@@ -871,23 +871,15 @@ def main():
                     lv = calc_trade_levels(df, total)
                     fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
 
-                    st.markdown(f"**전략:** `{lv['strategy']}`  &nbsp;&nbsp;  "
-                                f"**위험보상비율:** `{lv['rr']:.1f} : 1`  &nbsp;&nbsp;  "
-                                f"**ATR(14):** `{fmt_p(lv['atr'])}`")
-
-                    ca, cb, cc, cd, ce = st.columns(5)
-                    ca.metric("1차 매수가",  fmt_p(lv['entry1']),
-                              f"{(lv['entry1']-lv['cp'])/lv['cp']*100:+.1f}%")
-                    cb.metric("분할 매수가", fmt_p(lv['entry2']),
-                              f"{(lv['entry2']-lv['cp'])/lv['cp']*100:+.1f}%")
-                    cc.metric("1차 목표가",  fmt_p(lv['target1']),
-                              f"+{lv['ret1']:.1f}%", delta_color="normal")
-                    cd.metric("2차 목표가",  fmt_p(lv['target2']),
-                              f"+{lv['ret2']:.1f}%", delta_color="normal")
-                    ce.metric("손절가",      fmt_p(lv['stop']),
-                              f"-{lv['risk_pct']:.1f}%", delta_color="inverse")
-
-                    st.plotly_chart(_draw_levels_chart(lv, is_krw), use_container_width=True)
+                    lv_rows = [
+                        {'구분': '📌 전략',     '가격': lv['strategy'],        '현재가 대비': f"위험보상비율 {lv['rr']:.1f}:1"},
+                        {'구분': '🟢 1차 매수', '가격': fmt_p(lv['entry1']),   '현재가 대비': f"{(lv['entry1']-lv['cp'])/lv['cp']*100:+.1f}%"},
+                        {'구분': '🟩 분할 매수', '가격': fmt_p(lv['entry2']),  '현재가 대비': f"{(lv['entry2']-lv['cp'])/lv['cp']*100:+.1f}%"},
+                        {'구분': '🔵 1차 목표', '가격': fmt_p(lv['target1']),  '현재가 대비': f"+{lv['ret1']:.1f}%"},
+                        {'구분': '🔷 2차 목표', '가격': fmt_p(lv['target2']),  '현재가 대비': f"+{lv['ret2']:.1f}%"},
+                        {'구분': '🔴 손절가',   '가격': fmt_p(lv['stop']),     '현재가 대비': f"-{lv['risk_pct']:.1f}%"},
+                    ]
+                    st.dataframe(pd.DataFrame(lv_rows), use_container_width=True, hide_index=True)
                     st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정과 다를 수 있습니다.")
                     st.divider()
 
