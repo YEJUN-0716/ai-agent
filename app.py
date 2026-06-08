@@ -560,8 +560,6 @@ def calc_trade_levels(df, total_score):
     r1 = resists[0]  if resists  else cp * 1.05
     r2 = resists[1]  if len(resists) > 1 else r1 * 1.05
 
-    stop = s1 - atr * 0.5
-
     # 점수에 따라 진입 전략 변경
     if total_score >= 65:
         entry1 = cp          # 즉시 매수
@@ -576,6 +574,8 @@ def calc_trade_levels(df, total_score):
         entry2 = low60       # 장기 지지 대기
         strategy = '관망 후 저점매수'
 
+    # 손절가: 두 진입가 중 낮은 것 아래 ATR×0.5
+    stop   = min(entry1, entry2) - atr * 0.5
     risk   = entry1 - stop
     reward = r1 - entry1
     rr     = reward / risk if risk > 0 else 0
