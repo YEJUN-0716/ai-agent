@@ -198,7 +198,129 @@ def _score_de(v):
     return 15
 
 
-def fundamental_score(ticker):
+def calc_mdd(prices):
+    """Maximum Drawdown (음수 퍼센트 반환)"""
+    roll_max = prices.expanding().max()
+    dd = (prices - roll_max) / roll_max * 100
+    return float(dd.min())
+
+def _score_mdd(mdd_pct):
+    if mdd_pct > -10:   return 90
+    elif mdd_pct > -20: return 75
+    elif mdd_pct > -30: return 55
+    elif mdd_pct > -40: return 35
+    elif mdd_pct > -50: return 20
+    return 10
+
+def _get_fs_val(df, *keywords, col=0):
+    """재무제표 DataFrame에서 키워드로 행 검색"""
+    if df is None or df.empty:
+        return None
+    for idx in df.index:
+        idx_str = str(idx).lower()
+        if all(k.lower() in idx_str for k in keywords):
+            try:
+                val = df.iloc[df.index.get_loc(idx), col]
+                return float(val) if not pd.isna(val) else None
+            except:
+                pass
+    return None
+
+def calc_piotroski_fscore(ticker):
+    """Piotroski F-Score (0~9점)"""
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info
+        fin = t.financials
+        bal = t.balance_sheet
+        cf  = t.cashflow
+
+        score = 0
+        signals = {}
+        gv = _get_fs_val
+
+        # ── 수익성 (F1~F4) ───────────────────
+        roa = info.get('returnOnAssets')
+        if roa is not None and roa > 0:
+            score += 1; signals['F1 ROA>0'] = '✅'
+        else:
+            signals['F1 ROA>0'] = '❌'
+
+        ocf = gv(cf, 'operating') or gv(cf, 'cash', 'operation')
+        if ocf and ocf > 0:
+            score += 1; signals['F2 영업현금흐름>0'] = '✅'
+        else:
+            signals['F2 영업현금흐름>0'] = '❌'
+
+        ni_c = gv(fin, 'net income');     ni_p = gv(fin, 'net income', col=1)
+        ta_c = gv(bal, 'total assets');   ta_p = gv(bal, 'total assets', col=1)
+        roa_c = ni_c / ta_c if ni_c and ta_c else None
+        roa_p = ni_p / ta_p if ni_p and ta_p else None
+        if roa_c and roa_p:
+            if roa_c > roa_p: score += 1; signals['F3 ROA개선'] = '✅'
+            else:              signals['F3 ROA개선'] = '❌'
+        else:
+            signals['F3 ROA개선'] = '❓'
+
+        if ocf and ta_c and roa_c:
+            if ocf / ta_c > roa_c: score += 1; signals['F4 발생주의'] = '✅'
+            else:                   signals['F4 발생주의'] = '❌'
+        else:
+            signals['F4 발생주의'] = '❓'
+
+        # ── 레버리지/유동성 (F5~F7) ──────────
+        ltd_c = gv(bal, 'long', 'debt');   ltd_p = gv(bal, 'long', 'debt', col=1)
+        lev_c = ltd_c / ta_c if ltd_c and ta_c else None
+        lev_p = ltd_p / ta_p if ltd_p and ta_p else None
+        if lev_c is not None and lev_p is not None:
+            if lev_c < lev_p: score += 1; signals['F5 레버리지감소'] = '✅'
+            else:              signals['F5 레버리지감소'] = '❌'
+        else:
+            signals['F5 레버리지감소'] = '❓'
+
+        ca_c = gv(bal, 'current assets');   cl_c = gv(bal, 'current liabilities')
+        ca_p = gv(bal, 'current assets', col=1); cl_p = gv(bal, 'current liabilities', col=1)
+        cr_c = ca_c / cl_c if ca_c and cl_c else None
+        cr_p = ca_p / cl_p if ca_p and cl_p else None
+        if cr_c and cr_p:
+            if cr_c > cr_p: score += 1; signals['F6 유동성개선'] = '✅'
+            else:            signals['F6 유동성개선'] = '❌'
+        else:
+            signals['F6 유동성개선'] = '❓'
+
+        sh_c = gv(bal, 'ordinary shares') or gv(bal, 'common stock')
+        sh_p = gv(bal, 'ordinary shares', col=1) or gv(bal, 'common stock', col=1)
+        if sh_c and sh_p:
+            if sh_c <= sh_p * 1.01: score += 1; signals['F7 주식수불증가'] = '✅'
+            else:                    signals['F7 주식수불증가'] = '❌'
+        else:
+            signals['F7 주식수불증가'] = '❓'
+
+        # ── 운영효율 (F8~F9) ────────────────
+        rev_c = gv(fin, 'total revenue'); rev_p = gv(fin, 'total revenue', col=1)
+        gp_c  = gv(fin, 'gross profit');  gp_p  = gv(fin, 'gross profit', col=1)
+        gm_c = gp_c / rev_c if gp_c and rev_c else None
+        gm_p = gp_p / rev_p if gp_p and rev_p else None
+        if gm_c and gm_p:
+            if gm_c > gm_p: score += 1; signals['F8 매출총이익률개선'] = '✅'
+            else:            signals['F8 매출총이익률개선'] = '❌'
+        else:
+            signals['F8 매출총이익률개선'] = '❓'
+
+        at_c = rev_c / ta_c if rev_c and ta_c else None
+        at_p = rev_p / ta_p if rev_p and ta_p else None
+        if at_c and at_p:
+            if at_c > at_p: score += 1; signals['F9 자산회전율개선'] = '✅'
+            else:            signals['F9 자산회전율개선'] = '❌'
+        else:
+            signals['F9 자산회전율개선'] = '❓'
+
+        return score, signals
+    except Exception as e:
+        return None, {'오류': str(e)}
+
+
+def fundamental_score(ticker, df=None):
     try:
         info = yf.Ticker(ticker).info
         details = {}
@@ -246,11 +368,29 @@ def fundamental_score(ticker):
         safe = de_score * 0.6 + cr_score * 0.4
         details['안전성'] = safe
 
+        # MDD (10%)
+        if df is not None:
+            mdd_val = calc_mdd(df['Close'])
+            mdd_s   = _score_mdd(mdd_val)
+        else:
+            mdd_val, mdd_s = None, 50
+        details['MDD'] = float(mdd_s)
+        details['MDD값'] = mdd_val
+
+        # Piotroski F-Score (10%)
+        fscore, fsignals = calc_piotroski_fscore(ticker)
+        fs_score = (fscore / 9 * 100) if fscore is not None else 50.0
+        details['F-Score'] = float(fs_score)
+        details['F-Score값'] = fscore
+        details['F-Score시그널'] = fsignals
+
         total = (
-            details['밸류에이션'] * 0.30 +
-            details['수익성']     * 0.30 +
-            details['성장성']     * 0.25 +
-            details['안전성']     * 0.15
+            details['밸류에이션'] * 0.25 +
+            details['수익성']     * 0.25 +
+            details['성장성']     * 0.20 +
+            details['안전성']     * 0.10 +
+            details['MDD']        * 0.10 +
+            details['F-Score']    * 0.10
         )
         return float(total), details
     except Exception as e:
@@ -499,7 +639,7 @@ def main():
 
     prog.progress(45)
     msg.text("💰 재무제표·퀀트 분석 중...")
-    f_score, f_detail = fundamental_score(ticker)
+    f_score, f_detail = fundamental_score(ticker, df)
 
     prog.progress(65)
     msg.text("🌍 매크로·금리 환경 분석 중...")
@@ -569,7 +709,7 @@ def main():
     with col2:
         st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  (가중 {w_fund}%)"), use_container_width=True)
         with st.expander("세부 점수 보기"):
-            for k in ['밸류에이션', '수익성', '성장성', '안전성']:
+            for k in ['밸류에이션', '수익성', '성장성', '안전성', 'MDD', 'F-Score']:
                 v = f_detail.get(k, 50)
                 bar = '█' * int(v / 10) + '░' * (10 - int(v / 10))
                 st.markdown(f"**{k}** {bar} `{v:.0f}점`")
@@ -577,6 +717,15 @@ def main():
             st.caption(f"PER: {fmt(f_detail.get('PER'))}  |  PBR: {fmt(f_detail.get('PBR'))}")
             st.caption(f"ROE: {fmt(f_detail.get('ROE'), pct=True)}  |  ROA: {fmt(f_detail.get('ROA'), pct=True)}")
             st.caption(f"매출성장: {fmt(f_detail.get('매출성장'), pct=True)}  |  EPS성장: {fmt(f_detail.get('EPS성장'), pct=True)}")
+            mdd_val = f_detail.get('MDD값')
+            st.caption(f"MDD: {f'{mdd_val:.1f}%' if mdd_val is not None else 'N/A'}")
+            fscore_val = f_detail.get('F-Score값')
+            fs_label = f"{fscore_val}/9" if fscore_val is not None else "N/A"
+            st.caption(f"Piotroski F-Score: {fs_label}")
+            fsignals = f_detail.get('F-Score시그널', {})
+            if fsignals and '오류' not in fsignals:
+                for sig_k, sig_v in fsignals.items():
+                    st.caption(f"  {sig_v} {sig_k}")
 
     with col3:
         st.plotly_chart(gauge(m_score, f"🌍 매크로+금리  (가중 {w_macro}%)"), use_container_width=True)
@@ -602,7 +751,7 @@ def main():
     m20 = p.rolling(20).mean()
     m60 = p.rolling(60).mean()
     m120 = p.rolling(120).mean()
-    bb_u, bb_m, bb_l = calc_bb(p)
+    bb_u, _, bb_l = calc_bb(p)
     macd_l, sig_l, hist = calc_macd(p)
     rsi_s = calc_rsi(p)
 
