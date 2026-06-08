@@ -783,8 +783,12 @@ def main():
                 st.warning("분석 가능한 종목이 없습니다.")
             else:
                 st.success(f"총 {len(result_df)}개 종목 분석 완료")
-                styled = result_df.style.applymap(_style_score,
-                                                   subset=['종합점수','차트+파동','재무+퀀트','매크로'])
+                try:
+                    styled = result_df.style.map(_style_score,
+                                                 subset=['종합점수','차트+파동','재무+퀀트','매크로'])
+                except AttributeError:
+                    styled = result_df.style.applymap(_style_score,
+                                                      subset=['종합점수','차트+파동','재무+퀀트','매크로'])
                 st.dataframe(styled, use_container_width=True, height=460)
 
                 top5 = result_df.head(5)
