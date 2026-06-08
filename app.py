@@ -418,12 +418,15 @@ def run_screener(tickers, w_tech, w_fund, w_macro, prog_bar=None, prog_text=None
             t_s, _ = technical_score(df)
             f_s, _ = fundamental_score(ticker, df)
             total  = t_s*(w_tech/100) + f_s*(w_fund/100) + m_s*(w_macro/100)
+            mom    = calc_momentum(df)
             cp  = float(df['Close'].iloc[-1])
             pp  = float(df['Close'].iloc[-2]) if len(df) >= 2 else cp
             chg = (cp-pp)/pp*100
+            m3  = mom.get('3M')
             results.append({
                 '티커': ticker, '종합점수': round(total,1),
                 '차트+파동': round(t_s,1), '재무+퀀트': round(f_s,1), '매크로': round(m_s,1),
+                '모멘텀(3M)': f"{m3:+.1f}%" if m3 is not None else 'N/A',
                 '등급': score_label(total), '등락(%)': round(chg,2),
             })
         except: continue
@@ -639,6 +642,159 @@ def get_news_sentiment(ticker):
         return float(np.clip(50 + avg * 12, 0, 100)), articles
     except:
         return 50.0, []
+
+# ─────────────────────────────────────────────
+# ADVANCED ANALYTICS
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=1800)
+def technical_score_multi(ticker):
+    """일봉·주봉·월봉 3개 타임프레임 기술적 점수"""
+    end = datetime.now()
+    configs = [('일봉', '1d', 520), ('주봉', '1wk', 1825), ('월봉', '1mo', 3650)]
+    results = {}
+    for label, interval, days in configs:
+        try:
+            start = end - timedelta(days=days)
+            d = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
+            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+            d = d.dropna(subset=['Close'])
+            if len(d) >= 30:
+                score, det = technical_score(d)
+                results[label] = {'score': round(score, 1), 'det': det}
+            else:
+                results[label] = None
+        except:
+            results[label] = None
+    return results
+
+def detect_candle_patterns(df):
+    """주요 캔들 패턴 자동 감지 (단봉·이봉·삼봉)"""
+    if len(df) < 3: return []
+    o, h, l, c = df['Open'], df['High'], df['Low'], df['Close']
+    patterns = []
+
+    for i in [-1, -2, -3]:
+        if abs(i) >= len(df): continue
+        body   = abs(float(c.iloc[i]) - float(o.iloc[i]))
+        total  = float(h.iloc[i]) - float(l.iloc[i]) + 1e-9
+        upper  = float(h.iloc[i]) - max(float(c.iloc[i]), float(o.iloc[i]))
+        lower  = min(float(c.iloc[i]), float(o.iloc[i])) - float(l.iloc[i])
+        is_bull = float(c.iloc[i]) >= float(o.iloc[i])
+        ago = '최근' if i == -1 else f'{abs(i)}일전'
+        dt  = str(df.index[i])[:10]
+
+        if body / total < 0.08:
+            patterns.append({'날짜': dt, '패턴': '⚖️ 도지', '신호': '⚪ 중립/반전 가능', '경과': ago})
+        elif lower >= 2*body and upper <= body*0.3 and not is_bull:
+            patterns.append({'날짜': dt, '패턴': '🔨 망치형', '신호': '🟢 상승 반전 신호', '경과': ago})
+        elif upper >= 2*body and lower <= body*0.3 and is_bull:
+            patterns.append({'날짜': dt, '패턴': '⭐ 슈팅스타', '신호': '🔴 하락 반전 신호', '경과': ago})
+        elif body/total > 0.85 and is_bull:
+            patterns.append({'날짜': dt, '패턴': '📈 강세 마루보주', '신호': '🟢 강한 상승 지속', '경과': ago})
+        elif body/total > 0.85 and not is_bull:
+            patterns.append({'날짜': dt, '패턴': '📉 약세 마루보주', '신호': '🔴 강한 하락 지속', '경과': ago})
+
+    if len(df) >= 2:
+        pb = abs(float(c.iloc[-2]) - float(o.iloc[-2]))
+        cb = abs(float(c.iloc[-1]) - float(o.iloc[-1]))
+        pbull = float(c.iloc[-2]) >= float(o.iloc[-2])
+        cbull = float(c.iloc[-1]) >= float(o.iloc[-1])
+        dt = str(df.index[-1])[:10]
+        if cb > pb*1.1 and not pbull and cbull:
+            patterns.append({'날짜': dt, '패턴': '🟢 강세 장악형', '신호': '🟢 매수 반전 신호', '경과': '최근'})
+        elif cb > pb*1.1 and pbull and not cbull:
+            patterns.append({'날짜': dt, '패턴': '🔴 약세 장악형', '신호': '🔴 매도 반전 신호', '경과': '최근'})
+
+    if len(df) >= 3:
+        b1  = abs(float(c.iloc[-3]) - float(o.iloc[-3]))
+        t2  = float(h.iloc[-2]) - float(l.iloc[-2]) + 1e-9
+        b2  = abs(float(c.iloc[-2]) - float(o.iloc[-2]))
+        b3  = abs(float(c.iloc[-1]) - float(o.iloc[-1]))
+        bull1 = float(c.iloc[-3]) >= float(o.iloc[-3])
+        bull3 = float(c.iloc[-1]) >= float(o.iloc[-1])
+        dt = str(df.index[-1])[:10]
+        if not bull1 and b2/t2 < 0.3 and bull3 and b3 > b1*0.5:
+            patterns.append({'날짜': dt, '패턴': '🌅 Morning Star (샛별형)', '신호': '🟢 강한 매수 반전', '경과': '최근'})
+        elif bull1 and b2/t2 < 0.3 and not bull3 and b3 > b1*0.5:
+            patterns.append({'날짜': dt, '패턴': '🌆 Evening Star (석별형)', '신호': '🔴 강한 매도 반전', '경과': '최근'})
+
+    return patterns
+
+def calc_momentum(df):
+    """1M/3M/6M/12M 모멘텀 수익률 및 점수"""
+    p  = df['Close']
+    cp = float(p.iloc[-1])
+    def ret(d):
+        return (cp - float(p.iloc[-d])) / float(p.iloc[-d]) * 100 if len(p) > d else None
+    m1, m3, m6, m12 = ret(21), ret(63), ret(126), ret(252)
+    def sc(v):
+        if v is None: return 50
+        if v > 30: return 90
+        elif v > 15: return 75
+        elif v > 5: return 65
+        elif v > 0: return 55
+        elif v > -10: return 40
+        elif v > -20: return 25
+        else: return 10
+    vals = [v for v in [m3, m6, m12] if v is not None]
+    score = sum(sc(v) for v in vals) / len(vals) if vals else 50.0
+    return {'score': round(score, 1), '1M': m1, '3M': m3, '6M': m6, '12M': m12}
+
+def calc_dcf(ticker, treasury_yield=4.5):
+    """그레이엄 변형 공식 기반 내재가치 산출 (기본/보수적 2가지)"""
+    try:
+        info = yf.Ticker(ticker).info
+        eps  = info.get('trailingEps') or info.get('forwardEps')
+        if not eps or eps <= 0: return None, {}
+        g_raw = info.get('earningsGrowth') or info.get('revenueGrowth') or 0.07
+        g = float(g_raw) * 100 if abs(float(g_raw)) <= 1 else float(g_raw)
+        g = max(min(g, 30.0), -5.0)
+        y = max(treasury_yield, 1.0)
+        intrinsic    = eps * (8.5 + 2*g) * (4.4 / y)
+        conservative = eps * (8.5 + g)   * (4.4 / y)
+        cp = info.get('currentPrice') or info.get('regularMarketPrice')
+        if not cp: return None, {}
+        return intrinsic, {
+            'EPS': eps, '예상성장률(g)': round(g, 1), '적용금리(Y)': round(y, 2),
+            '내재가치_기본': intrinsic, '내재가치_보수': conservative, '현재가': cp,
+            '상승여력_기본': (intrinsic - cp) / cp * 100,
+            '상승여력_보수': (conservative - cp) / cp * 100,
+        }
+    except:
+        return None, {}
+
+@st.cache_data(ttl=1800)
+def calc_risk_metrics(ticker):
+    """Beta, 역사적 VaR(95%/99%), CVaR, 연간변동성, Sharpe"""
+    try:
+        end = datetime.now(); start = end - timedelta(days=390)
+        sdf   = yf.download(ticker, start=start, end=end, progress=False)
+        spydf = yf.download('SPY',  start=start, end=end, progress=False)
+        for d in [sdf, spydf]:
+            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+        sr = sdf['Close'].pct_change().dropna()
+        mr = spydf['Close'].pct_change().dropna()
+        idx = sr.index.intersection(mr.index)
+        if len(idx) < 60: return {}
+        sr = sr.loc[idx]; mr = mr.loc[idx]
+        beta   = np.cov(sr.values, mr.values)[0][1] / (np.var(mr.values) + 1e-12)
+        var95  = float(np.percentile(sr.values, 5))  * 100
+        var99  = float(np.percentile(sr.values, 1))  * 100
+        thresh = np.percentile(sr.values, 5)
+        cvar95 = float(sr[sr <= thresh].mean()) * 100 if (sr <= thresh).any() else var95
+        vol    = float(sr.std()) * np.sqrt(252) * 100
+        sharpe = float((sr.mean() - 4.5/252/100) / sr.std() * np.sqrt(252)) if sr.std() > 0 else 0
+        return {
+            'Beta': round(beta, 2),
+            'VaR 95% (1일)': f"{var95:.2f}%",
+            'VaR 99% (1일)': f"{var99:.2f}%",
+            'CVaR 95%': f"{cvar95:.2f}%",
+            '연간 변동성': f"{vol:.1f}%",
+            'Sharpe (RF 4.5%)': round(sharpe, 2),
+        }
+    except:
+        return {}
 
 # ─────────────────────────────────────────────
 # TRADE LEVELS
@@ -924,15 +1080,22 @@ def main():
                     st.error("데이터 부족 (30일 미만).")
                     prog.empty(); msg.empty()
                 else:
-                    prog.progress(20); msg.text("📈 차트·파동 분석 중...")
-                    t_score, t_det = technical_score(df)
-                    prog.progress(45); msg.text("💰 재무제표·퀀트 분석 중...")
-                    f_score, f_det = fundamental_score(ticker, df)
-                    prog.progress(65); msg.text("🌍 매크로·금리 분석 중...")
+                    prog.progress(15); msg.text("📈 차트·파동 분석 중...")
+                    t_score, t_det  = technical_score(df)
+                    candle_pats     = detect_candle_patterns(df)
+                    mom_data        = calc_momentum(df)
+                    prog.progress(35); msg.text("💰 재무제표·퀀트 분석 중...")
+                    f_score, f_det  = fundamental_score(ticker, df)
+                    prog.progress(52); msg.text("🌍 매크로·금리 분석 중...")
                     m_score, m_det, m_data = macro_score()
-                    prog.progress(95)
                     total = t_score*(w_tech/100) + f_score*(w_fund/100) + m_score*(w_macro/100)
-                    prog.progress(95); msg.text("📰 뉴스 감성 분석 중...")
+                    prog.progress(63); msg.text("🕐 멀티 타임프레임 분석 중...")
+                    mtf_scores      = technical_score_multi(ticker)
+                    prog.progress(74); msg.text("💵 DCF 내재가치 산출 중...")
+                    dcf_val, dcf_det = calc_dcf(ticker, m_data.get('10Y금리', 4.5))
+                    prog.progress(84); msg.text("⚠️ 리스크 분석 중...")
+                    risk_data       = calc_risk_metrics(ticker)
+                    prog.progress(93); msg.text("📰 뉴스 감성 분석 중...")
                     news_score, news_articles = get_news_sentiment(ticker)
                     regime, regime_diff = get_market_regime()
                     prog.progress(100); prog.empty(); msg.empty()
@@ -983,11 +1146,25 @@ def main():
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.plotly_chart(gauge(t_score, f"📈 차트+파동  ({w_tech}%)"), use_container_width=True)
-                        with st.expander("세부 점수"):
+                        with st.expander("세부 점수 · 캔들 패턴 · 모멘텀"):
                             for k, v in t_det.items():
                                 if k != 'RSI값':
                                     ex = f" *(현재 RSI: {t_det['RSI값']})*" if k=='RSI' else ''
                                     st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{ex}")
+                            st.divider()
+                            st.caption("**📊 모멘텀**")
+                            m_cols = st.columns(4)
+                            for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data['1M']),('3M', mom_data['3M']),('6M', mom_data['6M']),('12M', mom_data['12M'])]):
+                                if val is not None:
+                                    col_m.metric(lbl, f"{val:+.1f}%")
+                                else:
+                                    col_m.metric(lbl, "N/A")
+                            st.divider()
+                            st.caption("**🕯️ 캔들 패턴 (최근 3일)**")
+                            if candle_pats:
+                                st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
+                            else:
+                                st.caption("  특이 패턴 없음")
                     with col2:
                         st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
                         with st.expander("세부 점수"):
@@ -1006,6 +1183,17 @@ def main():
                             st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
                             for sk, sv in f_det.get('F-Score시그널', {}).items():
                                 if '오류' not in sk: st.caption(f"  {sv} {sk}")
+                            if dcf_det:
+                                st.divider()
+                                st.caption("**💵 DCF 내재가치 (그레이엄 공식)**")
+                                dv_b = dcf_det.get('내재가치_기본', 0)
+                                dv_c = dcf_det.get('내재가치_보수', 0)
+                                up_b = dcf_det.get('상승여력_기본', 0)
+                                up_c = dcf_det.get('상승여력_보수', 0)
+                                dc1, dc2 = st.columns(2)
+                                dc1.metric("내재가치 (기본)", fmt_p(dv_b), f"{up_b:+.1f}%")
+                                dc2.metric("내재가치 (보수)", fmt_p(dv_c), f"{up_c:+.1f}%")
+                                st.caption(f"EPS: {fmt(dcf_det.get('EPS'))}  |  g: {dcf_det.get('예상성장률(g)',0):.1f}%  |  Y: {dcf_det.get('적용금리(Y)',0):.2f}%")
                     with col3:
                         st.plotly_chart(gauge(m_score, f"🌍 매크로+금리  ({w_macro}%)"), use_container_width=True)
                         with st.expander("세부 점수"):
@@ -1019,6 +1207,41 @@ def main():
                                 st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
                             if 'VIX' in m_data:
                                 st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
+                    st.divider()
+
+                    # ── 멀티 타임프레임 분석 ──────────────────
+                    st.subheader("🕐 멀티 타임프레임 분석")
+                    mtf_labels = ['일봉 (Daily)', '주봉 (Weekly)', '월봉 (Monthly)']
+                    mtf_keys   = ['일봉', '주봉', '월봉']
+                    mtf_cols_ui = st.columns(3)
+                    signals = []
+                    for col_mtf, lbl, key in zip(mtf_cols_ui, mtf_labels, mtf_keys):
+                        info_mtf = mtf_scores.get(key)
+                        if info_mtf:
+                            sc  = info_mtf['score']
+                            det = info_mtf['det']
+                            col_mtf.metric(lbl, f"{sc:.1f}점", score_label(sc))
+                            signals.append(sc)
+                            with col_mtf:
+                                st.caption(" · ".join(f"{k} {v:.0f}" for k, v in det.items() if k not in ('RSI값',)))
+                        else:
+                            col_mtf.metric(lbl, "N/A")
+
+                    if signals:
+                        consensus = sum(signals) / len(signals)
+                        bull_cnt  = sum(1 for s in signals if s >= 65)
+                        bear_cnt  = sum(1 for s in signals if s < 50)
+                        if bull_cnt == len(signals):
+                            mtf_msg = "🟢 **전 타임프레임 강세** — 추세 일치, 신호 신뢰도 높음"
+                        elif bear_cnt == len(signals):
+                            mtf_msg = "🔴 **전 타임프레임 약세** — 하락 추세 강함"
+                        elif bull_cnt > bear_cnt:
+                            mtf_msg = "🟡 **중장기 강세, 단기 조정** — 눌림목 매수 고려"
+                        elif bear_cnt > bull_cnt:
+                            mtf_msg = "🟠 **중장기 약세, 단기 반등** — 데드캣 주의"
+                        else:
+                            mtf_msg = "⚪ **혼조세** — 방향성 확인 후 진입 권장"
+                        st.info(mtf_msg)
                     st.divider()
 
                     # ── 매수/매도 추천가 ──────────────────────
@@ -1072,17 +1295,63 @@ def main():
                             st.info("뉴스 데이터를 가져올 수 없습니다.")
                     st.divider()
 
+                    # ── 리스크 분석 ────────────────────────────
+                    st.subheader("⚠️ 리스크 분석")
+                    if risk_data:
+                        rk_cols = st.columns(3)
+                        beta_val = risk_data.get('Beta', 1.0)
+                        beta_str = f"{beta_val:.2f}"
+                        beta_desc = ("📈 고베타 (시장보다 변동 큼)" if beta_val > 1.2
+                                     else ("📉 저베타 (시장보다 안정)" if beta_val < 0.8
+                                           else "➡️ 시장 수준 변동성"))
+                        rk_cols[0].metric("Beta (vs SPY)", beta_str, beta_desc)
+                        rk_cols[1].metric("VaR 95% (1일)", risk_data.get('VaR 95% (1일)', 'N/A'),
+                                          help="95% 신뢰수준: 하루 최대 손실 추정")
+                        rk_cols[2].metric("연간 변동성", risk_data.get('연간 변동성', 'N/A'))
+                        rk_cols2 = st.columns(3)
+                        rk_cols2[0].metric("VaR 99% (1일)", risk_data.get('VaR 99% (1일)', 'N/A'),
+                                           help="99% 신뢰수준: 극단적 하루 손실 추정")
+                        rk_cols2[1].metric("CVaR 95%", risk_data.get('CVaR 95%', 'N/A'),
+                                           help="VaR 초과 시 평균 손실 (Expected Shortfall)")
+                        sharpe = risk_data.get('Sharpe (RF 4.5%)', 0)
+                        sharpe_desc = ("우수" if sharpe > 1 else ("보통" if sharpe > 0 else "저조"))
+                        rk_cols2[2].metric("Sharpe Ratio", f"{sharpe:.2f}", sharpe_desc)
+                        with st.expander("💡 리스크 지표 해석"):
+                            st.markdown("""
+| 지표 | 의미 | 해석 기준 |
+|---|---|---|
+| **Beta** | 시장(SPY) 대비 민감도 | >1.2 고위험, 0.8~1.2 중간, <0.8 방어적 |
+| **VaR 95%** | 하루 95% 확률로 이 손실 이내 | 절댓값 클수록 단기 위험 높음 |
+| **CVaR 95%** | VaR 초과 시 예상 평균 손실 | 꼬리 리스크 측정 |
+| **연간 변동성** | 연율화 표준편차 | 20% 이하 안정, 40% 이상 고변동 |
+| **Sharpe** | 위험 단위당 초과 수익 | >1 우수, 0~1 보통, <0 저조 |
+""")
+                    else:
+                        st.info("리스크 데이터를 불러올 수 없습니다.")
+                    st.divider()
+
                     # ── 차트 ──────────────────────────────────
                     st.subheader("📈 차트")
                     st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
 
                     st.subheader("📋 분석 요약")
+                    mtf_d = mtf_scores.get('일봉'); mtf_w = mtf_scores.get('주봉'); mtf_m = mtf_scores.get('월봉')
+                    mtf_summary = (f"일봉 {mtf_d['score']:.0f} / 주봉 {mtf_w['score']:.0f} / 월봉 {mtf_m['score']:.0f}"
+                                   if mtf_d and mtf_w and mtf_m else "N/A")
+                    mom_3 = mom_data.get('3M'); mom_12 = mom_data.get('12M')
+                    mom_summary = (f"3M {mom_3:+.1f}% / 12M {mom_12:+.1f}%"
+                                   if mom_3 is not None and mom_12 is not None else "N/A")
+                    dcf_summary = (f"기본 {fmt_p(dcf_det.get('내재가치_기본',0))} ({dcf_det.get('상승여력_기본',0):+.1f}%)"
+                                   if dcf_det else "N/A")
                     st.dataframe(pd.DataFrame([
-                        {'카테고리':'종합 점수',        '점수':f"{total:.1f}",      '등급':score_label(total),      '비고': f"시장: {regime_icon}"},
-                        {'카테고리':'📈 차트+파동',     '점수':f"{t_score:.1f}",    '등급':score_label(t_score),    '비고':f'가중치 {w_tech}%'},
-                        {'카테고리':'💰 재무제표+퀀트', '점수':f"{f_score:.1f}",    '등급':score_label(f_score),    '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
-                        {'카테고리':'🌍 매크로+금리',   '점수':f"{m_score:.1f}",    '등급':score_label(m_score),    '비고':f'가중치 {w_macro}%'},
-                        {'카테고리':'📰 뉴스 감성',     '점수':f"{news_score:.1f}", '등급':score_label(news_score), '비고':'참고용'},
+                        {'카테고리':'종합 점수',          '점수':f"{total:.1f}",          '등급':score_label(total),          '비고': f"시장: {regime_icon}"},
+                        {'카테고리':'📈 차트+파동',       '점수':f"{t_score:.1f}",        '등급':score_label(t_score),        '비고':f'가중치 {w_tech}%'},
+                        {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",        '등급':score_label(f_score),        '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
+                        {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",        '등급':score_label(m_score),        '비고':f'가중치 {w_macro}%'},
+                        {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mtf_summary},
+                        {'카테고리':'📊 모멘텀',          '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mom_summary},
+                        {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',                '등급':'-',                         '비고': dcf_summary},
+                        {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",     '등급':score_label(news_score),     '비고':'참고용'},
                     ]), use_container_width=True, hide_index=True)
                     st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
 
