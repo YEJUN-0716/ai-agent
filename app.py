@@ -54,6 +54,28 @@ def calc_bb(prices, period=20, k=2):
     std = prices.rolling(period).std()
     return sma + k*std, sma, sma - k*std
 
+def calc_stochastic(high, low, close, k=14, d=3):
+    lo = low.rolling(k).min()
+    hi = high.rolling(k).max()
+    pct_k = (close - lo) / (hi - lo + 1e-9) * 100
+    return pct_k, pct_k.rolling(d).mean()
+
+def calc_adx(high, low, close, period=14):
+    pc  = close.shift(1)
+    tr  = pd.concat([(high-low), (high-pc).abs(), (low-pc).abs()], axis=1).max(axis=1)
+    up  = high.diff(); dn = -low.diff()
+    pdm = up.where((up > dn) & (up > 0), 0.0)
+    ndm = dn.where((dn > up) & (dn > 0), 0.0)
+    atr = tr.rolling(period).mean()
+    pdi = pdm.rolling(period).mean() / (atr + 1e-9) * 100
+    ndi = ndm.rolling(period).mean() / (atr + 1e-9) * 100
+    dx  = (pdi - ndi).abs() / (pdi + ndi + 1e-9) * 100
+    return dx.rolling(period).mean(), pdi, ndi
+
+def calc_obv(close, volume):
+    sign = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    return (volume * sign).cumsum()
+
 def wave_score(prices, highs, lows):
     if len(prices) < 60:
         return 50.0
@@ -70,6 +92,7 @@ def technical_score(df):
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     det = {}
 
+    # ── MA 정렬 (15%) ─────────────────────────
     ma20  = p.rolling(20).mean()
     ma60  = p.rolling(60).mean()
     ma120 = p.rolling(120).mean()
@@ -80,6 +103,7 @@ def technical_score(df):
         elif m20 < m60 and float(ma20.iloc[-5]) >= float(ma60.iloc[-5]): ma = max(ma-15, 0)
     det['MA정렬'] = float(ma)
 
+    # ── RSI (10%) ──────────────────────────────
     rsi_s = calc_rsi(p)
     rv = float(rsi_s.iloc[-1])
     if 40 <= rv <= 60:   rsi = 50
@@ -90,9 +114,15 @@ def technical_score(df):
     rsi_tr = rv - float(rsi_s.iloc[-10]) if len(rsi_s) >= 10 else 0
     if rsi_tr > 5 and 40 < rv < 70:  rsi = min(rsi+20, 100)
     elif rsi_tr < -5:                  rsi = max(rsi-10, 0)
+    # RSI 다이버전스 감지
+    if len(p) >= 20:
+        pr20 = float(p.iloc[-20]); rs20 = float(rsi_s.iloc[-20]) if len(rsi_s) >= 20 else rv
+        if cp < pr20 and rv > rs20:   rsi = min(rsi+15, 100)   # 상승 다이버전스
+        elif cp > pr20 and rv < rs20: rsi = max(rsi-15, 0)      # 하락 다이버전스
     det['RSI'] = float(rsi)
     det['RSI값'] = round(rv, 1)
 
+    # ── MACD (13%) ─────────────────────────────
     ml, sl2, hist = calc_macd(p)
     ch  = float(hist.iloc[-1])
     ph2 = float(hist.iloc[-2]) if len(hist) >= 2 else 0
@@ -101,8 +131,15 @@ def technical_score(df):
     if ch > 0:   macd_v += 15
     if ch > ph2: macd_v += 15
     else:         macd_v -= 10
+    # MACD 다이버전스
+    if len(p) >= 20 and len(hist) >= 20:
+        if cp < float(p.iloc[-20]) and float(hist.iloc[-1]) > float(hist.iloc[-20]):
+            macd_v = min(macd_v+12, 100)
+        elif cp > float(p.iloc[-20]) and float(hist.iloc[-1]) < float(hist.iloc[-20]):
+            macd_v = max(macd_v-12, 0)
     det['MACD'] = float(np.clip(macd_v, 0, 100))
 
+    # ── 볼린저밴드 (10%) ───────────────────────
     bb_u, _, bb_l2 = calc_bb(p)
     rng = float(bb_u.iloc[-1]) - float(bb_l2.iloc[-1]) + 1e-9
     pos = (cp - float(bb_l2.iloc[-1])) / rng
@@ -111,8 +148,14 @@ def technical_score(df):
     elif pos > 0.95:          bb = 45
     elif 0.2 <= pos < 0.4:   bb = 45
     else:                     bb = 30
+    # 밴드 폭 수축(스퀴즈) 탐지 — 돌파 임박
+    if len(p) >= 40:
+        bw_now = rng / (cp + 1e-9)
+        bw_avg = float(((bb_u - bb_l2) / p).rolling(20).mean().iloc[-1])
+        if bw_now < bw_avg * 0.7: bb = min(bb+10, 100)   # 스퀴즈 → 돌파 기대
     det['볼린저밴드'] = float(bb)
 
+    # ── 거래량 (7%) ────────────────────────────
     vr  = float(v.iloc[-1]) / (float(v.rolling(20).mean().iloc[-1]) + 1e-9)
     pc  = (cp - float(p.iloc[-5])) / (float(p.iloc[-5]) + 1e-9)
     if pc > 0 and vr > 1.2:   vol = 80
@@ -122,10 +165,52 @@ def technical_score(df):
     else:                      vol = 50
     det['거래량'] = float(vol)
 
+    # ── 파동근사 (8%) ──────────────────────────
     det['파동근사'] = wave_score(p, h, l)
 
-    total = (det['MA정렬']*0.20 + det['RSI']*0.15 + det['MACD']*0.20 +
-             det['볼린저밴드']*0.15 + det['거래량']*0.15 + det['파동근사']*0.15)
+    # ── 스토캐스틱 (10%) ───────────────────────
+    sk_s, sd_s = calc_stochastic(h, l, p)
+    sk, sd = float(sk_s.iloc[-1]), float(sd_s.iloc[-1])
+    if sk > 80:   stoch = 35   # 과매수
+    elif sk > 60: stoch = 65
+    elif sk > 40: stoch = 55
+    elif sk > 20: stoch = 60
+    else:         stoch = 70   # 과매도 반등 가능
+    # %K가 %D 상향 돌파 → 강세 신호
+    if len(sk_s) >= 2 and len(sd_s) >= 2:
+        if float(sk_s.iloc[-2]) < float(sd_s.iloc[-2]) and sk > sd: stoch = min(stoch+20, 100)
+        elif float(sk_s.iloc[-2]) > float(sd_s.iloc[-2]) and sk < sd: stoch = max(stoch-20, 0)
+    det['스토캐스틱'] = float(stoch)
+    det['Stoch값'] = round(sk, 1)
+
+    # ── ADX 추세강도 (17%) ─────────────────────
+    adx_s, pdi_s, ndi_s = calc_adx(h, l, p)
+    adx = float(adx_s.iloc[-1]) if not np.isnan(float(adx_s.iloc[-1])) else 20.0
+    pdi = float(pdi_s.iloc[-1]); ndi = float(ndi_s.iloc[-1])
+    bull_trend = pdi > ndi
+    if adx > 40:   adx_v = 85 if bull_trend else 15   # 매우 강한 추세
+    elif adx > 25: adx_v = 72 if bull_trend else 28   # 추세 명확
+    elif adx > 18: adx_v = 58 if bull_trend else 42   # 추세 약함
+    else:          adx_v = 50                          # 횡보 (추세 없음)
+    det['ADX추세강도'] = float(adx_v)
+    det['ADX값'] = round(adx, 1)
+
+    # ── OBV (온밸런스볼륨) (10%) ───────────────
+    obv = calc_obv(p, v)
+    obv_ma = obv.rolling(20).mean()
+    obv_v = 65 if float(obv.iloc[-1]) > float(obv_ma.iloc[-1]) else 35
+    # OBV 다이버전스: 가격↓ OBV↑ → 강세 반전 신호
+    if len(p) >= 20:
+        if cp < float(p.iloc[-20]) and float(obv.iloc[-1]) > float(obv.iloc[-20]):
+            obv_v = min(obv_v+20, 100)
+        elif cp > float(p.iloc[-20]) and float(obv.iloc[-1]) < float(obv.iloc[-20]):
+            obv_v = max(obv_v-20, 0)
+    det['OBV'] = float(obv_v)
+
+    # 가중치: MA(15) RSI(10) MACD(13) BB(10) 거래량(7) 파동(8) 스토캐스틱(10) ADX(17) OBV(10)
+    total = (det['MA정렬']*0.15 + det['RSI']*0.10 + det['MACD']*0.13 +
+             det['볼린저밴드']*0.10 + det['거래량']*0.07 + det['파동근사']*0.08 +
+             det['스토캐스틱']*0.10 + det['ADX추세강도']*0.17 + det['OBV']*0.10)
     return float(total), det
 
 # ─────────────────────────────────────────────
@@ -164,6 +249,42 @@ def _score_growth(v):
 def _score_de(v):
     if v is None or np.isnan(v): return 50
     return 30 if v<0 else (90 if v<0.3 else (75 if v<0.7 else (55 if v<1.5 else (35 if v<3.0 else 15))))
+
+def _score_peg(v):
+    if v is None or np.isnan(v) or v <= 0: return 50
+    if v < 0.5:   return 95
+    elif v < 1.0: return 85
+    elif v < 1.5: return 70
+    elif v < 2.0: return 55
+    elif v < 3.0: return 35
+    else:         return 15
+
+def _score_ev_ebitda(v):
+    if v is None or np.isnan(v) or v <= 0: return 50
+    if v < 6:     return 90
+    elif v < 10:  return 80
+    elif v < 15:  return 65
+    elif v < 20:  return 50
+    elif v < 30:  return 30
+    else:         return 15
+
+def _score_fcf_yield(pct):
+    if pct is None or np.isnan(pct): return 50
+    if pct > 10:  return 90
+    elif pct > 6: return 80
+    elif pct > 3: return 65
+    elif pct > 1: return 50
+    elif pct > 0: return 35
+    else:         return 15
+
+def _score_int_coverage(v):
+    if v is None or np.isnan(v): return 50
+    if v > 15:   return 95
+    elif v > 8:  return 80
+    elif v > 4:  return 65
+    elif v > 2:  return 45
+    elif v > 1:  return 25
+    else:        return 10
 
 def calc_mdd(prices):
     roll_max = prices.expanding().max()
@@ -273,18 +394,19 @@ def fundamental_score(ticker, df=None):
         info = yf.Ticker(ticker).info
         det  = {}
 
-        per = info.get('trailingPE') or info.get('forwardPE')
-        pbr = info.get('priceToBook')
-        # 업종 평균 PER 대비 상대적 밸류에이션 (절대값 + 상대값 혼합)
-        sector = info.get('sector', '')
+        # ── 밸류에이션 (20%): PER·PBR·PEG·EV/EBITDA ──
+        per      = info.get('trailingPE') or info.get('forwardPE')
+        pbr      = info.get('priceToBook')
+        peg      = info.get('pegRatio')
+        ev_ebitda= info.get('enterpriseToEbitda')
+        sector   = info.get('sector', '')
         sector_avg = SECTOR_AVG_PER.get(sector, 20)
-        per_abs_s = _score_per(per)
-        per_rel_s = _score_per_relative(per, sector_avg)
-        per_s = per_abs_s * 0.4 + per_rel_s * 0.6   # 상대 비중 높임
-        det['밸류에이션'] = per_s * 0.6 + _score_pbr(pbr) * 0.4
-        det['PER'] = per; det['PBR'] = pbr
+        per_s  = _score_per(per)*0.4 + _score_per_relative(per, sector_avg)*0.6
+        det['밸류에이션'] = per_s*0.35 + _score_pbr(pbr)*0.25 + _score_peg(peg)*0.20 + _score_ev_ebitda(ev_ebitda)*0.20
+        det['PER'] = per; det['PBR'] = pbr; det['PEG'] = peg; det['EV/EBITDA'] = ev_ebitda
         det['업종'] = sector or 'N/A'; det['업종평균PER'] = sector_avg
 
+        # ── 수익성 (20%): ROE·ROA·순이익률 ──────────
         roe = info.get('returnOnEquity')
         roa = info.get('returnOnAssets')
         pm  = info.get('profitMargins')
@@ -293,28 +415,43 @@ def fundamental_score(ticker, df=None):
             pp = pm*100
             pm_s = 10 if pp<0 else (40 if pp<5 else (60 if pp<10 else (80 if pp<20 else 90)))
         det['수익성'] = _score_roe(roe)*0.4 + _score_roe(roa*3 if roa else None)*0.3 + pm_s*0.3
-        det['ROE'] = roe; det['ROA'] = roa
+        det['ROE'] = roe; det['ROA'] = roa; det['순이익률'] = pm
 
+        # ── 성장성 (13%) ──────────────────────────────
         rg = info.get('revenueGrowth'); eg = info.get('earningsGrowth')
         det['성장성'] = _score_growth(rg)*0.5 + _score_growth(eg)*0.5 if eg else _score_growth(rg)
         det['매출성장'] = rg; det['EPS성장'] = eg
 
-        de = info.get('debtToEquity'); cr = info.get('currentRatio')
-        de_s = _score_de(de/100 if de else None)
-        cr_s = 50
-        if cr: cr_s = 10 if cr<0.5 else (30 if cr<1.0 else (60 if cr<1.5 else (85 if cr<3.0 else 75)))
-        det['안전성'] = de_s*0.6 + cr_s*0.4
+        # ── FCF 품질 (12%): FCF수익률 ─────────────────
+        fcf  = info.get('freeCashflow')
+        mcap = info.get('marketCap')
+        fcf_yield = (fcf / mcap * 100) if (fcf and mcap and mcap > 0) else None
+        det['FCF품질'] = float(_score_fcf_yield(fcf_yield))
+        det['FCF수익률'] = fcf_yield
 
+        # ── 안전성 (10%): D/E·유동비율·이자보상배율 ──
+        de  = info.get('debtToEquity');  cr = info.get('currentRatio')
+        ebit    = info.get('ebit');      int_exp = info.get('interestExpense')
+        de_s  = _score_de(de/100 if de else None)
+        cr_s  = 50
+        if cr: cr_s = 10 if cr<0.5 else (30 if cr<1.0 else (60 if cr<1.5 else (85 if cr<3.0 else 75)))
+        int_cov = abs(ebit/int_exp) if (ebit and int_exp and int_exp != 0) else None
+        ic_s  = _score_int_coverage(int_cov)
+        det['안전성'] = de_s*0.45 + cr_s*0.30 + ic_s*0.25
+        det['D/E'] = de; det['유동비율'] = cr; det['이자보상배율'] = int_cov
+
+        # ── MDD (8%) ──────────────────────────────────
         mdd_v = calc_mdd(df['Close']) if df is not None else None
         det['MDD']  = float(_score_mdd(mdd_v)) if mdd_v is not None else 50.0
         det['MDD값'] = mdd_v
 
+        # ── F-Score (10%) ─────────────────────────────
         fs, fsig = calc_piotroski_fscore(ticker)
-        det['F-Score']     = float(fs/9*100) if fs is not None else 50.0
-        det['F-Score값']   = fs
+        det['F-Score']      = float(fs/9*100) if fs is not None else 50.0
+        det['F-Score값']    = fs
         det['F-Score시그널'] = fsig
 
-        # 52주 위치 점수
+        # ── 52주 위치 (7%) ────────────────────────────
         if df is not None and len(df) >= 30:
             cp52 = float(df['Close'].iloc[-1])
             h52  = float(df['High'].tail(252).max())
@@ -324,10 +461,10 @@ def fundamental_score(ticker, df=None):
         else:
             det['52주위치'] = 50.0
 
-        # 가중치: 밸류에이션20%, 수익성25%, 성장성15%, 안전성10%, MDD10%, F-Score10%, 52주위치10%
-        total = (det['밸류에이션']*0.20 + det['수익성']*0.25 + det['성장성']*0.15 +
-                 det['안전성']*0.10  + det['MDD']*0.10   + det['F-Score']*0.10 +
-                 det['52주위치']*0.10)
+        # 가중치: 밸류에이션20 수익성20 성장성13 FCF품질12 안전성10 MDD8 F-Score10 52주위치7
+        total = (det['밸류에이션']*0.20 + det['수익성']*0.20 + det['성장성']*0.13 +
+                 det['FCF품질']*0.12    + det['안전성']*0.10  + det['MDD']*0.08 +
+                 det['F-Score']*0.10    + det['52주위치']*0.07)
         return float(total), det
     except Exception as e:
         return 50.0, {'오류': str(e)}
@@ -358,13 +495,17 @@ def macro_score():
     det, data = {}, {}
     end = datetime.now(); start = end - timedelta(days=400)
     try:
-        tnx = yf.download('^TNX',    start=start, end=end, progress=False)
-        fvx = yf.download('^FVX',    start=start, end=end, progress=False)
-        vix = yf.download('^VIX',    start=start, end=end, progress=False)
-        dxy = yf.download('DX-Y.NYB',start=start, end=end, progress=False)
-        for d in [tnx, fvx, vix, dxy]:
+        tnx = yf.download('^TNX',     start=start, end=end, progress=False)
+        fvx = yf.download('^FVX',     start=start, end=end, progress=False)
+        vix = yf.download('^VIX',     start=start, end=end, progress=False)
+        dxy = yf.download('DX-Y.NYB', start=start, end=end, progress=False)
+        hyg = yf.download('HYG',      start=start, end=end, progress=False)  # 하이일드 채권
+        lqd = yf.download('LQD',      start=start, end=end, progress=False)  # 투자등급 채권
+        gld = yf.download('GLD',      start=start, end=end, progress=False)  # 금(인플레/공포)
+        for d in [tnx, fvx, vix, dxy, hyg, lqd, gld]:
             if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
 
+        # ── 금리환경 (28%) ────────────────────────────
         if len(tnx) >= 60:
             cr = float(tnx['Close'].iloc[-1]); r3 = float(tnx['Close'].iloc[-60]); chg = cr-r3
             data['10Y금리'] = cr; data['3M금리변화'] = chg
@@ -373,11 +514,13 @@ def macro_score():
             det['금리환경'] = lvl*0.4 + tr*0.6
         else: det['금리환경'] = 50.0
 
+        # ── 장단기금리차 (20%) ────────────────────────
         if len(tnx) > 0 and len(fvx) > 0:
             sp = float(tnx['Close'].iloc[-1]) - float(fvx['Close'].iloc[-1]); data['장단기스프레드'] = sp
             det['장단기금리차'] = 80 if sp>1.5 else (70 if sp>0.5 else (50 if sp>=0 else (35 if sp>-0.5 else 20)))
         else: det['장단기금리차'] = 50.0
 
+        # ── VIX 공포지수 (20%) ────────────────────────
         if len(vix) >= 20:
             cv = float(vix['Close'].iloc[-1]); av = float(vix['Close'].tail(30).mean()); data['VIX'] = cv
             vs = 75 if cv<15 else (70 if cv<20 else (55 if cv<25 else (35 if cv<35 else 20)))
@@ -386,13 +529,37 @@ def macro_score():
             det['VIX'] = float(vs)
         else: det['VIX'] = 50.0
 
+        # ── 달러지수 (12%) ────────────────────────────
         if len(dxy) >= 60:
             cd = float(dxy['Close'].iloc[-1]); d3 = float(dxy['Close'].iloc[-60])
             cp2 = (cd-d3)/d3*100; data['DXY'] = cd
             det['달러지수'] = 70 if cp2<-3 else (60 if cp2<0 else (50 if cp2<3 else (40 if cp2<6 else 30)))
         else: det['달러지수'] = 50.0
 
-        total = det['금리환경']*0.35 + det['장단기금리차']*0.25 + det['VIX']*0.25 + det['달러지수']*0.15
+        # ── 신용스프레드 HYG/LQD (12%) ───────────────
+        # HYG(하이일드)가 LQD(투자등급) 대비 부진 → 신용위험 확대 → 주식에 부정적
+        if len(hyg) >= 60 and len(lqd) >= 60:
+            hyg_r = (float(hyg['Close'].iloc[-1]) - float(hyg['Close'].iloc[-60])) / float(hyg['Close'].iloc[-60]) * 100
+            lqd_r = (float(lqd['Close'].iloc[-1]) - float(lqd['Close'].iloc[-60])) / float(lqd['Close'].iloc[-60]) * 100
+            spread_diff = hyg_r - lqd_r  # 양수 = 하이일드 강세 = 신용 환경 양호
+            data['신용스프레드(HYG-LQD)'] = round(spread_diff, 2)
+            det['신용스프레드'] = (80 if spread_diff > 2 else (70 if spread_diff > 0
+                                    else (50 if spread_diff > -2 else (35 if spread_diff > -5 else 20))))
+        else: det['신용스프레드'] = 50.0
+
+        # ── 원자재/인플레 GLD (8%) ────────────────────
+        # 금 급등 = 인플레 압력 or 공포 심리 → 주식에 약세
+        if len(gld) >= 60:
+            cg = float(gld['Close'].iloc[-1]); g3 = float(gld['Close'].iloc[-60])
+            gld_chg = (cg - g3) / g3 * 100; data['GLD변화(3M)'] = round(gld_chg, 2)
+            # 금 완만한 상승은 중립, 급등은 부정적
+            det['원자재/인플레'] = (65 if gld_chg < 0 else (60 if gld_chg < 5
+                                      else (50 if gld_chg < 10 else (40 if gld_chg < 20 else 25))))
+        else: det['원자재/인플레'] = 50.0
+
+        # 가중치: 금리환경28 장단기금리차20 VIX20 달러지수12 신용스프레드12 원자재/인플레8
+        total = (det['금리환경']*0.28 + det['장단기금리차']*0.20 + det['VIX']*0.20 +
+                 det['달러지수']*0.12  + det['신용스프레드']*0.12 + det['원자재/인플레']*0.08)
         return float(total), det, data
     except Exception as e:
         return 50.0, {'오류': str(e)}, {}
@@ -1147,10 +1314,16 @@ def main():
                     with col1:
                         st.plotly_chart(gauge(t_score, f"📈 차트+파동  ({w_tech}%)"), use_container_width=True)
                         with st.expander("세부 점수 · 캔들 패턴 · 모멘텀"):
+                            SKIP = {'RSI값', 'ADX값', 'Stoch값'}
+                            HINT = {
+                                'RSI':      f"RSI {t_det.get('RSI값','N/A')}",
+                                'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if float(t_det.get('ADX값',0)) > 25 else '횡보'})",
+                                '스토캐스틱': f"%K {t_det.get('Stoch값','N/A')}",
+                            }
                             for k, v in t_det.items():
-                                if k != 'RSI값':
-                                    ex = f" *(현재 RSI: {t_det['RSI값']})*" if k=='RSI' else ''
-                                    st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{ex}")
+                                if k in SKIP: continue
+                                hint = f" *({HINT[k]})*" if k in HINT else ''
+                                st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{hint}")
                             st.divider()
                             st.caption("**📊 모멘텀**")
                             m_cols = st.columns(4)
@@ -1168,14 +1341,17 @@ def main():
                     with col2:
                         st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
                         with st.expander("세부 점수"):
-                            for k in ['밸류에이션','수익성','성장성','안전성','MDD','F-Score','52주위치']:
+                            for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
                                 v = f_det.get(k, 50)
                                 st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
                             st.divider()
                             sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
                             st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
-                            st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}")
-                            st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}")
+                            peg_v = f_det.get('PEG'); ev_v = f_det.get('EV/EBITDA')
+                            st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}  |  PEG: {fmt(peg_v)}  |  EV/EBITDA: {fmt(ev_v)}")
+                            st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}  |  순이익률: {fmt(f_det.get('순이익률'),pct=True)}")
+                            fcf_y = f_det.get('FCF수익률')
+                            st.caption(f"FCF수익률: {f'{fcf_y:.1f}%' if fcf_y is not None else 'N/A'}  |  이자보상배율: {fmt(f_det.get('이자보상배율'))}")
                             st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
                             mdd_v = f_det.get('MDD값')
                             st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v else 'N/A'}")
@@ -1197,7 +1373,7 @@ def main():
                     with col3:
                         st.plotly_chart(gauge(m_score, f"🌍 매크로+금리  ({w_macro}%)"), use_container_width=True)
                         with st.expander("세부 점수"):
-                            for k in ['금리환경','장단기금리차','VIX','달러지수']:
+                            for k in ['금리환경','장단기금리차','VIX','달러지수','신용스프레드','원자재/인플레']:
                                 v = m_det.get(k, 50)
                                 st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
                             st.divider()
@@ -1207,6 +1383,10 @@ def main():
                                 st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
                             if 'VIX' in m_data:
                                 st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
+                            if '신용스프레드(HYG-LQD)' in m_data:
+                                st.caption(f"신용스프레드(HYG-LQD 3M): {m_data['신용스프레드(HYG-LQD)']:+.2f}%p")
+                            if 'GLD변화(3M)' in m_data:
+                                st.caption(f"금(GLD) 3M 변화: {m_data['GLD변화(3M)']:+.2f}%")
                     st.divider()
 
                     # ── 멀티 타임프레임 분석 ──────────────────
