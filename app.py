@@ -594,7 +594,7 @@ def _style_score(val):
     except: return ''
 
 def get_news_sentiment(ticker):
-    """yfinance 뉴스 헤드라인 키워드 기반 감성 분석"""
+    """yfinance 뉴스 헤드라인 키워드 기반 감성 분석 (구/신 API 형식 모두 지원)"""
     try:
         news = yf.Ticker(ticker).news
         if not news: return 50.0, []
@@ -608,23 +608,35 @@ def get_news_sentiment(ticker):
                   '하락','급락','손실','매도','악재','위기','조사','적자','리콜','제재']
         articles, total_score, count = [], 0, 0
         for item in news[:8]:
-            title = item.get('title', '')
+            # yfinance 0.2.50+ 신형식: item['content']['title']
+            # 구형식: item['title']
+            if 'content' in item and isinstance(item['content'], dict):
+                c = item['content']
+                title = c.get('title') or c.get('headline', '')
+                pub_str = c.get('pubDate', '') or c.get('displayTime', '')
+                try:
+                    pub_dt = pub_str[5:10].replace('-', '/') if pub_str else '-'
+                except:
+                    pub_dt = '-'
+            else:
+                title = item.get('title', '')
+                pub_ts = item.get('providerPublishTime', 0)
+                pub_dt = datetime.fromtimestamp(pub_ts).strftime('%m/%d') if pub_ts else '-'
+
             if not title: continue
             tl = title.lower()
             pos = sum(1 for k in pos_kw if k in tl)
             neg = sum(1 for k in neg_kw if k in tl)
             score = pos - neg
-            pub_ts = item.get('providerPublishTime', 0)
-            pub_dt = datetime.fromtimestamp(pub_ts).strftime('%m/%d') if pub_ts else '-'
             articles.append({
                 '날짜': pub_dt,
                 '헤드라인': title[:85] + ('…' if len(title) > 85 else ''),
                 '감성': '🟢 긍정' if score > 0 else ('🔴 부정' if score < 0 else '⚪ 중립'),
             })
             total_score += score; count += 1
+        if not articles: return 50.0, []
         avg = total_score / count if count else 0
-        sentiment_score = float(np.clip(50 + avg * 12, 0, 100))
-        return sentiment_score, articles
+        return float(np.clip(50 + avg * 12, 0, 100)), articles
     except:
         return 50.0, []
 
