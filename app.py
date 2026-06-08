@@ -25,6 +25,13 @@ PRESETS = {
     'ETF':          ['SPY','QQQ','IWM','GLD','TLT','EEM','069500.KS','114800.KS'],
 }
 
+SECTOR_AVG_PER = {
+    'Technology': 28, 'Consumer Cyclical': 22, 'Financial Services': 13,
+    'Healthcare': 20, 'Consumer Defensive': 19, 'Communication Services': 20,
+    'Industrials': 18, 'Basic Materials': 14, 'Energy': 11,
+    'Real Estate': 30, 'Utilities': 17,
+}
+
 # ─────────────────────────────────────────────
 # TECHNICAL ANALYSIS
 # ─────────────────────────────────────────────
@@ -129,6 +136,18 @@ def _score_per(v):
     if not v or np.isnan(v) or v <= 0: return 50
     return 70 if v<5 else (85 if v<15 else (65 if v<25 else (40 if v<40 else 20)))
 
+def _score_per_relative(per, sector_avg):
+    """업종 평균 PER 대비 상대적 저평가/고평가 점수"""
+    if not per or np.isnan(per) or per <= 0: return 50
+    ratio = per / sector_avg
+    if ratio < 0.5:   return 90
+    elif ratio < 0.7: return 80
+    elif ratio < 0.9: return 70
+    elif ratio < 1.1: return 60
+    elif ratio < 1.3: return 45
+    elif ratio < 1.5: return 30
+    else:             return 15
+
 def _score_pbr(v):
     if not v or np.isnan(v) or v <= 0: return 50
     return 85 if v<1 else (75 if v<2 else (55 if v<4 else (35 if v<8 else 20)))
@@ -152,6 +171,18 @@ def calc_mdd(prices):
 
 def _score_mdd(m):
     return 90 if m>-10 else (75 if m>-20 else (55 if m>-30 else (35 if m>-40 else (20 if m>-50 else 10))))
+
+def _score_52w_position(cp, high52, low52):
+    """52주 고저 대비 현재가 위치 점수 (중간대가 가장 좋음)"""
+    if high52 <= low52 or high52 == 0: return 50
+    pos = (cp - low52) / (high52 - low52) * 100
+    if pos < 20:   return 40   # 52주 저점 근처 - 낙폭과대 or 하락추세
+    elif pos < 35: return 60
+    elif pos < 50: return 70
+    elif pos < 65: return 80   # 중간~상단 스윗스팟
+    elif pos < 80: return 75
+    elif pos < 90: return 60
+    else:          return 45   # 52주 고점 근처 - 과매수 우려
 
 def _get_fs_val(df, *kw, col=0):
     if df is None or df.empty: return None
@@ -244,8 +275,15 @@ def fundamental_score(ticker, df=None):
 
         per = info.get('trailingPE') or info.get('forwardPE')
         pbr = info.get('priceToBook')
-        det['밸류에이션'] = _score_per(per)*0.6 + _score_pbr(pbr)*0.4
+        # 업종 평균 PER 대비 상대적 밸류에이션 (절대값 + 상대값 혼합)
+        sector = info.get('sector', '')
+        sector_avg = SECTOR_AVG_PER.get(sector, 20)
+        per_abs_s = _score_per(per)
+        per_rel_s = _score_per_relative(per, sector_avg)
+        per_s = per_abs_s * 0.4 + per_rel_s * 0.6   # 상대 비중 높임
+        det['밸류에이션'] = per_s * 0.6 + _score_pbr(pbr) * 0.4
         det['PER'] = per; det['PBR'] = pbr
+        det['업종'] = sector or 'N/A'; det['업종평균PER'] = sector_avg
 
         roe = info.get('returnOnEquity')
         roa = info.get('returnOnAssets')
@@ -276,8 +314,20 @@ def fundamental_score(ticker, df=None):
         det['F-Score값']   = fs
         det['F-Score시그널'] = fsig
 
-        total = (det['밸류에이션']*0.25 + det['수익성']*0.25 + det['성장성']*0.20 +
-                 det['안전성']*0.10  + det['MDD']*0.10   + det['F-Score']*0.10)
+        # 52주 위치 점수
+        if df is not None and len(df) >= 30:
+            cp52 = float(df['Close'].iloc[-1])
+            h52  = float(df['High'].tail(252).max())
+            l52  = float(df['Low'].tail(252).min())
+            det['52주위치'] = float(_score_52w_position(cp52, h52, l52))
+            det['52주고가'] = h52; det['52주저가'] = l52
+        else:
+            det['52주위치'] = 50.0
+
+        # 가중치: 밸류에이션20%, 수익성25%, 성장성15%, 안전성10%, MDD10%, F-Score10%, 52주위치10%
+        total = (det['밸류에이션']*0.20 + det['수익성']*0.25 + det['성장성']*0.15 +
+                 det['안전성']*0.10  + det['MDD']*0.10   + det['F-Score']*0.10 +
+                 det['52주위치']*0.10)
         return float(total), det
     except Exception as e:
         return 50.0, {'오류': str(e)}
@@ -285,6 +335,23 @@ def fundamental_score(ticker, df=None):
 # ─────────────────────────────────────────────
 # MACRO & INTEREST RATE
 # ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def get_market_regime():
+    """SPY vs MA200 기반 시장 국면 감지 (bull/bear/neutral)"""
+    try:
+        end = datetime.now(); start = end - timedelta(days=310)
+        spy = yf.download('SPY', start=start, end=end, progress=False)
+        if isinstance(spy.columns, pd.MultiIndex): spy.columns = spy.columns.droplevel(1)
+        if len(spy) < 200: return 'neutral', 0.0
+        cp = float(spy['Close'].iloc[-1])
+        ma200 = float(spy['Close'].rolling(200).mean().iloc[-1])
+        diff_pct = (cp - ma200) / ma200 * 100
+        if cp > ma200 * 1.03:   return 'bull', diff_pct
+        elif cp < ma200 * 0.97: return 'bear', diff_pct
+        else:                   return 'neutral', diff_pct
+    except:
+        return 'neutral', 0.0
 
 @st.cache_data(ttl=3600)
 def macro_score():
@@ -526,12 +593,47 @@ def _style_score(val):
         else:         return 'background-color:#3a1a1a;color:#f44336;font-weight:bold'
     except: return ''
 
+def get_news_sentiment(ticker):
+    """yfinance 뉴스 헤드라인 키워드 기반 감성 분석"""
+    try:
+        news = yf.Ticker(ticker).news
+        if not news: return 50.0, []
+        pos_kw = ['surge','rally','beat','exceed','record','gain','growth','strong','bullish',
+                  'upgrade','buy','positive','profit','revenue','raise','outperform','deal','win',
+                  'breakthrough','partnership','acquisition','dividend','boost',
+                  '상승','급등','호실적','매수','성장','기록','호재','흑자','돌파','계약']
+        neg_kw = ['fall','drop','miss','decline','loss','cut','downgrade','sell','weak','bearish',
+                  'concern','risk','warning','crash','layoff','lawsuit','fine','fraud',
+                  'investigation','debt','recall','shortage','penalty','halt',
+                  '하락','급락','손실','매도','악재','위기','조사','적자','리콜','제재']
+        articles, total_score, count = [], 0, 0
+        for item in news[:8]:
+            title = item.get('title', '')
+            if not title: continue
+            tl = title.lower()
+            pos = sum(1 for k in pos_kw if k in tl)
+            neg = sum(1 for k in neg_kw if k in tl)
+            score = pos - neg
+            pub_ts = item.get('providerPublishTime', 0)
+            pub_dt = datetime.fromtimestamp(pub_ts).strftime('%m/%d') if pub_ts else '-'
+            articles.append({
+                '날짜': pub_dt,
+                '헤드라인': title[:85] + ('…' if len(title) > 85 else ''),
+                '감성': '🟢 긍정' if score > 0 else ('🔴 부정' if score < 0 else '⚪ 중립'),
+            })
+            total_score += score; count += 1
+        avg = total_score / count if count else 0
+        sentiment_score = float(np.clip(50 + avg * 12, 0, 100))
+        return sentiment_score, articles
+    except:
+        return 50.0, []
+
 # ─────────────────────────────────────────────
 # TRADE LEVELS
 # ─────────────────────────────────────────────
 
 def calc_trade_levels(df, total_score):
-    """지지/저항/ATR 기반 매수·목표·손절가 계산"""
+    """피보나치·피봇포인트·ATR 기반 매수·목표·손절가 계산"""
     p, h, l = df['Close'], df['High'], df['Low']
     cp  = float(p.iloc[-1])
 
@@ -550,31 +652,55 @@ def calc_trade_levels(df, total_score):
     high20 = float(h.tail(20).max())
     high60 = float(h.tail(60).max())
 
-    # 지지선: 현재가보다 낮은 것 중 가까운 순
-    supports = sorted([x for x in [ma20, ma60, ma120, low20, bb_lower] if x < cp], reverse=True)
-    # 저항선: 현재가보다 높은 것 중 가까운 순
-    resists  = sorted([x for x in [high20, high60, bb_upper] if x > cp])
+    # ── 피보나치 되돌림 (60일 스윙 기준) ──────────
+    sw_high = float(h.tail(60).max())
+    sw_low  = float(l.tail(60).min())
+    fib_range = sw_high - sw_low
+    fib = {
+        '23.6%': sw_high - 0.236 * fib_range,
+        '38.2%': sw_high - 0.382 * fib_range,
+        '50.0%': sw_high - 0.500 * fib_range,
+        '61.8%': sw_high - 0.618 * fib_range,
+        '78.6%': sw_high - 0.786 * fib_range,
+    }
+
+    # ── 피봇 포인트 (전일 기준) ────────────────────
+    prev_h = float(h.iloc[-2]) if len(h) >= 2 else float(h.iloc[-1])
+    prev_l = float(l.iloc[-2]) if len(l) >= 2 else float(l.iloc[-1])
+    prev_c = float(p.iloc[-2]) if len(p) >= 2 else float(p.iloc[-1])
+    pivot  = (prev_h + prev_l + prev_c) / 3
+    piv = {
+        'R2': pivot + (prev_h - prev_l),
+        'R1': 2 * pivot - prev_l,
+        'PP': pivot,
+        'S1': 2 * pivot - prev_h,
+        'S2': pivot - (prev_h - prev_l),
+    }
+
+    # ── 지지선 풀: MA·BB·피보나치·피봇S ──────────
+    sup_pool = [ma20, ma60, ma120, low20, bb_lower,
+                fib['38.2%'], fib['50.0%'], fib['61.8%'], fib['78.6%'],
+                piv['S1'], piv['S2']]
+    # ── 저항선 풀: 고가·BB·피보나치·피봇R ────────
+    res_pool = [high20, high60, bb_upper,
+                fib['23.6%'], fib['38.2%'], fib['50.0%'],
+                piv['R1'], piv['R2']]
+
+    supports = sorted([x for x in sup_pool if x < cp * 0.999], reverse=True)
+    resists  = sorted([x for x in res_pool if x > cp * 1.001])
 
     s1 = supports[0] if supports else cp * 0.96
     s2 = supports[1] if len(supports) > 1 else s1 * 0.97
     r1 = resists[0]  if resists  else cp * 1.05
     r2 = resists[1]  if len(resists) > 1 else r1 * 1.05
 
-    # 점수에 따라 진입 전략 변경
     if total_score >= 65:
-        entry1 = cp          # 즉시 매수
-        entry2 = s1          # 눌림목 분할매수
-        strategy = '매수'
+        entry1, entry2, strategy = cp, s1, '즉시 매수'
     elif total_score >= 50:
-        entry1 = s1          # 지지선 대기
-        entry2 = s2          # 추가 분할매수
-        strategy = '분할매수 대기'
+        entry1, entry2, strategy = s1, s2, '분할매수 대기'
     else:
-        entry1 = s2          # 더 낮은 지지 대기
-        entry2 = low60       # 장기 지지 대기
-        strategy = '관망 후 저점매수'
+        entry1, entry2, strategy = s2, low60, '관망 후 저점매수'
 
-    # 손절가: 두 진입가 중 낮은 것 아래 ATR×0.5
     stop   = min(entry1, entry2) - atr * 0.5
     risk   = entry1 - stop
     reward = r1 - entry1
@@ -593,6 +719,9 @@ def calc_trade_levels(df, total_score):
         'risk_pct':  (entry1 - stop) / entry1 * 100,
         'atr':       atr,
         'cp':        cp,
+        'pivot':     pivot,
+        'fib':       fib,
+        'piv':       piv,
     }
 
 def _draw_levels_chart(lv, is_krw):
@@ -791,6 +920,9 @@ def main():
                     m_score, m_det, m_data = macro_score()
                     prog.progress(95)
                     total = t_score*(w_tech/100) + f_score*(w_fund/100) + m_score*(w_macro/100)
+                    prog.progress(95); msg.text("📰 뉴스 감성 분석 중...")
+                    news_score, news_articles = get_news_sentiment(ticker)
+                    regime, regime_diff = get_market_regime()
                     prog.progress(100); prog.empty(); msg.empty()
 
                     try:
@@ -804,12 +936,21 @@ def main():
                     pp  = float(df['Close'].iloc[-2]) if len(df) >= 2 else cp
                     chg = (cp-pp)/pp*100
 
+                    regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}[regime]
+                    regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}[regime]
+
                     st.header(f"{name}  `{ticker}`")
                     c1,c2,c3,c4 = st.columns(4)
                     c1.metric("현재가", fmt_p(cp), f"{chg:+.2f}%")
                     c2.metric("52주 고가", fmt_p(float(df['High'].tail(252).max())))
                     c3.metric("52주 저가", fmt_p(float(df['Low'].tail(252).min())))
                     c4.metric("분석 기준일", end_dt.strftime("%Y-%m-%d"))
+                    st.markdown(
+                        f"<span style='background:{regime_color}22;color:{regime_color};"
+                        f"border:1px solid {regime_color};border-radius:6px;"
+                        f"padding:3px 10px;font-size:13px;font-weight:600'>"
+                        f"시장 국면: {regime_icon}  (SPY vs MA200 {regime_diff:+.1f}%)</span>",
+                        unsafe_allow_html=True)
                     st.divider()
 
                     cg, cv = st.columns(2)
@@ -838,10 +979,12 @@ def main():
                     with col2:
                         st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
                         with st.expander("세부 점수"):
-                            for k in ['밸류에이션','수익성','성장성','안전성','MDD','F-Score']:
+                            for k in ['밸류에이션','수익성','성장성','안전성','MDD','F-Score','52주위치']:
                                 v = f_det.get(k, 50)
                                 st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
                             st.divider()
+                            sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
+                            st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
                             st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}")
                             st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}")
                             st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
@@ -872,15 +1015,49 @@ def main():
                     fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
 
                     lv_rows = [
-                        {'구분': '📌 전략',     '가격': lv['strategy'],        '현재가 대비': f"위험보상비율 {lv['rr']:.1f}:1"},
-                        {'구분': '🟢 1차 매수', '가격': fmt_p(lv['entry1']),   '현재가 대비': f"{(lv['entry1']-lv['cp'])/lv['cp']*100:+.1f}%"},
+                        {'구분': '📌 전략',      '가격': lv['strategy'],       '현재가 대비': f"위험보상비율 {lv['rr']:.1f}:1"},
+                        {'구분': '🟢 1차 매수',  '가격': fmt_p(lv['entry1']),  '현재가 대비': f"{(lv['entry1']-lv['cp'])/lv['cp']*100:+.1f}%"},
                         {'구분': '🟩 분할 매수', '가격': fmt_p(lv['entry2']),  '현재가 대비': f"{(lv['entry2']-lv['cp'])/lv['cp']*100:+.1f}%"},
-                        {'구분': '🔵 1차 목표', '가격': fmt_p(lv['target1']),  '현재가 대비': f"+{lv['ret1']:.1f}%"},
-                        {'구분': '🔷 2차 목표', '가격': fmt_p(lv['target2']),  '현재가 대비': f"+{lv['ret2']:.1f}%"},
-                        {'구분': '🔴 손절가',   '가격': fmt_p(lv['stop']),     '현재가 대비': f"-{lv['risk_pct']:.1f}%"},
+                        {'구분': '🔵 1차 목표',  '가격': fmt_p(lv['target1']), '현재가 대비': f"+{lv['ret1']:.1f}%"},
+                        {'구분': '🔷 2차 목표',  '가격': fmt_p(lv['target2']), '현재가 대비': f"+{lv['ret2']:.1f}%"},
+                        {'구분': '🔴 손절가',    '가격': fmt_p(lv['stop']),    '현재가 대비': f"-{lv['risk_pct']:.1f}%"},
                     ]
                     st.dataframe(pd.DataFrame(lv_rows), use_container_width=True, hide_index=True)
+
+                    with st.expander("📐 피보나치 & 피봇 포인트 세부"):
+                        fa, fb = st.columns(2)
+                        with fa:
+                            st.caption("**피보나치 되돌림 (60일 스윙)**")
+                            for k, v in lv['fib'].items():
+                                marker = " ◀ 현재가" if abs(v - lv['cp']) < lv['atr']*0.5 else ""
+                                st.caption(f"  {k}: {fmt_p(v)}{marker}")
+                        with fb:
+                            st.caption("**피봇 포인트 (전일 기준)**")
+                            for k, v in lv['piv'].items():
+                                marker = " ◀ 현재가" if abs(v - lv['cp']) < lv['atr']*0.5 else ""
+                                st.caption(f"  {k}: {fmt_p(v)}{marker}")
+                        st.caption(f"ATR(14): {fmt_p(lv['atr'])}")
+
                     st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정과 다를 수 있습니다.")
+                    st.divider()
+
+                    # ── 뉴스 감성 ──────────────────────────────
+                    st.subheader("📰 뉴스 감성 분석")
+                    ns_col1, ns_col2 = st.columns([1, 3])
+                    with ns_col1:
+                        ns_color = score_color(news_score)
+                        ns_label = '긍정적' if news_score >= 60 else ('부정적' if news_score < 40 else '중립')
+                        st.markdown(
+                            f"<div style='text-align:center;padding:15px 5px'>"
+                            f"<div style='font-size:42px;font-weight:bold;color:{ns_color}'>{news_score:.0f}</div>"
+                            f"<div style='color:{ns_color};font-size:14px'>{ns_label}</div>"
+                            f"<div style='color:#888;font-size:11px;margin-top:4px'>감성 점수</div>"
+                            f"</div>", unsafe_allow_html=True)
+                    with ns_col2:
+                        if news_articles:
+                            st.dataframe(pd.DataFrame(news_articles), use_container_width=True, hide_index=True)
+                        else:
+                            st.info("뉴스 데이터를 가져올 수 없습니다.")
                     st.divider()
 
                     # ── 차트 ──────────────────────────────────
@@ -889,10 +1066,11 @@ def main():
 
                     st.subheader("📋 분석 요약")
                     st.dataframe(pd.DataFrame([
-                        {'카테고리':'종합 점수',      '점수':f"{total:.1f}",   '등급':score_label(total),   '가중치':'100%'},
-                        {'카테고리':'📈 차트+파동',   '점수':f"{t_score:.1f}", '등급':score_label(t_score),  '가중치':f'{w_tech}%'},
-                        {'카테고리':'💰 재무제표+퀀트','점수':f"{f_score:.1f}", '등급':score_label(f_score), '가중치':f'{w_fund}%'},
-                        {'카테고리':'🌍 매크로+금리', '점수':f"{m_score:.1f}", '등급':score_label(m_score), '가중치':f'{w_macro}%'},
+                        {'카테고리':'종합 점수',        '점수':f"{total:.1f}",      '등급':score_label(total),      '비고': f"시장: {regime_icon}"},
+                        {'카테고리':'📈 차트+파동',     '점수':f"{t_score:.1f}",    '등급':score_label(t_score),    '비고':f'가중치 {w_tech}%'},
+                        {'카테고리':'💰 재무제표+퀀트', '점수':f"{f_score:.1f}",    '등급':score_label(f_score),    '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
+                        {'카테고리':'🌍 매크로+금리',   '점수':f"{m_score:.1f}",    '등급':score_label(m_score),    '비고':f'가중치 {w_macro}%'},
+                        {'카테고리':'📰 뉴스 감성',     '점수':f"{news_score:.1f}", '등급':score_label(news_score), '비고':'참고용'},
                     ]), use_container_width=True, hide_index=True)
                     st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
 
