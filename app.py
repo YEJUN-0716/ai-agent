@@ -527,6 +527,126 @@ def _style_score(val):
     except: return ''
 
 # ─────────────────────────────────────────────
+# TRADE LEVELS
+# ─────────────────────────────────────────────
+
+def calc_trade_levels(df, total_score):
+    """지지/저항/ATR 기반 매수·목표·손절가 계산"""
+    p, h, l = df['Close'], df['High'], df['Low']
+    cp  = float(p.iloc[-1])
+
+    atr = float((h - l).rolling(14).mean().iloc[-1])
+
+    ma20  = float(p.rolling(20).mean().iloc[-1])
+    ma60  = float(p.rolling(60).mean().iloc[-1])
+    ma120 = float(p.rolling(120).mean().iloc[-1])
+
+    bb_u, _, bb_l = calc_bb(p)
+    bb_upper = float(bb_u.iloc[-1])
+    bb_lower = float(bb_l.iloc[-1])
+
+    low20  = float(l.tail(20).min())
+    low60  = float(l.tail(60).min())
+    high20 = float(h.tail(20).max())
+    high60 = float(h.tail(60).max())
+
+    # 지지선: 현재가보다 낮은 것 중 가까운 순
+    supports = sorted([x for x in [ma20, ma60, ma120, low20, bb_lower] if x < cp], reverse=True)
+    # 저항선: 현재가보다 높은 것 중 가까운 순
+    resists  = sorted([x for x in [high20, high60, bb_upper] if x > cp])
+
+    s1 = supports[0] if supports else cp * 0.96
+    s2 = supports[1] if len(supports) > 1 else s1 * 0.97
+    r1 = resists[0]  if resists  else cp * 1.05
+    r2 = resists[1]  if len(resists) > 1 else r1 * 1.05
+
+    stop = s1 - atr * 0.5
+
+    # 점수에 따라 진입 전략 변경
+    if total_score >= 65:
+        entry1 = cp          # 즉시 매수
+        entry2 = s1          # 눌림목 분할매수
+        strategy = '매수'
+    elif total_score >= 50:
+        entry1 = s1          # 지지선 대기
+        entry2 = s2          # 추가 분할매수
+        strategy = '분할매수 대기'
+    else:
+        entry1 = s2          # 더 낮은 지지 대기
+        entry2 = low60       # 장기 지지 대기
+        strategy = '관망 후 저점매수'
+
+    risk   = entry1 - stop
+    reward = r1 - entry1
+    rr     = reward / risk if risk > 0 else 0
+
+    return {
+        'strategy':  strategy,
+        'entry1':    entry1,
+        'entry2':    entry2,
+        'target1':   r1,
+        'target2':   r2,
+        'stop':      stop,
+        'rr':        rr,
+        'ret1':      (r1 - entry1) / entry1 * 100,
+        'ret2':      (r2 - entry1) / entry1 * 100,
+        'risk_pct':  (entry1 - stop) / entry1 * 100,
+        'atr':       atr,
+        'cp':        cp,
+    }
+
+def _draw_levels_chart(lv, is_krw):
+    """매수·목표·손절가 시각화"""
+    fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
+
+    levels = [
+        ('2차 목표가', lv['target2'], '#1565C0', '▲'),
+        ('1차 목표가', lv['target1'], '#2196F3', '▲'),
+        ('현재가',     lv['cp'],      '#FFD700', '●'),
+        ('1차 매수',   lv['entry1'],  '#43A047', '▼'),
+        ('분할 매수',  lv['entry2'],  '#81C784', '▼'),
+        ('손절가',     lv['stop'],    '#EF5350', '✕'),
+    ]
+    levels_sorted = sorted(levels, key=lambda x: x[1], reverse=True)
+
+    fig = go.Figure()
+    for name, price, color, marker in levels_sorted:
+        pct = (price - lv['cp']) / lv['cp'] * 100
+        label = f"<b>{name}</b>  {fmt_p(price)}  ({pct:+.1f}%)"
+        fig.add_trace(go.Scatter(
+            x=[0], y=[price],
+            mode='markers+text',
+            marker=dict(size=14, color=color, symbol='line-ew', line=dict(color=color, width=3)),
+            text=[label], textposition='middle right',
+            textfont=dict(color=color, size=12),
+            name=name, showlegend=False,
+        ))
+        fig.add_hline(y=price, line_color=color, line_width=1,
+                      line_dash='dot' if name in ['분할 매수','2차 목표가'] else 'solid')
+
+    # 매수~목표 구간 강조
+    fig.add_hrect(y0=lv['entry1'], y1=lv['target1'],
+                  fillcolor='rgba(33,150,243,0.07)', line_width=0)
+    # 매수~손절 구간 강조
+    fig.add_hrect(y0=lv['stop'], y1=lv['entry1'],
+                  fillcolor='rgba(239,83,80,0.07)', line_width=0)
+
+    all_prices = [x[1] for x in levels]
+    margin = (max(all_prices) - min(all_prices)) * 0.15
+
+    fig.update_layout(
+        height=380, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+        font=dict(color=TV_TEXT, size=11),
+        xaxis=dict(visible=False, range=[-0.5, 2]),
+        yaxis=dict(range=[min(all_prices)-margin, max(all_prices)+margin],
+                   gridcolor=TV_GRID, tickfont=dict(color=TV_TEXT, size=10),
+                   side='right'),
+        margin=dict(l=10, r=160, t=20, b=10),
+    )
+    return fig
+
+
+# ─────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────
 
@@ -746,6 +866,32 @@ def main():
                                 st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
                     st.divider()
 
+                    # ── 매수/매도 추천가 ──────────────────────
+                    st.subheader("💡 매매 추천가")
+                    lv = calc_trade_levels(df, total)
+                    fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
+
+                    st.markdown(f"**전략:** `{lv['strategy']}`  &nbsp;&nbsp;  "
+                                f"**위험보상비율:** `{lv['rr']:.1f} : 1`  &nbsp;&nbsp;  "
+                                f"**ATR(14):** `{fmt_p(lv['atr'])}`")
+
+                    ca, cb, cc, cd, ce = st.columns(5)
+                    ca.metric("1차 매수가",  fmt_p(lv['entry1']),
+                              f"{(lv['entry1']-lv['cp'])/lv['cp']*100:+.1f}%")
+                    cb.metric("분할 매수가", fmt_p(lv['entry2']),
+                              f"{(lv['entry2']-lv['cp'])/lv['cp']*100:+.1f}%")
+                    cc.metric("1차 목표가",  fmt_p(lv['target1']),
+                              f"+{lv['ret1']:.1f}%", delta_color="normal")
+                    cd.metric("2차 목표가",  fmt_p(lv['target2']),
+                              f"+{lv['ret2']:.1f}%", delta_color="normal")
+                    ce.metric("손절가",      fmt_p(lv['stop']),
+                              f"-{lv['risk_pct']:.1f}%", delta_color="inverse")
+
+                    st.plotly_chart(_draw_levels_chart(lv, is_krw), use_container_width=True)
+                    st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정과 다를 수 있습니다.")
+                    st.divider()
+
+                    # ── 차트 ──────────────────────────────────
                     st.subheader("📈 차트")
                     st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
 
