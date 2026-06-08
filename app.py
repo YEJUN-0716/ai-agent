@@ -786,6 +786,17 @@ def main():
     fig.add_hline(y=70, line_dash='dash', line_color='#ef5350', line_width=1, row=3, col=1)
     fig.add_hline(y=30, line_dash='dash', line_color='#26a69a', line_width=1, row=3, col=1)
 
+    # 현재가 기준선
+    cur_price = float(df['Close'].iloc[-1])
+    price_str = f"₩{cur_price:,.0f}" if ticker.endswith('.KS') or ticker.endswith('.KQ') else f"${cur_price:.2f}"
+    fig.add_hline(
+        y=cur_price, line_dash='dot', line_color='#FFD700', line_width=1.5,
+        row=1, col=1,
+        annotation_text=f" {price_str}",
+        annotation_position="right",
+        annotation_font=dict(color='#FFD700', size=12),
+    )
+
     fig.update_layout(
         height=680, xaxis_rangeslider_visible=False,
         plot_bgcolor='#0E1117', paper_bgcolor='#0E1117',
