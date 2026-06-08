@@ -747,64 +747,162 @@ def main():
     # ── Price Chart ───────────────────────────
     st.subheader("📈 차트 (캔들·MA·볼린저밴드·MACD·RSI)")
 
-    p  = df['Close']
-    m20 = p.rolling(20).mean()
-    m60 = p.rolling(60).mean()
+    # ── TradingView 스타일 차트 ───────────────
+    TV_BG     = '#131722'
+    TV_PAPER  = '#131722'
+    TV_GRID   = '#1e2334'
+    TV_BORDER = '#2a2e39'
+    TV_TEXT   = '#b2b5be'
+    TV_UP     = '#26a69a'
+    TV_DOWN   = '#ef5350'
+
+    p    = df['Close']
+    m20  = p.rolling(20).mean()
+    m60  = p.rolling(60).mean()
     m120 = p.rolling(120).mean()
-    bb_u, _, bb_l = calc_bb(p)
+    bb_u, bb_mid, bb_l = calc_bb(p)
     macd_l, sig_l, hist = calc_macd(p)
     rsi_s = calc_rsi(p)
 
+    # 거래량 색상 (캔들 방향 기반)
+    vol_colors = [
+        f'rgba(38,166,154,0.5)' if float(df['Close'].iloc[i]) >= float(df['Open'].iloc[i])
+        else f'rgba(239,83,80,0.5)'
+        for i in range(len(df))
+    ]
+
     fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True,
-        row_heights=[0.55, 0.22, 0.23],
-        vertical_spacing=0.04,
-        subplot_titles=['가격', 'MACD', 'RSI']
+        rows=4, cols=1, shared_xaxes=True,
+        row_heights=[0.52, 0.14, 0.17, 0.17],
+        vertical_spacing=0.02,
+        subplot_titles=[None, None, None, None],
     )
 
-    # 캔들
+    # ── 1. 캔들스틱 ───────────────────────────
     fig.add_trace(go.Candlestick(
         x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name='캔들', increasing_line_color='#ef5350', decreasing_line_color='#26a69a'
+        name='',
+        increasing=dict(line=dict(color=TV_UP, width=1), fillcolor=TV_UP),
+        decreasing=dict(line=dict(color=TV_DOWN, width=1), fillcolor=TV_DOWN),
+        hoverlabel=dict(bgcolor=TV_BG),
     ), row=1, col=1)
 
-    for ma, color, name in [(m20,'#2196F3','MA20'), (m60,'#FF9800','MA60'), (m120,'#F44336','MA120')]:
-        fig.add_trace(go.Scatter(x=df.index, y=ma, name=name, line=dict(color=color, width=1.2)), row=1, col=1)
+    # 볼린저밴드 (연한 보라 반투명)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=bb_u, name='BB', line=dict(color='rgba(149,117,205,0.6)', width=1),
+        showlegend=True, legendgroup='bb',
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=bb_l, name='BB', line=dict(color='rgba(149,117,205,0.6)', width=1),
+        fill='tonexty', fillcolor='rgba(149,117,205,0.06)',
+        showlegend=False, legendgroup='bb',
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=bb_mid, name='BB Mid',
+        line=dict(color='rgba(149,117,205,0.4)', width=1, dash='dot'),
+        showlegend=False,
+    ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=df.index, y=bb_u, name='BB상단', line=dict(color='#9E9E9E', dash='dot', width=1)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=bb_l, name='BB하단', line=dict(color='#9E9E9E', dash='dot', width=1),
-                             fill='tonexty', fillcolor='rgba(158,158,158,0.08)'), row=1, col=1)
-
-    # MACD
-    hcolors = ['#ef5350' if v >= 0 else '#26a69a' for v in hist]
-    fig.add_trace(go.Bar(x=df.index, y=hist, name='히스토그램', marker_color=hcolors, showlegend=False), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=macd_l, name='MACD', line=dict(color='#2196F3', width=1.2)), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=sig_l,  name='시그널', line=dict(color='#FF9800', width=1.2)), row=2, col=1)
-
-    # RSI
-    fig.add_trace(go.Scatter(x=df.index, y=rsi_s, name='RSI', line=dict(color='#9C27B0', width=1.5)), row=3, col=1)
-    fig.add_hline(y=70, line_dash='dash', line_color='#ef5350', line_width=1, row=3, col=1)
-    fig.add_hline(y=30, line_dash='dash', line_color='#26a69a', line_width=1, row=3, col=1)
+    # 이동평균선
+    for ma_s, color, ma_name in [
+        (m20,  '#f5c518', 'MA 20'),
+        (m60,  '#2962ff', 'MA 60'),
+        (m120, '#ff6d00', 'MA 120'),
+    ]:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=ma_s, name=ma_name,
+            line=dict(color=color, width=1.4),
+        ), row=1, col=1)
 
     # 현재가 기준선
     cur_price = float(df['Close'].iloc[-1])
-    price_str = f"₩{cur_price:,.0f}" if ticker.endswith('.KS') or ticker.endswith('.KQ') else f"${cur_price:.2f}"
+    price_str = f"₩{cur_price:,.0f}" if is_krw else f"${cur_price:.2f}"
     fig.add_hline(
-        y=cur_price, line_dash='dot', line_color='#FFD700', line_width=1.5,
+        y=cur_price, line_dash='dot', line_color='#FFD700', line_width=1.2,
         row=1, col=1,
-        annotation_text=f" {price_str}",
+        annotation_text=f"  {price_str}",
         annotation_position="right",
-        annotation_font=dict(color='#FFD700', size=12),
+        annotation_font=dict(color='#FFD700', size=11, family='monospace'),
+        annotation_bgcolor=TV_BG,
     )
 
-    fig.update_layout(
-        height=680, xaxis_rangeslider_visible=False,
-        plot_bgcolor='#0E1117', paper_bgcolor='#0E1117',
-        font=dict(color='#FAFAFA'),
-        legend=dict(orientation='h', y=1.02, x=0)
+    # ── 2. 거래량 ─────────────────────────────
+    fig.add_trace(go.Bar(
+        x=df.index, y=df['Volume'], name='거래량',
+        marker_color=vol_colors, showlegend=True,
+    ), row=2, col=1)
+
+    # ── 3. MACD ───────────────────────────────
+    hist_colors = [TV_UP if float(v) >= 0 else TV_DOWN for v in hist]
+    fig.add_trace(go.Bar(
+        x=df.index, y=hist, name='히스토그램',
+        marker_color=hist_colors, showlegend=False, opacity=0.7,
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=macd_l, name='MACD',
+        line=dict(color='#2962ff', width=1.3),
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=sig_l, name='Signal',
+        line=dict(color='#ff6d00', width=1.3),
+    ), row=3, col=1)
+    fig.add_hline(y=0, line_color=TV_BORDER, line_width=1, row=3, col=1)
+
+    # ── 4. RSI ────────────────────────────────
+    # RSI 배경 영역 (30~70)
+    fig.add_hrect(y0=30, y1=70, fillcolor='rgba(255,255,255,0.03)',
+                  line_width=0, row=4, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=rsi_s, name='RSI',
+        line=dict(color='#ce93d8', width=1.4),
+    ), row=4, col=1)
+    fig.add_hline(y=70, line_color=TV_DOWN,   line_width=0.8, line_dash='dash', row=4, col=1)
+    fig.add_hline(y=50, line_color=TV_BORDER, line_width=0.8, row=4, col=1)
+    fig.add_hline(y=30, line_color=TV_UP,     line_width=0.8, line_dash='dash', row=4, col=1)
+
+    # ── 레이아웃 ──────────────────────────────
+    axis_style = dict(
+        gridcolor=TV_GRID, gridwidth=1,
+        zerolinecolor=TV_BORDER, zerolinewidth=1,
+        tickfont=dict(color=TV_TEXT, size=10),
+        showline=True, linecolor=TV_BORDER,
+        side='right',
     )
-    fig.update_xaxes(gridcolor='#1E2130', showgrid=True)
-    fig.update_yaxes(gridcolor='#1E2130', showgrid=True)
+    fig.update_layout(
+        height=780,
+        plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+        font=dict(color=TV_TEXT, family='Inter, sans-serif', size=11),
+        xaxis_rangeslider_visible=False,
+        hovermode='x unified',
+        hoverlabel=dict(bgcolor='#1e2334', font_color=TV_TEXT, bordercolor=TV_BORDER),
+        legend=dict(
+            orientation='h', y=1.01, x=0,
+            bgcolor='rgba(19,23,34,0.8)', bordercolor=TV_BORDER, borderwidth=1,
+            font=dict(size=11),
+        ),
+        margin=dict(l=0, r=60, t=30, b=0),
+    )
+    # x축
+    for i in range(1, 5):
+        fig.update_xaxes(
+            row=i, col=1,
+            gridcolor=TV_GRID, showgrid=True,
+            tickfont=dict(color=TV_TEXT, size=10),
+            showline=True, linecolor=TV_BORDER,
+            **({'showticklabels': True} if i == 4 else {'showticklabels': False}),
+        )
+    # y축
+    for i in range(1, 5):
+        fig.update_yaxes(row=i, col=1, **axis_style)
+
+    # 각 패널 라벨
+    for row_n, label in [(1, 'Price'), (2, 'Vol'), (3, 'MACD'), (4, 'RSI')]:
+        fig.add_annotation(
+            text=label, xref='paper', yref=f'y{row_n}',
+            x=0.003, y=1, showarrow=False,
+            font=dict(color=TV_TEXT, size=10),
+            xanchor='left', yanchor='top',
+        )
 
     st.plotly_chart(fig, use_container_width=True)
 
