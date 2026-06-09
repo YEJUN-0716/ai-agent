@@ -1019,35 +1019,35 @@ def calc_risk_metrics(ticker):
 # ─────────────────────────────────────────────
 
 def calc_trade_levels(df, total_score):
-    """피보나치·피봇포인트·ATR 기반 매수·목표·손절가 계산"""
+    """단타(1~5일)·스윙(2~4주) 분리 매매가 산출"""
     p, h, l = df['Close'], df['High'], df['Low']
     cp  = float(p.iloc[-1])
-
     atr = float((h - l).rolling(14).mean().iloc[-1])
 
     ma20  = float(p.rolling(20).mean().iloc[-1])
     ma60  = float(p.rolling(60).mean().iloc[-1])
     ma120 = float(p.rolling(120).mean().iloc[-1])
 
-    bb_u, _, bb_l = calc_bb(p)
+    bb_u, _, bb_l_v = calc_bb(p)
     bb_upper = float(bb_u.iloc[-1])
-    bb_lower = float(bb_l.iloc[-1])
+    bb_lower = float(bb_l_v.iloc[-1])
 
+    high20 = float(h.tail(20).max())
     low20  = float(l.tail(20).min())
     low60  = float(l.tail(60).min())
-    high20 = float(h.tail(20).max())
-    high60 = float(h.tail(60).max())
 
-    # ── 피보나치 되돌림 (60일 스윙 기준) ──────────
-    sw_high = float(h.tail(60).max())
-    sw_low  = float(l.tail(60).min())
-    fib_range = sw_high - sw_low
+    # ── 피보나치 (60일 스윙) ───────────────────────
+    sw_high  = float(h.tail(60).max())
+    sw_low   = float(l.tail(60).min())
+    fib_rng  = sw_high - sw_low
     fib = {
-        '23.6%': sw_high - 0.236 * fib_range,
-        '38.2%': sw_high - 0.382 * fib_range,
-        '50.0%': sw_high - 0.500 * fib_range,
-        '61.8%': sw_high - 0.618 * fib_range,
-        '78.6%': sw_high - 0.786 * fib_range,
+        '23.6%':       sw_high - 0.236 * fib_rng,
+        '38.2%':       sw_high - 0.382 * fib_rng,
+        '50.0%':       sw_high - 0.500 * fib_rng,
+        '61.8%':       sw_high - 0.618 * fib_rng,
+        '78.6%':       sw_high - 0.786 * fib_rng,
+        '확장 127.2%': sw_high + 0.272 * fib_rng,
+        '확장 161.8%': sw_high + 0.618 * fib_rng,
     }
 
     # ── 피봇 포인트 (전일 기준) ────────────────────
@@ -1056,107 +1056,169 @@ def calc_trade_levels(df, total_score):
     prev_c = float(p.iloc[-2]) if len(p) >= 2 else float(p.iloc[-1])
     pivot  = (prev_h + prev_l + prev_c) / 3
     piv = {
+        'R3': pivot + 2*(prev_h - prev_l),
         'R2': pivot + (prev_h - prev_l),
-        'R1': 2 * pivot - prev_l,
+        'R1': 2*pivot - prev_l,
         'PP': pivot,
-        'S1': 2 * pivot - prev_h,
+        'S1': 2*pivot - prev_h,
         'S2': pivot - (prev_h - prev_l),
+        'S3': pivot - 2*(prev_h - prev_l),
     }
 
-    # ── 지지선 풀: MA·BB·피보나치·피봇S ──────────
-    sup_pool = [ma20, ma60, ma120, low20, bb_lower,
-                fib['38.2%'], fib['50.0%'], fib['61.8%'], fib['78.6%'],
-                piv['S1'], piv['S2']]
-    # ── 저항선 풀: 고가·BB·피보나치·피봇R ────────
-    res_pool = [high20, high60, bb_upper,
-                fib['23.6%'], fib['38.2%'], fib['50.0%'],
-                piv['R1'], piv['R2']]
+    # ── 단타 (1~5일): 피봇·ATR 중심 ──────────────
+    if total_score >= 65:
+        dt_e1 = cp;                   dt_be1 = '현재가(즉시)'
+        dt_strategy = '✅ 즉시 진입'
+    elif total_score >= 50:
+        dt_e1 = piv['S1'] if piv['S1'] < cp*0.999 else bb_lower
+        dt_be1 = '피봇 S1 / BB하단'
+        dt_strategy = '⏳ S1 지지 확인 후 진입'
+    else:
+        dt_e1 = piv['S2'] if piv['S2'] < cp*0.999 else low20
+        dt_be1 = '피봇 S2 / 20일저점'
+        dt_strategy = '🔍 S2에서만 단기 진입'
 
-    supports = sorted([x for x in sup_pool if x < cp * 0.999], reverse=True)
-    resists  = sorted([x for x in res_pool if x > cp * 1.001])
+    dt_e2   = max(piv['S2'], dt_e1 - atr * 0.8)
+    dt_stop = dt_e1 - atr * 0.5
 
-    s1 = supports[0] if supports else cp * 0.96
-    s2 = supports[1] if len(supports) > 1 else s1 * 0.97
-    r1 = resists[0]  if resists  else cp * 1.05
-    r2 = resists[1]  if len(resists) > 1 else r1 * 1.05
+    dt_t1_pool = sorted([x for x in [piv['R1'], cp + atr*1.5, bb_upper] if x > cp*1.001])
+    dt_t2_pool = sorted([x for x in [piv['R2'], cp + atr*3.0, high20]   if x > cp*1.001])
+    dt_t1 = dt_t1_pool[0] if dt_t1_pool else cp + atr * 1.5
+    dt_t2 = next((x for x in dt_t2_pool if x > dt_t1*1.005), dt_t1 * 1.03)
+
+    dt_risk = max(dt_e1 - dt_stop, 1e-9)
+    dt_rr1  = (dt_t1 - dt_e1) / dt_risk
+    dt_rr2  = (dt_t2 - dt_e1) / dt_risk
+
+    # ── 스윙 (2~4주): 피보나치·MA 중심 ───────────
+    sw_sup = sorted([x for x in [fib['38.2%'], fib['50.0%'], fib['61.8%'],
+                                  ma20, ma60, low20] if x < cp*0.999], reverse=True)
+    sw_res = sorted([x for x in [fib['23.6%'], fib['확장 127.2%'], fib['확장 161.8%'],
+                                  sw_high, ma120] if x > cp*1.001])
+
+    sw_e1   = sw_sup[0] if sw_sup else cp * 0.96
+    sw_e2   = sw_sup[1] if len(sw_sup) > 1 else sw_e1 * 0.96
+    sw_stop = sw_e1 - atr * 1.5
+    sw_t1   = sw_res[0] if sw_res else cp * 1.08
+    sw_t2   = sw_res[1] if len(sw_res) > 1 else sw_t1 * 1.05
 
     if total_score >= 65:
-        entry1, entry2, strategy = cp, s1, '즉시 매수'
+        sw_strategy = '✅ 분할 매수 시작'
     elif total_score >= 50:
-        entry1, entry2, strategy = s1, s2, '분할매수 대기'
+        sw_strategy = '⏳ Fib / MA 지지 대기'
     else:
-        entry1, entry2, strategy = s2, low60, '관망 후 저점매수'
+        sw_strategy = '🔍 추세 전환 확인 후 진입'
 
-    stop   = min(entry1, entry2) - atr * 0.5
-    risk   = entry1 - stop
-    reward = r1 - entry1
-    rr     = reward / risk if risk > 0 else 0
+    sw_risk = max(sw_e1 - sw_stop, 1e-9)
+    sw_rr1  = (sw_t1 - sw_e1) / sw_risk
+    sw_rr2  = (sw_t2 - sw_e1) / sw_risk
+
+    safe = lambda a, b: a / b * 100 if b > 0 else 0.0
 
     return {
-        'strategy':  strategy,
-        'entry1':    entry1,
-        'entry2':    entry2,
-        'target1':   r1,
-        'target2':   r2,
-        'stop':      stop,
-        'rr':        rr,
-        'ret1':      (r1 - entry1) / entry1 * 100,
-        'ret2':      (r2 - entry1) / entry1 * 100,
-        'risk_pct':  (entry1 - stop) / entry1 * 100,
-        'atr':       atr,
-        'cp':        cp,
-        'pivot':     pivot,
-        'fib':       fib,
-        'piv':       piv,
+        'cp': cp, 'atr': atr, 'pivot': pivot, 'fib': fib, 'piv': piv,
+        'dantta': {
+            'strategy': dt_strategy,
+            'entry1':  dt_e1,  'basis_e1':   dt_be1,
+            'entry2':  dt_e2,  'basis_e2':   'S2 / −ATR×0.8',
+            'target1': dt_t1,  'basis_t1':   'R1 / +ATR×1.5',
+            'target2': dt_t2,  'basis_t2':   'R2 / +ATR×3.0',
+            'stop':    dt_stop,'basis_stop':  '−ATR×0.5 (타이트)',
+            'rr1': round(dt_rr1,1), 'rr2': round(dt_rr2,1),
+            'ret1': safe(dt_t1-dt_e1, dt_e1),
+            'ret2': safe(dt_t2-dt_e1, dt_e1),
+            'risk_pct': safe(dt_e1-dt_stop, dt_e1),
+        },
+        'swing': {
+            'strategy': sw_strategy,
+            'entry1':  sw_e1,  'basis_e1':   'Fib 38.2% / MA20',
+            'entry2':  sw_e2,  'basis_e2':   'Fib 50% / MA60',
+            'target1': sw_t1,  'basis_t1':   '60일 고점 / Fib127%',
+            'target2': sw_t2,  'basis_t2':   'Fib 161.8% 확장',
+            'stop':    sw_stop,'basis_stop':  '−ATR×1.5 (여유)',
+            'rr1': round(sw_rr1,1), 'rr2': round(sw_rr2,1),
+            'ret1': safe(sw_t1-sw_e1, sw_e1),
+            'ret2': safe(sw_t2-sw_e1, sw_e1),
+            'risk_pct': safe(sw_e1-sw_stop, sw_e1),
+        },
     }
 
 def _draw_levels_chart(lv, is_krw):
-    """매수·목표·손절가 시각화"""
+    """단타·스윙 매매가 통합 시각화 (파란=단타, 주황=스윙)"""
     fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
+    cp = lv['cp']
+    dt = lv['dantta']
+    sw = lv['swing']
 
-    levels = [
-        ('2차 목표가', lv['target2'], '#1565C0', '▲'),
-        ('1차 목표가', lv['target1'], '#2196F3', '▲'),
-        ('현재가',     lv['cp'],      '#FFD700', '●'),
-        ('1차 매수',   lv['entry1'],  '#43A047', '▼'),
-        ('분할 매수',  lv['entry2'],  '#81C784', '▼'),
-        ('손절가',     lv['stop'],    '#EF5350', '✕'),
+    # 단타 레벨 (파란 계열, x=0)
+    dt_levels = [
+        ('⚡ 단타 2차목표', dt['target2'], '#1565C0', 'dot',   dt['basis_t2']),
+        ('⚡ 단타 1차목표', dt['target1'], '#42a5f5', 'solid', dt['basis_t1']),
+        ('⚡ 단타 1차매수', dt['entry1'],  '#4caf50', 'solid', dt['basis_e1']),
+        ('⚡ 단타 2차매수', dt['entry2'],  '#81c784', 'dot',   dt['basis_e2']),
+        ('⚡ 단타 손절',   dt['stop'],    '#ef5350', 'dash',  dt['basis_stop']),
     ]
-    levels_sorted = sorted(levels, key=lambda x: x[1], reverse=True)
+    # 스윙 레벨 (주황 계열, x=1)
+    sw_levels = [
+        ('📈 스윙 2차목표', sw['target2'], '#e65100', 'dot',   sw['basis_t2']),
+        ('📈 스윙 1차목표', sw['target1'], '#ff9800', 'solid', sw['basis_t1']),
+        ('📈 스윙 1차매수', sw['entry1'],  '#26a69a', 'solid', sw['basis_e1']),
+        ('📈 스윙 2차매수', sw['entry2'],  '#80cbc4', 'dot',   sw['basis_e2']),
+        ('📈 스윙 손절',   sw['stop'],    '#b71c1c', 'dash',  sw['basis_stop']),
+    ]
+
+    all_prices = [cp] + [x[1] for x in dt_levels + sw_levels]
+    valid = [p for p in all_prices if p > 0]
+    margin = (max(valid) - min(valid)) * 0.12
 
     fig = go.Figure()
-    for name, price, color, marker in levels_sorted:
-        pct = (price - lv['cp']) / lv['cp'] * 100
-        label = f"<b>{name}</b>  {fmt_p(price)}  ({pct:+.1f}%)"
-        fig.add_trace(go.Scatter(
-            x=[0], y=[price],
-            mode='markers+text',
-            marker=dict(size=14, color=color, symbol='line-ew', line=dict(color=color, width=3)),
+
+    # 현재가
+    fig.add_hline(y=cp, line_color='#FFD700', line_width=2, line_dash='dot')
+    fig.add_trace(go.Scatter(x=[0, 1], y=[cp, cp], mode='lines+text',
+        line=dict(color='#FFD700', width=0),
+        text=['', f"  <b>현재가</b> {fmt_p(cp)}"],
+        textposition='middle right', textfont=dict(color='#FFD700', size=12),
+        showlegend=False))
+
+    for name, price, color, style, basis in dt_levels:
+        pct = (price - cp) / cp * 100
+        label = f"  <b>{name}</b>  {fmt_p(price)}  ({pct:+.1f}%)  [{basis}]"
+        fig.add_trace(go.Scatter(x=[0], y=[price], mode='markers+text',
+            marker=dict(size=10, color=color, symbol='line-ew', line=dict(color=color, width=2.5)),
             text=[label], textposition='middle right',
-            textfont=dict(color=color, size=12),
-            name=name, showlegend=False,
-        ))
-        fig.add_hline(y=price, line_color=color, line_width=1,
-                      line_dash='dot' if name in ['분할 매수','2차 목표가'] else 'solid')
+            textfont=dict(color=color, size=11), showlegend=False))
+        fig.add_hline(y=price, line_color=color, line_width=0.8, line_dash=style,
+                      annotation_text='', annotation_position='right')
 
-    # 매수~목표 구간 강조
-    fig.add_hrect(y0=lv['entry1'], y1=lv['target1'],
-                  fillcolor='rgba(33,150,243,0.07)', line_width=0)
-    # 매수~손절 구간 강조
-    fig.add_hrect(y0=lv['stop'], y1=lv['entry1'],
-                  fillcolor='rgba(239,83,80,0.07)', line_width=0)
+    for name, price, color, style, basis in sw_levels:
+        pct = (price - cp) / cp * 100
+        label = f"  <b>{name}</b>  {fmt_p(price)}  ({pct:+.1f}%)  [{basis}]"
+        fig.add_trace(go.Scatter(x=[1], y=[price], mode='markers+text',
+            marker=dict(size=10, color=color, symbol='line-ew', line=dict(color=color, width=2.5)),
+            text=[label], textposition='middle right',
+            textfont=dict(color=color, size=11), showlegend=False))
+        fig.add_hline(y=price, line_color=color, line_width=0.8, line_dash=style)
 
-    all_prices = [x[1] for x in levels]
-    margin = (max(all_prices) - min(all_prices)) * 0.15
+    # 구간 하이라이트
+    fig.add_hrect(y0=dt['entry1'], y1=dt['target1'], fillcolor='rgba(66,165,245,0.07)', line_width=0)
+    fig.add_hrect(y0=dt['stop'],   y1=dt['entry1'],  fillcolor='rgba(239,83,80,0.06)',  line_width=0)
+    fig.add_hrect(y0=sw['entry1'], y1=sw['target1'], fillcolor='rgba(255,152,0,0.06)',  line_width=0)
+
+    # 컬럼 구분선
+    fig.add_vline(x=0.5, line_color=TV_BORDER, line_width=1, line_dash='dot')
+    fig.add_annotation(x=0, y=max(valid)+margin*0.8, text="⚡ 단타 (1~5일)",
+                       showarrow=False, font=dict(color='#42a5f5', size=12))
+    fig.add_annotation(x=1, y=max(valid)+margin*0.8, text="📈 스윙 (2~4주)",
+                       showarrow=False, font=dict(color='#ff9800', size=12))
 
     fig.update_layout(
-        height=380, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+        height=520, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
         font=dict(color=TV_TEXT, size=11),
-        xaxis=dict(visible=False, range=[-0.5, 2]),
-        yaxis=dict(range=[min(all_prices)-margin, max(all_prices)+margin],
-                   gridcolor=TV_GRID, tickfont=dict(color=TV_TEXT, size=10),
-                   side='right'),
-        margin=dict(l=10, r=160, t=20, b=10),
+        xaxis=dict(visible=False, range=[-0.5, 3.2]),
+        yaxis=dict(range=[min(valid)-margin, max(valid)+margin*1.2],
+                   gridcolor=TV_GRID, tickfont=dict(color=TV_TEXT, size=10), side='right'),
+        margin=dict(l=10, r=280, t=30, b=10),
     )
     return fig
 
@@ -1496,34 +1558,73 @@ def main():
 
                     # ── 매수/매도 추천가 ──────────────────────
                     st.subheader("💡 매매 추천가")
-                    lv = calc_trade_levels(df, total)
+                    lv    = calc_trade_levels(df, total)
                     fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
+                    cp_lv = lv['cp']
+                    dt    = lv['dantta']
+                    sw    = lv['swing']
 
-                    lv_rows = [
-                        {'구분': '📌 전략',      '가격': lv['strategy'],       '현재가 대비': f"위험보상비율 {lv['rr']:.1f}:1"},
-                        {'구분': '🟢 1차 매수',  '가격': fmt_p(lv['entry1']),  '현재가 대비': f"{(lv['entry1']-lv['cp'])/lv['cp']*100:+.1f}%"},
-                        {'구분': '🟩 분할 매수', '가격': fmt_p(lv['entry2']),  '현재가 대비': f"{(lv['entry2']-lv['cp'])/lv['cp']*100:+.1f}%"},
-                        {'구분': '🔵 1차 목표',  '가격': fmt_p(lv['target1']), '현재가 대비': f"+{lv['ret1']:.1f}%"},
-                        {'구분': '🔷 2차 목표',  '가격': fmt_p(lv['target2']), '현재가 대비': f"+{lv['ret2']:.1f}%"},
-                        {'구분': '🔴 손절가',    '가격': fmt_p(lv['stop']),    '현재가 대비': f"-{lv['risk_pct']:.1f}%"},
-                    ]
-                    st.dataframe(pd.DataFrame(lv_rows), use_container_width=True, hide_index=True)
+                    lv_c1, lv_c2 = st.columns(2)
+
+                    with lv_c1:
+                        dt_rr_color = '#4caf50' if dt['rr1'] >= 2 else ('#ff9800' if dt['rr1'] >= 1 else '#ef5350')
+                        st.markdown(
+                            f"<div style='background:#0d1b2e;border:1px solid #42a5f544;border-radius:10px;"
+                            f"padding:12px 16px;margin-bottom:8px'>"
+                            f"<div style='color:#42a5f5;font-weight:700;font-size:15px'>⚡ 단타 전략 (1~5일)</div>"
+                            f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{dt['strategy']}</div>"
+                            f"<div style='color:#888;font-size:11px;margin-top:2px'>"
+                            f"손익비 1차 <b style='color:{dt_rr_color}'>R {dt['rr1']:.1f}:1</b>"
+                            f" &nbsp;·&nbsp; 2차 <b style='color:{dt_rr_color}'>R {dt['rr2']:.1f}:1</b>"
+                            f" &nbsp;·&nbsp; 손절폭 <b style='color:#ef5350'>{dt['risk_pct']:.1f}%</b></div>"
+                            f"</div>", unsafe_allow_html=True)
+                        dt_rows = [
+                            {'구분':'🟢 1차 매수','가격':fmt_p(dt['entry1']),'현재가 대비':f"{(dt['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e1']},
+                            {'구분':'🟩 2차 매수','가격':fmt_p(dt['entry2']),'현재가 대비':f"{(dt['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e2']},
+                            {'구분':'🔵 1차 목표','가격':fmt_p(dt['target1']),'현재가 대비':f"+{dt['ret1']:.1f}%",'근거':dt['basis_t1']},
+                            {'구분':'🔷 2차 목표','가격':fmt_p(dt['target2']),'현재가 대비':f"+{dt['ret2']:.1f}%",'근거':dt['basis_t2']},
+                            {'구분':'🔴 손절가',  '가격':fmt_p(dt['stop']),  '현재가 대비':f"-{dt['risk_pct']:.1f}%",'근거':dt['basis_stop']},
+                        ]
+                        st.dataframe(pd.DataFrame(dt_rows), use_container_width=True, hide_index=True)
+
+                    with lv_c2:
+                        sw_rr_color = '#4caf50' if sw['rr1'] >= 2 else ('#ff9800' if sw['rr1'] >= 1 else '#ef5350')
+                        st.markdown(
+                            f"<div style='background:#1a1a0a;border:1px solid #ff980044;border-radius:10px;"
+                            f"padding:12px 16px;margin-bottom:8px'>"
+                            f"<div style='color:#ff9800;font-weight:700;font-size:15px'>📈 스윙 전략 (2~4주)</div>"
+                            f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{sw['strategy']}</div>"
+                            f"<div style='color:#888;font-size:11px;margin-top:2px'>"
+                            f"손익비 1차 <b style='color:{sw_rr_color}'>R {sw['rr1']:.1f}:1</b>"
+                            f" &nbsp;·&nbsp; 2차 <b style='color:{sw_rr_color}'>R {sw['rr2']:.1f}:1</b>"
+                            f" &nbsp;·&nbsp; 손절폭 <b style='color:#ef5350'>{sw['risk_pct']:.1f}%</b></div>"
+                            f"</div>", unsafe_allow_html=True)
+                        sw_rows = [
+                            {'구분':'🟢 1차 매수','가격':fmt_p(sw['entry1']),'현재가 대비':f"{(sw['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e1']},
+                            {'구분':'🟩 2차 매수','가격':fmt_p(sw['entry2']),'현재가 대비':f"{(sw['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e2']},
+                            {'구분':'🔵 1차 목표','가격':fmt_p(sw['target1']),'현재가 대비':f"+{sw['ret1']:.1f}%",'근거':sw['basis_t1']},
+                            {'구분':'🔷 2차 목표','가격':fmt_p(sw['target2']),'현재가 대비':f"+{sw['ret2']:.1f}%",'근거':sw['basis_t2']},
+                            {'구분':'🔴 손절가',  '가격':fmt_p(sw['stop']),  '현재가 대비':f"-{sw['risk_pct']:.1f}%",'근거':sw['basis_stop']},
+                        ]
+                        st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
+
+                    st.plotly_chart(_draw_levels_chart(lv, is_krw), use_container_width=True)
 
                     with st.expander("📐 피보나치 & 피봇 포인트 세부"):
                         fa, fb = st.columns(2)
                         with fa:
-                            st.caption("**피보나치 되돌림 (60일 스윙)**")
+                            st.caption("**피보나치 되돌림·확장 (60일 스윙)**")
                             for k, v in lv['fib'].items():
-                                marker = " ◀ 현재가" if abs(v - lv['cp']) < lv['atr']*0.5 else ""
+                                marker = " ◀ 현재가 근처" if abs(v - cp_lv) < lv['atr']*0.5 else ""
                                 st.caption(f"  {k}: {fmt_p(v)}{marker}")
                         with fb:
                             st.caption("**피봇 포인트 (전일 기준)**")
                             for k, v in lv['piv'].items():
-                                marker = " ◀ 현재가" if abs(v - lv['cp']) < lv['atr']*0.5 else ""
+                                marker = " ◀ 현재가 근처" if abs(v - cp_lv) < lv['atr']*0.5 else ""
                                 st.caption(f"  {k}: {fmt_p(v)}{marker}")
-                        st.caption(f"ATR(14): {fmt_p(lv['atr'])}")
+                        st.caption(f"ATR(14): {fmt_p(lv['atr'])}  |  현재가: {fmt_p(cp_lv)}")
 
-                    st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정과 다를 수 있습니다.")
+                    st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정의 책임은 본인에게 있습니다.")
                     st.divider()
 
                     # ── 뉴스 감성 ──────────────────────────────
