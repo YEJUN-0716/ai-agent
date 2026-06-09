@@ -1516,6 +1516,8 @@ def main():
 
                     st.subheader("📋 분석 요약")
                     mtf_d = mtf_scores.get('일봉'); mtf_w = mtf_scores.get('주봉'); mtf_m = mtf_scores.get('월봉')
+                    mtf_list = [x['score'] for x in [mtf_d, mtf_w, mtf_m] if x is not None]
+                    mtf_avg  = sum(mtf_list) / len(mtf_list) if mtf_list else 50.0
                     mtf_summary = (f"일봉 {mtf_d['score']:.0f} / 주봉 {mtf_w['score']:.0f} / 월봉 {mtf_m['score']:.0f}"
                                    if mtf_d and mtf_w and mtf_m else "N/A")
                     mom_3 = mom_data.get('3M'); mom_12 = mom_data.get('12M')
@@ -1524,14 +1526,14 @@ def main():
                     dcf_summary = (f"기본 {fmt_p(dcf_det.get('내재가치_기본',0))} ({dcf_det.get('상승여력_기본',0):+.1f}%)"
                                    if dcf_det else "N/A")
                     st.dataframe(pd.DataFrame([
-                        {'카테고리':'종합 점수',          '점수':f"{total:.1f}",          '등급':score_label(total),          '비고': f"시장: {regime_icon}"},
-                        {'카테고리':'📈 차트+파동',       '점수':f"{t_score:.1f}",        '등급':score_label(t_score),        '비고':f'가중치 {w_tech}%'},
-                        {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",        '등급':score_label(f_score),        '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
-                        {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",        '등급':score_label(m_score),        '비고':f'가중치 {w_macro}%'},
-                        {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mtf_summary},
+                        {'카테고리':'종합 점수',          '점수':f"{total:.1f}",       '등급':score_label(total),       '비고': f"시장: {regime_icon}"},
+                        {'카테고리':'📈 차트+파동',       '점수':f"{t_score:.1f}",     '등급':score_label(t_score),     '비고':f'가중치 {w_tech}%'},
+                        {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",     '등급':score_label(f_score),     '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
+                        {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",     '등급':score_label(m_score),     '비고':f'가중치 {w_macro}%'},
+                        {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mtf_avg:.1f}",     '등급':score_label(mtf_avg),     '비고': mtf_summary},
                         {'카테고리':'📊 모멘텀',          '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mom_summary},
-                        {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',                '등급':'-',                         '비고': dcf_summary},
-                        {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",     '등급':score_label(news_score),     '비고':'참고용'},
+                        {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',             '등급':'-',                      '비고': dcf_summary},
+                        {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",  '등급':score_label(news_score),  '비고':'참고용'},
                     ]), use_container_width=True, hide_index=True)
                     st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
 
