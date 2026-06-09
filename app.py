@@ -76,6 +76,42 @@ def calc_obv(close, volume):
     sign = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
     return (volume * sign).cumsum()
 
+def detect_trading_signals(df, t_det):
+    """현재 시점 매매 시그널 감지 (RSI/MA크로스/BB/MACD/거래량/스토캐스틱)"""
+    p = df['Close']
+    cp = float(p.iloc[-1])
+    signals = []
+    rsi_v = t_det.get('RSI값', 50)
+    if rsi_v < 30:   signals.append(('🟢', 'RSI 과매도',     f'RSI {rsi_v:.1f} — 반등 가능'))
+    elif rsi_v > 70: signals.append(('🔴', 'RSI 과매수',     f'RSI {rsi_v:.1f} — 조정 주의'))
+    ma20_s = p.rolling(20).mean(); ma60_s = p.rolling(60).mean()
+    if len(p) >= 22:
+        if float(ma20_s.iloc[-2]) <= float(ma60_s.iloc[-2]) and float(ma20_s.iloc[-1]) > float(ma60_s.iloc[-1]):
+            signals.append(('🟢', '골든크로스',    'MA20 ↑ MA60 돌파 — 중기 매수 신호'))
+        elif float(ma20_s.iloc[-2]) >= float(ma60_s.iloc[-2]) and float(ma20_s.iloc[-1]) < float(ma60_s.iloc[-1]):
+            signals.append(('🔴', '데드크로스',    'MA20 ↓ MA60 이탈 — 중기 매도 신호'))
+    bb_u_s, _, bb_l_s = calc_bb(p)
+    if cp > float(bb_u_s.iloc[-1]):   signals.append(('🔴', 'BB 상단 돌파',  '과매수 구간 — 단기 조정 주의'))
+    elif cp < float(bb_l_s.iloc[-1]): signals.append(('🟢', 'BB 하단 이탈', '과매도 구간 — 반등 대기'))
+    elif len(p) >= 40:
+        bw_n = (float(bb_u_s.iloc[-1]) - float(bb_l_s.iloc[-1])) / (cp + 1e-9)
+        bw_a = float(((bb_u_s - bb_l_s) / p).rolling(20).mean().iloc[-1])
+        if bw_n < bw_a * 0.7: signals.append(('🟡', 'BB 스퀴즈', '밴드 수축 — 큰 방향성 돌파 임박'))
+    ml_s, sl_s, _ = calc_macd(p)
+    if len(ml_s) >= 2:
+        if float(ml_s.iloc[-2]) <= float(sl_s.iloc[-2]) and float(ml_s.iloc[-1]) > float(sl_s.iloc[-1]):
+            signals.append(('🟢', 'MACD 상향 돌파', 'MACD > Signal — 단기 매수 신호'))
+        elif float(ml_s.iloc[-2]) >= float(sl_s.iloc[-2]) and float(ml_s.iloc[-1]) < float(sl_s.iloc[-1]):
+            signals.append(('🔴', 'MACD 하향 돌파', 'MACD < Signal — 단기 매도 신호'))
+    vr = float(df['Volume'].iloc[-1]) / (float(df['Volume'].rolling(20).mean().iloc[-1]) + 1e-9)
+    if vr > 2.0:
+        dir_s = '상승' if cp > float(p.iloc[-2]) else '하락'
+        signals.append(('⚡', '거래량 급증', f'평균의 {vr:.1f}배 ({dir_s}) — 방향성 강화'))
+    sk_v = t_det.get('Stoch값', 50)
+    if sk_v < 20:   signals.append(('🟢', '스토캐스틱 과매도', f'%K {sk_v:.1f} — 반등 구간'))
+    elif sk_v > 80: signals.append(('🔴', '스토캐스틱 과매수', f'%K {sk_v:.1f} — 과열 구간'))
+    return signals
+
 def wave_score(prices, highs, lows):
     if len(prices) < 60:
         return 50.0
@@ -582,7 +618,7 @@ def run_screener(tickers, w_tech, w_fund, w_macro, prog_bar=None, prog_text=None
             df  = df.dropna(subset=['Close'])
             if len(df) < 30: continue
 
-            t_s, _ = technical_score(df)
+            t_s, t_det_sc = technical_score(df)
             f_s, _ = fundamental_score(ticker, df)
             total  = t_s*(w_tech/100) + f_s*(w_fund/100) + m_s*(w_macro/100)
             mom    = calc_momentum(df)
@@ -590,11 +626,26 @@ def run_screener(tickers, w_tech, w_fund, w_macro, prog_bar=None, prog_text=None
             pp  = float(df['Close'].iloc[-2]) if len(df) >= 2 else cp
             chg = (cp-pp)/pp*100
             m3  = mom.get('3M')
+            sigs = []
+            rsi_sc = t_det_sc.get('RSI값', 50)
+            if rsi_sc < 30: sigs.append('RSI과매도')
+            elif rsi_sc > 70: sigs.append('RSI과매수')
+            bbu_sc, _, bbl_sc = calc_bb(df['Close'])
+            bw_sc  = (float(bbu_sc.iloc[-1])-float(bbl_sc.iloc[-1]))/(cp+1e-9)
+            bwa_sc = float(((bbu_sc-bbl_sc)/df['Close']).rolling(20).mean().iloc[-1])
+            if bw_sc < bwa_sc*0.7: sigs.append('BB스퀴즈')
+            ma20_sc = df['Close'].rolling(20).mean(); ma60_sc = df['Close'].rolling(60).mean()
+            if len(df) >= 22 and float(ma20_sc.iloc[-2]) <= float(ma60_sc.iloc[-2]) and float(ma20_sc.iloc[-1]) > float(ma60_sc.iloc[-1]):
+                sigs.append('골든크로스')
+            ml_sc, sl_sc, _ = calc_macd(df['Close'])
+            if len(ml_sc) >= 2 and float(ml_sc.iloc[-2]) <= float(sl_sc.iloc[-2]) and float(ml_sc.iloc[-1]) > float(sl_sc.iloc[-1]):
+                sigs.append('MACD↑')
             results.append({
                 '티커': ticker, '종합점수': round(total,1),
                 '차트+파동': round(t_s,1), '재무+퀀트': round(f_s,1), '매크로': round(m_s,1),
                 '모멘텀(3M)': f"{m3:+.1f}%" if m3 is not None else 'N/A',
                 '등급': score_label(total), '등락(%)': round(chg,2),
+                '시그널': ' '.join(sigs) or '-',
             })
         except: continue
 
@@ -1204,7 +1255,7 @@ def main():
         if total_w == 100: st.success(f"가중치 합계: {total_w}% ✅")
         else:              st.error(f"가중치 합계: {total_w}% (100% 필요)")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 종목 분석", "🔍 스크리너", "📉 백테스팅", "🔔 알림"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 종목 분석", "🔍 스크리너", "📉 백테스팅", "🔔 알림", "💼 포트폴리오"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -1308,6 +1359,25 @@ def main():
                           매크로+금리 <b>{m_score:.0f}</b>점</div>
                         </div>""", unsafe_allow_html=True)
                     st.divider()
+
+                    # ── 매매 시그널 ──────────────────────────────
+                    trade_signals = detect_trading_signals(df, t_det)
+                    if trade_signals:
+                        st.subheader("🚨 매매 시그널")
+                        sig_n = min(len(trade_signals), 3)
+                        sig_cols = st.columns(sig_n)
+                        for sig_i, (sig_ico, sig_nm, sig_dc) in enumerate(trade_signals):
+                            sig_clr = ('#26a69a' if sig_ico == '🟢' else
+                                       '#ef5350' if sig_ico == '🔴' else
+                                       '#ff9800' if sig_ico == '🟡' else '#42a5f5')
+                            sig_cols[sig_i % sig_n].markdown(
+                                f"<div style='background:{sig_clr}18;border:1px solid {sig_clr}44;"
+                                f"border-radius:8px;padding:10px 14px;margin:4px 0'>"
+                                f"<span style='font-size:18px'>{sig_ico}</span> "
+                                f"<span style='color:{sig_clr};font-weight:600;font-size:14px'>{sig_nm}</span><br>"
+                                f"<span style='color:#888;font-size:12px'>{sig_dc}</span></div>",
+                                unsafe_allow_html=True)
+                        st.divider()
 
                     st.subheader("카테고리별 점수")
                     col1, col2, col3 = st.columns(3)
@@ -1553,6 +1623,14 @@ def main():
                 ticker_list = PRESETS[preset]
                 st.info(f"선택된 종목: {', '.join(ticker_list)}")
 
+        with st.expander("🔎 시그널 필터 (선택)"):
+            sf1, sf2, sf3, sf4 = st.columns(4)
+            flt_rsi  = sf1.checkbox("RSI 과매도 (<30)")
+            flt_sqz  = sf2.checkbox("BB 스퀴즈")
+            flt_gold = sf3.checkbox("골든크로스")
+            flt_macd = sf4.checkbox("MACD 상향")
+            sc_min_sc = st.slider("최소 종합점수", 0, 90, 0, 5, key="sc_min_sc")
+
         if st.button("🔍 스크리닝 시작", type="primary", disabled=(total_w!=100)):
             pb = st.progress(0); pt = st.empty()
             result_df = run_screener(ticker_list, w_tech, w_fund, w_macro, pb, pt)
@@ -1561,24 +1639,33 @@ def main():
             if result_df.empty:
                 st.warning("분석 가능한 종목이 없습니다.")
             else:
-                st.success(f"총 {len(result_df)}개 종목 분석 완료")
-                try:
-                    styled = result_df.style.map(_style_score,
-                                                 subset=['종합점수','차트+파동','재무+퀀트','매크로'])
-                except AttributeError:
-                    styled = result_df.style.applymap(_style_score,
-                                                      subset=['종합점수','차트+파동','재무+퀀트','매크로'])
-                st.dataframe(styled, use_container_width=True, height=460)
+                if flt_rsi:       result_df = result_df[result_df['시그널'].str.contains('RSI과매도',  na=False)]
+                if flt_sqz:       result_df = result_df[result_df['시그널'].str.contains('BB스퀴즈',   na=False)]
+                if flt_gold:      result_df = result_df[result_df['시그널'].str.contains('골든크로스', na=False)]
+                if flt_macd:      result_df = result_df[result_df['시그널'].str.contains('MACD↑',     na=False)]
+                if sc_min_sc > 0: result_df = result_df[result_df['종합점수'] >= sc_min_sc]
 
-                top5 = result_df.head(5)
-                fig_bar = go.Figure()
-                for col, c in [('차트+파동','#f5c518'),('재무+퀀트','#2962ff'),('매크로','#ff6d00')]:
-                    fig_bar.add_trace(go.Bar(name=col, x=top5['티커'], y=top5[col], marker_color=c))
-                fig_bar.update_layout(barmode='group', height=300,
-                    plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER, font=dict(color=TV_TEXT),
-                    legend=dict(orientation='h'), yaxis=dict(range=[0,100], gridcolor=TV_GRID),
-                    xaxis=dict(gridcolor=TV_GRID), margin=dict(t=20,b=20))
-                st.plotly_chart(fig_bar, use_container_width=True)
+                if result_df.empty:
+                    st.warning("필터 조건에 맞는 종목이 없습니다.")
+                else:
+                    st.success(f"총 {len(result_df)}개 종목 분석 완료")
+                    try:
+                        styled = result_df.style.map(_style_score,
+                                                     subset=['종합점수','차트+파동','재무+퀀트','매크로'])
+                    except AttributeError:
+                        styled = result_df.style.applymap(_style_score,
+                                                          subset=['종합점수','차트+파동','재무+퀀트','매크로'])
+                    st.dataframe(styled, use_container_width=True, height=460)
+
+                    top5 = result_df.head(5)
+                    fig_bar = go.Figure()
+                    for col, c in [('차트+파동','#f5c518'),('재무+퀀트','#2962ff'),('매크로','#ff6d00')]:
+                        fig_bar.add_trace(go.Bar(name=col, x=top5['티커'], y=top5[col], marker_color=c))
+                    fig_bar.update_layout(barmode='group', height=300,
+                        plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER, font=dict(color=TV_TEXT),
+                        legend=dict(orientation='h'), yaxis=dict(range=[0,100], gridcolor=TV_GRID),
+                        xaxis=dict(gridcolor=TV_GRID), margin=dict(t=20,b=20))
+                    st.plotly_chart(fig_bar, use_container_width=True)
 
     # ── Tab 3: 백테스팅 ───────────────────────
     with tab3:
@@ -1695,6 +1782,146 @@ def main():
                     st.dataframe(pd.DataFrame(sent), use_container_width=True, hide_index=True)
                 else:
                     st.info(f"기준 점수 {alert_th}점 이상인 종목이 없습니다.")
+
+    # ── Tab 5: 포트폴리오 ────────────────────────
+    with tab5:
+        st.subheader("💼 포트폴리오 관리")
+        st.caption("보유 종목의 손익과 분석 점수를 한눈에 확인하세요. (세션 동안 유지)")
+
+        if 'portfolio' not in st.session_state:
+            st.session_state.portfolio = []
+
+        # ── 포지션 추가 ──────────────────────────
+        with st.expander("➕ 포지션 추가", expanded=(len(st.session_state.portfolio) == 0)):
+            with st.form("pf_form", clear_on_submit=True):
+                pfc1, pfc2, pfc3 = st.columns([2, 1, 1])
+                pf_t  = pfc1.text_input("티커", placeholder="AAPL 또는 005930.KS")
+                pf_q  = pfc2.number_input("수량", min_value=0.001, value=1.0, format="%.3f")
+                pf_c  = pfc3.number_input("평균매수가", min_value=0.0, value=0.0, format="%.2f")
+                pf_nt = st.text_input("메모 (선택)", placeholder="장기보유, 스윙 등")
+                if st.form_submit_button("추가", type="primary"):
+                    tk_in = pf_t.strip().upper()
+                    if tk_in:
+                        st.session_state.portfolio.append(
+                            {'ticker': tk_in, 'qty': float(pf_q), 'avg_cost': float(pf_c), 'note': pf_nt})
+                        st.success(f"✅ {tk_in} 추가됨")
+                        st.rerun()
+
+        if not st.session_state.portfolio:
+            st.info("포지션을 추가한 후 분석을 실행하세요.")
+        else:
+            # 보유 종목 목록
+            st.caption(f"**보유 종목 {len(st.session_state.portfolio)}개**")
+            for pf_i, pos in enumerate(st.session_state.portfolio):
+                pc1, pc2 = st.columns([5, 1])
+                note_str = f"  — {pos['note']}" if pos.get('note') else ''
+                pc1.markdown(f"**{pos['ticker']}** &nbsp; {pos['qty']:.3f}주 @ {pos['avg_cost']:.2f}{note_str}")
+                if pc2.button("삭제", key=f"pf_del_{pf_i}"):
+                    st.session_state.portfolio.pop(pf_i)
+                    if 'pf_res' in st.session_state: del st.session_state['pf_res']
+                    st.rerun()
+            st.divider()
+
+            if st.button("📊 포트폴리오 분석 실행", type="primary", disabled=(total_w != 100)):
+                pf_m_s, _, _ = macro_score()
+                pf_rows = []
+                pf_pb = st.progress(0); pf_pt = st.empty()
+                for pf_idx, pos in enumerate(st.session_state.portfolio):
+                    tk = pos['ticker']
+                    pf_pt.text(f"분석 중: {tk} ({pf_idx+1}/{len(st.session_state.portfolio)})")
+                    pf_pb.progress((pf_idx+1)/len(st.session_state.portfolio))
+                    try:
+                        pf_end = datetime.now(); pf_start = pf_end - timedelta(days=520)
+                        pf_df = yf.download(tk, start=pf_start, end=pf_end, progress=False)
+                        if isinstance(pf_df.columns, pd.MultiIndex): pf_df.columns = pf_df.columns.droplevel(1)
+                        pf_df = pf_df.dropna(subset=['Close'])
+                        if len(pf_df) < 30: raise ValueError("데이터 부족")
+                        pf_ts, _ = technical_score(pf_df)
+                        pf_fs, _ = fundamental_score(tk, pf_df)
+                        pf_sc = pf_ts*(w_tech/100) + pf_fs*(w_fund/100) + pf_m_s*(w_macro/100)
+                        pf_cp = float(pf_df['Close'].iloc[-1])
+                        pf_is_krw = tk.endswith('.KS') or tk.endswith('.KQ')
+                        pf_fp = (lambda krw: (lambda x: f"₩{x:,.0f}" if krw else f"${x:.2f}"))(pf_is_krw)
+                        avg_c = pos['avg_cost']
+                        pnl   = (pf_cp - avg_c) * pos['qty'] if avg_c > 0 else 0.0
+                        pnl_p = (pf_cp - avg_c) / avg_c * 100 if avg_c > 0 else 0.0
+                        val   = pf_cp * pos['qty']
+                        pf_rows.append({
+                            '_is_krw': pf_is_krw, '_val': val, '_sc': pf_sc, '_pnl': pnl,
+                            '티커': tk, '수량': pos['qty'],
+                            '매수가': pf_fp(avg_c) if avg_c > 0 else '-',
+                            '현재가': pf_fp(pf_cp),
+                            '평가금액': pf_fp(val),
+                            '손익': (f"+{pf_fp(pnl)}" if pnl >= 0 else pf_fp(pnl)) if avg_c > 0 else '-',
+                            '수익률': f"{pnl_p:+.1f}%" if avg_c > 0 else '-',
+                            '종합점수': round(pf_sc, 1),
+                            '신호': score_label(pf_sc),
+                            '메모': pos.get('note', ''),
+                        })
+                    except Exception as pf_e:
+                        pf_rows.append({
+                            '티커': tk, '수량': pos['qty'], '매수가': '-', '현재가': '오류',
+                            '평가금액': '-', '손익': '-', '수익률': '-',
+                            '종합점수': 0, '신호': '오류', '메모': str(pf_e)[:30],
+                        })
+                pf_pb.empty(); pf_pt.empty()
+                st.session_state.pf_res = pf_rows
+
+            if 'pf_res' in st.session_state and st.session_state.pf_res:
+                pf_rows = st.session_state.pf_res
+                valid_pf = [r for r in pf_rows if '_val' in r]
+
+                if valid_pf:
+                    usd_pf = [r for r in valid_pf if not r.get('_is_krw')]
+                    krw_pf = [r for r in valid_pf if r.get('_is_krw')]
+                    avg_sc_pf = sum(r['_sc'] for r in valid_pf) / len(valid_pf)
+                    pm1, pm2, pm3 = st.columns(3)
+                    if usd_pf:
+                        tot_usd = sum(r['_val'] for r in usd_pf)
+                        pnl_usd = sum(r['_pnl'] for r in usd_pf)
+                        pm1.metric("USD 평가금액", f"${tot_usd:,.2f}", f"P&L ${pnl_usd:+,.2f}")
+                    if krw_pf:
+                        tot_krw = sum(r['_val'] for r in krw_pf)
+                        pnl_krw = sum(r['_pnl'] for r in krw_pf)
+                        pm2.metric("KRW 평가금액", f"₩{tot_krw:,.0f}", f"P&L ₩{pnl_krw:+,.0f}")
+                    pm3.metric("평균 종합점수", f"{avg_sc_pf:.1f}점", score_label(avg_sc_pf))
+                    st.divider()
+
+                disp_cols = ['티커','수량','매수가','현재가','평가금액','손익','수익률','종합점수','신호','메모']
+                df_pf = pd.DataFrame(pf_rows)
+                df_pf = df_pf[[c for c in disp_cols if c in df_pf.columns]]
+                try:
+                    df_pf_styled = df_pf.style.map(_style_score, subset=['종합점수'])
+                except AttributeError:
+                    df_pf_styled = df_pf.style.applymap(_style_score, subset=['종합점수'])
+                st.dataframe(df_pf_styled, use_container_width=True, hide_index=True)
+
+                if valid_pf and len(valid_pf) >= 2:
+                    st.subheader("📊 비중 분포")
+                    pie_cols = st.columns(2)
+                    for pie_i, (ccy, c_rows) in enumerate([('USD', usd_pf), ('KRW', krw_pf)]):
+                        if len(c_rows) >= 2:
+                            fig_pie = go.Figure(go.Pie(
+                                labels=[r['티커'] for r in c_rows],
+                                values=[r['_val'] for r in c_rows],
+                                hole=0.4, textinfo='label+percent',
+                                textfont=dict(color='white', size=12),
+                            ))
+                            fig_pie.update_layout(
+                                height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                font=dict(color=TV_TEXT), margin=dict(l=0,r=0,t=30,b=0),
+                                showlegend=False,
+                                title=dict(text=f'{ccy} 비중', font=dict(color=TV_TEXT, size=13))
+                            )
+                            pie_cols[pie_i].plotly_chart(fig_pie, use_container_width=True)
+
+                if valid_pf:
+                    weak_pf   = [r['티커'] for r in valid_pf if r.get('_sc', 100) < 40]
+                    strong_pf = [r['티커'] for r in valid_pf if r.get('_sc', 0) >= 75]
+                    if weak_pf:   st.warning(f"⚠️ 매도 검토: **{', '.join(weak_pf)}** — 종합점수 40점 미만")
+                    if strong_pf: st.success(f"🚀 강세 유지: **{', '.join(strong_pf)}** — 종합점수 75점 이상")
+
+        st.caption("⚠️ 포지션 정보는 페이지 새로고침 시 초기화됩니다.")
 
 
 if __name__ == "__main__":
