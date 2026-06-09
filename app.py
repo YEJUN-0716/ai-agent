@@ -1143,85 +1143,6 @@ def calc_trade_levels(df, total_score):
         },
     }
 
-def _draw_levels_chart(lv, is_krw):
-    """단타·스윙 매매가 통합 시각화 (파란=단타, 주황=스윙)"""
-    fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
-    cp = lv['cp']
-    dt = lv['dantta']
-    sw = lv['swing']
-
-    # 단타 레벨 (파란 계열, x=0)
-    dt_levels = [
-        ('⚡ 단타 2차목표', dt['target2'], '#1565C0', 'dot',   dt['basis_t2']),
-        ('⚡ 단타 1차목표', dt['target1'], '#42a5f5', 'solid', dt['basis_t1']),
-        ('⚡ 단타 1차매수', dt['entry1'],  '#4caf50', 'solid', dt['basis_e1']),
-        ('⚡ 단타 2차매수', dt['entry2'],  '#81c784', 'dot',   dt['basis_e2']),
-        ('⚡ 단타 손절',   dt['stop'],    '#ef5350', 'dash',  dt['basis_stop']),
-    ]
-    # 스윙 레벨 (주황 계열, x=1)
-    sw_levels = [
-        ('📈 스윙 2차목표', sw['target2'], '#e65100', 'dot',   sw['basis_t2']),
-        ('📈 스윙 1차목표', sw['target1'], '#ff9800', 'solid', sw['basis_t1']),
-        ('📈 스윙 1차매수', sw['entry1'],  '#26a69a', 'solid', sw['basis_e1']),
-        ('📈 스윙 2차매수', sw['entry2'],  '#80cbc4', 'dot',   sw['basis_e2']),
-        ('📈 스윙 손절',   sw['stop'],    '#b71c1c', 'dash',  sw['basis_stop']),
-    ]
-
-    all_prices = [cp] + [x[1] for x in dt_levels + sw_levels]
-    valid = [p for p in all_prices if p > 0]
-    margin = (max(valid) - min(valid)) * 0.12
-
-    fig = go.Figure()
-
-    # 현재가
-    fig.add_hline(y=cp, line_color='#FFD700', line_width=2, line_dash='dot')
-    fig.add_trace(go.Scatter(x=[0, 1], y=[cp, cp], mode='lines+text',
-        line=dict(color='#FFD700', width=0),
-        text=['', f"  <b>현재가</b> {fmt_p(cp)}"],
-        textposition='middle right', textfont=dict(color='#FFD700', size=12),
-        showlegend=False))
-
-    for name, price, color, style, basis in dt_levels:
-        pct = (price - cp) / cp * 100
-        label = f"  <b>{name}</b>  {fmt_p(price)}  ({pct:+.1f}%)  [{basis}]"
-        fig.add_trace(go.Scatter(x=[0], y=[price], mode='markers+text',
-            marker=dict(size=10, color=color, symbol='line-ew', line=dict(color=color, width=2.5)),
-            text=[label], textposition='middle right',
-            textfont=dict(color=color, size=11), showlegend=False))
-        fig.add_hline(y=price, line_color=color, line_width=0.8, line_dash=style,
-                      annotation_text='', annotation_position='right')
-
-    for name, price, color, style, basis in sw_levels:
-        pct = (price - cp) / cp * 100
-        label = f"  <b>{name}</b>  {fmt_p(price)}  ({pct:+.1f}%)  [{basis}]"
-        fig.add_trace(go.Scatter(x=[1], y=[price], mode='markers+text',
-            marker=dict(size=10, color=color, symbol='line-ew', line=dict(color=color, width=2.5)),
-            text=[label], textposition='middle right',
-            textfont=dict(color=color, size=11), showlegend=False))
-        fig.add_hline(y=price, line_color=color, line_width=0.8, line_dash=style)
-
-    # 구간 하이라이트
-    fig.add_hrect(y0=dt['entry1'], y1=dt['target1'], fillcolor='rgba(66,165,245,0.07)', line_width=0)
-    fig.add_hrect(y0=dt['stop'],   y1=dt['entry1'],  fillcolor='rgba(239,83,80,0.06)',  line_width=0)
-    fig.add_hrect(y0=sw['entry1'], y1=sw['target1'], fillcolor='rgba(255,152,0,0.06)',  line_width=0)
-
-    # 컬럼 구분선
-    fig.add_vline(x=0.5, line_color=TV_BORDER, line_width=1, line_dash='dot')
-    fig.add_annotation(x=0, y=max(valid)+margin*0.8, text="⚡ 단타 (1~5일)",
-                       showarrow=False, font=dict(color='#42a5f5', size=12))
-    fig.add_annotation(x=1, y=max(valid)+margin*0.8, text="📈 스윙 (2~4주)",
-                       showarrow=False, font=dict(color='#ff9800', size=12))
-
-    fig.update_layout(
-        height=520, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-        font=dict(color=TV_TEXT, size=11),
-        xaxis=dict(visible=False, range=[-0.5, 3.2]),
-        yaxis=dict(range=[min(valid)-margin, max(valid)+margin*1.2],
-                   gridcolor=TV_GRID, tickfont=dict(color=TV_TEXT, size=10), side='right'),
-        margin=dict(l=10, r=280, t=30, b=10),
-    )
-    return fig
-
 
 # ─────────────────────────────────────────────
 # MAIN APP
@@ -1607,8 +1528,6 @@ def main():
                             {'구분':'🔴 손절가',  '가격':fmt_p(sw['stop']),  '현재가 대비':f"-{sw['risk_pct']:.1f}%",'근거':sw['basis_stop']},
                         ]
                         st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
-
-                    st.plotly_chart(_draw_levels_chart(lv, is_krw), use_container_width=True)
 
                     with st.expander("📐 피보나치 & 피봇 포인트 세부"):
                         fa, fb = st.columns(2)
