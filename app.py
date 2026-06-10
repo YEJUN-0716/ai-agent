@@ -677,46 +677,79 @@ def bt_signals(df):
 
     return (ma_s*0.40 + rsi_s*0.30 + macd_s*0.30).fillna(50)
 
-def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000):
+def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
+                 commission=0.0005, slippage=0.0003):
+    """수수료·슬리피지 반영 백테스트.
+    commission: 편도 수수료율 (기본 0.05%)
+    slippage:   편도 슬리피지율 (기본 0.03%)
+    """
     sigs   = bt_signals(df)
     prices = df['Close'].values
     dates  = df.index
     n      = len(df)
 
-    capital  = float(initial_capital)
-    shares   = 0.0
-    in_pos   = False
-    entry_px = 0.0
-    equity   = np.full(n, float(initial_capital))
-    trades   = []
+    capital   = float(initial_capital)
+    shares    = 0.0
+    in_pos    = False
+    entry_val = 0.0   # 매수 시점 투입 자본 (수수료·슬리피지 후)
+    equity    = np.full(n, float(initial_capital))
+    trades    = []
 
     for i in range(20, n):
         px  = float(prices[i])
         sig = float(sigs.iloc[i])
         if not in_pos and sig > buy_th:
-            shares = capital/px; entry_px = px; capital = 0.0; in_pos = True
-            trades.append({'날짜': dates[i], '구분': '🟢 매수', '가격': round(px,2), '신호': round(sig,1), '수익률': ''})
+            buy_px   = px * (1 + slippage)            # 슬리피지 적용 체결가
+            fee      = capital * commission             # 매수 수수료
+            shares   = (capital - fee) / buy_px
+            entry_val = capital                        # 수수료 차감 전 투입액 기준
+            capital  = 0.0
+            in_pos   = True
+            trades.append({'날짜': dates[i], '구분': '🟢 매수',
+                           '가격': round(px, 2), '체결가(수수료+슬리피지)': round(buy_px*(1+commission/(1+slippage+1e-9)), 2),
+                           '신호': round(sig, 1), '수익률': ''})
         elif in_pos and sig < sell_th:
-            capital = shares*px; pnl = (px-entry_px)/entry_px*100; shares = 0.0; in_pos = False
-            trades.append({'날짜': dates[i], '구분': '🔴 매도', '가격': round(px,2), '신호': round(sig,1), '수익률': f"{pnl:+.2f}%"})
-        equity[i] = capital + shares*px
+            sell_px  = px * (1 - slippage)            # 슬리피지 적용 체결가
+            gross    = shares * sell_px
+            fee      = gross * commission
+            net      = gross - fee
+            pnl      = (net / entry_val - 1) * 100
+            capital  = net
+            shares   = 0.0
+            in_pos   = False
+            trades.append({'날짜': dates[i], '구분': '🔴 매도',
+                           '가격': round(px, 2), '체결가(수수료+슬리피지)': round(sell_px*(1-commission), 2),
+                           '신호': round(sig, 1), '수익률': f"{pnl:+.2f}%"})
+        equity[i] = capital + shares * px
 
     final_v = float(equity[-1])
     days    = (dates[-1] - dates[20]).days
-    years   = max(days/365, 0.01)
+    years   = max(days / 365, 0.01)
     bh_ret  = (float(prices[-1]) - float(prices[20])) / float(prices[20]) * 100
     tot_ret = (final_v - initial_capital) / initial_capital * 100
-    cagr    = ((final_v/initial_capital)**(1/years) - 1)*100
+    cagr    = ((final_v / initial_capital) ** (1 / years) - 1) * 100
 
     eq_s      = pd.Series(equity).replace(0, np.nan).ffill()
     roll_max  = eq_s.expanding().max()
-    mdd       = float(((eq_s - roll_max)/roll_max*100).min())
+    dd_series = (eq_s - roll_max) / roll_max * 100
+    mdd       = float(dd_series.min())
     daily_ret = eq_s.pct_change().dropna()
-    sharpe    = float(daily_ret.mean()/daily_ret.std()*np.sqrt(252)) if daily_ret.std() > 0 else 0
+    sharpe    = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0
+    calmar    = abs(cagr / mdd) if mdd < 0 else 0.0
 
-    sells    = [t for t in trades if '매도' in t['구분']]
-    wins     = [t for t in sells if isinstance(t['수익률'], str) and '+' in t['수익률']]
-    win_rate = len(wins)/len(sells)*100 if sells else 0
+    sells = [t for t in trades if '매도' in t['구분']]
+    pnls  = []
+    for t in sells:
+        try: pnls.append(float(t['수익률'].replace('%', '').replace('+', '')))
+        except: pass
+    wins     = [p for p in pnls if p > 0]
+    losses   = [p for p in pnls if p <= 0]
+    win_rate = len(wins) / len(pnls) * 100 if pnls else 0
+    avg_win  = sum(wins) / len(wins) if wins else 0
+    avg_loss = sum(losses) / len(losses) if losses else 0
+    profit_factor = (sum(wins) / abs(sum(losses))) if losses and sum(losses) != 0 else float('inf')
+
+    cost_drag = (commission + slippage) * 2 * len(sells) * 100  # 총 비용 부담률(%)
 
     metrics = {
         '전략 수익률':    f"{tot_ret:+.1f}%",
@@ -724,15 +757,46 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000):
         'CAGR':           f"{cagr:+.1f}%",
         '최대낙폭(MDD)':  f"{mdd:.1f}%",
         'Sharpe Ratio':   f"{sharpe:.2f}",
+        'Calmar Ratio':   f"{calmar:.2f}",
+        'Profit Factor':  f"{profit_factor:.2f}" if profit_factor != float('inf') else "∞",
         '총 매매':        f"{len(sells)}회",
         '승률':           f"{win_rate:.1f}%",
-        '최종 자산':      f"₩{final_v:,.0f}",
+        '평균 수익':      f"{avg_win:+.2f}%",
+        '평균 손실':      f"{avg_loss:+.2f}%",
+        '비용 부담':      f"{cost_drag:.2f}%",
     }
 
-    bh_eq    = np.full(n, float(initial_capital))
+    bh_eq      = np.full(n, float(initial_capital))
     bh_eq[20:] = (df['Close'].iloc[20:].values / float(prices[20])) * initial_capital
-    eq_df    = pd.DataFrame({'날짜': dates, '전략': equity, '매수보유': bh_eq})
+    eq_df      = pd.DataFrame({'날짜': dates, '전략': equity, '매수보유': bh_eq})
     return metrics, eq_df, pd.DataFrame(trades)
+
+def analyze_score_correlation(df):
+    """bt_signals 점수와 N일 후 수익률의 상관관계를 분석.
+    Returns list of dicts per horizon: IC, bucket_stats DataFrame, scatter DataFrame.
+    """
+    sigs   = bt_signals(df)
+    closes = df['Close']
+    results = []
+    bins   = [0, 30, 40, 50, 60, 70, 80, 101]
+    labels = ['0-30', '30-40', '40-50', '50-60', '60-70', '70-80', '80+']
+
+    for horizon in [5, 10, 20]:
+        fwd_ret = closes.pct_change(horizon).shift(-horizon) * 100
+        combined = pd.DataFrame({'score': sigs, 'fwd_ret': fwd_ret}).dropna()
+        combined = combined.iloc[20:]   # 워밍업 구간 제외
+
+        ic = float(combined['score'].corr(combined['fwd_ret'])) if len(combined) > 10 else 0.0
+
+        combined['bucket'] = pd.cut(combined['score'], bins=bins, labels=labels, right=False)
+        bucket_stats = (combined.groupby('bucket', observed=True)['fwd_ret']
+                        .agg(평균수익률='mean', 표준편차='std', 샘플수='count')
+                        .reset_index())
+        bucket_stats.columns = ['점수구간', '평균수익률(%)', '표준편차', '샘플수']
+
+        results.append({'horizon': horizon, 'IC': ic,
+                        'bucket_stats': bucket_stats, 'scatter': combined})
+    return results
 
 # ─────────────────────────────────────────────
 # TELEGRAM ALERTS
@@ -1690,7 +1754,7 @@ def main():
     # ── Tab 3: 백테스팅 ───────────────────────
     with tab3:
         st.subheader("📉 전략 백테스팅")
-        st.caption("MA + RSI + MACD 기반 신호 전략의 과거 성과를 검증합니다.")
+        st.caption("MA + RSI + MACD 기반 신호 전략의 과거 성과를 검증합니다. 수수료·슬리피지가 반영됩니다.")
 
         c1, c2, c3 = st.columns(3)
         bt_ticker  = c1.text_input("티커", "AAPL").strip().upper()
@@ -1700,6 +1764,15 @@ def main():
         c4, c5 = st.columns(2)
         buy_th  = c4.slider("매수 임계값", 50, 90, 65, 5, help="신호가 이 점수를 넘으면 매수")
         sell_th = c5.slider("매도 임계값", 20, 60, 45, 5, help="신호가 이 점수 아래로 내려오면 매도")
+
+        with st.expander("⚙️ 비용 설정 (수수료 · 슬리피지)"):
+            cc1, cc2 = st.columns(2)
+            bt_commission = cc1.slider("수수료율 (편도, %)", 0.0, 0.5, 0.05, 0.01,
+                                        help="증권사 매매 수수료. 미국 주식 ~0.05%, 한국 주식 ~0.015%") / 100
+            bt_slippage   = cc2.slider("슬리피지율 (편도, %)", 0.0, 0.5, 0.03, 0.01,
+                                        help="호가 스프레드 + 체결 지연. 유동성 낮을수록 증가") / 100
+            total_cost = (bt_commission + bt_slippage) * 2 * 100
+            st.caption(f"왕복 총비용: **{total_cost:.2f}%** / 매매 — 거래 빈도가 높을수록 수익률 압박 증가")
 
         period_days = {"1년":365, "2년":730, "3년":1095, "5년":1825}
 
@@ -1714,36 +1787,41 @@ def main():
             if bt_df.empty or len(bt_df) < 60:
                 st.error("데이터가 부족합니다.")
             else:
-                metrics, eq_df, trades_df = run_backtest(bt_df, buy_th, sell_th, bt_capital)
+                metrics, eq_df, trades_df = run_backtest(
+                    bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage)
 
+                # ── 지표 12개 (3행×4열) ──────────────────
                 m_keys = list(metrics.keys()); m_vals = list(metrics.values())
-                cols = st.columns(4)
-                for i in range(4): cols[i].metric(m_keys[i], m_vals[i])
-                cols2 = st.columns(4)
-                for i in range(4): cols2[i].metric(m_keys[i+4], m_vals[i+4])
+                for row_start in range(0, len(m_keys), 4):
+                    row_keys = m_keys[row_start:row_start+4]
+                    row_vals = m_vals[row_start:row_start+4]
+                    row_cols = st.columns(len(row_keys))
+                    for ci, (k, v) in enumerate(zip(row_keys, row_vals)):
+                        row_cols[ci].metric(k, v)
                 st.divider()
 
+                # ── 자산 곡선 ─────────────────────────────
                 fig_eq = go.Figure()
                 fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['전략'], name='전략',
-                    line=dict(color='#2962ff',width=2),
+                    line=dict(color='#2962ff', width=2),
                     fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
                 fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['매수보유'], name='매수보유',
-                    line=dict(color='#888',width=1.5,dash='dash')))
+                    line=dict(color='#888', width=1.5, dash='dash')))
 
                 if not trades_df.empty:
-                    buys  = trades_df[trades_df['구분'].str.contains('매수')]
-                    sells2 = trades_df[trades_df['구분'].str.contains('매도')]
-                    for bdate in buys['날짜']:
-                        row = eq_df[eq_df['날짜']==bdate]
+                    buys_df  = trades_df[trades_df['구분'].str.contains('매수')]
+                    sells_df = trades_df[trades_df['구분'].str.contains('매도')]
+                    for bdate in buys_df['날짜']:
+                        row = eq_df[eq_df['날짜'] == bdate]
                         if not row.empty:
                             fig_eq.add_trace(go.Scatter(x=[bdate], y=[float(row['전략'].iloc[0])],
-                                mode='markers', marker=dict(symbol='triangle-up',size=12,color=TV_UP),
+                                mode='markers', marker=dict(symbol='triangle-up', size=12, color=TV_UP),
                                 showlegend=False))
-                    for sdate in sells2['날짜']:
-                        row = eq_df[eq_df['날짜']==sdate]
+                    for sdate in sells_df['날짜']:
+                        row = eq_df[eq_df['날짜'] == sdate]
                         if not row.empty:
                             fig_eq.add_trace(go.Scatter(x=[sdate], y=[float(row['전략'].iloc[0])],
-                                mode='markers', marker=dict(symbol='triangle-down',size=12,color=TV_DOWN),
+                                mode='markers', marker=dict(symbol='triangle-down', size=12, color=TV_DOWN),
                                 showlegend=False))
 
                 fig_eq.update_layout(height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
@@ -1757,6 +1835,69 @@ def main():
                 if not trades_df.empty:
                     st.subheader(f"매매 내역 ({len(trades_df)}건)")
                     st.dataframe(trades_df, use_container_width=True, hide_index=True)
+
+                # ── 📊 점수-수익률 상관관계 검증 ─────────────
+                st.divider()
+                st.subheader("📊 점수-수익률 상관관계 검증")
+                st.caption(
+                    "신호 점수가 실제 미래 수익률과 얼마나 연관되는지 검증합니다. "
+                    "**IC(정보계수)** > 0 이면 점수가 높을수록 수익률이 높은 경향이 있음을 의미합니다.")
+
+                corr_results = analyze_score_correlation(bt_df)
+
+                # IC 카드 3개
+                ic_cols = st.columns(3)
+                for ci, cr in enumerate(corr_results):
+                    ic_val = cr['IC']
+                    ic_color = "normal" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "off")
+                    ic_cols[ci].metric(
+                        f"IC ({cr['horizon']}일 후 수익률)",
+                        f"{ic_val:+.3f}",
+                        delta=("유효 신호 ✅" if abs(ic_val) >= 0.05 else "신호 미약 ⚠️"),
+                        delta_color=ic_color)
+
+                st.caption("IC 해석: |IC| ≥ 0.05 → 약한 예측력 / ≥ 0.10 → 의미있는 예측력 / ≥ 0.15 → 강한 예측력")
+                st.divider()
+
+                # 20일 기준 점수 구간별 평균 수익률 막대차트
+                cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1])
+                bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)'])
+                if not bs.empty:
+                    bar_colors = [TV_UP if v >= 0 else TV_DOWN for v in bs['평균수익률(%)'].tolist()]
+                    fig_bar = go.Figure()
+                    fig_bar.add_trace(go.Bar(
+                        x=bs['점수구간'], y=bs['평균수익률(%)'],
+                        marker_color=bar_colors,
+                        error_y=dict(type='data', array=bs['표준편차'].tolist(), visible=True,
+                                     color=TV_TEXT, thickness=1.2, width=4),
+                        text=[f"{v:+.2f}%" for v in bs['평균수익률(%)'].tolist()],
+                        textposition='outside', textfont=dict(size=11)))
+                    fig_bar.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
+                    fig_bar.update_layout(
+                        title=dict(text=f"점수 구간별 평균 20일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
+                        height=340, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
+                        yaxis=dict(title='평균 수익률 (%)', gridcolor=TV_GRID, zeroline=False),
+                        margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # 구간별 상세 통계 테이블
+                    with st.expander("📋 구간별 상세 통계"):
+                        display_bs = bs.copy()
+                        display_bs['평균수익률(%)'] = display_bs['평균수익률(%)'].map(lambda x: f"{x:+.2f}%")
+                        display_bs['표준편차']       = display_bs['표준편차'].map(lambda x: f"{x:.2f}%")
+                        st.dataframe(display_bs, use_container_width=True, hide_index=True)
+
+                        # 5일, 10일 IC 도 표로
+                        ic_summary = pd.DataFrame([
+                            {'기간': f"{cr['horizon']}일 후", 'IC': f"{cr['IC']:+.3f}",
+                             '예측력': ('강함 💪' if abs(cr['IC']) >= 0.15 else
+                                       ('보통 🔶' if abs(cr['IC']) >= 0.10 else
+                                        ('약함 🔸' if abs(cr['IC']) >= 0.05 else '없음 ❌')))}
+                            for cr in corr_results
+                        ])
+                        st.dataframe(ic_summary, use_container_width=True, hide_index=True)
 
     # ── Tab 4: 알림 ───────────────────────────
     with tab4:
