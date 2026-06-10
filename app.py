@@ -88,6 +88,19 @@ SECTOR_AVG_PER = {
     'Real Estate': 30, 'Utilities': 17,
 }
 
+# 시장 국면별 기술적 지표 가중치 (합계=1.0)
+REGIME_TECH_WEIGHTS = {
+    # 강세장: 추세/모멘텀 지표(MA·ADX·MACD) 강조
+    'bull':    {'MA정렬':0.20,'RSI':0.07,'MACD':0.15,'볼린저밴드':0.07,
+                '거래량':0.09,'파동근사':0.09,'스토캐스틱':0.07,'ADX추세강도':0.20,'OBV':0.06},
+    # 중립장: 기본 가중치
+    'neutral': {'MA정렬':0.15,'RSI':0.10,'MACD':0.13,'볼린저밴드':0.10,
+                '거래량':0.07,'파동근사':0.08,'스토캐스틱':0.10,'ADX추세강도':0.17,'OBV':0.10},
+    # 약세장: 반전/과매도 지표(RSI·BB·OBV) 강조
+    'bear':    {'MA정렬':0.08,'RSI':0.15,'MACD':0.10,'볼린저밴드':0.15,
+                '거래량':0.07,'파동근사':0.05,'스토캐스틱':0.13,'ADX추세강도':0.12,'OBV':0.15},
+}
+
 # ─────────────────────────────────────────────
 # TECHNICAL ANALYSIS
 # ─────────────────────────────────────────────
@@ -572,6 +585,7 @@ def get_market_regime():
         end = datetime.now(); start = end - timedelta(days=310)
         spy = yf.download('SPY', start=start, end=end, progress=False)
         if isinstance(spy.columns, pd.MultiIndex): spy.columns = spy.columns.droplevel(1)
+        spy = spy.dropna(subset=['Close'])
         if len(spy) < 200: return 'neutral', 0.0
         cp = float(spy['Close'].iloc[-1])
         ma200 = float(spy['Close'].rolling(200).mean().iloc[-1])
@@ -596,6 +610,7 @@ def macro_score():
         gld = yf.download('GLD',      start=start, end=end, progress=False)  # 금(인플레/공포)
         for d in [tnx, fvx, vix, dxy, hyg, lqd, gld]:
             if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+            d.dropna(subset=['Close'], inplace=True)
 
         # ── 금리환경 (28%) ────────────────────────────
         if len(tnx) >= 60:
@@ -1089,10 +1104,10 @@ def calc_sector_relative(ticker, sector, df):
     try:
         bench = yf.download(tickers_to_dl, start=start, end=end, progress=False)
         if isinstance(bench.columns, pd.MultiIndex):
-            spy_close = bench['Close']['SPY']
-            etf_close = bench['Close'][etf] if etf else None
+            spy_close = bench['Close']['SPY'].dropna()
+            etf_close = bench['Close'][etf].dropna() if etf else None
         else:
-            spy_close = bench['Close'] if 'SPY' in tickers_to_dl else None
+            spy_close = bench['Close'].dropna() if 'SPY' in tickers_to_dl else None
             etf_close = None
     except Exception:
         return {}
@@ -1115,6 +1130,92 @@ def calc_sector_relative(ticker, sector, df):
         except Exception:
             continue
     return {'data': results, 'etf': etf, 'sector': sector}
+
+
+def regime_adjusted_technical(t_det, regime='neutral'):
+    """t_det 컴포넌트 점수를 국면별 가중치로 재계산."""
+    w = REGIME_TECH_WEIGHTS.get(regime, REGIME_TECH_WEIGHTS['neutral'])
+    return float(
+        t_det.get('MA정렬',50)*w['MA정렬'] + t_det.get('RSI',50)*w['RSI'] +
+        t_det.get('MACD',50)*w['MACD'] + t_det.get('볼린저밴드',50)*w['볼린저밴드'] +
+        t_det.get('거래량',50)*w['거래량'] + t_det.get('파동근사',50)*w['파동근사'] +
+        t_det.get('스토캐스틱',50)*w['스토캐스틱'] + t_det.get('ADX추세강도',50)*w['ADX추세강도'] +
+        t_det.get('OBV',50)*w['OBV'])
+
+
+def calc_indicator_ics(df, horizon=20):
+    """9개 지표 각각의 IC(정보계수)를 독립 계산 — 어떤 지표가 실제로 예측력이 있는지 측정."""
+    p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
+    fwd = p.pct_change(horizon).shift(-horizon) * 100
+
+    def _ic(series):
+        c = pd.DataFrame({'s': series, 'f': fwd}).dropna().iloc[20:]
+        return float(c['s'].corr(c['f'])) if len(c) > 20 else 0.0
+
+    ma20, ma60, ma120 = p.rolling(20).mean(), p.rolling(60).mean(), p.rolling(120).mean()
+    ma_s = ((p>ma20)*20+(p>ma60)*20+(p>ma120)*20+(ma20>ma60)*20+(ma60>ma120)*20).astype(float)
+
+    rsi = calc_rsi(p)
+    rs  = pd.Series(50.0, index=p.index)
+    rs[(rsi>60)&(rsi<=70)]=75; rs[rsi>70]=40; rs[(rsi>=30)&(rsi<40)]=30; rs[rsi<30]=60
+
+    ml, sl2, hist = calc_macd(p)
+    ms_b = pd.Series(0.0, index=p.index)
+    ms_b[ml>sl2]+=20; ms_b[hist>0]+=15
+    ms_b[hist>hist.shift(1)]+=15; ms_b[hist<=hist.shift(1)]-=10
+
+    bb_u,_,bb_l = calc_bb(p)
+    rng=(bb_u-bb_l).clip(lower=1e-9); pos=(p-bb_l)/rng
+    bs=pd.Series(50.0,index=p.index)
+    bs[(pos>=0.4)&(pos<=0.8)]=70; bs[(pos>0.8)&(pos<=0.95)]=85
+    bs[pos>0.95]=45; bs[(pos>=0.2)&(pos<0.4)]=45; bs[pos<0.2]=30
+
+    vma20=v.rolling(20).mean().clip(lower=1e-9); vr=v/vma20; pc5=p.pct_change(5)
+    vs=pd.Series(50.0,index=p.index)
+    vs[(pc5>0)&(vr>1.2)]=80; vs[(pc5>0)&(vr<0.8)]=55
+    vs[(pc5<0)&(vr>1.2)]=25; vs[(pc5<0)&(vr<0.8)]=45
+
+    sk_s,sd_s=calc_stochastic(h,l,p)
+    sts=pd.Series(50.0,index=p.index)
+    sts[sk_s>80]=35; sts[(sk_s>60)&(sk_s<=80)]=65
+    sts[(sk_s>40)&(sk_s<=60)]=55; sts[(sk_s>20)&(sk_s<=40)]=60; sts[sk_s<=20]=70
+
+    adx_v,pdi,ndi=calc_adx(h,l,p)
+    adx_f=adx_v.fillna(0); bull=(pdi>ndi).fillna(False)
+    ads=pd.Series(50.0,index=p.index)
+    ads[(adx_f>40)&bull]=85; ads[(adx_f>40)&~bull]=15
+    ads[(adx_f>25)&(adx_f<=40)&bull]=72; ads[(adx_f>25)&(adx_f<=40)&~bull]=28
+
+    obv=calc_obv(p,v); obv_ma=obv.rolling(20).mean()
+    obv_s=pd.Series(35.0,index=p.index); obv_s[obv>obv_ma]=65
+
+    DEFAULT_W = REGIME_TECH_WEIGHTS['neutral']
+    ics = {
+        'MA정렬':      _ic(ma_s.fillna(50)),
+        'RSI':         _ic(rs.fillna(50)),
+        'MACD':        _ic((pd.Series(50.0,index=p.index)+ms_b).clip(0,100).fillna(50)),
+        '볼린저밴드':   _ic(bs.fillna(50)),
+        '거래량':       _ic(vs.fillna(50)),
+        '스토캐스틱':   _ic(sts.fillna(50)),
+        'ADX추세강도':  _ic(ads),
+        'OBV':         _ic(obv_s.fillna(50)),
+    }
+    # 파동근사는 벡터화 간소화
+    rh20=h.rolling(20).max(); ph20=h.shift(20).rolling(20).max()
+    rl20=l.rolling(20).min(); pl20=l.shift(20).rolling(20).min()
+    wave_base=(50+(rh20>ph20)*15+(rl20>pl20)*15).astype(float)
+    rs20v=(p-p.shift(19))/(p.shift(19)+1e-9); rm60v=(p-p.shift(59))/(p.shift(59)+1e-9)
+    wave_s=(wave_base+(rs20v*150+rm60v*80).clip(-40,40)).clip(0,100)
+    ics['파동근사'] = _ic(wave_s.fillna(50))
+
+    # IC 기반 권장 가중치 (|IC| 비례, 최소 3%)
+    abs_ics = {k: max(abs(v), 0.001) for k, v in ics.items()}
+    total_abs = sum(abs_ics.values())
+    suggested = {k: max(abs_ics[k]/total_abs, 0.03) for k in abs_ics}
+    s_total = sum(suggested.values())
+    suggested = {k: round(v/s_total, 3) for k, v in suggested.items()}
+
+    return ics, suggested, DEFAULT_W
 
 
 def run_walkforward(df, buy_th, sell_th, initial_capital, commission, slippage):
@@ -1727,6 +1828,7 @@ def main():
                     t_score, t_det  = technical_score(df)
                     candle_pats     = detect_candle_patterns(df)
                     mom_data        = calc_momentum(df)
+                    ic_data         = calc_indicator_ics(df)
                     prog.progress(35); msg.text("💰 재무제표·퀀트 분석 중...")
                     f_score, f_det  = fundamental_score(ticker, df)
                     prog.progress(52); msg.text("🌍 매크로·금리 분석 중...")
@@ -1741,6 +1843,9 @@ def main():
                     prog.progress(93); msg.text("📰 뉴스 감성 분석 중...")
                     news_score, news_articles = get_news_sentiment(ticker)
                     regime, regime_diff = get_market_regime()
+                    # 국면 조정 기술적 점수 & 종합점수
+                    t_score_adj = regime_adjusted_technical(t_det, regime)
+                    total_adj   = t_score_adj*(w_tech/100) + f_score*(w_fund/100) + m_score*(w_macro/100)
                     prog.progress(100); prog.empty(); msg.empty()
 
                     try:
@@ -1807,6 +1912,24 @@ def main():
                           재무+퀀트 <b>{f_score:.0f}</b>점 &nbsp;|&nbsp;
                           매크로+금리 <b>{m_score:.0f}</b>점</div>
                         </div>""", unsafe_allow_html=True)
+
+                    # 국면 조정 점수 비교 카드
+                    regime_label_map = {'bull':'🐂 강세장 가중치', 'bear':'🐻 약세장 가중치', 'neutral':'➡️ 중립장 가중치'}
+                    regime_color_map = {'bull':'#26a69a', 'bear':'#ef5350', 'neutral':'#b2b5be'}
+                    diff = total_adj - total
+                    diff_str = f"{diff:+.1f}점"
+                    st.markdown(
+                        f"<div style='background:{regime_color_map[regime]}18;"
+                        f"border:1px solid {regime_color_map[regime]}55;"
+                        f"border-radius:8px;padding:10px 16px;"
+                        f"display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span style='color:{regime_color_map[regime]};font-weight:600'>"
+                        f"{regime_label_map[regime]} 적용 시</span>"
+                        f"<span style='font-size:20px;font-weight:bold;color:{score_color(total_adj)}'>"
+                        f"{total_adj:.1f}점 &nbsp;"
+                        f"<span style='font-size:13px;color:{'#26a69a' if diff>=0 else '#ef5350'}'>"
+                        f"({diff_str})</span></span></div>",
+                        unsafe_allow_html=True)
                     # ── ⚡ Alpaca 실시간 시세 ─────────────────────
                     _al_key, _al_sec = _get_alpaca_keys()
                     if _al_key and _al_sec and not is_krw:
@@ -1915,6 +2038,44 @@ def main():
                                 st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
                             else:
                                 st.caption("  특이 패턴 없음")
+                        with st.expander("🔬 지표 예측력 분석 (IC · 정보계수)"):
+                            ics, suggested_w, default_w = ic_data
+                            ic_items = sorted(ics.items(), key=lambda x: abs(x[1]), reverse=True)
+                            ic_labels = [k for k, _ in ic_items]
+                            ic_values = [v for _, v in ic_items]
+                            ic_colors = [TV_UP if v >= 0 else TV_DOWN for v in ic_values]
+                            fig_ic = go.Figure()
+                            fig_ic.add_trace(go.Bar(
+                                x=ic_labels, y=ic_values,
+                                marker_color=ic_colors,
+                                text=[f"{v:+.3f}" for v in ic_values],
+                                textposition='outside', textfont=dict(size=10)))
+                            fig_ic.add_hline(y=0,    line_color=TV_TEXT,    line_width=1, opacity=0.5)
+                            fig_ic.add_hline(y=0.05,  line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
+                            fig_ic.add_hline(y=-0.05, line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
+                            fig_ic.update_layout(
+                                title=dict(text=f"20일 후 수익률 예측력 (IC)", font=dict(size=11)),
+                                height=270, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                font=dict(color=TV_TEXT),
+                                xaxis=dict(gridcolor=TV_GRID, tickfont=dict(size=10)),
+                                yaxis=dict(gridcolor=TV_GRID, zeroline=False),
+                                margin=dict(l=5, r=5, t=35, b=5), showlegend=False)
+                            st.plotly_chart(fig_ic, use_container_width=True)
+                            st.caption("주황 점선 = |IC| 0.05 기준 (유효 예측력) | IC > 0: 점수 높을수록 수익↑")
+                            st.divider()
+                            st.caption("**지표별 IC vs 현재·권장 가중치**")
+                            w_rows = []
+                            for k in ic_labels:
+                                ic_v = ics[k]
+                                grade = '강함 💪' if abs(ic_v) >= 0.10 else ('보통 🔶' if abs(ic_v) >= 0.05 else '약함 ❌')
+                                w_rows.append({
+                                    '지표': k,
+                                    'IC': f"{ic_v:+.3f}",
+                                    '예측력': grade,
+                                    'IC 권장(%)': f"{suggested_w.get(k,0)*100:.1f}",
+                                    '현재(%)':    f"{default_w.get(k,0)*100:.1f}",
+                                })
+                            st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
                     with col2:
                         st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
                         with st.expander("세부 점수"):
