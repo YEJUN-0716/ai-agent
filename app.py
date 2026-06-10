@@ -950,6 +950,84 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     eq_df      = pd.DataFrame({'날짜': dates, '전략': equity, '매수보유': bh_eq})
     return metrics, eq_df, pd.DataFrame(trades)
 
+# ─────────────────────────────────────────────
+# ALPACA REAL-TIME DATA
+# ─────────────────────────────────────────────
+_ALPACA_DATA = "https://data.alpaca.markets/v2"
+
+def _alpaca_headers(key, secret):
+    return {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
+
+def _get_alpaca_keys():
+    """secrets → env → session_state 순서로 Alpaca 키 조회."""
+    try:
+        k = st.secrets.get("ALPACA_API_KEY", "")
+        s = st.secrets.get("ALPACA_SECRET_KEY", "")
+        if k and s:
+            return k, s
+    except Exception:
+        pass
+    k = os.environ.get("ALPACA_API_KEY", "")
+    s = os.environ.get("ALPACA_SECRET_KEY", "")
+    if k and s:
+        return k, s
+    return (st.session_state.get('alpaca_key', ''),
+            st.session_state.get('alpaca_secret', ''))
+
+def get_alpaca_quote(symbol, key, secret):
+    """최신 호가 (bid/ask/spread). IEX 피드 사용 (무료)."""
+    try:
+        r = requests.get(
+            f"{_ALPACA_DATA}/stocks/{symbol}/quotes/latest",
+            headers=_alpaca_headers(key, secret),
+            params={"feed": "iex"}, timeout=5)
+        if r.status_code == 200:
+            q = r.json().get('quote', {})
+            ap = q.get('ap', 0) or 0
+            bp = q.get('bp', 0) or 0
+            return {
+                'ask':       ap,
+                'bid':       bp,
+                'ask_size':  q.get('as', 0),
+                'bid_size':  q.get('bs', 0),
+                'spread':    ap - bp,
+                'spread_pct': (ap - bp) / bp * 100 if bp > 0 else 0,
+                'timestamp': q.get('t', ''),
+            }
+        return {'error': f"HTTP {r.status_code}: {r.text[:80]}"}
+    except Exception as e:
+        return {'error': str(e)[:80]}
+
+def get_alpaca_bars(symbol, key, secret, timeframe='5Min', limit=100):
+    """분봉 데이터 (오늘 장중). IEX 피드 사용."""
+    try:
+        r = requests.get(
+            f"{_ALPACA_DATA}/stocks/{symbol}/bars",
+            headers=_alpaca_headers(key, secret),
+            params={"timeframe": timeframe, "limit": limit,
+                    "feed": "iex", "sort": "asc"}, timeout=10)
+        if r.status_code != 200:
+            return None
+        bars = r.json().get('bars', [])
+        if not bars:
+            return None
+        df = pd.DataFrame(bars)
+        df['t'] = pd.to_datetime(df['t'], utc=True).dt.tz_convert('America/New_York')
+        df = df.set_index('t')
+        df = df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low',
+                                 'c': 'Close', 'v': 'Volume'})
+        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+    except Exception:
+        return None
+
+def test_alpaca_connection(key, secret):
+    """연결 테스트 — AAPL 최신 호가 조회로 확인."""
+    result = get_alpaca_quote('AAPL', key, secret)
+    if result and 'error' not in result:
+        return True, f"연결 성공 ✅  AAPL ask={result['ask']:.2f}  bid={result['bid']:.2f}"
+    return False, result.get('error', '알 수 없는 오류') if result else '연결 실패'
+
+
 def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
                            initial_capital, commission, slippage):
     """멀티 종목 포트폴리오 백테스트.
@@ -1729,6 +1807,64 @@ def main():
                           재무+퀀트 <b>{f_score:.0f}</b>점 &nbsp;|&nbsp;
                           매크로+금리 <b>{m_score:.0f}</b>점</div>
                         </div>""", unsafe_allow_html=True)
+                    # ── ⚡ Alpaca 실시간 시세 ─────────────────────
+                    _al_key, _al_sec = _get_alpaca_keys()
+                    if _al_key and _al_sec and not is_krw:
+                        with st.expander("⚡ 실시간 시세 (Alpaca)", expanded=True):
+                            al_r_col, al_btn_col = st.columns([4, 1])
+                            al_r_col.caption(f"Alpaca IEX 피드 — 무료 플랜 15분 지연 / 유료 플랜 실시간")
+                            if al_btn_col.button("🔄 새로고침", key="alpaca_refresh"):
+                                if 'alpaca_cache' in st.session_state:
+                                    del st.session_state['alpaca_cache']
+
+                            cache_key = f"alpaca_{ticker}"
+                            if cache_key not in st.session_state:
+                                with st.spinner("실시간 데이터 로딩..."):
+                                    _aq = get_alpaca_quote(ticker, _al_key, _al_sec)
+                                    _ab = get_alpaca_bars(ticker, _al_key, _al_sec,
+                                                          timeframe='5Min', limit=80)
+                                st.session_state[cache_key] = {'quote': _aq, 'bars': _ab,
+                                                               'fetched': datetime.now()}
+                            cached = st.session_state[cache_key]
+                            aq = cached['quote']
+                            ab = cached['bars']
+                            fetched_at = cached['fetched'].strftime('%H:%M:%S')
+
+                            if aq and 'error' not in aq:
+                                aq_c1, aq_c2, aq_c3, aq_c4 = st.columns(4)
+                                aq_c1.metric("매도 호가 (Ask)", f"${aq['ask']:.2f}",
+                                             f"{aq['ask_size']}주")
+                                aq_c2.metric("매수 호가 (Bid)", f"${aq['bid']:.2f}",
+                                             f"{aq['bid_size']}주")
+                                aq_c3.metric("스프레드",
+                                             f"${aq['spread']:.3f}",
+                                             f"{aq['spread_pct']:.3f}%")
+                                ts_str = str(aq['timestamp'])[:19].replace('T', ' ')
+                                aq_c4.metric("호가 시각", ts_str[:10], ts_str[11:19])
+                            elif aq and 'error' in aq:
+                                st.warning(f"호가 조회 실패: {aq['error']}")
+
+                            if ab is not None and not ab.empty:
+                                fig_in = go.Figure(go.Candlestick(
+                                    x=ab.index, open=ab['Open'], high=ab['High'],
+                                    low=ab['Low'], close=ab['Close'],
+                                    increasing_line_color=TV_UP,
+                                    decreasing_line_color=TV_DOWN,
+                                    name='5분봉'))
+                                fig_in.update_layout(
+                                    height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                    font=dict(color=TV_TEXT),
+                                    title=dict(text=f"{ticker} 장중 5분봉  (조회: {fetched_at})",
+                                               font=dict(size=12)),
+                                    xaxis=dict(gridcolor=TV_GRID, rangeslider_visible=False,
+                                               type='category',
+                                               tickformat='%H:%M',
+                                               nticks=12),
+                                    yaxis=dict(gridcolor=TV_GRID, side='right'),
+                                    margin=dict(l=0, r=60, t=35, b=0))
+                                st.plotly_chart(fig_in, use_container_width=True)
+                            else:
+                                st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
                     st.divider()
 
                     # ── 매매 시그널 ──────────────────────────────
@@ -2479,6 +2615,58 @@ def main():
                     st.dataframe(pd.DataFrame(sent), use_container_width=True, hide_index=True)
                 else:
                     st.info(f"기준 점수 {alert_th}점 이상인 종목이 없습니다.")
+
+        # ── ⚡ Alpaca 실시간 데이터 설정 ──────────────
+        st.divider()
+        st.subheader("⚡ Alpaca 실시간 데이터 연동")
+        st.caption(
+            "Alpaca API를 연결하면 **미국 주식 실시간 호가(bid/ask)** 및 "
+            "**장중 분봉 차트**를 Tab 1에서 확인할 수 있습니다. "
+            "무료 계정(IEX 피드) 기준 15분 지연 데이터 제공.")
+
+        with st.expander("📋 Alpaca 가입 및 키 발급 방법"):
+            st.markdown("""
+            1. [alpaca.markets](https://alpaca.markets) 에서 무료 계정 생성
+            2. **Paper Trading** 계정으로 시작 (신용카드 불필요)
+            3. 대시보드 → **API Keys** → `Generate New Key`
+            4. API Key ID 와 Secret Key 를 아래에 입력
+            5. 유료 플랜(Unlimited, $9/월) 가입 시 진짜 실시간 데이터 제공
+            """)
+
+        al_c1, al_c2 = st.columns(2)
+        al_key    = al_c1.text_input("Alpaca API Key ID",
+                                      value=st.session_state.get('alpaca_key', ''),
+                                      placeholder="PKXXXXXXXXXXXXXXXXXXXXXXXX",
+                                      type="password")
+        al_secret = al_c2.text_input("Alpaca Secret Key",
+                                      value=st.session_state.get('alpaca_secret', ''),
+                                      placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                                      type="password")
+
+        al_c3, al_c4 = st.columns(2)
+        if al_c3.button("🔌 연결 테스트", key="alpaca_test"):
+            if not al_key or not al_secret:
+                st.error("API Key와 Secret Key를 모두 입력해주세요.")
+            else:
+                with st.spinner("연결 테스트 중..."):
+                    ok, msg = test_alpaca_connection(al_key, al_secret)
+                if ok:
+                    st.success(msg)
+                    st.session_state['alpaca_key']    = al_key
+                    st.session_state['alpaca_secret'] = al_secret
+                else:
+                    st.error(f"연결 실패: {msg}")
+
+        if al_c4.button("💾 키 저장 (세션)", key="alpaca_save"):
+            if al_key and al_secret:
+                st.session_state['alpaca_key']    = al_key
+                st.session_state['alpaca_secret'] = al_secret
+                st.success("✅ 세션에 저장됨 — Tab 1 종목 분석 시 실시간 위젯이 표시됩니다.")
+            else:
+                st.warning("키를 입력한 후 저장하세요.")
+
+        if st.session_state.get('alpaca_key'):
+            st.info(f"⚡ Alpaca 연결 중 — Tab 1에서 미국 주식 분석 시 실시간 호가가 표시됩니다.")
 
     # ── Tab 5: 포트폴리오 ────────────────────────
     with tab5:
