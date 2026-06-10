@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import requests
+import sqlite3
+import os
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -17,6 +19,46 @@ TV_BORDER = '#2a2e39'
 TV_TEXT = '#b2b5be'
 TV_UP = '#26a69a'
 TV_DOWN = '#ef5350'
+
+# ─────────────────────────────────────────────
+# PORTFOLIO DB  (sqlite3 로컬 파일)
+# ─────────────────────────────────────────────
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'portfolio.db')
+
+def _db_init():
+    with sqlite3.connect(_DB_PATH) as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker   TEXT    NOT NULL,
+                qty      REAL    NOT NULL DEFAULT 1,
+                avg_cost REAL    NOT NULL DEFAULT 0,
+                note     TEXT    NOT NULL DEFAULT '',
+                added_at TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+            )""")
+        con.commit()
+
+def _db_load():
+    _db_init()
+    with sqlite3.connect(_DB_PATH) as con:
+        rows = con.execute(
+            "SELECT id, ticker, qty, avg_cost, note FROM positions ORDER BY id").fetchall()
+    return [{'id': r[0], 'ticker': r[1], 'qty': r[2],
+             'avg_cost': r[3], 'note': r[4]} for r in rows]
+
+def _db_add(ticker, qty, avg_cost, note):
+    _db_init()
+    with sqlite3.connect(_DB_PATH) as con:
+        cur = con.execute(
+            "INSERT INTO positions (ticker, qty, avg_cost, note) VALUES (?,?,?,?)",
+            (ticker, qty, avg_cost, note))
+        con.commit()
+        return cur.lastrowid
+
+def _db_delete(pos_id):
+    with sqlite3.connect(_DB_PATH) as con:
+        con.execute("DELETE FROM positions WHERE id=?", (pos_id,))
+        con.commit()
 
 PRESETS = {
     '미국 대형주':  ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','JPM','V','JNJ'],
@@ -894,6 +936,38 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     eq_df      = pd.DataFrame({'날짜': dates, '전략': equity, '매수보유': bh_eq})
     return metrics, eq_df, pd.DataFrame(trades)
 
+def run_walkforward(df, buy_th, sell_th, initial_capital, commission, slippage):
+    """70/30 시간분할 워크-포워드 검증.
+    학습기간(in-sample) 과 검증기간(out-of-sample) 성과를 비교해 과적합 여부를 진단."""
+    split = int(len(df) * 0.70)
+    train_df = df.iloc[:split]
+    # 검증 구간은 지표 워밍업을 위해 20봉 오버랩
+    test_df  = df.iloc[max(0, split - 20):]
+
+    key_metrics = ['전략 수익률', 'CAGR', '최대낙폭(MDD)', 'Sharpe Ratio',
+                   'Calmar Ratio', '승률', '총 매매']
+
+    results = {}
+    for label, sub_df in [('학습 (In-Sample)', train_df), ('검증 (Out-of-Sample)', test_df)]:
+        if len(sub_df) < 60:
+            results[label] = {k: 'N/A' for k in key_metrics}
+            results[label]['기간'] = f"{sub_df.index[0].strftime('%Y-%m-%d')} ~ {sub_df.index[-1].strftime('%Y-%m-%d')}"
+            continue
+        m, _, _ = run_backtest(sub_df, buy_th, sell_th, initial_capital, commission, slippage)
+        results[label] = {k: m.get(k, '-') for k in key_metrics}
+        results[label]['기간'] = f"{sub_df.index[0].strftime('%Y-%m-%d')} ~ {sub_df.index[-1].strftime('%Y-%m-%d')}"
+
+    # 과적합 지수: IS CAGR vs OOS CAGR 차이 (클수록 과적합)
+    def _parse_pct(s):
+        try: return float(str(s).replace('%','').replace('+',''))
+        except: return 0.0
+    is_cagr  = _parse_pct(results['학습 (In-Sample)'].get('CAGR', 0))
+    oos_cagr = _parse_pct(results['검증 (Out-of-Sample)'].get('CAGR', 0))
+    overfit  = is_cagr - oos_cagr
+
+    return results, overfit, df.index[split].strftime('%Y-%m-%d')
+
+
 def analyze_score_correlation(df):
     """bt_signals 점수와 N일 후 수익률의 상관관계를 분석.
     Returns list of dicts per horizon: IC, bucket_stats DataFrame, scatter DataFrame.
@@ -1502,12 +1576,36 @@ def main():
                     regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}[regime]
                     regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}[regime]
 
+                    # ── 이익발표일 조회 ──────────────────────────
+                    earn_str = ""
+                    try:
+                        cal = yf.Ticker(ticker).calendar
+                        if cal is not None and not (isinstance(cal, dict) and len(cal) == 0):
+                            if isinstance(cal, dict):
+                                ed = cal.get('Earnings Date')
+                                if ed:
+                                    ed = ed[0] if isinstance(ed, list) else ed
+                                    days_left = (pd.Timestamp(ed).date() - datetime.now().date()).days
+                                    earn_str = f"다음 실적발표: **{pd.Timestamp(ed).strftime('%Y-%m-%d')}** ({days_left:+d}일)"
+                                    if 0 <= days_left <= 14:
+                                        earn_str += " 🔔"
+                            elif isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.index:
+                                ed = cal.loc['Earnings Date'].iloc[0]
+                                days_left = (pd.Timestamp(ed).date() - datetime.now().date()).days
+                                earn_str = f"다음 실적발표: **{pd.Timestamp(ed).strftime('%Y-%m-%d')}** ({days_left:+d}일)"
+                                if 0 <= days_left <= 14:
+                                    earn_str += " 🔔"
+                    except Exception:
+                        pass
+
                     st.header(f"{name}  `{ticker}`")
                     c1,c2,c3,c4 = st.columns(4)
                     c1.metric("현재가", fmt_p(cp), f"{chg:+.2f}%")
                     c2.metric("52주 고가", fmt_p(float(df['High'].tail(252).max())))
                     c3.metric("52주 저가", fmt_p(float(df['Low'].tail(252).min())))
                     c4.metric("분석 기준일", end_dt.strftime("%Y-%m-%d"))
+                    if earn_str:
+                        st.caption(earn_str)
                     st.markdown(
                         f"<span style='background:{regime_color}22;color:{regime_color};"
                         f"border:1px solid {regime_color};border-radius:6px;"
@@ -2022,7 +2120,43 @@ def main():
                         ])
                         st.dataframe(ic_summary, use_container_width=True, hide_index=True)
 
-    # ── Tab 4: 알림 ───────────────────────────
+                # ── 📐 워크-포워드 검증 ──────────────────────
+                st.divider()
+                st.subheader("📐 워크-포워드 검증 (과적합 진단)")
+                st.caption(
+                    "전체 기간을 **학습 70%** / **검증 30%** 로 분리해 동일 전략을 각각 실행합니다. "
+                    "학습 성과와 검증 성과 차이가 클수록 **과적합** 가능성이 높습니다.")
+
+                if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
+                    wf_results, wf_overfit, wf_split_date = run_walkforward(
+                        bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage)
+
+                    wf_col1, wf_col2 = st.columns(2)
+                    wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
+                                    'Sharpe Ratio', 'Calmar Ratio', '승률', '총 매매']
+                    for wf_ci, (wf_label, wf_m) in enumerate(wf_results.items()):
+                        col = wf_col1 if wf_ci == 0 else wf_col2
+                        bg  = 'rgba(41,98,255,0.08)' if wf_ci == 0 else 'rgba(255,82,82,0.08)'
+                        bdr = '#2962ff' if wf_ci == 0 else '#ef5350'
+                        col.markdown(
+                            f"<div style='background:{bg};border-left:3px solid {bdr};"
+                            f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
+                            f"<b>{wf_label}</b></div>", unsafe_allow_html=True)
+                        for wf_k in wf_key_order:
+                            if wf_k in wf_m:
+                                col.metric(wf_k, wf_m[wf_k])
+
+                    # 과적합 진단 메시지
+                    st.divider()
+                    if abs(wf_overfit) < 3:
+                        st.success(f"✅ **과적합 없음** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p (기준 ±3%p 이내)")
+                    elif abs(wf_overfit) < 8:
+                        st.warning(f"🔶 **경미한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값 재검토 권장")
+                    else:
+                        st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
+                    st.caption(f"분할 기준일: {wf_split_date}")
+
+    # ── Tab 4: 알림 ──────────────────────────────────
     with tab4:
         st.subheader("🔔 텔레그램 알림 설정")
 
@@ -2070,8 +2204,12 @@ def main():
     # ── Tab 5: 포트폴리오 ────────────────────────
     with tab5:
         st.subheader("💼 포트폴리오 관리")
-        st.caption("보유 종목의 손익과 분석 점수를 한눈에 확인하세요. (세션 동안 유지)")
+        st.caption("보유 종목의 손익과 분석 점수를 한눈에 확인하세요. 포지션은 **로컬 DB에 영구 저장**됩니다.")
 
+        # DB에서 최초 1회 로드
+        if 'pf_db_loaded' not in st.session_state:
+            st.session_state.portfolio    = _db_load()
+            st.session_state.pf_db_loaded = True
         if 'portfolio' not in st.session_state:
             st.session_state.portfolio = []
 
@@ -2086,9 +2224,11 @@ def main():
                 if st.form_submit_button("추가", type="primary"):
                     tk_in = pf_t.strip().upper()
                     if tk_in:
+                        new_id = _db_add(tk_in, float(pf_q), float(pf_c), pf_nt)
                         st.session_state.portfolio.append(
-                            {'ticker': tk_in, 'qty': float(pf_q), 'avg_cost': float(pf_c), 'note': pf_nt})
-                        st.success(f"✅ {tk_in} 추가됨")
+                            {'id': new_id, 'ticker': tk_in, 'qty': float(pf_q),
+                             'avg_cost': float(pf_c), 'note': pf_nt})
+                        st.success(f"✅ {tk_in} 추가됨 (DB 저장 완료)")
                         st.rerun()
 
         if not st.session_state.portfolio:
@@ -2101,6 +2241,8 @@ def main():
                 note_str = f"  — {pos['note']}" if pos.get('note') else ''
                 pc1.markdown(f"**{pos['ticker']}** &nbsp; {pos['qty']:.3f}주 @ {pos['avg_cost']:.2f}{note_str}")
                 if pc2.button("삭제", key=f"pf_del_{pf_i}"):
+                    if pos.get('id'):
+                        _db_delete(pos['id'])
                     st.session_state.portfolio.pop(pf_i)
                     if 'pf_res' in st.session_state: del st.session_state['pf_res']
                     st.rerun()
@@ -2205,7 +2347,7 @@ def main():
                     if weak_pf:   st.warning(f"⚠️ 매도 검토: **{', '.join(weak_pf)}** — 종합점수 40점 미만")
                     if strong_pf: st.success(f"🚀 강세 유지: **{', '.join(strong_pf)}** — 종합점수 75점 이상")
 
-        st.caption("⚠️ 포지션 정보는 페이지 새로고침 시 초기화됩니다.")
+        st.caption(f"💾 포지션은 `{_DB_PATH}` 에 저장됩니다. Streamlit Cloud 재배포 시 초기화될 수 있습니다.")
 
 
 if __name__ == "__main__":
