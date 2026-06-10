@@ -67,6 +67,20 @@ PRESETS = {
     'ETF':          ['SPY','QQQ','IWM','GLD','TLT','EEM','069500.KS','114800.KS'],
 }
 
+SECTOR_ETF = {
+    'Technology':             'XLK',
+    'Consumer Cyclical':      'XLY',
+    'Financial Services':     'XLF',
+    'Healthcare':             'XLV',
+    'Consumer Defensive':     'XLP',
+    'Communication Services': 'XLC',
+    'Industrials':            'XLI',
+    'Basic Materials':        'XLB',
+    'Energy':                 'XLE',
+    'Real Estate':            'XLRE',
+    'Utilities':              'XLU',
+}
+
 SECTOR_AVG_PER = {
     'Technology': 28, 'Consumer Cyclical': 22, 'Financial Services': 13,
     'Healthcare': 20, 'Consumer Defensive': 19, 'Communication Services': 20,
@@ -936,6 +950,95 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     eq_df      = pd.DataFrame({'날짜': dates, '전략': equity, '매수보유': bh_eq})
     return metrics, eq_df, pd.DataFrame(trades)
 
+def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
+                           initial_capital, commission, slippage):
+    """멀티 종목 포트폴리오 백테스트.
+    각 종목에 weight 비율만큼 자본 배분 후 개별 run_backtest 실행,
+    포트폴리오 전체 자산 곡선과 합산 지표를 반환."""
+    end   = datetime.now()
+    start = end - timedelta(days=period_days + 60)
+
+    eq_combined = None  # 포트폴리오 합산 equity
+    results = []        # 종목별 결과
+
+    for tk, wt in zip(tickers, weights):
+        alloc = initial_capital * wt
+        try:
+            raw = yf.download(tk, start=start, end=end, progress=False)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.droplevel(1)
+            raw = raw.dropna(subset=['Close'])
+            if len(raw) < 60:
+                results.append({'ticker': tk, 'weight': wt, 'error': '데이터 부족'})
+                continue
+            m, eq_df, _ = run_backtest(raw, buy_th, sell_th, alloc, commission, slippage)
+            results.append({'ticker': tk, 'weight': wt, 'metrics': m, 'eq_df': eq_df, 'error': None})
+
+            # 공통 날짜 인덱스로 합산
+            eq_s = eq_df.set_index('날짜')['전략']
+            if eq_combined is None:
+                eq_combined = eq_s.copy()
+            else:
+                eq_combined = eq_combined.add(eq_s, fill_value=0)
+        except Exception as e:
+            results.append({'ticker': tk, 'weight': wt, 'error': str(e)[:40]})
+
+    # SPY 벤치마크 (같은 기간)
+    spy_eq = None
+    try:
+        spy_raw = yf.download('SPY', start=start, end=end, progress=False)
+        if isinstance(spy_raw.columns, pd.MultiIndex):
+            spy_raw.columns = spy_raw.columns.droplevel(1)
+        spy_raw = spy_raw.dropna(subset=['Close'])
+        spy_first = float(spy_raw['Close'].iloc[20])
+        spy_eq    = (spy_raw['Close'].iloc[20:] / spy_first) * initial_capital
+        spy_eq.index.name = '날짜'
+    except Exception:
+        pass
+
+    return results, eq_combined, spy_eq
+
+
+def calc_sector_relative(ticker, sector, df):
+    """종목 vs 섹터 ETF vs SPY 상대 강도 분석.
+    Returns dict: horizons × {ticker_ret, etf_ret, spy_ret, rs_vs_etf, rs_vs_spy}
+    """
+    etf = SECTOR_ETF.get(sector, '')
+    end = datetime.now()
+    start = end - timedelta(days=200)
+    tickers_to_dl = ['SPY'] + ([etf] if etf else [])
+
+    try:
+        bench = yf.download(tickers_to_dl, start=start, end=end, progress=False)
+        if isinstance(bench.columns, pd.MultiIndex):
+            spy_close = bench['Close']['SPY']
+            etf_close = bench['Close'][etf] if etf else None
+        else:
+            spy_close = bench['Close'] if 'SPY' in tickers_to_dl else None
+            etf_close = None
+    except Exception:
+        return {}
+
+    stock_close = df['Close']
+    results = {}
+    for label, days in [('1개월', 21), ('3개월', 63), ('6개월', 126)]:
+        try:
+            n = min(days, len(stock_close) - 1)
+            tk_ret  = (float(stock_close.iloc[-1]) / float(stock_close.iloc[-n]) - 1) * 100
+            spy_ret = (float(spy_close.iloc[-1])   / float(spy_close.iloc[-n])   - 1) * 100 if spy_close is not None and len(spy_close) >= n else None
+            etf_ret = (float(etf_close.iloc[-1])   / float(etf_close.iloc[-n])   - 1) * 100 if etf_close is not None and len(etf_close) >= n else None
+            results[label] = {
+                'tk_ret':  tk_ret,
+                'etf_ret': etf_ret,
+                'spy_ret': spy_ret,
+                'rs_etf':  (tk_ret - etf_ret) if etf_ret is not None else None,
+                'rs_spy':  (tk_ret - spy_ret) if spy_ret is not None else None,
+            }
+        except Exception:
+            continue
+    return {'data': results, 'etf': etf, 'sector': sector}
+
+
 def run_walkforward(df, buy_th, sell_th, initial_capital, commission, slippage):
     """70/30 시간분할 워크-포워드 검증.
     학습기간(in-sample) 과 검증기간(out-of-sample) 성과를 비교해 과적합 여부를 진단."""
@@ -1760,6 +1863,62 @@ def main():
                         else:
                             mtf_msg = "⚪ **혼조세** — 방향성 확인 후 진입 권장"
                         st.info(mtf_msg)
+                    # ── 섹터 상대 강도 ─────────────────────────
+                    sector_name = info.get('sector', '') if info else ''
+                    if sector_name and not is_krw:
+                        with st.expander(f"📊 섹터 상대 강도 — {sector_name} ({SECTOR_ETF.get(sector_name, 'ETF 없음')})"):
+                            with st.spinner("섹터 데이터 로딩 중..."):
+                                sr = calc_sector_relative(ticker, sector_name, df)
+                            if sr and sr.get('data'):
+                                sr_data = sr['data']
+                                sr_horizons = list(sr_data.keys())
+                                sr_cols = st.columns(len(sr_horizons))
+                                for sri, hor in enumerate(sr_horizons):
+                                    d = sr_data[hor]
+                                    tk_r   = d['tk_ret']
+                                    etf_r  = d.get('etf_ret')
+                                    spy_r  = d.get('spy_ret')
+                                    rs_etf = d.get('rs_etf')
+                                    with sr_cols[sri]:
+                                        st.markdown(f"**{hor}**")
+                                        st.metric(ticker, f"{tk_r:+.1f}%")
+                                        if etf_r is not None:
+                                            st.metric(sr['etf'], f"{etf_r:+.1f}%",
+                                                      delta=f"RS {rs_etf:+.1f}%p",
+                                                      delta_color="normal" if rs_etf >= 0 else "inverse")
+                                        if spy_r is not None:
+                                            st.metric("SPY", f"{spy_r:+.1f}%",
+                                                      delta=f"RS {d['rs_spy']:+.1f}%p",
+                                                      delta_color="normal" if d['rs_spy'] >= 0 else "inverse")
+
+                                # 3개월 기준 막대차트
+                                if '3개월' in sr_data:
+                                    d3 = sr_data['3개월']
+                                    bar_labels = [ticker]
+                                    bar_vals   = [d3['tk_ret']]
+                                    if d3['etf_ret'] is not None:
+                                        bar_labels.append(sr['etf'])
+                                        bar_vals.append(d3['etf_ret'])
+                                    if d3['spy_ret'] is not None:
+                                        bar_labels.append('SPY')
+                                        bar_vals.append(d3['spy_ret'])
+                                    bar_clr = [TV_UP if v >= 0 else TV_DOWN for v in bar_vals]
+                                    fig_sr = go.Figure(go.Bar(
+                                        x=bar_labels, y=bar_vals,
+                                        marker_color=bar_clr,
+                                        text=[f"{v:+.1f}%" for v in bar_vals],
+                                        textposition='outside'))
+                                    fig_sr.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
+                                    fig_sr.update_layout(
+                                        title=dict(text="3개월 수익률 비교", font=dict(size=12)),
+                                        height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                        font=dict(color=TV_TEXT),
+                                        yaxis=dict(gridcolor=TV_GRID, zeroline=False),
+                                        xaxis=dict(gridcolor=TV_GRID),
+                                        margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                                    st.plotly_chart(fig_sr, use_container_width=True)
+                            else:
+                                st.info("섹터 데이터를 가져올 수 없습니다.")
                     st.divider()
 
                     # ── 매수/매도 추천가 ──────────────────────
@@ -2155,6 +2314,126 @@ def main():
                     else:
                         st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
                     st.caption(f"분할 기준일: {wf_split_date}")
+
+        # ── 📦 멀티 종목 포트폴리오 백테스트 ──────────
+        st.divider()
+        st.subheader("📦 멀티 종목 포트폴리오 백테스트")
+        st.caption("여러 종목에 자본을 배분해 포트폴리오 전체의 백테스트 성과를 확인합니다.")
+
+        with st.expander("⚙️ 포트폴리오 설정", expanded=True):
+            pbt_str = st.text_input("종목 목록 (쉼표 구분, 최대 5개)",
+                                     "AAPL,MSFT,NVDA,GOOGL,META",
+                                     help="미국: AAPL / 한국: 005930.KS")
+            pbt_tickers = [t.strip().upper() for t in pbt_str.split(',') if t.strip()][:5]
+
+            pbt_wt_mode = st.radio("비중 방식", ["균등 배분", "직접 입력"], horizontal=True)
+            if pbt_wt_mode == "균등 배분":
+                pbt_weights = [1.0 / len(pbt_tickers)] * len(pbt_tickers) if pbt_tickers else []
+            else:
+                pbt_wt_cols = st.columns(len(pbt_tickers))
+                pbt_weights = []
+                for pi, tk in enumerate(pbt_tickers):
+                    w = pbt_wt_cols[pi].number_input(tk, 0.0, 1.0,
+                        round(1.0 / len(pbt_tickers), 2), 0.05, key=f"pbt_w_{pi}")
+                    pbt_weights.append(w)
+                wt_sum = sum(pbt_weights)
+                if abs(wt_sum - 1.0) > 0.01:
+                    st.warning(f"비중 합계: {wt_sum:.2f} (1.00이 되어야 합니다)")
+                else:
+                    pbt_weights = [w / wt_sum for w in pbt_weights]  # 정규화
+
+            pbt_c1, pbt_c2, pbt_c3 = st.columns(3)
+            pbt_period  = pbt_c1.selectbox("기간", ["1년","2년","3년","5년"], index=1, key="pbt_period")
+            pbt_capital = pbt_c2.number_input("초기자금 (원)", value=10_000_000,
+                                               step=1_000_000, min_value=100_000, key="pbt_cap")
+            pbt_buy_th  = pbt_c3.slider("매수 임계값", 50, 90, 65, 5, key="pbt_buy")
+
+        pbt_period_days = {"1년": 365, "2년": 730, "3년": 1095, "5년": 1825}
+
+        if st.button("📦 포트폴리오 백테스트 실행", type="primary", key="pbt_run"):
+            if not pbt_tickers:
+                st.error("종목을 입력해주세요.")
+            else:
+                with st.spinner(f"{len(pbt_tickers)}개 종목 다운로드 및 백테스트 실행 중..."):
+                    pbt_results, pbt_eq, pbt_spy = run_portfolio_backtest(
+                        pbt_tickers, pbt_weights,
+                        pbt_period_days[pbt_period],
+                        pbt_buy_th, sell_th,
+                        pbt_capital, bt_commission, bt_slippage)
+
+                # ── 개별 종목 성과 ────────────────────────
+                st.markdown("#### 종목별 성과")
+                ok_res  = [r for r in pbt_results if not r.get('error')]
+                err_res = [r for r in pbt_results if r.get('error')]
+                if err_res:
+                    for r in err_res:
+                        st.warning(f"⚠️ {r['ticker']}: {r['error']}")
+
+                if ok_res:
+                    sum_rows = []
+                    for r in ok_res:
+                        m = r['metrics']
+                        sum_rows.append({
+                            '종목':      r['ticker'],
+                            '비중':      f"{r['weight']*100:.0f}%",
+                            '전략수익률': m.get('전략 수익률', '-'),
+                            'CAGR':      m.get('CAGR', '-'),
+                            'MDD':       m.get('최대낙폭(MDD)', '-'),
+                            'Sharpe':    m.get('Sharpe Ratio', '-'),
+                            '승률':      m.get('승률', '-'),
+                        })
+                    st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
+
+                # ── 포트폴리오 통합 자산 곡선 ─────────────
+                if pbt_eq is not None and not pbt_eq.empty:
+                    st.markdown("#### 포트폴리오 자산 곡선 (SPY 벤치마크 포함)")
+                    fig_pbt = go.Figure()
+                    fig_pbt.add_trace(go.Scatter(
+                        x=pbt_eq.index, y=pbt_eq.values,
+                        name='포트폴리오',
+                        line=dict(color='#2962ff', width=2.5),
+                        fill='tozeroy', fillcolor='rgba(41,98,255,0.07)'))
+                    if pbt_spy is not None:
+                        # align spy to portfolio start capital
+                        spy_norm = pbt_spy / float(pbt_spy.iloc[0]) * pbt_capital
+                        fig_pbt.add_trace(go.Scatter(
+                            x=spy_norm.index, y=spy_norm.values,
+                            name='SPY (벤치마크)',
+                            line=dict(color='#888', width=1.5, dash='dash')))
+                    # 개별 종목 곡선 (얇게)
+                    pal = ['#ff6b6b','#ffa94d','#69db7c','#74c0fc','#da77f2']
+                    for ri, r in enumerate(ok_res):
+                        eq_s = r['eq_df'].set_index('날짜')['전략']
+                        fig_pbt.add_trace(go.Scatter(
+                            x=eq_s.index, y=eq_s.values,
+                            name=f"{r['ticker']} ({r['weight']*100:.0f}%)",
+                            line=dict(color=pal[ri % len(pal)], width=1, dash='dot'),
+                            opacity=0.7))
+                    fig_pbt.update_layout(
+                        height=450, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT), hovermode='x unified',
+                        yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right'),
+                        xaxis=dict(gridcolor=TV_GRID),
+                        legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)',
+                                    yanchor='bottom', y=1.02),
+                        margin=dict(l=0, r=60, t=40, b=0))
+                    st.plotly_chart(fig_pbt, use_container_width=True)
+
+                    # 포트폴리오 요약 지표
+                    pf_final  = float(pbt_eq.iloc[-1])
+                    pf_ret    = (pf_final / pbt_capital - 1) * 100
+                    pf_days   = (pbt_eq.index[-1] - pbt_eq.index[0]).days
+                    pf_years  = max(pf_days / 365, 0.01)
+                    pf_cagr   = ((pf_final / pbt_capital) ** (1 / pf_years) - 1) * 100
+                    pf_dr     = pd.Series(pbt_eq.values).pct_change().dropna()
+                    pf_sharpe = float(pf_dr.mean() / pf_dr.std() * np.sqrt(252)) if pf_dr.std() > 0 else 0
+                    roll_max  = pd.Series(pbt_eq.values).expanding().max()
+                    pf_mdd    = float(((pd.Series(pbt_eq.values) - roll_max) / roll_max * 100).min())
+                    pm1, pm2, pm3, pm4 = st.columns(4)
+                    pm1.metric("포트폴리오 수익률", f"{pf_ret:+.1f}%")
+                    pm2.metric("CAGR",             f"{pf_cagr:+.1f}%")
+                    pm3.metric("MDD",              f"{pf_mdd:.1f}%")
+                    pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
 
     # ── Tab 4: 알림 ──────────────────────────────────
     with tab4:
