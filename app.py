@@ -677,13 +677,136 @@ def bt_signals(df):
 
     return (ma_s*0.40 + rsi_s*0.30 + macd_s*0.30).fillna(50)
 
+def bt_signals_full(df):
+    """technical_score 9개 지표를 전체 기간 벡터화 계산.
+    bt_signals(MA+RSI+MACD 3개) 대신 실제 scoring과 동일한 9개 지표를 사용."""
+    p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
+
+    # ── MA 정렬 (15%) ─────────────────────────
+    ma20, ma60, ma120 = p.rolling(20).mean(), p.rolling(60).mean(), p.rolling(120).mean()
+    ma_s = ((p > ma20)*20 + (p > ma60)*20 + (p > ma120)*20 +
+            (ma20 > ma60)*20 + (ma60 > ma120)*20).astype(float)
+    gc = (ma20 > ma60) & (ma20.shift(5) <= ma60.shift(5))
+    dc = (ma20 < ma60) & (ma20.shift(5) >= ma60.shift(5))
+    ma_s = (ma_s + gc.astype(float)*15 - dc.astype(float)*15).clip(0, 100).fillna(50)
+
+    # ── RSI (10%) ──────────────────────────────
+    rsi = calc_rsi(p)
+    rs  = pd.Series(50.0, index=p.index)
+    rs[(rsi > 60) & (rsi <= 70)] = 75
+    rs[rsi > 70]                 = 40
+    rs[(rsi >= 30) & (rsi < 40)] = 30
+    rs[rsi < 30]                 = 60
+    rs_b = pd.Series(0.0, index=p.index)
+    rsi_tr = rsi - rsi.shift(10)
+    rs_b[(rsi_tr > 5)  & (rsi > 40) & (rsi < 70)] = 20
+    rs_b[rsi_tr < -5]                              = -10
+    pr20 = p.shift(20); rsi20 = rsi.shift(20)
+    rs_b[(p < pr20) & (rsi > rsi20)] += 15
+    rs_b[(p > pr20) & (rsi < rsi20)] -= 15
+    rs = (rs + rs_b).clip(0, 100).fillna(50)
+
+    # ── MACD (13%) ─────────────────────────────
+    ml, sl2, hist = calc_macd(p)
+    ms   = pd.Series(50.0, index=p.index)
+    ms_b = pd.Series(0.0, index=p.index)
+    ms_b[ml > sl2]              += 20
+    ms_b[hist > 0]               += 15
+    ms_b[hist > hist.shift(1)]   += 15
+    ms_b[hist <= hist.shift(1)]  -= 10
+    pr20m = p.shift(20)
+    ms_b[(p < pr20m) & (hist > hist.shift(20))] += 12
+    ms_b[(p > pr20m) & (hist < hist.shift(20))] -= 12
+    ms = (ms + ms_b).clip(0, 100).fillna(50)
+
+    # ── 볼린저밴드 (10%) ───────────────────────
+    bb_u, _, bb_l = calc_bb(p)
+    rng = (bb_u - bb_l).clip(lower=1e-9)
+    pos = (p - bb_l) / rng
+    bs  = pd.Series(50.0, index=p.index)
+    bs[(pos >= 0.4) & (pos <= 0.8)] = 70
+    bs[(pos > 0.8)  & (pos <= 0.95)]= 85
+    bs[pos > 0.95]                  = 45
+    bs[(pos >= 0.2) & (pos < 0.4)]  = 45
+    bs[pos < 0.2]                   = 30
+    bw_now = rng / p.clip(lower=1e-9)
+    bw_avg = bw_now.rolling(20).mean()
+    bs_b = pd.Series(0.0, index=p.index)
+    bs_b[bw_now < bw_avg * 0.7] = 10
+    bs = (bs + bs_b).clip(0, 100).fillna(50)
+
+    # ── 거래량 (7%) ────────────────────────────
+    vma20 = v.rolling(20).mean().clip(lower=1e-9)
+    vr, pc5 = v / vma20, p.pct_change(5)
+    vs = pd.Series(50.0, index=p.index)
+    vs[(pc5 > 0) & (vr > 1.2)] = 80
+    vs[(pc5 > 0) & (vr < 0.8)] = 55
+    vs[(pc5 < 0) & (vr > 1.2)] = 25
+    vs[(pc5 < 0) & (vr < 0.8)] = 45
+    vs = vs.fillna(50)
+
+    # ── 파동근사 (8%) ──────────────────────────
+    rh20  = h.rolling(20).max()
+    ph20  = h.shift(20).rolling(20).max()
+    rl20  = l.rolling(20).min()
+    pl20  = l.shift(20).rolling(20).min()
+    rs20v = (p - p.shift(19)) / (p.shift(19) + 1e-9)
+    rm60v = (p - p.shift(59)) / (p.shift(59) + 1e-9)
+    wave_base = (50 + (rh20 > ph20).astype(float)*15 +
+                     (rl20 > pl20).astype(float)*15)
+    wave_s = (wave_base + (rs20v*150 + rm60v*80).clip(-40, 40)).clip(0, 100).fillna(50)
+
+    # ── 스토캐스틱 (10%) ───────────────────────
+    sk_s, sd_s = calc_stochastic(h, l, p)
+    sts  = pd.Series(50.0, index=p.index)
+    sts[sk_s > 80]                 = 35
+    sts[(sk_s > 60) & (sk_s <= 80)]= 65
+    sts[(sk_s > 40) & (sk_s <= 60)]= 55
+    sts[(sk_s > 20) & (sk_s <= 40)]= 60
+    sts[sk_s <= 20]                = 70
+    sts_b = pd.Series(0.0, index=p.index)
+    k_up   = (sk_s.shift(1) < sd_s.shift(1)) & (sk_s >= sd_s)
+    k_down = (sk_s.shift(1) > sd_s.shift(1)) & (sk_s <  sd_s)
+    sts_b[k_up]   =  20
+    sts_b[k_down] = -20
+    sts = (sts + sts_b).clip(0, 100).fillna(50)
+
+    # ── ADX (17%) ──────────────────────────────
+    adx_v, pdi, ndi = calc_adx(h, l, p)
+    adx_f = adx_v.fillna(0)
+    bull  = (pdi > ndi).fillna(False)
+    ads   = pd.Series(50.0, index=p.index)
+    ads[(adx_f > 40) &  bull]                  = 85
+    ads[(adx_f > 40) & ~bull]                  = 15
+    ads[(adx_f > 25) & (adx_f <= 40) &  bull]  = 72
+    ads[(adx_f > 25) & (adx_f <= 40) & ~bull]  = 28
+    ads[(adx_f > 18) & (adx_f <= 25) &  bull]  = 58
+    ads[(adx_f > 18) & (adx_f <= 25) & ~bull]  = 42
+
+    # ── OBV (10%) ──────────────────────────────
+    obv    = calc_obv(p, v)
+    obv_ma = obv.rolling(20).mean()
+    obv_s  = pd.Series(35.0, index=p.index)
+    obv_s[obv > obv_ma] = 65
+    obv_b  = pd.Series(0.0, index=p.index)
+    pr20o  = p.shift(20); obv20 = obv.shift(20)
+    obv_b[(p < pr20o) & (obv > obv20)] =  20
+    obv_b[(p > pr20o) & (obv < obv20)] = -20
+    obv_s  = (obv_s + obv_b).clip(0, 100).fillna(50)
+
+    # 가중 합산 (technical_score 동일 가중치)
+    total = (ma_s*0.15 + rs*0.10 + ms*0.13 + bs*0.10 + vs*0.07 +
+             wave_s*0.08 + sts*0.10 + ads*0.17 + obv_s*0.10)
+    return total.fillna(50)
+
+
 def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
                  commission=0.0005, slippage=0.0003):
     """수수료·슬리피지 반영 백테스트.
     commission: 편도 수수료율 (기본 0.05%)
     slippage:   편도 슬리피지율 (기본 0.03%)
     """
-    sigs   = bt_signals(df)
+    sigs   = bt_signals_full(df)
     prices = df['Close'].values
     dates  = df.index
     n      = len(df)
@@ -775,7 +898,7 @@ def analyze_score_correlation(df):
     """bt_signals 점수와 N일 후 수익률의 상관관계를 분석.
     Returns list of dicts per horizon: IC, bucket_stats DataFrame, scatter DataFrame.
     """
-    sigs   = bt_signals(df)
+    sigs   = bt_signals_full(df)
     closes = df['Close']
     results = []
     bins   = [0, 30, 40, 50, 60, 70, 80, 101]
