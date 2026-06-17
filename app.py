@@ -1739,6 +1739,53 @@ def calc_risk_metrics(ticker):
         return {}
 
 # ─────────────────────────────────────────────
+# MONTE CARLO SIMULATION
+# ─────────────────────────────────────────────
+
+def calc_monte_carlo(df, days=60, n_sims=500, initial=None):
+    """GBM(기하 브라운 운동) 기반 몬테카를로 시뮬레이션.
+    Returns: simulations array (n_sims × days), stats dict"""
+    close = df['Close']
+    if initial is None:
+        initial = float(close.iloc[-1])
+
+    log_ret = np.log(close / close.shift(1)).dropna()
+    mu = float(log_ret.mean())
+    sigma = float(log_ret.std())
+
+    sims = np.zeros((n_sims, days))
+    sims[:, 0] = initial
+
+    rng = np.random.default_rng(42)
+    for t in range(1, days):
+        z = rng.standard_normal(n_sims)
+        sims[:, t] = sims[:, t-1] * np.exp((mu - 0.5 * sigma**2) + sigma * z)
+
+    final_prices = sims[:, -1]
+    returns = (final_prices - initial) / initial * 100
+
+    stats = {
+        'days': days,
+        'n_sims': n_sims,
+        'current': initial,
+        'median': float(np.median(final_prices)),
+        'mean': float(np.mean(final_prices)),
+        'p5': float(np.percentile(final_prices, 5)),
+        'p25': float(np.percentile(final_prices, 25)),
+        'p75': float(np.percentile(final_prices, 75)),
+        'p95': float(np.percentile(final_prices, 95)),
+        'prob_up': float(np.mean(final_prices > initial) * 100),
+        'prob_down10': float(np.mean(returns < -10) * 100),
+        'prob_up10': float(np.mean(returns > 10) * 100),
+        'ret_median': float(np.median(returns)),
+        'ret_mean': float(np.mean(returns)),
+        'ret_p5': float(np.percentile(returns, 5)),
+        'ret_p95': float(np.percentile(returns, 95)),
+        'daily_vol': sigma,
+    }
+    return sims, stats
+
+# ─────────────────────────────────────────────
 # TRADE LEVELS
 # ─────────────────────────────────────────────
 
@@ -2651,6 +2698,97 @@ def main():
 """)
                     else:
                         st.info("리스크 데이터를 불러올 수 없습니다.")
+                    st.divider()
+
+                    # ── 몬테카를로 시뮬레이션 ─────────────────
+                    st.subheader("🎲 몬테카를로 시뮬레이션")
+                    st.caption("과거 변동성을 기반으로 미래 가격 분포를 시뮬레이션합니다.")
+
+                    mc_c1, mc_c2, mc_c3 = st.columns(3)
+                    mc_days = mc_c1.selectbox("예측 기간", [30, 60, 90, 120, 180, 252],
+                                              index=1, format_func=lambda x: f"{x}거래일 (~{x//21}개월)")
+                    mc_sims = mc_c2.selectbox("시뮬레이션 횟수", [200, 500, 1000, 2000], index=1)
+                    mc_run = mc_c3.button("🎲 시뮬레이션 실행", key="mc_run")
+
+                    if mc_run:
+                        with st.spinner("시뮬레이션 실행 중..."):
+                            mc_paths, mc_stats = calc_monte_carlo(df, days=mc_days, n_sims=mc_sims)
+
+                        mc_m1, mc_m2, mc_m3, mc_m4 = st.columns(4)
+                        mc_m1.metric("상승 확률", f"{mc_stats['prob_up']:.1f}%")
+                        mc_m2.metric("예상 중앙값", fmt_p(mc_stats['median']),
+                                     f"{mc_stats['ret_median']:+.1f}%")
+                        mc_m3.metric("낙관 (95%)", fmt_p(mc_stats['p95']),
+                                     f"{mc_stats['ret_p95']:+.1f}%")
+                        mc_m4.metric("비관 (5%)", fmt_p(mc_stats['p5']),
+                                     f"{mc_stats['ret_p5']:+.1f}%")
+
+                        mc_m5, mc_m6, mc_m7 = st.columns(3)
+                        mc_m5.metric("10%+ 상승 확률", f"{mc_stats['prob_up10']:.1f}%")
+                        mc_m6.metric("10%+ 하락 확률", f"{mc_stats['prob_down10']:.1f}%")
+                        mc_m7.metric("일간 변동성", f"{mc_stats['daily_vol']*100:.2f}%")
+
+                        # 시뮬레이션 경로 차트
+                        fig_mc = go.Figure()
+                        future_dates = pd.bdate_range(df.index[-1], periods=mc_days+1)[1:]
+                        n_show = min(mc_sims, 100)
+                        for i in range(n_show):
+                            fig_mc.add_trace(go.Scatter(
+                                x=future_dates, y=mc_paths[i],
+                                mode='lines', line=dict(width=0.5, color='rgba(41,98,255,0.08)'),
+                                showlegend=False, hoverinfo='skip'))
+
+                        p5_path  = np.percentile(mc_paths, 5, axis=0)
+                        p50_path = np.percentile(mc_paths, 50, axis=0)
+                        p95_path = np.percentile(mc_paths, 95, axis=0)
+
+                        fig_mc.add_trace(go.Scatter(x=future_dates, y=p95_path, name='95% (낙관)',
+                            line=dict(color='#26a69a', width=1.5, dash='dash')))
+                        fig_mc.add_trace(go.Scatter(x=future_dates, y=p50_path, name='50% (중앙)',
+                            line=dict(color='#FFD700', width=2.5)))
+                        fig_mc.add_trace(go.Scatter(x=future_dates, y=p5_path, name='5% (비관)',
+                            line=dict(color='#ef5350', width=1.5, dash='dash')))
+
+                        fig_mc.add_hline(y=cp, line_dash='dot', line_color='#888', line_width=1,
+                            annotation_text=f"현재가 {fmt_p(cp)}", annotation_position="left",
+                            annotation_font=dict(color='#888', size=10))
+
+                        fig_mc.update_layout(
+                            height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT),
+                            title=dict(text=f"{mc_days}거래일 후 가격 분포 ({mc_sims}회 시뮬레이션)",
+                                       font=dict(size=13)),
+                            xaxis=dict(gridcolor=TV_GRID),
+                            yaxis=dict(gridcolor=TV_GRID, side='right', tickformat=',.0f'),
+                            legend=dict(orientation='h', y=1.02, bgcolor='rgba(0,0,0,0)'),
+                            margin=dict(l=0, r=60, t=40, b=0))
+                        st.plotly_chart(fig_mc, use_container_width=True)
+
+                        # 최종 가격 분포 히스토그램
+                        final_returns = (mc_paths[:, -1] - cp) / cp * 100
+                        fig_hist = go.Figure()
+                        fig_hist.add_trace(go.Histogram(
+                            x=final_returns, nbinsx=50,
+                            marker_color=['#26a69a' if r >= 0 else '#ef5350' for r in sorted(final_returns)],
+                            opacity=0.75, name='수익률 분포'))
+                        fig_hist.add_vline(x=0, line_color='#FFD700', line_width=2,
+                            annotation_text="현재가", annotation_position="top",
+                            annotation_font=dict(color='#FFD700', size=10))
+                        fig_hist.add_vline(x=float(np.median(final_returns)),
+                            line_color='#2962ff', line_width=1.5, line_dash='dash',
+                            annotation_text=f"중앙값 {np.median(final_returns):+.1f}%",
+                            annotation_position="top",
+                            annotation_font=dict(color='#2962ff', size=10))
+                        fig_hist.update_layout(
+                            height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT),
+                            title=dict(text=f"{mc_days}거래일 후 예상 수익률 분포", font=dict(size=13)),
+                            xaxis=dict(title='수익률 (%)', gridcolor=TV_GRID),
+                            yaxis=dict(title='빈도', gridcolor=TV_GRID),
+                            margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                        st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
                     st.divider()
 
                     # ── 차트 ──────────────────────────────────
