@@ -62,77 +62,57 @@ def _db_delete(pos_id):
         con.commit()
 
 # ─────────────────────────────────────────────
-# GOOGLE SHEETS STORAGE (Cloud 영속성)
+# SUPABASE STORAGE (Cloud 영속성)
 # ─────────────────────────────────────────────
 
-def _gsheet_configured():
+def _supabase_configured():
     try:
-        return bool(st.secrets.get("gcp_service_account")) and bool(st.secrets.get("GSHEET_URL"))
+        return bool(st.secrets.get("SUPABASE_URL")) and bool(st.secrets.get("SUPABASE_KEY"))
     except Exception:
         return False
 
-def _get_gsheet_ws():
-    import gspread
-    from google.oauth2.service_account import Credentials
-    scopes = ['https://www.googleapis.com/auth/spreadsheets',
-              'https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]), scopes=scopes)
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_url(st.secrets["GSHEET_URL"])
-    try:
-        ws = sh.worksheet("portfolio")
-    except Exception:
-        ws = sh.add_worksheet(title="portfolio", rows=100, cols=6)
-        ws.update('A1:F1', [['id', 'ticker', 'qty', 'avg_cost', 'note', 'added_at']])
-    return ws
+def _get_supabase():
+    from supabase import create_client
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def _gs_load():
-    ws = _get_gsheet_ws()
-    records = ws.get_all_records()
-    return [{'id': r.get('id', i+1), 'ticker': str(r['ticker']),
-             'qty': float(r['qty']), 'avg_cost': float(r['avg_cost']),
-             'note': str(r.get('note', ''))} for i, r in enumerate(records)]
+def _sb_load():
+    sb = _get_supabase()
+    res = sb.table("positions").select("*").order("id").execute()
+    return [{'id': r['id'], 'ticker': r['ticker'], 'qty': float(r['qty']),
+             'avg_cost': float(r['avg_cost']), 'note': r.get('note', '')}
+            for r in res.data]
 
-def _gs_add(ticker, qty, avg_cost, note):
-    ws = _get_gsheet_ws()
-    all_vals = ws.get_all_values()
-    ids = [int(r[0]) for r in all_vals[1:] if r and r[0].isdigit()]
-    new_id = max(ids or [0]) + 1
-    ws.append_row([new_id, ticker, qty, avg_cost, note,
-                   datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-    return new_id
+def _sb_add(ticker, qty, avg_cost, note):
+    sb = _get_supabase()
+    res = sb.table("positions").insert({
+        'ticker': ticker, 'qty': qty, 'avg_cost': avg_cost, 'note': note
+    }).execute()
+    return res.data[0]['id'] if res.data else None
 
-def _gs_delete(pos_id):
-    ws = _get_gsheet_ws()
-    all_vals = ws.get_all_values()
-    for i, row in enumerate(all_vals):
-        if i == 0:
-            continue
-        if str(row[0]) == str(pos_id):
-            ws.delete_rows(i + 1)
-            return
+def _sb_delete(pos_id):
+    sb = _get_supabase()
+    sb.table("positions").delete().eq("id", pos_id).execute()
 
 def db_load():
-    if _gsheet_configured():
+    if _supabase_configured():
         try:
-            return _gs_load()
+            return _sb_load()
         except Exception:
             pass
     return _db_load()
 
 def db_add(ticker, qty, avg_cost, note):
-    if _gsheet_configured():
+    if _supabase_configured():
         try:
-            return _gs_add(ticker, qty, avg_cost, note)
+            return _sb_add(ticker, qty, avg_cost, note)
         except Exception:
             pass
     return _db_add(ticker, qty, avg_cost, note)
 
 def db_delete(pos_id):
-    if _gsheet_configured():
+    if _supabase_configured():
         try:
-            _gs_delete(pos_id)
+            _sb_delete(pos_id)
             return
         except Exception:
             pass
@@ -3322,37 +3302,46 @@ ANTHROPIC_API_KEY = "sk-ant-api03-..."
                     if weak_pf:   st.warning(f"⚠️ 매도 검토: **{', '.join(weak_pf)}** — 종합점수 40점 미만")
                     if strong_pf: st.success(f"🚀 강세 유지: **{', '.join(strong_pf)}** — 종합점수 75점 이상")
 
-        if _gsheet_configured():
-            st.caption("☁️ Google Sheets 연동 중 — 데이터가 클라우드에 영구 보존됩니다.")
+        if _supabase_configured():
+            st.caption("☁️ Supabase 연동 중 — 데이터가 클라우드에 영구 보존됩니다.")
         else:
             st.caption(f"💾 로컬 SQLite 사용 중 (`{_DB_PATH}`). Streamlit Cloud 재배포 시 초기화될 수 있습니다.")
-            with st.expander("☁️ Google Sheets 연동으로 영구 보존하기"):
+            with st.expander("☁️ Supabase 연동으로 영구 보존하기 (무료)"):
                 st.markdown("""
-**설정 방법 (Streamlit Cloud)**
+**설정 방법 (5분 소요)**
 
-1. [Google Cloud Console](https://console.cloud.google.com) → 프로젝트 생성
-2. **Google Sheets API** 및 **Google Drive API** 활성화
-3. **서비스 계정** 생성 → JSON 키 다운로드
-4. Google Sheets에서 새 스프레드시트 생성 → 서비스 계정 이메일에 **편집자** 권한 공유
-5. Streamlit Cloud 앱 설정 → **Secrets** 에 아래 형식으로 입력:
+**1단계: Supabase 가입 & 프로젝트 생성**
+1. [supabase.com](https://supabase.com) → **Start your project** → GitHub 로그인
+2. **New Project** → 이름: `stock-analyzer` → 비밀번호 설정 → **Create**
+3. 잠시 대기 (프로젝트 생성 1~2분)
 
-```toml
-GSHEET_URL = "https://docs.google.com/spreadsheets/d/여기에_시트ID/edit"
+**2단계: 테이블 생성**
+1. 왼쪽 **SQL Editor** 클릭 → 아래 SQL 붙여넣기 → **Run**:
 
-[gcp_service_account]
-type = "service_account"
-project_id = "your-project-id"
-private_key_id = "key-id"
-private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-client_email = "name@project.iam.gserviceaccount.com"
-client_id = "123456789"
-auth_uri = "https://accounts.google.com/o/oauth2/auth"
-token_uri = "https://oauth2.googleapis.com/token"
-auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
+```sql
+CREATE TABLE positions (
+    id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticker   TEXT NOT NULL,
+    qty      DOUBLE PRECISION NOT NULL DEFAULT 1,
+    avg_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+    note     TEXT NOT NULL DEFAULT '',
+    added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
-6. 앱 재시작 → 포트폴리오가 자동으로 Google Sheets에 저장됩니다.
+**3단계: API 키 복사**
+1. 왼쪽 **Project Settings** → **API**
+2. `Project URL` 과 `anon public` 키 복사
+
+**4단계: Streamlit Secrets 등록**
+1. [share.streamlit.io](https://share.streamlit.io) → 앱 → **Settings** → **Secrets**:
+
+```toml
+SUPABASE_URL = "https://xxxx.supabase.co"
+SUPABASE_KEY = "eyJhbGci..."
+```
+
+2. **Save** → 앱 재시작 → 완료!
 """)
 
 
