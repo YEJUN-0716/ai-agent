@@ -930,12 +930,17 @@ def bt_signals_full(df):
 
 
 def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
-                 commission=0.0005, slippage=0.0003):
+                 commission=0.0005, slippage=0.0003,
+                 f_score=None, m_score=None,
+                 w_tech=100, w_fund=0, w_macro=0):
     """수수료·슬리피지 반영 백테스트.
-    commission: 편도 수수료율 (기본 0.05%)
-    slippage:   편도 슬리피지율 (기본 0.03%)
+    f_score/m_score 전달 시 실전과 동일한 종합점수 기반으로 매매.
     """
-    sigs   = bt_signals_full(df)
+    tech_sigs = bt_signals_full(df)
+    if f_score is not None and m_score is not None and w_tech < 100:
+        sigs = tech_sigs * (w_tech / 100) + f_score * (w_fund / 100) + m_score * (w_macro / 100)
+    else:
+        sigs = tech_sigs
     prices = df['Close'].values
     dates  = df.index
     n      = len(df)
@@ -1102,12 +1107,14 @@ def test_alpaca_connection(key, secret):
 
 
 def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
-                           initial_capital, commission, slippage):
+                           initial_capital, commission, slippage,
+                           w_tech=100, w_fund=0, w_macro=0):
     """멀티 종목 포트폴리오 백테스트.
     각 종목에 weight 비율만큼 자본 배분 후 개별 run_backtest 실행,
     포트폴리오 전체 자산 곡선과 합산 지표를 반환."""
     end   = datetime.now()
     start = end - timedelta(days=period_days + 60)
+    pf_m_score, _, _ = macro_score() if w_fund > 0 else (None, {}, {})
 
     eq_combined = None  # 포트폴리오 합산 equity
     results = []        # 종목별 결과
@@ -1122,7 +1129,15 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
             if len(raw) < 60:
                 results.append({'ticker': tk, 'weight': wt, 'error': '데이터 부족'})
                 continue
-            m, eq_df, _ = run_backtest(raw, buy_th, sell_th, alloc, commission, slippage)
+            pf_f_score = None
+            if w_fund > 0:
+                try:
+                    pf_f_score, _ = fundamental_score(tk, raw)
+                except Exception:
+                    pass
+            m, eq_df, _ = run_backtest(raw, buy_th, sell_th, alloc, commission, slippage,
+                                       f_score=pf_f_score, m_score=pf_m_score,
+                                       w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
             results.append({'ticker': tk, 'weight': wt, 'metrics': m, 'eq_df': eq_df, 'error': None})
 
             # 공통 날짜 인덱스로 합산
@@ -1276,7 +1291,8 @@ def calc_indicator_ics(df, horizon=20):
     return ics, suggested, DEFAULT_W
 
 
-def run_walkforward(df, buy_th, sell_th, initial_capital, commission, slippage):
+def run_walkforward(df, buy_th, sell_th, initial_capital, commission, slippage,
+                    f_score=None, m_score=None, w_tech=100, w_fund=0, w_macro=0):
     """70/30 시간분할 워크-포워드 검증.
     학습기간(in-sample) 과 검증기간(out-of-sample) 성과를 비교해 과적합 여부를 진단."""
     split = int(len(df) * 0.70)
@@ -1293,7 +1309,9 @@ def run_walkforward(df, buy_th, sell_th, initial_capital, commission, slippage):
             results[label] = {k: 'N/A' for k in key_metrics}
             results[label]['기간'] = f"{sub_df.index[0].strftime('%Y-%m-%d')} ~ {sub_df.index[-1].strftime('%Y-%m-%d')}"
             continue
-        m, _, _ = run_backtest(sub_df, buy_th, sell_th, initial_capital, commission, slippage)
+        m, _, _ = run_backtest(sub_df, buy_th, sell_th, initial_capital, commission, slippage,
+                               f_score=f_score, m_score=m_score,
+                               w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
         results[label] = {k: m.get(k, '-') for k in key_metrics}
         results[label]['기간'] = f"{sub_df.index[0].strftime('%Y-%m-%d')} ~ {sub_df.index[-1].strftime('%Y-%m-%d')}"
 
@@ -2707,7 +2725,7 @@ def main():
     # ── Tab 3: 백테스팅 ───────────────────────
     with tab3:
         st.subheader("📉 전략 백테스팅")
-        st.caption("MA + RSI + MACD 기반 신호 전략의 과거 성과를 검증합니다. 수수료·슬리피지가 반영됩니다.")
+        st.caption("사이드바 가중치와 동일한 **종합점수**(차트+재무+매크로) 기반으로 과거 성과를 검증합니다. 수수료·슬리피지 반영.")
 
         c1, c2, c3 = st.columns(3)
         bt_ticker  = c1.text_input("티커", "AAPL").strip().upper()
@@ -2740,8 +2758,19 @@ def main():
             if bt_df.empty or len(bt_df) < 60:
                 st.error("데이터가 부족합니다.")
             else:
+                bt_f_score, bt_m_score = None, None
+                if total_w == 100 and w_fund > 0:
+                    with st.spinner("재무·매크로 점수 산출 중..."):
+                        bt_f_score, _ = fundamental_score(bt_ticker, bt_df)
+                        bt_m_score, _, _ = macro_score()
+
                 metrics, eq_df, trades_df = run_backtest(
-                    bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage)
+                    bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
+                    f_score=bt_f_score, m_score=bt_m_score,
+                    w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
+
+                if bt_f_score is not None:
+                    st.info(f"📊 종합점수 백테스트 — 차트 {w_tech}% (동적) + 재무 {bt_f_score:.0f}점 × {w_fund}% + 매크로 {bt_m_score:.0f}점 × {w_macro}%")
 
                 # ── 지표 12개 (3행×4열) ──────────────────
                 m_keys = list(metrics.keys()); m_vals = list(metrics.values())
@@ -2861,7 +2890,9 @@ def main():
 
                 if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
                     wf_results, wf_overfit, wf_split_date = run_walkforward(
-                        bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage)
+                        bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
+                        f_score=bt_f_score, m_score=bt_m_score,
+                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
 
                     wf_col1, wf_col2 = st.columns(2)
                     wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
@@ -2932,7 +2963,8 @@ def main():
                         pbt_tickers, pbt_weights,
                         pbt_period_days[pbt_period],
                         pbt_buy_th, sell_th,
-                        pbt_capital, bt_commission, bt_slippage)
+                        pbt_capital, bt_commission, bt_slippage,
+                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
 
                 # ── 개별 종목 성과 ────────────────────────
                 st.markdown("#### 종목별 성과")
