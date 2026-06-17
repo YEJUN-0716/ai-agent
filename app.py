@@ -2204,8 +2204,8 @@ def main():
         else:              st.error(f"가중치 합계: {total_w}% (100% 필요)")
         st.divider()
         st.subheader("🛡️ 실전 리스크 설정")
-        acct_capital = st.number_input("계좌 기준 금액", min_value=100_000, value=10_000_000,
-                                       step=1_000_000, help="포지션 사이징 계산 기준 금액입니다.")
+        acct_capital = st.number_input("계좌 기준 금액", min_value=100, value=10_000_000,
+                                       step=100_000, help="포지션 사이징 계산 기준 금액입니다.")
         risk_per_trade = st.slider("1회 거래 허용 손실 (%)", 0.1, 5.0, 1.0, 0.1,
                                    help="손절 시 계좌에서 감수할 최대 손실 비율입니다.")
         max_position_pct = st.slider("종목당 최대 비중 (%)", 1, 100, 20, 1,
