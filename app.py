@@ -1687,6 +1687,85 @@ def calc_trade_levels(df, total_score):
     }
 
 
+def _parse_pct_value(value):
+    """'12.3%' 같은 표시 문자열을 float 퍼센트 값으로 변환."""
+    try:
+        if value is None:
+            return None
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return float(value)
+        return float(str(value).replace('%', '').replace(',', '').strip())
+    except Exception:
+        return None
+
+
+def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
+                         capital, risk_per_trade_pct, max_position_pct,
+                         min_rr=1.5):
+    """추천 매매가를 실전 포지션 사이징과 거래 가능 여부로 변환."""
+    plans = {}
+    risk_budget = max(float(capital) * float(risk_per_trade_pct) / 100, 0.0)
+    max_position_value = max(float(capital) * float(max_position_pct) / 100, 0.0)
+    risk_vol = _parse_pct_value(risk_data.get('연간 변동성')) if risk_data else None
+    beta = risk_data.get('Beta') if risk_data else None
+
+    for key, label in [('dantta', '단타'), ('swing', '스윙')]:
+        tr = lv[key]
+        entry = float(tr['entry1'])
+        stop = float(tr['stop'])
+        target = float(tr['target1'])
+        per_share_risk = max(entry - stop, 1e-9)
+        rr = (target - entry) / per_share_risk
+
+        qty_by_risk = risk_budget / per_share_risk if risk_budget > 0 else 0.0
+        qty_by_alloc = max_position_value / entry if entry > 0 else 0.0
+        qty = max(min(qty_by_risk, qty_by_alloc), 0.0)
+        position_value = qty * entry
+        expected_risk = qty * per_share_risk
+        expected_reward = qty * max(target - entry, 0.0)
+
+        blockers = []
+        warnings = []
+        if total_adj < 55:
+            blockers.append('국면 조정 점수 55점 미만')
+        if rr < min_rr:
+            blockers.append(f'손익비 {rr:.1f}:1 < 기준 {min_rr:.1f}:1')
+        if risk_budget <= 0 or max_position_value <= 0:
+            blockers.append('계좌/리스크 설정 필요')
+        if beta is not None and beta >= 1.5:
+            warnings.append('고베타 종목')
+        if risk_vol is not None and risk_vol >= 45:
+            warnings.append('연간 변동성 45% 이상')
+        if regime == 'bear' and key == 'dantta':
+            warnings.append('약세장 단타는 비중 축소 권장')
+        if total_score >= 75 and rr >= min_rr and not blockers:
+            verdict = '진입 가능'
+        elif not blockers:
+            verdict = '조건부 진입'
+        else:
+            verdict = '대기/회피'
+
+        plans[key] = {
+            'label': label,
+            'verdict': verdict,
+            'blockers': blockers,
+            'warnings': warnings,
+            'qty': qty,
+            'position_value': position_value,
+            'risk_amount': expected_risk,
+            'reward_amount': expected_reward,
+            'risk_budget': risk_budget,
+            'max_position_value': max_position_value,
+            'rr': rr,
+            'entry': entry,
+            'stop': stop,
+            'target': target,
+            'risk_pct_of_account': expected_risk / capital * 100 if capital > 0 else 0.0,
+            'alloc_pct_of_account': position_value / capital * 100 if capital > 0 else 0.0,
+        }
+    return plans
+
+
 # ─────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────
@@ -1780,6 +1859,16 @@ def main():
         total_w = w_tech + w_fund + w_macro
         if total_w == 100: st.success(f"가중치 합계: {total_w}% ✅")
         else:              st.error(f"가중치 합계: {total_w}% (100% 필요)")
+        st.divider()
+        st.subheader("🛡️ 실전 리스크 설정")
+        acct_capital = st.number_input("계좌 기준 금액", min_value=100_000, value=10_000_000,
+                                       step=1_000_000, help="포지션 사이징 계산 기준 금액입니다.")
+        risk_per_trade = st.slider("1회 거래 허용 손실 (%)", 0.1, 5.0, 1.0, 0.1,
+                                   help="손절 시 계좌에서 감수할 최대 손실 비율입니다.")
+        max_position_pct = st.slider("종목당 최대 비중 (%)", 1, 100, 20, 1,
+                                     help="한 종목에 투입할 수 있는 최대 계좌 비중입니다.")
+        min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
+                           help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 종목 분석", "🔍 스크리너", "📉 백테스팅", "🔔 알림", "💼 포트폴리오"])
 
@@ -2269,6 +2358,44 @@ def main():
                             {'구분':'🔴 손절가',  '가격':fmt_p(sw['stop']),  '현재가 대비':f"-{sw['risk_pct']:.1f}%",'근거':sw['basis_stop']},
                         ]
                         st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
+
+                    st.markdown("#### 🛡️ 실전 포지션 플랜")
+                    exec_plans = build_execution_plan(
+                        lv, total, total_adj, regime, risk_data,
+                        acct_capital, risk_per_trade, max_position_pct, min_rr)
+                    plan_cols = st.columns(2)
+                    for plan_col, plan_key in zip(plan_cols, ['dantta', 'swing']):
+                        plan = exec_plans[plan_key]
+                        verdict_color = (
+                            '#26a69a' if plan['verdict'] == '진입 가능'
+                            else ('#ff9800' if plan['verdict'] == '조건부 진입' else '#ef5350')
+                        )
+                        qty_text = f"{plan['qty']:,.0f}주" if is_krw else f"{plan['qty']:,.2f}주"
+                        notes = plan['blockers'] + plan['warnings']
+                        notes_text = " · ".join(notes) if notes else "조건 충족"
+                        with plan_col:
+                            st.markdown(
+                                f"<div style='background:#151923;border:1px solid {verdict_color}66;"
+                                f"border-radius:8px;padding:12px 14px;margin-bottom:8px'>"
+                                f"<div style='display:flex;justify-content:space-between;gap:10px'>"
+                                f"<b>{plan['label']} 실행 판정</b>"
+                                f"<b style='color:{verdict_color}'>{plan['verdict']}</b></div>"
+                                f"<div style='color:#999;font-size:12px;margin-top:6px'>{notes_text}</div>"
+                                f"</div>", unsafe_allow_html=True)
+                            pc1, pc2, pc3 = st.columns(3)
+                            pc1.metric("최대 수량", qty_text)
+                            pc2.metric("투입 금액", fmt_p(plan['position_value']),
+                                       f"{plan['alloc_pct_of_account']:.1f}%")
+                            pc3.metric("예상 손실", fmt_p(plan['risk_amount']),
+                                       f"{plan['risk_pct_of_account']:.2f}%")
+                            pc4, pc5 = st.columns(2)
+                            pc4.metric("1차 기대수익", fmt_p(plan['reward_amount']))
+                            pc5.metric("손익비", f"R {plan['rr']:.1f}:1")
+
+                    st.caption(
+                        f"계산 기준: 계좌 {fmt_p(acct_capital)} · 거래당 손실 {risk_per_trade:.1f}% "
+                        f"· 종목당 최대 {max_position_pct}% · 최소 손익비 R {min_rr:.1f}"
+                    )
 
                     with st.expander("📐 피보나치 & 피봇 포인트 세부"):
                         fa, fb = st.columns(2)
