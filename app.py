@@ -1607,17 +1607,18 @@ def calc_trade_levels(df, total_score):
         'S2': pivot - (prev_h - prev_l),
         'S3': pivot - 2*(prev_h - prev_l),
     }
+    touched_support_limit = cp + max(atr * 0.25, cp * 0.003)
 
     # ── 단타 (1~5일): 피봇·ATR 중심 ──────────────
     if total_score >= 65:
         dt_e1 = cp;                   dt_be1 = '현재가(즉시)'
         dt_strategy = '✅ 즉시 진입'
     elif total_score >= 50:
-        dt_e1 = piv['S1'] if piv['S1'] < cp*0.999 else bb_lower
+        dt_e1 = piv['S1'] if piv['S1'] <= touched_support_limit else bb_lower
         dt_be1 = '피봇 S1 / BB하단'
         dt_strategy = '⏳ S1 지지 확인 후 진입'
     else:
-        dt_e1 = piv['S2'] if piv['S2'] < cp*0.999 else low20
+        dt_e1 = piv['S2'] if piv['S2'] <= touched_support_limit else low20
         dt_be1 = '피봇 S2 / 20일저점'
         dt_strategy = '🔍 S2에서만 단기 진입'
 
@@ -1635,7 +1636,7 @@ def calc_trade_levels(df, total_score):
 
     # ── 스윙 (2~4주): 피보나치·MA 중심 ───────────
     sw_sup = sorted([x for x in [fib['38.2%'], fib['50.0%'], fib['61.8%'],
-                                  ma20, ma60, low20] if x < cp*0.999], reverse=True)
+                                  ma20, ma60, low20] if x <= touched_support_limit], reverse=True)
     sw_res = sorted([x for x in [fib['23.6%'], fib['확장 127.2%'], fib['확장 161.8%'],
                                   sw_high, ma120] if x > cp*1.001])
 
