@@ -2329,12 +2329,21 @@ def main():
                     except: _info, _name = {}, ticker
 
                     _is_krw = ticker.endswith('.KS') or ticker.endswith('.KQ')
-                    _cp  = float(_info.get('regularMarketPrice') or _df['Close'].iloc[-1])
+                    _reg_price  = _info.get('regularMarketPrice') or _info.get('currentPrice')
+                    _cp  = float(_reg_price) if _reg_price else float(_df['Close'].iloc[-1])
                     _pp  = float(_info.get('regularMarketPreviousClose') or (_df['Close'].iloc[-2] if len(_df) >= 2 else _cp))
                     _pre_price  = _info.get('preMarketPrice')
                     _pre_chg    = _info.get('preMarketChangePercent')
                     _post_price = _info.get('postMarketPrice')
                     _post_chg   = _info.get('postMarketChangePercent')
+                    _live_price = _cp
+                    _live_label = '현재가'
+                    if _post_price and _post_price > 0:
+                        _live_price = float(_post_price)
+                        _live_label = '현재가 (애프터)'
+                    elif _pre_price and _pre_price > 0:
+                        _live_price = float(_pre_price)
+                        _live_label = '현재가 (프리마켓)'
 
                     _earn_str = ""
                     try:
@@ -2371,6 +2380,7 @@ def main():
                         't_score_adj': _t_score_adj, 'total_adj': _total_adj,
                         'info': _info, 'name': _name,
                         'is_krw': _is_krw, 'cp': _cp, 'pp': _pp,
+                        'live_price': _live_price, 'live_label': _live_label,
                         'pre_price': _pre_price, 'pre_chg': _pre_chg,
                         'post_price': _post_price, 'post_chg': _post_chg,
                         'earn_str': _earn_str,
@@ -2395,6 +2405,8 @@ def main():
             t_score_adj = _a['t_score_adj']; total_adj = _a['total_adj']
             info      = _a['info']; name = _a['name']
             is_krw    = _a['is_krw']; cp = _a['cp']; pp = _a['pp']
+            live_price = _a.get('live_price', cp)
+            live_label = _a.get('live_label', '현재가')
             pre_price = _a.get('pre_price'); pre_chg = _a.get('pre_chg')
             post_price = _a.get('post_price'); post_chg = _a.get('post_chg')
             earn_str  = _a['earn_str']
@@ -2407,20 +2419,25 @@ def main():
             regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}[regime]
 
             st.header(f"{name}  `{ticker}`")
+            live_chg = (live_price - pp) / pp * 100 if pp > 0 else 0
             c1,c2,c3,c4 = st.columns(4)
-            c1.metric("현재가", fmt_p(cp), f"{chg:+.2f}%")
+            c1.metric(live_label, fmt_p(live_price), f"{live_chg:+.2f}%")
             c2.metric("52주 고가", fmt_p(float(df['High'].tail(252).max())))
             c3.metric("52주 저가", fmt_p(float(df['Low'].tail(252).min())))
             c4.metric("분석 기준일", end_dt.strftime("%Y-%m-%d"))
 
-            if not is_krw and (pre_price or post_price):
-                ext_cols = st.columns(2)
-                if pre_price:
+            if not is_krw:
+                ext_parts = []
+                if pre_price and pre_price > 0:
                     pre_chg_v = pre_chg * 100 if pre_chg and abs(pre_chg) < 1 else (pre_chg or 0)
-                    ext_cols[0].metric("🌅 프리마켓", fmt_p(pre_price), f"{pre_chg_v:+.2f}%")
-                if post_price:
+                    ext_parts.append(f"🌅 프리마켓 **{fmt_p(pre_price)}** ({pre_chg_v:+.2f}%)")
+                if post_price and post_price > 0:
                     post_chg_v = post_chg * 100 if post_chg and abs(post_chg) < 1 else (post_chg or 0)
-                    ext_cols[1].metric("🌙 애프터마켓", fmt_p(post_price), f"{post_chg_v:+.2f}%")
+                    ext_parts.append(f"🌙 애프터 **{fmt_p(post_price)}** ({post_chg_v:+.2f}%)")
+                if cp != live_price:
+                    ext_parts.append(f"📊 정규장 종가 **{fmt_p(cp)}** ({chg:+.2f}%)")
+                if ext_parts:
+                    st.caption(" &nbsp;|&nbsp; ".join(ext_parts))
 
             if earn_str:
                 st.caption(earn_str)
