@@ -230,39 +230,131 @@ def calc_obv(close, volume):
     return (volume * sign).cumsum()
 
 def detect_trading_signals(df, t_det):
-    """현재 시점 매매 시그널 감지 (RSI/MA크로스/BB/MACD/거래량/스토캐스틱)"""
+    """컨플루언스 기반 매매 시그널 감지.
+    ADX 추세 필터, 거래량 확인, whipsaw 방지 적용."""
     p = df['Close']
     cp = float(p.iloc[-1])
     signals = []
+    bull, bear = 0, 0
+
+    adx_val  = t_det.get('ADX값', 20)
+    has_trend = adx_val > 20
     rsi_v = t_det.get('RSI값', 50)
-    if rsi_v < 30:   signals.append(('🟢', 'RSI 과매도',     f'RSI {rsi_v:.1f} — 반등 가능'))
-    elif rsi_v > 70: signals.append(('🔴', 'RSI 과매수',     f'RSI {rsi_v:.1f} — 조정 주의'))
+    sk_v  = t_det.get('Stoch값', 50)
+
+    vr = float(df['Volume'].iloc[-1]) / (float(df['Volume'].rolling(20).mean().iloc[-1]) + 1e-9)
+    vol_ok = vr >= 0.8
+
+    # ── RSI (동적 임계값: 추세장에서 완화) ────────
+    rsi_ob = 65 if (has_trend and adx_val > 30) else 70
+    rsi_os = 35 if (has_trend and adx_val > 30) else 30
+    if rsi_v < rsi_os:
+        signals.append(('🟢', 'RSI 과매도', f'RSI {rsi_v:.1f} < {rsi_os} — 반등 가능'))
+        bull += 1
+    elif rsi_v > rsi_ob:
+        signals.append(('🔴', 'RSI 과매수', f'RSI {rsi_v:.1f} > {rsi_ob} — 조정 주의'))
+        bear += 1
+
+    # ── MA 크로스 (ADX 필터 + 3봉 지속 확인) ─────
     ma20_s = p.rolling(20).mean(); ma60_s = p.rolling(60).mean()
-    if len(p) >= 22:
-        if float(ma20_s.iloc[-2]) <= float(ma60_s.iloc[-2]) and float(ma20_s.iloc[-1]) > float(ma60_s.iloc[-1]):
-            signals.append(('🟢', '골든크로스',    'MA20 ↑ MA60 돌파 — 중기 매수 신호'))
-        elif float(ma20_s.iloc[-2]) >= float(ma60_s.iloc[-2]) and float(ma20_s.iloc[-1]) < float(ma60_s.iloc[-1]):
-            signals.append(('🔴', '데드크로스',    'MA20 ↓ MA60 이탈 — 중기 매도 신호'))
+    if len(p) >= 25:
+        above_cnt = sum(1 for j in range(-3, 0) if float(ma20_s.iloc[j]) > float(ma60_s.iloc[j]))
+        below_cnt = 3 - above_cnt
+        was_below_5d = float(ma20_s.iloc[-5]) <= float(ma60_s.iloc[-5])
+        was_above_5d = float(ma20_s.iloc[-5]) >= float(ma60_s.iloc[-5])
+
+        if above_cnt >= 3 and was_below_5d:
+            if has_trend:
+                signals.append(('🟢', '골든크로스', f'MA20 ↑ MA60 (3봉 지속, ADX {adx_val:.0f})'))
+                bull += 2
+            else:
+                signals.append(('🟡', '골든크로스 (약)', f'MA20 ↑ MA60 — ADX {adx_val:.0f} 추세 약함'))
+                bull += 1
+        elif below_cnt >= 3 and was_above_5d:
+            if has_trend:
+                signals.append(('🔴', '데드크로스', f'MA20 ↓ MA60 (3봉 지속, ADX {adx_val:.0f})'))
+                bear += 2
+            else:
+                signals.append(('🟡', '데드크로스 (약)', f'MA20 ↓ MA60 — ADX {adx_val:.0f} 추세 약함'))
+                bear += 1
+
+    # ── 볼린저밴드 ─────────────────────────────────
     bb_u_s, _, bb_l_s = calc_bb(p)
-    if cp > float(bb_u_s.iloc[-1]):   signals.append(('🔴', 'BB 상단 돌파',  '과매수 구간 — 단기 조정 주의'))
-    elif cp < float(bb_l_s.iloc[-1]): signals.append(('🟢', 'BB 하단 이탈', '과매도 구간 — 반등 대기'))
+    if cp > float(bb_u_s.iloc[-1]):
+        signals.append(('🔴', 'BB 상단 돌파', '과매수 구간 — 단기 조정 주의'))
+        bear += 1
+    elif cp < float(bb_l_s.iloc[-1]):
+        signals.append(('🟢', 'BB 하단 이탈', '과매도 구간 — 반등 대기'))
+        bull += 1
     elif len(p) >= 40:
         bw_n = (float(bb_u_s.iloc[-1]) - float(bb_l_s.iloc[-1])) / (cp + 1e-9)
         bw_a = float(((bb_u_s - bb_l_s) / p).rolling(20).mean().iloc[-1])
-        if bw_n < bw_a * 0.7: signals.append(('🟡', 'BB 스퀴즈', '밴드 수축 — 큰 방향성 돌파 임박'))
-    ml_s, sl_s, _ = calc_macd(p)
-    if len(ml_s) >= 2:
-        if float(ml_s.iloc[-2]) <= float(sl_s.iloc[-2]) and float(ml_s.iloc[-1]) > float(sl_s.iloc[-1]):
+        if bw_n < bw_a * 0.7:
+            signals.append(('🟡', 'BB 스퀴즈', '밴드 수축 — 큰 방향성 돌파 임박'))
+
+    # ── MACD (크로스 + 히스토그램 방향) ────────────
+    ml_s, sl_s, hist_s = calc_macd(p)
+    if len(ml_s) >= 3:
+        cross_up  = float(ml_s.iloc[-2]) <= float(sl_s.iloc[-2]) and float(ml_s.iloc[-1]) > float(sl_s.iloc[-1])
+        cross_dn  = float(ml_s.iloc[-2]) >= float(sl_s.iloc[-2]) and float(ml_s.iloc[-1]) < float(sl_s.iloc[-1])
+        hist_rising = float(hist_s.iloc[-1]) > float(hist_s.iloc[-2])
+        if cross_up:
             signals.append(('🟢', 'MACD 상향 돌파', 'MACD > Signal — 단기 매수 신호'))
-        elif float(ml_s.iloc[-2]) >= float(sl_s.iloc[-2]) and float(ml_s.iloc[-1]) < float(sl_s.iloc[-1]):
+            bull += 1
+        elif cross_dn:
             signals.append(('🔴', 'MACD 하향 돌파', 'MACD < Signal — 단기 매도 신호'))
-    vr = float(df['Volume'].iloc[-1]) / (float(df['Volume'].rolling(20).mean().iloc[-1]) + 1e-9)
+            bear += 1
+        elif float(ml_s.iloc[-1]) > float(sl_s.iloc[-1]) and hist_rising:
+            bull += 1
+        elif float(ml_s.iloc[-1]) < float(sl_s.iloc[-1]) and not hist_rising:
+            bear += 1
+
+    # ── 스토캐스틱 (동적 임계값) ────────────────────
+    stoch_ob = 75 if has_trend else 80
+    stoch_os = 25 if has_trend else 20
+    if sk_v < stoch_os:
+        signals.append(('🟢', '스토캐스틱 과매도', f'%K {sk_v:.1f} < {stoch_os} — 반등 구간'))
+        bull += 1
+    elif sk_v > stoch_ob:
+        signals.append(('🔴', '스토캐스틱 과매수', f'%K {sk_v:.1f} > {stoch_ob} — 과열 구간'))
+        bear += 1
+
+    # ── OBV 다이버전스 ─────────────────────────────
+    if len(p) >= 20:
+        obv = calc_obv(p, df['Volume'])
+        if cp < float(p.iloc[-20]) and float(obv.iloc[-1]) > float(obv.iloc[-20]):
+            signals.append(('🟢', 'OBV 상승 다이버전스', '가격↓ 거래량↑ — 매집 가능'))
+            bull += 1
+        elif cp > float(p.iloc[-20]) and float(obv.iloc[-1]) < float(obv.iloc[-20]):
+            signals.append(('🔴', 'OBV 하락 다이버전스', '가격↑ 거래량↓ — 분산 가능'))
+            bear += 1
+
+    # ── 거래량 확인 ────────────────────────────────
     if vr > 2.0:
         dir_s = '상승' if cp > float(p.iloc[-2]) else '하락'
         signals.append(('⚡', '거래량 급증', f'평균의 {vr:.1f}배 ({dir_s}) — 방향성 강화'))
-    sk_v = t_det.get('Stoch값', 50)
-    if sk_v < 20:   signals.append(('🟢', '스토캐스틱 과매도', f'%K {sk_v:.1f} — 반등 구간'))
-    elif sk_v > 80: signals.append(('🔴', '스토캐스틱 과매수', f'%K {sk_v:.1f} — 과열 구간'))
+        if cp > float(p.iloc[-2]): bull += 1
+        else: bear += 1
+    elif not vol_ok:
+        signals.append(('⚠️', '거래량 부족', f'평균의 {vr:.1f}배 — 신호 신뢰도 감소'))
+
+    # ── 컨플루언스 종합 판정 ───────────────────────
+    net = bull - bear
+    total_sigs = bull + bear
+    if total_sigs == 0:
+        conf = ('⚪', '시그널 없음', '뚜렷한 매매 신호가 없습니다')
+    elif net >= 3:
+        conf = ('🟢', f'강한 매수 합류 ({bull}:{bear})', f'{bull}개 매수 신호 동시 발생 — 높은 신뢰도')
+    elif net >= 2:
+        conf = ('🟢', f'매수 우세 ({bull}:{bear})', f'매수 신호 우세 — 보통 신뢰도')
+    elif net <= -3:
+        conf = ('🔴', f'강한 매도 합류 ({bear}:{bull})', f'{bear}개 매도 신호 동시 발생 — 높은 신뢰도')
+    elif net <= -2:
+        conf = ('🔴', f'매도 우세 ({bear}:{bull})', f'매도 신호 우세 — 보통 신뢰도')
+    else:
+        conf = ('🟡', f'혼조세 ({bull}:{bear})', '매수/매도 엇갈림 — 관망 권장')
+
+    signals.insert(0, conf)
     return signals
 
 def wave_score(prices, highs, lows):
@@ -281,6 +373,13 @@ def technical_score(df):
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     det = {}
 
+    # ── ADX 선행 계산 (다른 지표에서 활용) ──────
+    adx_s, pdi_s, ndi_s = calc_adx(h, l, p)
+    adx = float(adx_s.iloc[-1]) if not np.isnan(float(adx_s.iloc[-1])) else 20.0
+    pdi = float(pdi_s.iloc[-1]); ndi = float(ndi_s.iloc[-1])
+    bull_trend = pdi > ndi
+    has_trend = adx > 20
+
     # ── MA 정렬 (15%) ─────────────────────────
     ma20  = p.rolling(20).mean()
     ma60  = p.rolling(60).mean()
@@ -288,26 +387,33 @@ def technical_score(df):
     cp, m20, m60, m120 = float(p.iloc[-1]), float(ma20.iloc[-1]), float(ma60.iloc[-1]), float(ma120.iloc[-1])
     ma = (20 if cp>m20 else 0)+(20 if cp>m60 else 0)+(20 if cp>m120 else 0)+(20 if m20>m60 else 0)+(20 if m60>m120 else 0)
     if len(ma20) >= 5:
-        if m20 > m60 and float(ma20.iloc[-5]) <= float(ma60.iloc[-5]):  ma = min(ma+15, 100)
-        elif m20 < m60 and float(ma20.iloc[-5]) >= float(ma60.iloc[-5]): ma = max(ma-15, 0)
+        cross_up = m20 > m60 and float(ma20.iloc[-5]) <= float(ma60.iloc[-5])
+        cross_dn = m20 < m60 and float(ma20.iloc[-5]) >= float(ma60.iloc[-5])
+        if cross_up and has_trend:
+            persist = sum(1 for j in range(-3, 0) if float(ma20.iloc[j]) > float(ma60.iloc[j]))
+            ma = min(ma + (15 if persist >= 3 else 5), 100)
+        elif cross_dn and has_trend:
+            persist = sum(1 for j in range(-3, 0) if float(ma20.iloc[j]) < float(ma60.iloc[j]))
+            ma = max(ma - (15 if persist >= 3 else 5), 0)
     det['MA정렬'] = float(ma)
 
-    # ── RSI (10%) ──────────────────────────────
+    # ── RSI (10%) — 동적 임계값 ────────────────
     rsi_s = calc_rsi(p)
     rv = float(rsi_s.iloc[-1])
-    if 40 <= rv <= 60:   rsi = 50
-    elif 60 < rv <= 70:  rsi = 75
-    elif rv > 70:        rsi = 40
-    elif 30 <= rv < 40:  rsi = 30
-    else:                rsi = 60
+    rsi_ob = 65 if (has_trend and bull_trend and adx > 30) else 70
+    rsi_os = 35 if (has_trend and not bull_trend and adx > 30) else 30
+    if rsi_os <= rv <= 60:      rsi = 50
+    elif 60 < rv <= rsi_ob:     rsi = 75
+    elif rv > rsi_ob:           rsi = 40
+    elif rsi_os - 10 <= rv < rsi_os: rsi = 30
+    else:                        rsi = 60
     rsi_tr = rv - float(rsi_s.iloc[-10]) if len(rsi_s) >= 10 else 0
-    if rsi_tr > 5 and 40 < rv < 70:  rsi = min(rsi+20, 100)
-    elif rsi_tr < -5:                  rsi = max(rsi-10, 0)
-    # RSI 다이버전스 감지
+    if rsi_tr > 5 and rsi_os < rv < rsi_ob: rsi = min(rsi+20, 100)
+    elif rsi_tr < -5:                        rsi = max(rsi-10, 0)
     if len(p) >= 20:
         pr20 = float(p.iloc[-20]); rs20 = float(rsi_s.iloc[-20]) if len(rsi_s) >= 20 else rv
-        if cp < pr20 and rv > rs20:   rsi = min(rsi+15, 100)   # 상승 다이버전스
-        elif cp > pr20 and rv < rs20: rsi = max(rsi-15, 0)      # 하락 다이버전스
+        if cp < pr20 and rv > rs20:   rsi = min(rsi+15, 100)
+        elif cp > pr20 and rv < rs20: rsi = max(rsi-15, 0)
     det['RSI'] = float(rsi)
     det['RSI값'] = round(rv, 1)
 
@@ -372,15 +478,11 @@ def technical_score(df):
     det['스토캐스틱'] = float(stoch)
     det['Stoch값'] = round(sk, 1)
 
-    # ── ADX 추세강도 (17%) ─────────────────────
-    adx_s, pdi_s, ndi_s = calc_adx(h, l, p)
-    adx = float(adx_s.iloc[-1]) if not np.isnan(float(adx_s.iloc[-1])) else 20.0
-    pdi = float(pdi_s.iloc[-1]); ndi = float(ndi_s.iloc[-1])
-    bull_trend = pdi > ndi
-    if adx > 40:   adx_v = 85 if bull_trend else 15   # 매우 강한 추세
-    elif adx > 25: adx_v = 72 if bull_trend else 28   # 추세 명확
-    elif adx > 18: adx_v = 58 if bull_trend else 42   # 추세 약함
-    else:          adx_v = 50                          # 횡보 (추세 없음)
+    # ── ADX 추세강도 (17%) — 이미 선행 계산됨 ───
+    if adx > 40:   adx_v = 85 if bull_trend else 15
+    elif adx > 25: adx_v = 72 if bull_trend else 28
+    elif adx > 18: adx_v = 58 if bull_trend else 42
+    else:          adx_v = 50
     det['ADX추세강도'] = float(adx_v)
     det['ADX값'] = round(adx, 1)
 
@@ -836,13 +938,25 @@ def bt_signals_full(df):
     bt_signals(MA+RSI+MACD 3개) 대신 실제 scoring과 동일한 9개 지표를 사용."""
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
 
-    # ── MA 정렬 (15%) ─────────────────────────
+    # ── ADX 선행 계산 ──────────────────────────
+    adx_v_bt, pdi_bt, ndi_bt = calc_adx(h, l, p)
+    adx_f_bt = adx_v_bt.fillna(0)
+    has_trend_bt = adx_f_bt > 20
+
+    # ── MA 정렬 (15%) — ADX 필터 + 3봉 지속 확인
     ma20, ma60, ma120 = p.rolling(20).mean(), p.rolling(60).mean(), p.rolling(120).mean()
     ma_s = ((p > ma20)*20 + (p > ma60)*20 + (p > ma120)*20 +
             (ma20 > ma60)*20 + (ma60 > ma120)*20).astype(float)
     gc = (ma20 > ma60) & (ma20.shift(5) <= ma60.shift(5))
     dc = (ma20 < ma60) & (ma20.shift(5) >= ma60.shift(5))
-    ma_s = (ma_s + gc.astype(float)*15 - dc.astype(float)*15).clip(0, 100).fillna(50)
+    gc_persist = gc & (ma20.shift(1) > ma60.shift(1)) & (ma20.shift(2) > ma60.shift(2))
+    dc_persist = dc & (ma20.shift(1) < ma60.shift(1)) & (ma20.shift(2) < ma60.shift(2))
+    gc_bonus = gc_persist & has_trend_bt
+    dc_bonus = dc_persist & has_trend_bt
+    gc_weak = gc & ~gc_bonus
+    dc_weak = dc & ~dc_bonus
+    ma_s = (ma_s + gc_bonus.astype(float)*15 - dc_bonus.astype(float)*15
+                 + gc_weak.astype(float)*5  - dc_weak.astype(float)*5).clip(0, 100).fillna(50)
 
     # ── RSI (10%) ──────────────────────────────
     rsi = calc_rsi(p)
