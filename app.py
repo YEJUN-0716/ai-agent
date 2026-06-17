@@ -1607,20 +1607,19 @@ def calc_trade_levels(df, total_score):
         'S2': pivot - (prev_h - prev_l),
         'S3': pivot - 2*(prev_h - prev_l),
     }
-    touched_support_limit = cp + max(atr * 0.25, cp * 0.003)
 
     # ── 단타 (1~5일): 피봇·ATR 중심 ──────────────
     if total_score >= 65:
         dt_e1 = cp;                   dt_be1 = '현재가(즉시)'
         dt_strategy = '✅ 즉시 진입'
     elif total_score >= 50:
-        dt_e1 = piv['S1'] if piv['S1'] <= touched_support_limit else bb_lower
-        dt_be1 = '피봇 S1 / BB하단'
+        dt_e1 = piv['S1']
+        dt_be1 = '피봇 S1'
         dt_strategy = '⏳ S1 지지 확인 후 진입'
     else:
-        dt_e1 = piv['S2'] if piv['S2'] <= touched_support_limit else low20
-        dt_be1 = '피봇 S2 / 20일저점'
-        dt_strategy = '🔍 S2에서만 단기 진입'
+        dt_e1 = piv['S1']
+        dt_be1 = '피봇 S1'
+        dt_strategy = '🔍 S1 회복/지지 확인 후 진입'
 
     dt_e2   = max(piv['S2'], dt_e1 - atr * 0.8)
     dt_stop = dt_e1 - atr * 0.5
@@ -1635,13 +1634,14 @@ def calc_trade_levels(df, total_score):
     dt_rr2  = (dt_t2 - dt_e1) / dt_risk
 
     # ── 스윙 (2~4주): 피보나치·MA 중심 ───────────
-    sw_sup = sorted([x for x in [fib['38.2%'], fib['50.0%'], fib['61.8%'],
-                                  ma20, ma60, low20] if x <= touched_support_limit], reverse=True)
+    sw_levels = [fib['38.2%'], fib['50.0%'], fib['61.8%'], ma20, ma60, low20]
+    sw_sup = sorted(sw_levels, key=lambda x: (abs(x - cp), -x))
     sw_res = sorted([x for x in [fib['23.6%'], fib['확장 127.2%'], fib['확장 161.8%'],
                                   sw_high, ma120] if x > cp*1.001])
 
     sw_e1   = sw_sup[0] if sw_sup else cp * 0.96
-    sw_e2   = sw_sup[1] if len(sw_sup) > 1 else sw_e1 * 0.96
+    sw_e2_candidates = sorted([x for x in sw_levels if x < sw_e1 * 0.999], reverse=True)
+    sw_e2   = sw_e2_candidates[0] if sw_e2_candidates else sw_e1 * 0.96
     sw_stop = sw_e1 - atr * 1.5
     sw_t1   = sw_res[0] if sw_res else cp * 1.08
     sw_t2   = sw_res[1] if len(sw_res) > 1 else sw_t1 * 1.05
