@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import requests
 import sqlite3
 import os
+import json
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -59,6 +60,83 @@ def _db_delete(pos_id):
     with sqlite3.connect(_DB_PATH) as con:
         con.execute("DELETE FROM positions WHERE id=?", (pos_id,))
         con.commit()
+
+# ─────────────────────────────────────────────
+# GOOGLE SHEETS STORAGE (Cloud 영속성)
+# ─────────────────────────────────────────────
+
+def _gsheet_configured():
+    try:
+        return bool(st.secrets.get("gcp_service_account")) and bool(st.secrets.get("GSHEET_URL"))
+    except Exception:
+        return False
+
+def _get_gsheet_ws():
+    import gspread
+    from google.oauth2.service_account import Credentials
+    scopes = ['https://www.googleapis.com/auth/spreadsheets',
+              'https://www.googleapis.com/auth/drive']
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]), scopes=scopes)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_url(st.secrets["GSHEET_URL"])
+    try:
+        ws = sh.worksheet("portfolio")
+    except Exception:
+        ws = sh.add_worksheet(title="portfolio", rows=100, cols=6)
+        ws.update('A1:F1', [['id', 'ticker', 'qty', 'avg_cost', 'note', 'added_at']])
+    return ws
+
+def _gs_load():
+    ws = _get_gsheet_ws()
+    records = ws.get_all_records()
+    return [{'id': r.get('id', i+1), 'ticker': str(r['ticker']),
+             'qty': float(r['qty']), 'avg_cost': float(r['avg_cost']),
+             'note': str(r.get('note', ''))} for i, r in enumerate(records)]
+
+def _gs_add(ticker, qty, avg_cost, note):
+    ws = _get_gsheet_ws()
+    all_vals = ws.get_all_values()
+    ids = [int(r[0]) for r in all_vals[1:] if r and r[0].isdigit()]
+    new_id = max(ids or [0]) + 1
+    ws.append_row([new_id, ticker, qty, avg_cost, note,
+                   datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
+    return new_id
+
+def _gs_delete(pos_id):
+    ws = _get_gsheet_ws()
+    all_vals = ws.get_all_values()
+    for i, row in enumerate(all_vals):
+        if i == 0:
+            continue
+        if str(row[0]) == str(pos_id):
+            ws.delete_rows(i + 1)
+            return
+
+def db_load():
+    if _gsheet_configured():
+        try:
+            return _gs_load()
+        except Exception:
+            pass
+    return _db_load()
+
+def db_add(ticker, qty, avg_cost, note):
+    if _gsheet_configured():
+        try:
+            return _gs_add(ticker, qty, avg_cost, note)
+        except Exception:
+            pass
+    return _db_add(ticker, qty, avg_cost, note)
+
+def db_delete(pos_id):
+    if _gsheet_configured():
+        try:
+            _gs_delete(pos_id)
+            return
+        except Exception:
+            pass
+    _db_delete(pos_id)
 
 PRESETS = {
     '미국 대형주':  ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','JPM','V','JNJ'],
@@ -1357,8 +1435,8 @@ def _style_score(val):
         else:         return 'background-color:#3a1a1a;color:#f44336;font-weight:bold'
     except: return ''
 
-def get_news_sentiment(ticker):
-    """yfinance 뉴스 헤드라인 키워드 기반 감성 분석 (구/신 API 형식 모두 지원)"""
+def _news_sentiment_keyword(ticker):
+    """키워드 기반 감성 분석 (폴백용)"""
     try:
         news = yf.Ticker(ticker).news
         if not news: return 50.0, []
@@ -1403,6 +1481,92 @@ def get_news_sentiment(ticker):
         return float(np.clip(50 + avg * 12, 0, 100)), articles
     except:
         return 50.0, []
+
+def _get_anthropic_key():
+    try:
+        k = st.secrets.get("ANTHROPIC_API_KEY", "")
+        if k: return k
+    except Exception:
+        pass
+    k = os.environ.get("ANTHROPIC_API_KEY", "")
+    if k: return k
+    return st.session_state.get('anthropic_key', '')
+
+def get_news_sentiment(ticker):
+    """뉴스 감성 분석 (Claude API 우선, 키워드 폴백)"""
+    api_key = _get_anthropic_key()
+    if not api_key:
+        return _news_sentiment_keyword(ticker)
+
+    try:
+        news = yf.Ticker(ticker).news
+        if not news:
+            return 50.0, []
+
+        raw_articles = []
+        for item in news[:8]:
+            if 'content' in item and isinstance(item['content'], dict):
+                c = item['content']
+                title = c.get('title') or c.get('headline', '')
+                pub_str = c.get('pubDate', '') or c.get('displayTime', '')
+                try:
+                    pub_dt = pub_str[5:10].replace('-', '/') if pub_str else '-'
+                except Exception:
+                    pub_dt = '-'
+            else:
+                title = item.get('title', '')
+                pub_ts = item.get('providerPublishTime', 0)
+                pub_dt = datetime.fromtimestamp(pub_ts).strftime('%m/%d') if pub_ts else '-'
+            if title:
+                raw_articles.append({'date': pub_dt, 'title': title})
+
+        if not raw_articles:
+            return 50.0, []
+
+        headlines = "\n".join([f"- {a['title']}" for a in raw_articles])
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": (
+                f"다음은 {ticker} 종목 관련 최근 뉴스 헤드라인입니다. "
+                f"각 헤드라인이 주가에 미치는 영향을 분석해주세요.\n\n"
+                f"{headlines}\n\n"
+                f"반드시 아래 JSON 형식으로만 응답하세요 (다른 텍스트 없이):\n"
+                f'{{"overall_score": <0~100 정수, 50=중립, 70+=긍정, 30-=부정>, '
+                f'"articles": [{{"sentiment": "긍정" 또는 "부정" 또는 "중립", '
+                f'"reason": "한줄 근거"}}]}}'
+            )}]
+        )
+
+        text = response.content[0].text.strip()
+        if text.startswith('```'):
+            text = text.split('\n', 1)[1].rsplit('```', 1)[0].strip()
+        result = json.loads(text)
+        overall = float(np.clip(result.get('overall_score', 50), 0, 100))
+
+        ai_articles = result.get('articles', [])
+        display_articles = []
+        for i, a in enumerate(raw_articles):
+            if i < len(ai_articles):
+                sa = ai_articles[i]
+                s = sa.get('sentiment', '중립')
+                icon = '🟢 긍정' if s == '긍정' else ('🔴 부정' if s == '부정' else '⚪ 중립')
+                reason = sa.get('reason', '')[:60]
+            else:
+                icon, reason = '⚪ 중립', ''
+            display_articles.append({
+                '날짜': a['date'],
+                '헤드라인': a['title'][:85] + ('…' if len(a['title']) > 85 else ''),
+                '감성': icon,
+                '분석': reason,
+            })
+
+        return overall, display_articles
+    except Exception:
+        return _news_sentiment_keyword(ticker)
 
 # ─────────────────────────────────────────────
 # ADVANCED ANALYTICS
@@ -2417,6 +2581,10 @@ def main():
 
                     # ── 뉴스 감성 ──────────────────────────────
                     st.subheader("📰 뉴스 감성 분석")
+                    if _get_anthropic_key():
+                        st.caption("🤖 Claude AI 감성 분석")
+                    else:
+                        st.caption("📝 키워드 기반 분석 (Claude API 키 설정 시 AI 분석으로 업그레이드)")
                     ns_col1, ns_col2 = st.columns([1, 3])
                     with ns_col1:
                         ns_color = score_color(news_score)
@@ -2957,6 +3125,57 @@ def main():
         if st.session_state.get('alpaca_key'):
             st.info(f"⚡ Alpaca 연결 중 — Tab 1에서 미국 주식 분석 시 실시간 호가가 표시됩니다.")
 
+        # ── 🤖 Claude AI 뉴스 감성 분석 설정 ─────────
+        st.divider()
+        st.subheader("🤖 Claude AI 뉴스 감성 분석")
+        st.caption(
+            "Anthropic Claude API를 연결하면 뉴스 헤드라인의 감성을 AI가 정밀 분석합니다. "
+            "미설정 시 키워드 기반 분석이 사용됩니다.")
+
+        with st.expander("📋 API 키 발급 방법"):
+            st.markdown("""
+1. [console.anthropic.com](https://console.anthropic.com) 에서 계정 생성
+2. **API Keys** → `Create Key` 클릭
+3. 발급된 키(`sk-ant-...`)를 아래에 입력하거나 Streamlit Secrets에 등록
+
+**Streamlit Cloud Secrets 방식** (권장):
+```toml
+ANTHROPIC_API_KEY = "sk-ant-api03-..."
+```
+""")
+
+        ant_key = st.text_input("Anthropic API Key",
+                                value=st.session_state.get('anthropic_key', ''),
+                                placeholder="sk-ant-api03-...",
+                                type="password", key="ant_key_input")
+
+        ant_c1, ant_c2 = st.columns(2)
+        if ant_c1.button("🔌 연결 테스트", key="ant_test"):
+            if not ant_key:
+                st.error("API Key를 입력해주세요.")
+            else:
+                try:
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=ant_key)
+                    resp = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=20,
+                        messages=[{"role": "user", "content": "Say OK"}])
+                    st.success(f"✅ 연결 성공 — {resp.model}")
+                    st.session_state['anthropic_key'] = ant_key
+                except Exception as e:
+                    st.error(f"연결 실패: {str(e)[:80]}")
+
+        if ant_c2.button("💾 키 저장 (세션)", key="ant_save"):
+            if ant_key:
+                st.session_state['anthropic_key'] = ant_key
+                st.success("✅ 세션에 저장됨 — 종목 분석 시 AI 뉴스 감성 분석이 활성화됩니다.")
+            else:
+                st.warning("키를 입력한 후 저장하세요.")
+
+        if _get_anthropic_key():
+            st.info("🤖 Claude AI 연결 중 — Tab 1 뉴스 감성 분석에 AI가 적용됩니다.")
+
     # ── Tab 5: 포트폴리오 ────────────────────────
     with tab5:
         st.subheader("💼 포트폴리오 관리")
@@ -2964,7 +3183,7 @@ def main():
 
         # DB에서 최초 1회 로드
         if 'pf_db_loaded' not in st.session_state:
-            st.session_state.portfolio    = _db_load()
+            st.session_state.portfolio    = db_load()
             st.session_state.pf_db_loaded = True
         if 'portfolio' not in st.session_state:
             st.session_state.portfolio = []
@@ -2980,7 +3199,7 @@ def main():
                 if st.form_submit_button("추가", type="primary"):
                     tk_in = pf_t.strip().upper()
                     if tk_in:
-                        new_id = _db_add(tk_in, float(pf_q), float(pf_c), pf_nt)
+                        new_id = db_add(tk_in, float(pf_q), float(pf_c), pf_nt)
                         st.session_state.portfolio.append(
                             {'id': new_id, 'ticker': tk_in, 'qty': float(pf_q),
                              'avg_cost': float(pf_c), 'note': pf_nt})
@@ -2998,7 +3217,7 @@ def main():
                 pc1.markdown(f"**{pos['ticker']}** &nbsp; {pos['qty']:.3f}주 @ {pos['avg_cost']:.2f}{note_str}")
                 if pc2.button("삭제", key=f"pf_del_{pf_i}"):
                     if pos.get('id'):
-                        _db_delete(pos['id'])
+                        db_delete(pos['id'])
                     st.session_state.portfolio.pop(pf_i)
                     if 'pf_res' in st.session_state: del st.session_state['pf_res']
                     st.rerun()
@@ -3103,7 +3322,38 @@ def main():
                     if weak_pf:   st.warning(f"⚠️ 매도 검토: **{', '.join(weak_pf)}** — 종합점수 40점 미만")
                     if strong_pf: st.success(f"🚀 강세 유지: **{', '.join(strong_pf)}** — 종합점수 75점 이상")
 
-        st.caption(f"💾 포지션은 `{_DB_PATH}` 에 저장됩니다. Streamlit Cloud 재배포 시 초기화될 수 있습니다.")
+        if _gsheet_configured():
+            st.caption("☁️ Google Sheets 연동 중 — 데이터가 클라우드에 영구 보존됩니다.")
+        else:
+            st.caption(f"💾 로컬 SQLite 사용 중 (`{_DB_PATH}`). Streamlit Cloud 재배포 시 초기화될 수 있습니다.")
+            with st.expander("☁️ Google Sheets 연동으로 영구 보존하기"):
+                st.markdown("""
+**설정 방법 (Streamlit Cloud)**
+
+1. [Google Cloud Console](https://console.cloud.google.com) → 프로젝트 생성
+2. **Google Sheets API** 및 **Google Drive API** 활성화
+3. **서비스 계정** 생성 → JSON 키 다운로드
+4. Google Sheets에서 새 스프레드시트 생성 → 서비스 계정 이메일에 **편집자** 권한 공유
+5. Streamlit Cloud 앱 설정 → **Secrets** 에 아래 형식으로 입력:
+
+```toml
+GSHEET_URL = "https://docs.google.com/spreadsheets/d/여기에_시트ID/edit"
+
+[gcp_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "key-id"
+private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+client_email = "name@project.iam.gserviceaccount.com"
+client_id = "123456789"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
+```
+
+6. 앱 재시작 → 포트폴리오가 자동으로 Google Sheets에 저장됩니다.
+""")
 
 
 if __name__ == "__main__":
