@@ -118,6 +118,32 @@ def db_delete(pos_id):
             pass
     _db_delete(pos_id)
 
+# ─────────────────────────────────────────────
+# 통합 주식 데이터 다운로드
+# ─────────────────────────────────────────────
+
+def download_stock(ticker, start, end, interval='1d'):
+    """한국 주식: FinanceDataReader 우선, yfinance 폴백.
+    그 외: yfinance 사용."""
+    is_krx = ticker.endswith('.KS') or ticker.endswith('.KQ')
+
+    if is_krx and interval == '1d':
+        try:
+            import FinanceDataReader as fdr
+            code = ticker.split('.')[0]
+            df = fdr.DataReader(code, start, end)
+            if df is not None and not df.empty and len(df) >= 5:
+                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+                df.index.name = 'Date'
+                return df
+        except Exception:
+            pass
+
+    df = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(1)
+    return df
+
 PRESETS = {
     '미국 대형주':  ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','JPM','V','JNJ'],
     '한국 대형주':  ['005930.KS','000660.KS','035420.KS','005380.KS','051910.KS','006400.KS'],
@@ -741,9 +767,8 @@ def run_screener(tickers, w_tech, w_fund, w_macro, prog_bar=None, prog_text=None
         if prog_bar:  prog_bar.progress((i+1)/len(tickers))
         try:
             end = datetime.now(); start = end - timedelta(days=520)
-            df  = yf.download(ticker, start=start, end=end, progress=False)
+            df  = download_stock(ticker, start=start, end=end)
             if df.empty: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
             df  = df.dropna(subset=['Close'])
             if len(df) < 30: continue
 
@@ -1122,9 +1147,7 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
     for tk, wt in zip(tickers, weights):
         alloc = initial_capital * wt
         try:
-            raw = yf.download(tk, start=start, end=end, progress=False)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.droplevel(1)
+            raw = download_stock(tk, start=start, end=end)
             raw = raw.dropna(subset=['Close'])
             if len(raw) < 60:
                 results.append({'ticker': tk, 'weight': wt, 'error': '데이터 부족'})
@@ -1371,9 +1394,8 @@ def check_alerts(watchlist, token, chat_id, threshold, w_tech, w_fund, w_macro):
     for ticker in watchlist:
         try:
             end = datetime.now(); start = end - timedelta(days=520)
-            df  = yf.download(ticker, start=start, end=end, progress=False)
+            df  = download_stock(ticker, start=start, end=end)
             if df.empty: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
             df  = df.dropna(subset=['Close'])
             if len(df) < 30: continue
             t_s, _ = technical_score(df)
@@ -1579,8 +1601,7 @@ def technical_score_multi(ticker):
     for label, interval, days in configs:
         try:
             start = end - timedelta(days=days)
-            d = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
-            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+            d = download_stock(ticker, start=start, end=end, interval=interval)
             d = d.dropna(subset=['Close'])
             if len(d) >= 30:
                 score, det = technical_score(d)
@@ -1692,10 +1713,8 @@ def calc_risk_metrics(ticker):
     """Beta, 역사적 VaR(95%/99%), CVaR, 연간변동성, Sharpe"""
     try:
         end = datetime.now(); start = end - timedelta(days=390)
-        sdf   = yf.download(ticker, start=start, end=end, progress=False)
-        spydf = yf.download('SPY',  start=start, end=end, progress=False)
-        for d in [sdf, spydf]:
-            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+        sdf   = download_stock(ticker, start=start, end=end)
+        spydf = download_stock('SPY', start=start, end=end)
         sr = sdf['Close'].pct_change().dropna()
         mr = spydf['Close'].pct_change().dropna()
         idx = sr.index.intersection(mr.index)
@@ -2063,13 +2082,12 @@ def main():
 
             end_dt   = datetime.now()
             start_dt = end_dt - timedelta(days=520)
-            df = yf.download(ticker, start=start_dt, end=end_dt, progress=False)
+            df = download_stock(ticker, start=start_dt, end=end_dt)
 
             if df.empty:
                 st.error(f"'{ticker}' 데이터를 찾을 수 없습니다.")
                 prog.empty(); msg.empty()
             else:
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
                 df = df.dropna(subset=['Close'])
 
                 if len(df) < 30:
@@ -2751,8 +2769,7 @@ def main():
             with st.spinner("백테스팅 실행 중..."):
                 end_dt2   = datetime.now()
                 start_dt2 = end_dt2 - timedelta(days=period_days[bt_period]+60)
-                bt_df = yf.download(bt_ticker, start=start_dt2, end=end_dt2, progress=False)
-                if isinstance(bt_df.columns, pd.MultiIndex): bt_df.columns = bt_df.columns.droplevel(1)
+                bt_df = download_stock(bt_ticker, start=start_dt2, end=end_dt2)
                 bt_df = bt_df.dropna(subset=['Close'])
 
             if bt_df.empty or len(bt_df) < 60:
@@ -3245,8 +3262,7 @@ ANTHROPIC_API_KEY = "sk-ant-api03-..."
                     pf_pb.progress((pf_idx+1)/len(st.session_state.portfolio))
                     try:
                         pf_end = datetime.now(); pf_start = pf_end - timedelta(days=520)
-                        pf_df = yf.download(tk, start=pf_start, end=pf_end, progress=False)
-                        if isinstance(pf_df.columns, pd.MultiIndex): pf_df.columns = pf_df.columns.droplevel(1)
+                        pf_df = download_stock(tk, start=pf_start, end=pf_end)
                         pf_df = pf_df.dropna(subset=['Close'])
                         if len(pf_df) < 30: raise ValueError("데이터 부족")
                         pf_ts, _ = technical_score(pf_df)
