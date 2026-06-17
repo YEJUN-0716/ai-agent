@@ -2329,8 +2329,12 @@ def main():
                     except: _info, _name = {}, ticker
 
                     _is_krw = ticker.endswith('.KS') or ticker.endswith('.KQ')
-                    _cp  = float(_df['Close'].iloc[-1])
-                    _pp  = float(_df['Close'].iloc[-2]) if len(_df) >= 2 else _cp
+                    _cp  = float(_info.get('regularMarketPrice') or _df['Close'].iloc[-1])
+                    _pp  = float(_info.get('regularMarketPreviousClose') or (_df['Close'].iloc[-2] if len(_df) >= 2 else _cp))
+                    _pre_price  = _info.get('preMarketPrice')
+                    _pre_chg    = _info.get('preMarketChangePercent')
+                    _post_price = _info.get('postMarketPrice')
+                    _post_chg   = _info.get('postMarketChangePercent')
 
                     _earn_str = ""
                     try:
@@ -2366,7 +2370,10 @@ def main():
                         'regime': _regime, 'regime_diff': _regime_diff,
                         't_score_adj': _t_score_adj, 'total_adj': _total_adj,
                         'info': _info, 'name': _name,
-                        'is_krw': _is_krw, 'cp': _cp, 'pp': _pp, 'earn_str': _earn_str,
+                        'is_krw': _is_krw, 'cp': _cp, 'pp': _pp,
+                        'pre_price': _pre_price, 'pre_chg': _pre_chg,
+                        'post_price': _post_price, 'post_chg': _post_chg,
+                        'earn_str': _earn_str,
                         'w_tech': w_tech, 'w_fund': w_fund, 'w_macro': w_macro,
                     }
 
@@ -2388,6 +2395,8 @@ def main():
             t_score_adj = _a['t_score_adj']; total_adj = _a['total_adj']
             info      = _a['info']; name = _a['name']
             is_krw    = _a['is_krw']; cp = _a['cp']; pp = _a['pp']
+            pre_price = _a.get('pre_price'); pre_chg = _a.get('pre_chg')
+            post_price = _a.get('post_price'); post_chg = _a.get('post_chg')
             earn_str  = _a['earn_str']
             w_tech    = _a['w_tech']; w_fund = _a['w_fund']; w_macro = _a['w_macro']
 
@@ -2403,6 +2412,16 @@ def main():
             c2.metric("52주 고가", fmt_p(float(df['High'].tail(252).max())))
             c3.metric("52주 저가", fmt_p(float(df['Low'].tail(252).min())))
             c4.metric("분석 기준일", end_dt.strftime("%Y-%m-%d"))
+
+            if not is_krw and (pre_price or post_price):
+                ext_cols = st.columns(2)
+                if pre_price:
+                    pre_chg_v = pre_chg * 100 if pre_chg and abs(pre_chg) < 1 else (pre_chg or 0)
+                    ext_cols[0].metric("🌅 프리마켓", fmt_p(pre_price), f"{pre_chg_v:+.2f}%")
+                if post_price:
+                    post_chg_v = post_chg * 100 if post_chg and abs(post_chg) < 1 else (post_chg or 0)
+                    ext_cols[1].metric("🌙 애프터마켓", fmt_p(post_price), f"{post_chg_v:+.2f}%")
+
             if earn_str:
                 st.caption(earn_str)
             st.markdown(
