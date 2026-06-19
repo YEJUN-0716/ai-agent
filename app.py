@@ -2687,8 +2687,28 @@ def main():
                 """
                 components.html(_tv_html, height=720)
 
-                with st.expander("📊 자체 기술적 분석 차트"):
-                    st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
+                with st.expander("📊 자체 기술적 분석 수치"):
+                    _rsi_v = float(calc_rsi(df['Close']).iloc[-1])
+                    _macd_l, _sig_l, _hist_l = calc_macd(df['Close'])
+                    _sk_s, _sd_s = calc_stochastic(df['High'], df['Low'], df['Close'])
+                    _bb_u, _bb_m, _bb_l = calc_bb(df['Close'])
+                    _adx_s, _pdi_s, _ndi_s = calc_adx(df['High'], df['Low'], df['Close'])
+
+                    ic1, ic2, ic3, ic4 = st.columns(4)
+                    ic1.metric("RSI", f"{_rsi_v:.1f}", "과매수" if _rsi_v > 70 else ("과매도" if _rsi_v < 30 else "보통"))
+                    ic2.metric("MACD", f"{float(_macd_l.iloc[-1]):.2f}",
+                              f"Signal {float(_sig_l.iloc[-1]):.2f}")
+                    ic3.metric("스토캐스틱 %K", f"{float(_sk_s.iloc[-1]):.1f}",
+                              f"%D {float(_sd_s.iloc[-1]):.1f}")
+                    _adx_v = float(_adx_s.iloc[-1]) if not np.isnan(float(_adx_s.iloc[-1])) else 0
+                    ic4.metric("ADX", f"{_adx_v:.1f}",
+                              "강한 추세" if _adx_v > 25 else "횡보")
+
+                    ic5, ic6, ic7, ic8 = st.columns(4)
+                    ic5.metric("MA20", fmt_p(float(df['Close'].rolling(20).mean().iloc[-1])))
+                    ic6.metric("MA60", fmt_p(float(df['Close'].rolling(60).mean().iloc[-1])))
+                    ic7.metric("BB 상단", fmt_p(float(_bb_u.iloc[-1])))
+                    ic8.metric("BB 하단", fmt_p(float(_bb_l.iloc[-1])))
 
             with sub1:
                 # ── 매매 시그널 ──────────────────────────────
