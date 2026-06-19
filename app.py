@@ -3185,172 +3185,191 @@ def main():
             with st.spinner("백테스팅 실행 중..."):
                 end_dt2   = datetime.now()
                 start_dt2 = end_dt2 - timedelta(days=period_days[bt_period]+60)
-                bt_df = download_stock(bt_ticker, start=start_dt2, end=end_dt2)
-                bt_df = bt_df.dropna(subset=['Close'])
+                _bt_df = download_stock(bt_ticker, start=start_dt2, end=end_dt2)
+                _bt_df = _bt_df.dropna(subset=['Close'])
 
-            if bt_df.empty or len(bt_df) < 60:
+            if _bt_df.empty or len(_bt_df) < 60:
                 st.error("데이터가 부족합니다.")
             else:
-                bt_f_score, bt_m_score = None, None
+                _bt_f, _bt_m = None, None
                 if total_w == 100 and w_fund > 0:
                     with st.spinner("재무·매크로 점수 산출 중..."):
-                        bt_f_score, _ = fundamental_score(bt_ticker, bt_df)
-                        bt_m_score, _, _ = macro_score()
+                        _bt_f, _ = fundamental_score(bt_ticker, _bt_df)
+                        _bt_m, _, _ = macro_score()
 
-                metrics, eq_df, trades_df = run_backtest(
+                _metrics, _eq_df, _trades_df = run_backtest(
+                    _bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
+                    f_score=_bt_f, m_score=_bt_m,
+                    w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
+
+                _corr_results = analyze_score_correlation(_bt_df)
+
+                st.session_state['tab3'] = {
+                    'bt_df': _bt_df, 'metrics': _metrics, 'eq_df': _eq_df,
+                    'trades_df': _trades_df, 'corr_results': _corr_results,
+                    'bt_f_score': _bt_f, 'bt_m_score': _bt_m,
+                    'bt_ticker': bt_ticker, 'bt_capital': bt_capital,
+                    'buy_th': buy_th, 'sell_th': sell_th,
+                    'bt_commission': bt_commission, 'bt_slippage': bt_slippage,
+                    'w_tech': w_tech, 'w_fund': w_fund, 'w_macro': w_macro,
+                }
+
+        if 'tab3' in st.session_state:
+            _bt = st.session_state['tab3']
+            bt_df = _bt['bt_df']; metrics = _bt['metrics']
+            eq_df = _bt['eq_df']; trades_df = _bt['trades_df']
+            corr_results = _bt['corr_results']
+            bt_f_score = _bt['bt_f_score']; bt_m_score = _bt['bt_m_score']
+
+            if bt_f_score is not None:
+                st.info(f"📊 종합점수 백테스트 — 차트 {_bt['w_tech']}% (동적) + 재무 {bt_f_score:.0f}점 × {_bt['w_fund']}% + 매크로 {bt_m_score:.0f}점 × {_bt['w_macro']}%")
+
+            # ── 지표 12개 (3행×4열) ──────────────────
+            m_keys = list(metrics.keys()); m_vals = list(metrics.values())
+            for row_start in range(0, len(m_keys), 4):
+                row_keys = m_keys[row_start:row_start+4]
+                row_vals = m_vals[row_start:row_start+4]
+                row_cols = st.columns(len(row_keys))
+                for ci, (k, v) in enumerate(zip(row_keys, row_vals)):
+                    row_cols[ci].metric(k, v)
+            st.divider()
+
+            # ── 자산 곡선 ─────────────────────────────
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['전략'], name='전략',
+                line=dict(color='#2962ff', width=2),
+                fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
+            fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['매수보유'], name='매수보유',
+                line=dict(color='#888', width=1.5, dash='dash')))
+
+            if not trades_df.empty:
+                buys_df  = trades_df[trades_df['구분'].str.contains('매수')]
+                sells_df = trades_df[trades_df['구분'].str.contains('매도')]
+                for bdate in buys_df['날짜']:
+                    row = eq_df[eq_df['날짜'] == bdate]
+                    if not row.empty:
+                        fig_eq.add_trace(go.Scatter(x=[bdate], y=[float(row['전략'].iloc[0])],
+                            mode='markers', marker=dict(symbol='triangle-up', size=12, color=TV_UP),
+                            showlegend=False))
+                for sdate in sells_df['날짜']:
+                    row = eq_df[eq_df['날짜'] == sdate]
+                    if not row.empty:
+                        fig_eq.add_trace(go.Scatter(x=[sdate], y=[float(row['전략'].iloc[0])],
+                            mode='markers', marker=dict(symbol='triangle-down', size=12, color=TV_DOWN),
+                            showlegend=False))
+
+            fig_eq.update_layout(height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                font=dict(color=TV_TEXT), hovermode='x unified',
+                yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right'),
+                xaxis=dict(gridcolor=TV_GRID),
+                legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)'),
+                margin=dict(l=0, r=60, t=20, b=0))
+            st.plotly_chart(fig_eq, use_container_width=True)
+
+            if not trades_df.empty:
+                st.subheader(f"매매 내역 ({len(trades_df)}건)")
+                st.dataframe(trades_df, use_container_width=True, hide_index=True)
+
+            # ── 📊 점수-수익률 상관관계 검증 ─────────────
+            st.divider()
+            st.subheader("📊 점수-수익률 상관관계 검증")
+            st.caption(
+                "신호 점수가 실제 미래 수익률과 얼마나 연관되는지 검증합니다. "
+                "**IC(정보계수)** > 0 이면 점수가 높을수록 수익률이 높은 경향이 있음을 의미합니다.")
+
+            corr_results = analyze_score_correlation(bt_df)
+
+            # IC 카드 3개
+            ic_cols = st.columns(3)
+            for ci, cr in enumerate(corr_results):
+                ic_val = cr['IC']
+                ic_color = "normal" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "off")
+                ic_cols[ci].metric(
+                    f"IC ({cr['horizon']}일 후 수익률)",
+                    f"{ic_val:+.3f}",
+                    delta=("유효 신호 ✅" if abs(ic_val) >= 0.05 else "신호 미약 ⚠️"),
+                    delta_color=ic_color)
+
+            st.caption("IC 해석: |IC| ≥ 0.05 → 약한 예측력 / ≥ 0.10 → 의미있는 예측력 / ≥ 0.15 → 강한 예측력")
+            st.divider()
+
+            # 20일 기준 점수 구간별 평균 수익률 막대차트
+            cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1])
+            bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)'])
+            if not bs.empty:
+                bar_colors = [TV_UP if v >= 0 else TV_DOWN for v in bs['평균수익률(%)'].tolist()]
+                fig_bar = go.Figure()
+                fig_bar.add_trace(go.Bar(
+                    x=bs['점수구간'], y=bs['평균수익률(%)'],
+                    marker_color=bar_colors,
+                    error_y=dict(type='data', array=bs['표준편차'].tolist(), visible=True,
+                                 color=TV_TEXT, thickness=1.2, width=4),
+                    text=[f"{v:+.2f}%" for v in bs['평균수익률(%)'].tolist()],
+                    textposition='outside', textfont=dict(size=11)))
+                fig_bar.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
+                fig_bar.update_layout(
+                    title=dict(text=f"점수 구간별 평균 20일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
+                    height=340, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    font=dict(color=TV_TEXT),
+                    xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
+                    yaxis=dict(title='평균 수익률 (%)', gridcolor=TV_GRID, zeroline=False),
+                    margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+                # 구간별 상세 통계 테이블
+                with st.expander("📋 구간별 상세 통계"):
+                    display_bs = bs.copy()
+                    display_bs['평균수익률(%)'] = display_bs['평균수익률(%)'].map(lambda x: f"{x:+.2f}%")
+                    display_bs['표준편차']       = display_bs['표준편차'].map(lambda x: f"{x:.2f}%")
+                    st.dataframe(display_bs, use_container_width=True, hide_index=True)
+
+                    # 5일, 10일 IC 도 표로
+                    ic_summary = pd.DataFrame([
+                        {'기간': f"{cr['horizon']}일 후", 'IC': f"{cr['IC']:+.3f}",
+                         '예측력': ('강함 💪' if abs(cr['IC']) >= 0.15 else
+                                   ('보통 🔶' if abs(cr['IC']) >= 0.10 else
+                                    ('약함 🔸' if abs(cr['IC']) >= 0.05 else '없음 ❌')))}
+                        for cr in corr_results
+                    ])
+                    st.dataframe(ic_summary, use_container_width=True, hide_index=True)
+
+            # ── 📐 워크-포워드 검증 ──────────────────────
+            st.divider()
+            st.subheader("📐 워크-포워드 검증 (과적합 진단)")
+            st.caption(
+                "전체 기간을 **학습 70%** / **검증 30%** 로 분리해 동일 전략을 각각 실행합니다. "
+                "학습 성과와 검증 성과 차이가 클수록 **과적합** 가능성이 높습니다.")
+
+            if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
+                wf_results, wf_overfit, wf_split_date = run_walkforward(
                     bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
                     f_score=bt_f_score, m_score=bt_m_score,
                     w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
 
-                if bt_f_score is not None:
-                    st.info(f"📊 종합점수 백테스트 — 차트 {w_tech}% (동적) + 재무 {bt_f_score:.0f}점 × {w_fund}% + 매크로 {bt_m_score:.0f}점 × {w_macro}%")
+                wf_col1, wf_col2 = st.columns(2)
+                wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
+                                'Sharpe Ratio', 'Calmar Ratio', '승률', '총 매매']
+                for wf_ci, (wf_label, wf_m) in enumerate(wf_results.items()):
+                    col = wf_col1 if wf_ci == 0 else wf_col2
+                    bg  = 'rgba(41,98,255,0.08)' if wf_ci == 0 else 'rgba(255,82,82,0.08)'
+                    bdr = '#2962ff' if wf_ci == 0 else '#ef5350'
+                    col.markdown(
+                        f"<div style='background:{bg};border-left:3px solid {bdr};"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
+                        f"<b>{wf_label}</b></div>", unsafe_allow_html=True)
+                    for wf_k in wf_key_order:
+                        if wf_k in wf_m:
+                            col.metric(wf_k, wf_m[wf_k])
 
-                # ── 지표 12개 (3행×4열) ──────────────────
-                m_keys = list(metrics.keys()); m_vals = list(metrics.values())
-                for row_start in range(0, len(m_keys), 4):
-                    row_keys = m_keys[row_start:row_start+4]
-                    row_vals = m_vals[row_start:row_start+4]
-                    row_cols = st.columns(len(row_keys))
-                    for ci, (k, v) in enumerate(zip(row_keys, row_vals)):
-                        row_cols[ci].metric(k, v)
+                # 과적합 진단 메시지
                 st.divider()
-
-                # ── 자산 곡선 ─────────────────────────────
-                fig_eq = go.Figure()
-                fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['전략'], name='전략',
-                    line=dict(color='#2962ff', width=2),
-                    fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
-                fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['매수보유'], name='매수보유',
-                    line=dict(color='#888', width=1.5, dash='dash')))
-
-                if not trades_df.empty:
-                    buys_df  = trades_df[trades_df['구분'].str.contains('매수')]
-                    sells_df = trades_df[trades_df['구분'].str.contains('매도')]
-                    for bdate in buys_df['날짜']:
-                        row = eq_df[eq_df['날짜'] == bdate]
-                        if not row.empty:
-                            fig_eq.add_trace(go.Scatter(x=[bdate], y=[float(row['전략'].iloc[0])],
-                                mode='markers', marker=dict(symbol='triangle-up', size=12, color=TV_UP),
-                                showlegend=False))
-                    for sdate in sells_df['날짜']:
-                        row = eq_df[eq_df['날짜'] == sdate]
-                        if not row.empty:
-                            fig_eq.add_trace(go.Scatter(x=[sdate], y=[float(row['전략'].iloc[0])],
-                                mode='markers', marker=dict(symbol='triangle-down', size=12, color=TV_DOWN),
-                                showlegend=False))
-
-                fig_eq.update_layout(height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    font=dict(color=TV_TEXT), hovermode='x unified',
-                    yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right'),
-                    xaxis=dict(gridcolor=TV_GRID),
-                    legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)'),
-                    margin=dict(l=0, r=60, t=20, b=0))
-                st.plotly_chart(fig_eq, use_container_width=True)
-
-                if not trades_df.empty:
-                    st.subheader(f"매매 내역 ({len(trades_df)}건)")
-                    st.dataframe(trades_df, use_container_width=True, hide_index=True)
-
-                # ── 📊 점수-수익률 상관관계 검증 ─────────────
-                st.divider()
-                st.subheader("📊 점수-수익률 상관관계 검증")
-                st.caption(
-                    "신호 점수가 실제 미래 수익률과 얼마나 연관되는지 검증합니다. "
-                    "**IC(정보계수)** > 0 이면 점수가 높을수록 수익률이 높은 경향이 있음을 의미합니다.")
-
-                corr_results = analyze_score_correlation(bt_df)
-
-                # IC 카드 3개
-                ic_cols = st.columns(3)
-                for ci, cr in enumerate(corr_results):
-                    ic_val = cr['IC']
-                    ic_color = "normal" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "off")
-                    ic_cols[ci].metric(
-                        f"IC ({cr['horizon']}일 후 수익률)",
-                        f"{ic_val:+.3f}",
-                        delta=("유효 신호 ✅" if abs(ic_val) >= 0.05 else "신호 미약 ⚠️"),
-                        delta_color=ic_color)
-
-                st.caption("IC 해석: |IC| ≥ 0.05 → 약한 예측력 / ≥ 0.10 → 의미있는 예측력 / ≥ 0.15 → 강한 예측력")
-                st.divider()
-
-                # 20일 기준 점수 구간별 평균 수익률 막대차트
-                cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1])
-                bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)'])
-                if not bs.empty:
-                    bar_colors = [TV_UP if v >= 0 else TV_DOWN for v in bs['평균수익률(%)'].tolist()]
-                    fig_bar = go.Figure()
-                    fig_bar.add_trace(go.Bar(
-                        x=bs['점수구간'], y=bs['평균수익률(%)'],
-                        marker_color=bar_colors,
-                        error_y=dict(type='data', array=bs['표준편차'].tolist(), visible=True,
-                                     color=TV_TEXT, thickness=1.2, width=4),
-                        text=[f"{v:+.2f}%" for v in bs['평균수익률(%)'].tolist()],
-                        textposition='outside', textfont=dict(size=11)))
-                    fig_bar.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
-                    fig_bar.update_layout(
-                        title=dict(text=f"점수 구간별 평균 20일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
-                        height=340, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color=TV_TEXT),
-                        xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
-                        yaxis=dict(title='평균 수익률 (%)', gridcolor=TV_GRID, zeroline=False),
-                        margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-                    st.plotly_chart(fig_bar, use_container_width=True)
-
-                    # 구간별 상세 통계 테이블
-                    with st.expander("📋 구간별 상세 통계"):
-                        display_bs = bs.copy()
-                        display_bs['평균수익률(%)'] = display_bs['평균수익률(%)'].map(lambda x: f"{x:+.2f}%")
-                        display_bs['표준편차']       = display_bs['표준편차'].map(lambda x: f"{x:.2f}%")
-                        st.dataframe(display_bs, use_container_width=True, hide_index=True)
-
-                        # 5일, 10일 IC 도 표로
-                        ic_summary = pd.DataFrame([
-                            {'기간': f"{cr['horizon']}일 후", 'IC': f"{cr['IC']:+.3f}",
-                             '예측력': ('강함 💪' if abs(cr['IC']) >= 0.15 else
-                                       ('보통 🔶' if abs(cr['IC']) >= 0.10 else
-                                        ('약함 🔸' if abs(cr['IC']) >= 0.05 else '없음 ❌')))}
-                            for cr in corr_results
-                        ])
-                        st.dataframe(ic_summary, use_container_width=True, hide_index=True)
-
-                # ── 📐 워크-포워드 검증 ──────────────────────
-                st.divider()
-                st.subheader("📐 워크-포워드 검증 (과적합 진단)")
-                st.caption(
-                    "전체 기간을 **학습 70%** / **검증 30%** 로 분리해 동일 전략을 각각 실행합니다. "
-                    "학습 성과와 검증 성과 차이가 클수록 **과적합** 가능성이 높습니다.")
-
-                if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
-                    wf_results, wf_overfit, wf_split_date = run_walkforward(
-                        bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
-                        f_score=bt_f_score, m_score=bt_m_score,
-                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
-
-                    wf_col1, wf_col2 = st.columns(2)
-                    wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
-                                    'Sharpe Ratio', 'Calmar Ratio', '승률', '총 매매']
-                    for wf_ci, (wf_label, wf_m) in enumerate(wf_results.items()):
-                        col = wf_col1 if wf_ci == 0 else wf_col2
-                        bg  = 'rgba(41,98,255,0.08)' if wf_ci == 0 else 'rgba(255,82,82,0.08)'
-                        bdr = '#2962ff' if wf_ci == 0 else '#ef5350'
-                        col.markdown(
-                            f"<div style='background:{bg};border-left:3px solid {bdr};"
-                            f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
-                            f"<b>{wf_label}</b></div>", unsafe_allow_html=True)
-                        for wf_k in wf_key_order:
-                            if wf_k in wf_m:
-                                col.metric(wf_k, wf_m[wf_k])
-
-                    # 과적합 진단 메시지
-                    st.divider()
-                    if abs(wf_overfit) < 3:
-                        st.success(f"✅ **과적합 없음** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p (기준 ±3%p 이내)")
-                    elif abs(wf_overfit) < 8:
-                        st.warning(f"🔶 **경미한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값 재검토 권장")
-                    else:
-                        st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
-                    st.caption(f"분할 기준일: {wf_split_date}")
+                if abs(wf_overfit) < 3:
+                    st.success(f"✅ **과적합 없음** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p (기준 ±3%p 이내)")
+                elif abs(wf_overfit) < 8:
+                    st.warning(f"🔶 **경미한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값 재검토 권장")
+                else:
+                    st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
+                st.caption(f"분할 기준일: {wf_split_date}")
 
         # ── 📦 멀티 종목 포트폴리오 백테스트 ──────────
         st.divider()
