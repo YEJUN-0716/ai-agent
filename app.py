@@ -3168,8 +3168,8 @@ def main():
         bt_capital = c3.number_input("초기자금 (원)", value=10_000_000, step=1_000_000, min_value=100_000)
 
         c4, c5 = st.columns(2)
-        buy_th  = c4.slider("매수 임계값", 50, 90, 65, 5, help="신호가 이 점수를 넘으면 매수")
-        sell_th = c5.slider("매도 임계값", 20, 60, 45, 5, help="신호가 이 점수 아래로 내려오면 매도")
+        buy_th  = c4.slider("매수 임계값", 50, 80, 58, 1, help="신호가 이 점수를 넘으면 매수 (낮을수록 매매 많음)")
+        sell_th = c5.slider("매도 임계값", 30, 55, 42, 1, help="신호가 이 점수 아래로 내려오면 매도 (높을수록 매매 많음)")
 
         with st.expander("⚙️ 비용 설정 (수수료 · 슬리피지)"):
             cc1, cc2 = st.columns(2)
@@ -3205,9 +3205,12 @@ def main():
 
                 _corr_results = analyze_score_correlation(_bt_df)
 
+                _bt_sigs = bt_signals_full(_bt_df)
+
                 st.session_state['tab3'] = {
                     'bt_df': _bt_df, 'metrics': _metrics, 'eq_df': _eq_df,
                     'trades_df': _trades_df, 'corr_results': _corr_results,
+                    'bt_sigs': _bt_sigs,
                     'bt_f_score': _bt_f, 'bt_m_score': _bt_m,
                     'bt_ticker': bt_ticker, 'bt_capital': bt_capital,
                     'buy_th': buy_th, 'sell_th': sell_th,
@@ -3235,6 +3238,38 @@ def main():
                 for ci, (k, v) in enumerate(zip(row_keys, row_vals)):
                     row_cols[ci].metric(k, v)
             st.divider()
+
+            # ── 신호 분포 ─────────────────────────────
+            with st.expander("📊 신호 점수 분포 (임계값 튜닝 참고)"):
+                _sig_vals = _bt['bt_sigs'].dropna().iloc[20:]
+                _adj_buy = _bt['buy_th']
+                _adj_sell = _bt['sell_th']
+                if bt_f_score is not None:
+                    _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
+                    _adj_buy = _bt['buy_th'] - _fm_off
+                    _adj_sell = _bt['sell_th'] - _fm_off
+                _pct_above = float((_sig_vals > _adj_buy).sum() / len(_sig_vals) * 100)
+                _pct_below = float((_sig_vals < _adj_sell).sum() / len(_sig_vals) * 100)
+                sc1, sc2, sc3 = st.columns(3)
+                sc1.metric("매수 구간 비율", f"{_pct_above:.1f}%", f"점수 > {_adj_buy:.0f}")
+                sc2.metric("매도 구간 비율", f"{_pct_below:.1f}%", f"점수 < {_adj_sell:.0f}")
+                sc3.metric("평균 신호 점수", f"{float(_sig_vals.mean()):.1f}")
+                fig_dist = go.Figure()
+                fig_dist.add_trace(go.Histogram(x=_sig_vals, nbinsx=40,
+                    marker_color='rgba(41,98,255,0.5)', name='신호 분포'))
+                fig_dist.add_vline(x=_adj_buy, line_color=TV_UP, line_width=2,
+                    annotation_text=f"매수 {_adj_buy:.0f}", annotation_position="top",
+                    annotation_font=dict(color=TV_UP, size=11))
+                fig_dist.add_vline(x=_adj_sell, line_color=TV_DOWN, line_width=2,
+                    annotation_text=f"매도 {_adj_sell:.0f}", annotation_position="top",
+                    annotation_font=dict(color=TV_DOWN, size=11))
+                fig_dist.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    font=dict(color=TV_TEXT), showlegend=False,
+                    xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
+                    yaxis=dict(title='빈도', gridcolor=TV_GRID),
+                    margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_dist, use_container_width=True)
+                st.caption("매수 구간이 5~15%, 매도 구간이 5~15% 정도면 적절합니다. 슬라이더로 조절하세요.")
 
             # ── 자산 곡선 ─────────────────────────────
             fig_eq = go.Figure()
@@ -3404,7 +3439,7 @@ def main():
             pbt_period  = pbt_c1.selectbox("기간", ["1년","2년","3년","5년"], index=1, key="pbt_period")
             pbt_capital = pbt_c2.number_input("초기자금 (원)", value=10_000_000,
                                                step=1_000_000, min_value=100_000, key="pbt_cap")
-            pbt_buy_th  = pbt_c3.slider("매수 임계값", 50, 90, 65, 5, key="pbt_buy")
+            pbt_buy_th  = pbt_c3.slider("매수 임계값", 50, 80, 58, 1, key="pbt_buy")
 
         pbt_period_days = {"1년": 365, "2년": 730, "3년": 1095, "5년": 1825}
 
