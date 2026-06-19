@@ -2754,121 +2754,99 @@ def main():
 
             with sub3:
                 st.subheader("카테고리별 점수")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.plotly_chart(gauge(t_score, f"📈 차트+파동  ({w_tech}%)"), use_container_width=True)
-                    with st.expander("세부 점수 · 캔들 패턴 · 모멘텀"):
-                        SKIP = {'RSI값', 'ADX값', 'Stoch값'}
-                        HINT = {
-                            'RSI':      f"RSI {t_det.get('RSI값','N/A')}",
-                            'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if float(t_det.get('ADX값',0)) > 25 else '횡보'})",
-                            '스토캐스틱': f"%K {t_det.get('Stoch값','N/A')}",
-                        }
-                        for k, v in t_det.items():
-                            if k in SKIP: continue
-                            hint = f" *({HINT[k]})*" if k in HINT else ''
-                            st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{hint}")
+
+                def _score_bar(label, score, color):
+                    pct = max(min(score, 100), 0)
+                    st.markdown(
+                        f"<div style='margin:6px 0'>"
+                        f"<div style='display:flex;justify-content:space-between;margin-bottom:2px'>"
+                        f"<span style='font-weight:600;font-size:14px'>{label}</span>"
+                        f"<span style='font-weight:700;color:{color};font-size:14px'>{score:.0f}점</span></div>"
+                        f"<div style='background:#1e2334;border-radius:4px;height:8px'>"
+                        f"<div style='background:{color};width:{pct}%;height:8px;border-radius:4px'></div>"
+                        f"</div></div>", unsafe_allow_html=True)
+
+                _score_bar(f"📈 차트+파동 ({w_tech}%)", t_score, score_color(t_score))
+                _score_bar(f"💰 재무+퀀트 ({w_fund}%)", f_score, score_color(f_score))
+                _score_bar(f"🌍 매크로+금리 ({w_macro}%)", m_score, score_color(m_score))
+
+                with st.expander("📈 차트+파동 세부"):
+                    SKIP = {'RSI값', 'ADX값', 'Stoch값'}
+                    HINT = {
+                        'RSI':      f"RSI {t_det.get('RSI값','N/A')}",
+                        'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if float(t_det.get('ADX값',0)) > 25 else '횡보'})",
+                        '스토캐스틱': f"%K {t_det.get('Stoch값','N/A')}",
+                    }
+                    for k, v in t_det.items():
+                        if k in SKIP: continue
+                        hint = f" *({HINT[k]})*" if k in HINT else ''
+                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{hint}")
+                    st.divider()
+                    st.caption("**📊 모멘텀**")
+                    m_cols = st.columns(4)
+                    for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data['1M']),('3M', mom_data['3M']),('6M', mom_data['6M']),('12M', mom_data['12M'])]):
+                        if val is not None: col_m.metric(lbl, f"{val:+.1f}%")
+                        else: col_m.metric(lbl, "N/A")
+                    st.divider()
+                    st.caption("**🕯️ 캔들 패턴 (최근 3일)**")
+                    if candle_pats:
+                        st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("  특이 패턴 없음")
+
+                with st.expander("🔬 지표 예측력 (IC)"):
+                    ics, suggested_w, default_w = ic_data
+                    ic_items = sorted(ics.items(), key=lambda x: abs(x[1]), reverse=True)
+                    w_rows = []
+                    for k, ic_v in ic_items:
+                        grade = '강함 💪' if abs(ic_v) >= 0.10 else ('보통 🔶' if abs(ic_v) >= 0.05 else '약함 ❌')
+                        w_rows.append({'지표': k, 'IC': f"{ic_v:+.3f}", '예측력': grade,
+                                       'IC 권장(%)': f"{suggested_w.get(k,0)*100:.1f}",
+                                       '현재(%)': f"{default_w.get(k,0)*100:.1f}"})
+                    st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
+
+                with st.expander("💰 재무+퀀트 세부"):
+                    for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
+                        v = f_det.get(k, 50)
+                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
+                    st.divider()
+                    sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
+                    st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
+                    st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}  |  PEG: {fmt(f_det.get('PEG'))}  |  EV/EBITDA: {fmt(f_det.get('EV/EBITDA'))}")
+                    st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}  |  순이익률: {fmt(f_det.get('순이익률'),pct=True)}")
+                    fcf_y = f_det.get('FCF수익률')
+                    st.caption(f"FCF수익률: {f'{fcf_y:.1f}%' if fcf_y is not None else 'N/A'}  |  이자보상배율: {fmt(f_det.get('이자보상배율'))}")
+                    st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
+                    mdd_v = f_det.get('MDD값')
+                    st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v else 'N/A'}")
+                    fs_v = f_det.get('F-Score값')
+                    st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
+                    for sk, sv in f_det.get('F-Score시그널', {}).items():
+                        if '오류' not in sk: st.caption(f"  {sv} {sk}")
+                    if dcf_det:
                         st.divider()
-                        st.caption("**📊 모멘텀**")
-                        m_cols = st.columns(4)
-                        for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data['1M']),('3M', mom_data['3M']),('6M', mom_data['6M']),('12M', mom_data['12M'])]):
-                            if val is not None:
-                                col_m.metric(lbl, f"{val:+.1f}%")
-                            else:
-                                col_m.metric(lbl, "N/A")
-                        st.divider()
-                        st.caption("**🕯️ 캔들 패턴 (최근 3일)**")
-                        if candle_pats:
-                            st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
-                        else:
-                            st.caption("  특이 패턴 없음")
-                    with st.expander("🔬 지표 예측력 분석 (IC · 정보계수)"):
-                        ics, suggested_w, default_w = ic_data
-                        ic_items = sorted(ics.items(), key=lambda x: abs(x[1]), reverse=True)
-                        ic_labels = [k for k, _ in ic_items]
-                        ic_values = [v for _, v in ic_items]
-                        ic_colors = [TV_UP if v >= 0 else TV_DOWN for v in ic_values]
-                        fig_ic = go.Figure()
-                        fig_ic.add_trace(go.Bar(
-                            x=ic_labels, y=ic_values,
-                            marker_color=ic_colors,
-                            text=[f"{v:+.3f}" for v in ic_values],
-                            textposition='outside', textfont=dict(size=10)))
-                        fig_ic.add_hline(y=0,    line_color=TV_TEXT,    line_width=1, opacity=0.5)
-                        fig_ic.add_hline(y=0.05,  line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
-                        fig_ic.add_hline(y=-0.05, line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
-                        fig_ic.update_layout(
-                            title=dict(text=f"20일 후 수익률 예측력 (IC)", font=dict(size=11)),
-                            height=270, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                            font=dict(color=TV_TEXT),
-                            xaxis=dict(gridcolor=TV_GRID, tickfont=dict(size=10)),
-                            yaxis=dict(gridcolor=TV_GRID, zeroline=False),
-                            margin=dict(l=5, r=5, t=35, b=5), showlegend=False)
-                        st.plotly_chart(fig_ic, use_container_width=True)
-                        st.caption("주황 점선 = |IC| 0.05 기준 (유효 예측력) | IC > 0: 점수 높을수록 수익↑")
-                        st.divider()
-                        st.caption("**지표별 IC vs 현재·권장 가중치**")
-                        w_rows = []
-                        for k in ic_labels:
-                            ic_v = ics[k]
-                            grade = '강함 💪' if abs(ic_v) >= 0.10 else ('보통 🔶' if abs(ic_v) >= 0.05 else '약함 ❌')
-                            w_rows.append({
-                                '지표': k,
-                                'IC': f"{ic_v:+.3f}",
-                                '예측력': grade,
-                                'IC 권장(%)': f"{suggested_w.get(k,0)*100:.1f}",
-                                '현재(%)':    f"{default_w.get(k,0)*100:.1f}",
-                            })
-                        st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
-                with col2:
-                    st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
-                    with st.expander("세부 점수"):
-                        for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
-                            v = f_det.get(k, 50)
-                            st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
-                        st.divider()
-                        sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
-                        st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
-                        peg_v = f_det.get('PEG'); ev_v = f_det.get('EV/EBITDA')
-                        st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}  |  PEG: {fmt(peg_v)}  |  EV/EBITDA: {fmt(ev_v)}")
-                        st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}  |  순이익률: {fmt(f_det.get('순이익률'),pct=True)}")
-                        fcf_y = f_det.get('FCF수익률')
-                        st.caption(f"FCF수익률: {f'{fcf_y:.1f}%' if fcf_y is not None else 'N/A'}  |  이자보상배율: {fmt(f_det.get('이자보상배율'))}")
-                        st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
-                        mdd_v = f_det.get('MDD값')
-                        st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v else 'N/A'}")
-                        fs_v = f_det.get('F-Score값')
-                        st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
-                        for sk, sv in f_det.get('F-Score시그널', {}).items():
-                            if '오류' not in sk: st.caption(f"  {sv} {sk}")
-                        if dcf_det:
-                            st.divider()
-                            st.caption("**💵 DCF 내재가치 (그레이엄 공식)**")
-                            dv_b = dcf_det.get('내재가치_기본', 0)
-                            dv_c = dcf_det.get('내재가치_보수', 0)
-                            up_b = dcf_det.get('상승여력_기본', 0)
-                            up_c = dcf_det.get('상승여력_보수', 0)
-                            dc1, dc2 = st.columns(2)
-                            dc1.metric("내재가치 (기본)", fmt_p(dv_b), f"{up_b:+.1f}%")
-                            dc2.metric("내재가치 (보수)", fmt_p(dv_c), f"{up_c:+.1f}%")
-                            st.caption(f"EPS: {fmt(dcf_det.get('EPS'))}  |  g: {dcf_det.get('예상성장률(g)',0):.1f}%  |  Y: {dcf_det.get('적용금리(Y)',0):.2f}%")
-                with col3:
-                    st.plotly_chart(gauge(m_score, f"🌍 매크로+금리  ({w_macro}%)"), use_container_width=True)
-                    with st.expander("세부 점수"):
-                        for k in ['금리환경','장단기금리차','VIX','달러지수','신용스프레드','원자재/인플레']:
-                            v = m_det.get(k, 50)
-                            st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
-                        st.divider()
-                        if '10Y금리' in m_data:
-                            st.caption(f"10Y 금리: {m_data['10Y금리']:.2f}%  |  3M변화: {m_data.get('3M금리변화',0):+.2f}%p")
-                        if '장단기스프레드' in m_data:
-                            st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
-                        if 'VIX' in m_data:
-                            st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
-                        if '신용스프레드(HYG-LQD)' in m_data:
-                            st.caption(f"신용스프레드(HYG-LQD 3M): {m_data['신용스프레드(HYG-LQD)']:+.2f}%p")
-                        if 'GLD변화(3M)' in m_data:
-                            st.caption(f"금(GLD) 3M 변화: {m_data['GLD변화(3M)']:+.2f}%")
+                        st.caption("**💵 DCF 내재가치 (그레이엄 공식)**")
+                        dc1, dc2 = st.columns(2)
+                        dc1.metric("내재가치 (기본)", fmt_p(dcf_det.get('내재가치_기본', 0)),
+                                   f"{dcf_det.get('상승여력_기본', 0):+.1f}%")
+                        dc2.metric("내재가치 (보수)", fmt_p(dcf_det.get('내재가치_보수', 0)),
+                                   f"{dcf_det.get('상승여력_보수', 0):+.1f}%")
+
+                with st.expander("🌍 매크로+금리 세부"):
+                    for k in ['금리환경','장단기금리차','VIX','달러지수','신용스프레드','원자재/인플레']:
+                        v = m_det.get(k, 50)
+                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
+                    st.divider()
+                    if '10Y금리' in m_data:
+                        st.caption(f"10Y 금리: {m_data['10Y금리']:.2f}%  |  3M변화: {m_data.get('3M금리변화',0):+.2f}%p")
+                    if '장단기스프레드' in m_data:
+                        st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
+                    if 'VIX' in m_data:
+                        st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
+                    if '신용스프레드(HYG-LQD)' in m_data:
+                        st.caption(f"신용스프레드(HYG-LQD 3M): {m_data['신용스프레드(HYG-LQD)']:+.2f}%p")
+                    if 'GLD변화(3M)' in m_data:
+                        st.caption(f"금(GLD) 3M 변화: {m_data['GLD변화(3M)']:+.2f}%")
 
                 # ── 멀티 타임프레임 분석 ──────────────────
                 st.subheader("🕐 멀티 타임프레임 분석")
