@@ -2310,18 +2310,57 @@ def main():
                     _f_score, _f_det  = fundamental_score(ticker, _df)
                     prog.progress(52); msg.text("🌍 매크로·금리 분석 중...")
                     _m_score, _m_det, _m_data = macro_score()
-                    _total = _t_score*(w_tech/100) + _f_score*(w_fund/100) + _m_score*(w_macro/100)
+                    _regime, _regime_diff = get_market_regime()
                     prog.progress(63); msg.text("🕐 멀티 타임프레임 분석 중...")
                     _mtf_scores      = technical_score_multi(ticker)
+                    prog.progress(70); msg.text("📊 점수 최적화 중...")
+
+                    _ics, _suggested_w, _default_w = _ic_data
+                    _abs_ics = {k: max(abs(v), 0.001) for k, v in _ics.items()}
+                    _ic_total = sum(_abs_ics.values())
+                    _ic_w = {k: max(_abs_ics[k] / _ic_total, 0.03) for k in _abs_ics}
+                    _ic_w_sum = sum(_ic_w.values())
+                    _ic_w = {k: v / _ic_w_sum for k, v in _ic_w.items()}
+
+                    _t_score_ic = float(sum(_t_det.get(k, 50) * _ic_w.get(k, 0.11)
+                                            for k in ['MA정렬','RSI','MACD','볼린저밴드','거래량',
+                                                       '파동근사','스토캐스틱','ADX추세강도','OBV']))
+
+                    _t_score_regime = regime_adjusted_technical(_t_det, _regime)
+
+                    _t_score_final = _t_score_ic * 0.5 + _t_score_regime * 0.5
+
+                    _mtf_list = [x['score'] for x in [_mtf_scores.get('일봉'),
+                                 _mtf_scores.get('주봉'), _mtf_scores.get('월봉')] if x]
+                    _mtf_bonus = 0.0
+                    if len(_mtf_list) >= 2:
+                        _mtf_avg = sum(_mtf_list) / len(_mtf_list)
+                        _mtf_bull = sum(1 for s in _mtf_list if s >= 60)
+                        _mtf_bear = sum(1 for s in _mtf_list if s < 40)
+                        if _mtf_bull == len(_mtf_list):
+                            _mtf_bonus = 5.0
+                        elif _mtf_bear == len(_mtf_list):
+                            _mtf_bonus = -5.0
+                        elif _mtf_bull > _mtf_bear:
+                            _mtf_bonus = 2.0
+                        elif _mtf_bear > _mtf_bull:
+                            _mtf_bonus = -2.0
+
+                    _total_raw = _t_score_final*(w_tech/100) + _f_score*(w_fund/100) + _m_score*(w_macro/100)
+                    _total = float(np.clip(_total_raw + _mtf_bonus, 0, 100))
+
+                    _t_score_adj = _t_score_regime
+                    _total_adj = _t_score_adj*(w_tech/100) + _f_score*(w_fund/100) + _m_score*(w_macro/100)
+
+                    _score_method = (f"IC적응({sum(1 for v in _ics.values() if abs(v)>=0.05)}개 유효) "
+                                    f"+ 국면({_regime}) + MTF({_mtf_bonus:+.0f})")
+
                     prog.progress(74); msg.text("💵 DCF 내재가치 산출 중...")
                     _dcf_val, _dcf_det = calc_dcf(ticker, _m_data.get('10Y금리', 4.5))
                     prog.progress(84); msg.text("⚠️ 리스크 분석 중...")
                     _risk_data       = calc_risk_metrics(ticker)
                     prog.progress(93); msg.text("📰 뉴스 감성 분석 중...")
                     _news_score, _news_articles = get_news_sentiment(ticker)
-                    _regime, _regime_diff = get_market_regime()
-                    _t_score_adj = regime_adjusted_technical(_t_det, _regime)
-                    _total_adj   = _t_score_adj*(w_tech/100) + _f_score*(w_fund/100) + _m_score*(w_macro/100)
 
                     try:
                         _info = yf.Ticker(ticker).info
@@ -2383,7 +2422,7 @@ def main():
                         'live_price': _live_price, 'live_label': _live_label,
                         'pre_price': _pre_price, 'pre_chg': _pre_chg,
                         'post_price': _post_price, 'post_chg': _post_chg,
-                        'earn_str': _earn_str,
+                        'score_method': _score_method, 'earn_str': _earn_str,
                         'w_tech': w_tech, 'w_fund': w_fund, 'w_macro': w_macro,
                     }
 
@@ -2409,6 +2448,7 @@ def main():
             live_label = _a.get('live_label', '현재가')
             pre_price = _a.get('pre_price'); pre_chg = _a.get('pre_chg')
             post_price = _a.get('post_price'); post_chg = _a.get('post_chg')
+            score_method = _a.get('score_method', '')
             earn_str  = _a['earn_str']
             w_tech    = _a['w_tech']; w_fund = _a['w_fund']; w_macro = _a['w_macro']
 
@@ -2460,6 +2500,8 @@ def main():
                   차트+파동 <b>{t_score:.0f}</b>점 &nbsp;|&nbsp;
                   재무+퀀트 <b>{f_score:.0f}</b>점 &nbsp;|&nbsp;
                   매크로+금리 <b>{m_score:.0f}</b>점</div>
+                  <div style='color:#555;font-size:11px;margin-top:6px'>
+                  📐 {score_method}</div>
                 </div>""", unsafe_allow_html=True)
 
             # 국면 조정 점수 비교 카드
