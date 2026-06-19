@@ -2290,21 +2290,6 @@ def _draw_chart(df, ticker, is_krw):
         hoverlabel=dict(bgcolor='#1e2334', font_color=TV_TEXT, bordercolor=TV_BORDER, font_size=11),
         legend=dict(visible=False),
         margin=dict(l=0, r=80, t=10, b=0),
-        xaxis5=dict(
-            rangeselector=dict(
-                buttons=[
-                    dict(count=1, label='1M', step='month', stepmode='backward'),
-                    dict(count=3, label='3M', step='month', stepmode='backward'),
-                    dict(count=6, label='6M', step='month', stepmode='backward'),
-                    dict(count=1, label='1Y', step='year', stepmode='backward'),
-                    dict(label='전체', step='all'),
-                ],
-                bgcolor='#1e2334', activecolor='#2a2e39',
-                bordercolor=TV_BORDER, borderwidth=1,
-                font=dict(color=TV_TEXT, size=10),
-                x=0, y=-0.15,
-            ),
-        ),
     )
     for i in range(1, 6):
         fig.update_xaxes(row=i, col=1, gridcolor=TV_GRID, showgrid=True,
