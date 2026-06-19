@@ -2289,7 +2289,13 @@ def main():
             else:
                 ticker = st.text_input("ETF 티커", placeholder="SPY").strip().upper()
 
-        run = st.button("📊 분석 시작", type="primary", disabled=(total_w!=100 or not ticker))
+        btn_c1, btn_c2 = st.columns([1, 1])
+        run = btn_c1.button("📊 분석 시작", type="primary", disabled=(total_w!=100 or not ticker))
+        refresh = btn_c2.button("🔄 새로고침", disabled=('tab1' not in st.session_state))
+        if refresh:
+            if 'tab1' in st.session_state:
+                del st.session_state['tab1']
+            run = True
 
         if run:
             prog = st.progress(0); msg = st.empty()
@@ -2467,6 +2473,8 @@ def main():
             regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}[regime]
 
             st.header(f"{name}  `{ticker}`")
+            _updated = end_dt.strftime('%Y-%m-%d %H:%M')
+            st.caption(f"마지막 업데이트: {_updated} — 🔄 새로고침 버튼으로 최신 데이터 갱신")
             live_chg = (live_price - pp) / pp * 100 if pp > 0 else 0
             c1,c2,c3,c4 = st.columns(4)
             c1.metric(live_label, fmt_p(live_price), f"{live_chg:+.2f}%")
