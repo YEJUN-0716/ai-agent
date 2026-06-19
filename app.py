@@ -193,7 +193,8 @@ def calc_rsi(prices, period=14):
     delta = prices.diff()
     gain  = delta.where(delta > 0, 0).rolling(period).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    return 100 - (100 / (1 + gain / loss))
+    rs = gain / loss.replace(0, 1e-10)
+    return 100 - (100 / (1 + rs))
 
 def calc_macd(prices, fast=12, slow=26, signal=9):
     ema_f = prices.ewm(span=fast,   adjust=False).mean()
@@ -705,7 +706,7 @@ def fundamental_score(ticker, df=None):
         if pm:
             pp = pm*100
             pm_s = 10 if pp<0 else (40 if pp<5 else (60 if pp<10 else (80 if pp<20 else 90)))
-        det['수익성'] = _score_roe(roe)*0.4 + _score_roe(roa*3 if roa else None)*0.3 + pm_s*0.3
+        det['수익성'] = _score_roe(roe)*0.4 + _score_roe(roa*3 if roa is not None else None)*0.3 + pm_s*0.3
         det['ROE'] = roe; det['ROA'] = roa; det['순이익률'] = pm
 
         # ── 성장성 (13%) ──────────────────────────────
@@ -723,7 +724,7 @@ def fundamental_score(ticker, df=None):
         # ── 안전성 (10%): D/E·유동비율·이자보상배율 ──
         de  = info.get('debtToEquity');  cr = info.get('currentRatio')
         ebit    = info.get('ebit');      int_exp = info.get('interestExpense')
-        de_s  = _score_de(de/100 if de else None)
+        de_s  = _score_de(de/100 if de is not None else None)
         cr_s  = 50
         if cr: cr_s = 10 if cr<0.5 else (30 if cr<1.0 else (60 if cr<1.5 else (85 if cr<3.0 else 75)))
         int_cov = abs(ebit/int_exp) if (ebit and int_exp and int_exp != 0) else None
@@ -1254,7 +1255,7 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
     포트폴리오 전체 자산 곡선과 합산 지표를 반환."""
     end   = datetime.now()
     start = end - timedelta(days=period_days + 60)
-    pf_m_score, _, _ = macro_score() if w_fund > 0 else (None, {}, {})
+    pf_m_score, _, _ = macro_score() if (w_fund > 0 or w_macro > 0) else (None, {}, {})
 
     eq_combined = None  # 포트폴리오 합산 equity
     results = []        # 종목별 결과
@@ -2173,7 +2174,7 @@ def _draw_chart(df, ticker, is_krw):
     sk_s, sd_s = calc_stochastic(h, l, p)
 
     vol_c = [TV_UP if float(p.iloc[i]) >= float(df['Open'].iloc[i]) else TV_DOWN for i in range(len(df))]
-    vol_a = [0.6 if float(p.iloc[i]) >= float(df['Open'].iloc[i]) else 0.6 for i in range(len(df))]
+    vol_a = [0.7 if float(p.iloc[i]) >= float(df['Open'].iloc[i]) else 0.5 for i in range(len(df))]
     fp = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
     cp = float(p.iloc[-1])
 
@@ -3145,7 +3146,7 @@ def main():
                     fig_hist = go.Figure()
                     fig_hist.add_trace(go.Histogram(
                         x=final_returns, nbinsx=50,
-                        marker_color=['#26a69a' if r >= 0 else '#ef5350' for r in sorted(final_returns)],
+                        marker_color='#42a5f5',
                         opacity=0.75, name='수익률 분포'))
                     fig_hist.add_vline(x=0, line_color='#FFD700', line_width=2,
                         annotation_text="현재가", annotation_position="top",
@@ -3262,7 +3263,7 @@ def main():
                 st.error("데이터가 부족합니다.")
             else:
                 _bt_f, _bt_m = None, None
-                if total_w == 100 and w_fund > 0:
+                if total_w == 100 and (w_fund > 0 or w_macro > 0):
                     with st.spinner("재무·매크로 점수 산출 중..."):
                         _bt_f, _ = fundamental_score(bt_ticker, _bt_df)
                         _bt_m, _, _ = macro_score()
@@ -3294,7 +3295,7 @@ def main():
             corr_results = _bt['corr_results']
             bt_f_score = _bt['bt_f_score']; bt_m_score = _bt['bt_m_score']
 
-            if bt_f_score is not None:
+            if bt_f_score is not None and bt_m_score is not None:
                 _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
                 st.info(f"📊 재무 {bt_f_score:.0f}점 · 매크로 {bt_m_score:.0f}점 → 임계값 보정 {_fm_off:+.1f}점 (매수 {_bt['buy_th']-_fm_off:.0f} / 매도 {_bt['sell_th']-_fm_off:.0f})")
 
@@ -3313,7 +3314,7 @@ def main():
                 _sig_vals = _bt['bt_sigs'].dropna().iloc[20:]
                 _adj_buy = _bt['buy_th']
                 _adj_sell = _bt['sell_th']
-                if bt_f_score is not None:
+                if bt_f_score is not None and bt_m_score is not None:
                     _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
                     _adj_buy = _bt['buy_th'] - _fm_off
                     _adj_sell = _bt['sell_th'] - _fm_off
