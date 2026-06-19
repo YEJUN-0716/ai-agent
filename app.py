@@ -2165,7 +2165,7 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 # MAIN APP
 # ─────────────────────────────────────────────
 
-def _draw_chart(df, ticker, is_krw):
+def _draw_chart_legacy(df, ticker, is_krw):
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     m20  = p.rolling(20).mean(); m60 = p.rolling(60).mean(); m120 = p.rolling(120).mean()
     bb_u, bb_mid, bb_l = calc_bb(p)
@@ -3415,7 +3415,7 @@ def main():
                 "신호 점수가 실제 미래 수익률과 얼마나 연관되는지 검증합니다. "
                 "**IC(정보계수)** > 0 이면 점수가 높을수록 수익률이 높은 경향이 있음을 의미합니다.")
 
-            corr_results = analyze_score_correlation(bt_df)
+            corr_results = _bt['corr_results']
 
             # IC 카드 3개
             ic_cols = st.columns(3)
