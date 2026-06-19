@@ -2479,580 +2479,580 @@ def main():
                 f"<span style='font-size:13px;color:{'#26a69a' if diff>=0 else '#ef5350'}'>"
                 f"({diff_str})</span></span></div>",
                 unsafe_allow_html=True)
-            # ── ⚡ Alpaca 실시간 시세 ─────────────────────
-            _al_key, _al_sec = _get_alpaca_keys()
-            if _al_key and _al_sec and not is_krw:
-                with st.expander("⚡ 실시간 시세 (Alpaca)", expanded=True):
-                    al_r_col, al_btn_col = st.columns([4, 1])
-                    al_r_col.caption(f"Alpaca IEX 피드 — 무료 플랜 15분 지연 / 유료 플랜 실시간")
-                    if al_btn_col.button("🔄 새로고침", key="alpaca_refresh"):
-                        if 'alpaca_cache' in st.session_state:
-                            del st.session_state['alpaca_cache']
 
-                    cache_key = f"alpaca_{ticker}"
-                    if cache_key not in st.session_state:
-                        with st.spinner("실시간 데이터 로딩..."):
-                            _aq = get_alpaca_quote(ticker, _al_key, _al_sec)
-                            _ab = get_alpaca_bars(ticker, _al_key, _al_sec,
-                                                  timeframe='5Min', limit=80)
-                        st.session_state[cache_key] = {'quote': _aq, 'bars': _ab,
-                                                       'fetched': datetime.now()}
-                    cached = st.session_state[cache_key]
-                    aq = cached['quote']
-                    ab = cached['bars']
-                    fetched_at = cached['fetched'].strftime('%H:%M:%S')
+            sub1, sub2, sub3, sub4, sub5 = st.tabs(["📋 요약", "📈 차트", "🔬 세부분석", "💡 매매전략", "⚠️ 리스크"])
 
-                    if aq and 'error' not in aq:
-                        aq_c1, aq_c2, aq_c3, aq_c4 = st.columns(4)
-                        aq_c1.metric("매도 호가 (Ask)", f"${aq['ask']:.2f}",
-                                     f"{aq['ask_size']}주")
-                        aq_c2.metric("매수 호가 (Bid)", f"${aq['bid']:.2f}",
-                                     f"{aq['bid_size']}주")
-                        aq_c3.metric("스프레드",
-                                     f"${aq['spread']:.3f}",
-                                     f"{aq['spread_pct']:.3f}%")
-                        ts_str = str(aq['timestamp'])[:19].replace('T', ' ')
-                        aq_c4.metric("호가 시각", ts_str[:10], ts_str[11:19])
-                    elif aq and 'error' in aq:
-                        st.warning(f"호가 조회 실패: {aq['error']}")
+            with sub2:
+                # ── ⚡ Alpaca 실시간 시세 ─────────────────────
+                _al_key, _al_sec = _get_alpaca_keys()
+                if _al_key and _al_sec and not is_krw:
+                    with st.expander("⚡ 실시간 시세 (Alpaca)", expanded=True):
+                        al_r_col, al_btn_col = st.columns([4, 1])
+                        al_r_col.caption(f"Alpaca IEX 피드 — 무료 플랜 15분 지연 / 유료 플랜 실시간")
+                        if al_btn_col.button("🔄 새로고침", key="alpaca_refresh"):
+                            if 'alpaca_cache' in st.session_state:
+                                del st.session_state['alpaca_cache']
 
-                    if ab is not None and not ab.empty:
-                        fig_in = go.Figure(go.Candlestick(
-                            x=ab.index, open=ab['Open'], high=ab['High'],
-                            low=ab['Low'], close=ab['Close'],
-                            increasing_line_color=TV_UP,
-                            decreasing_line_color=TV_DOWN,
-                            name='5분봉'))
-                        fig_in.update_layout(
-                            height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                            font=dict(color=TV_TEXT),
-                            title=dict(text=f"{ticker} 장중 5분봉  (조회: {fetched_at})",
-                                       font=dict(size=12)),
-                            xaxis=dict(gridcolor=TV_GRID, rangeslider_visible=False,
-                                       type='category',
-                                       tickformat='%H:%M',
-                                       nticks=12),
-                            yaxis=dict(gridcolor=TV_GRID, side='right'),
-                            margin=dict(l=0, r=60, t=35, b=0))
-                        st.plotly_chart(fig_in, use_container_width=True)
-                    else:
-                        st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
-            st.divider()
+                        cache_key = f"alpaca_{ticker}"
+                        if cache_key not in st.session_state:
+                            with st.spinner("실시간 데이터 로딩..."):
+                                _aq = get_alpaca_quote(ticker, _al_key, _al_sec)
+                                _ab = get_alpaca_bars(ticker, _al_key, _al_sec,
+                                                      timeframe='5Min', limit=80)
+                            st.session_state[cache_key] = {'quote': _aq, 'bars': _ab,
+                                                           'fetched': datetime.now()}
+                        cached = st.session_state[cache_key]
+                        aq = cached['quote']
+                        ab = cached['bars']
+                        fetched_at = cached['fetched'].strftime('%H:%M:%S')
 
-            # ── 매매 시그널 ──────────────────────────────
-            trade_signals = detect_trading_signals(df, t_det)
-            if trade_signals:
-                st.subheader("🚨 매매 시그널")
-                sig_n = min(len(trade_signals), 3)
-                sig_cols = st.columns(sig_n)
-                for sig_i, (sig_ico, sig_nm, sig_dc) in enumerate(trade_signals):
-                    sig_clr = ('#26a69a' if sig_ico == '🟢' else
-                               '#ef5350' if sig_ico == '🔴' else
-                               '#ff9800' if sig_ico == '🟡' else '#42a5f5')
-                    sig_cols[sig_i % sig_n].markdown(
-                        f"<div style='background:{sig_clr}18;border:1px solid {sig_clr}44;"
-                        f"border-radius:8px;padding:10px 14px;margin:4px 0'>"
-                        f"<span style='font-size:18px'>{sig_ico}</span> "
-                        f"<span style='color:{sig_clr};font-weight:600;font-size:14px'>{sig_nm}</span><br>"
-                        f"<span style='color:#888;font-size:12px'>{sig_dc}</span></div>",
-                        unsafe_allow_html=True)
-                st.divider()
+                        if aq and 'error' not in aq:
+                            aq_c1, aq_c2, aq_c3, aq_c4 = st.columns(4)
+                            aq_c1.metric("매도 호가 (Ask)", f"${aq['ask']:.2f}",
+                                         f"{aq['ask_size']}주")
+                            aq_c2.metric("매수 호가 (Bid)", f"${aq['bid']:.2f}",
+                                         f"{aq['bid_size']}주")
+                            aq_c3.metric("스프레드",
+                                         f"${aq['spread']:.3f}",
+                                         f"{aq['spread_pct']:.3f}%")
+                            ts_str = str(aq['timestamp'])[:19].replace('T', ' ')
+                            aq_c4.metric("호가 시각", ts_str[:10], ts_str[11:19])
+                        elif aq and 'error' in aq:
+                            st.warning(f"호가 조회 실패: {aq['error']}")
 
-            st.subheader("카테고리별 점수")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.plotly_chart(gauge(t_score, f"📈 차트+파동  ({w_tech}%)"), use_container_width=True)
-                with st.expander("세부 점수 · 캔들 패턴 · 모멘텀"):
-                    SKIP = {'RSI값', 'ADX값', 'Stoch값'}
-                    HINT = {
-                        'RSI':      f"RSI {t_det.get('RSI값','N/A')}",
-                        'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if float(t_det.get('ADX값',0)) > 25 else '횡보'})",
-                        '스토캐스틱': f"%K {t_det.get('Stoch값','N/A')}",
-                    }
-                    for k, v in t_det.items():
-                        if k in SKIP: continue
-                        hint = f" *({HINT[k]})*" if k in HINT else ''
-                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{hint}")
-                    st.divider()
-                    st.caption("**📊 모멘텀**")
-                    m_cols = st.columns(4)
-                    for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data['1M']),('3M', mom_data['3M']),('6M', mom_data['6M']),('12M', mom_data['12M'])]):
-                        if val is not None:
-                            col_m.metric(lbl, f"{val:+.1f}%")
-                        else:
-                            col_m.metric(lbl, "N/A")
-                    st.divider()
-                    st.caption("**🕯️ 캔들 패턴 (최근 3일)**")
-                    if candle_pats:
-                        st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("  특이 패턴 없음")
-                with st.expander("🔬 지표 예측력 분석 (IC · 정보계수)"):
-                    ics, suggested_w, default_w = ic_data
-                    ic_items = sorted(ics.items(), key=lambda x: abs(x[1]), reverse=True)
-                    ic_labels = [k for k, _ in ic_items]
-                    ic_values = [v for _, v in ic_items]
-                    ic_colors = [TV_UP if v >= 0 else TV_DOWN for v in ic_values]
-                    fig_ic = go.Figure()
-                    fig_ic.add_trace(go.Bar(
-                        x=ic_labels, y=ic_values,
-                        marker_color=ic_colors,
-                        text=[f"{v:+.3f}" for v in ic_values],
-                        textposition='outside', textfont=dict(size=10)))
-                    fig_ic.add_hline(y=0,    line_color=TV_TEXT,    line_width=1, opacity=0.5)
-                    fig_ic.add_hline(y=0.05,  line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
-                    fig_ic.add_hline(y=-0.05, line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
-                    fig_ic.update_layout(
-                        title=dict(text=f"20일 후 수익률 예측력 (IC)", font=dict(size=11)),
-                        height=270, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color=TV_TEXT),
-                        xaxis=dict(gridcolor=TV_GRID, tickfont=dict(size=10)),
-                        yaxis=dict(gridcolor=TV_GRID, zeroline=False),
-                        margin=dict(l=5, r=5, t=35, b=5), showlegend=False)
-                    st.plotly_chart(fig_ic, use_container_width=True)
-                    st.caption("주황 점선 = |IC| 0.05 기준 (유효 예측력) | IC > 0: 점수 높을수록 수익↑")
-                    st.divider()
-                    st.caption("**지표별 IC vs 현재·권장 가중치**")
-                    w_rows = []
-                    for k in ic_labels:
-                        ic_v = ics[k]
-                        grade = '강함 💪' if abs(ic_v) >= 0.10 else ('보통 🔶' if abs(ic_v) >= 0.05 else '약함 ❌')
-                        w_rows.append({
-                            '지표': k,
-                            'IC': f"{ic_v:+.3f}",
-                            '예측력': grade,
-                            'IC 권장(%)': f"{suggested_w.get(k,0)*100:.1f}",
-                            '현재(%)':    f"{default_w.get(k,0)*100:.1f}",
-                        })
-                    st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
-            with col2:
-                st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
-                with st.expander("세부 점수"):
-                    for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
-                        v = f_det.get(k, 50)
-                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
-                    st.divider()
-                    sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
-                    st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
-                    peg_v = f_det.get('PEG'); ev_v = f_det.get('EV/EBITDA')
-                    st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}  |  PEG: {fmt(peg_v)}  |  EV/EBITDA: {fmt(ev_v)}")
-                    st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}  |  순이익률: {fmt(f_det.get('순이익률'),pct=True)}")
-                    fcf_y = f_det.get('FCF수익률')
-                    st.caption(f"FCF수익률: {f'{fcf_y:.1f}%' if fcf_y is not None else 'N/A'}  |  이자보상배율: {fmt(f_det.get('이자보상배율'))}")
-                    st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
-                    mdd_v = f_det.get('MDD값')
-                    st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v else 'N/A'}")
-                    fs_v = f_det.get('F-Score값')
-                    st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
-                    for sk, sv in f_det.get('F-Score시그널', {}).items():
-                        if '오류' not in sk: st.caption(f"  {sv} {sk}")
-                    if dcf_det:
-                        st.divider()
-                        st.caption("**💵 DCF 내재가치 (그레이엄 공식)**")
-                        dv_b = dcf_det.get('내재가치_기본', 0)
-                        dv_c = dcf_det.get('내재가치_보수', 0)
-                        up_b = dcf_det.get('상승여력_기본', 0)
-                        up_c = dcf_det.get('상승여력_보수', 0)
-                        dc1, dc2 = st.columns(2)
-                        dc1.metric("내재가치 (기본)", fmt_p(dv_b), f"{up_b:+.1f}%")
-                        dc2.metric("내재가치 (보수)", fmt_p(dv_c), f"{up_c:+.1f}%")
-                        st.caption(f"EPS: {fmt(dcf_det.get('EPS'))}  |  g: {dcf_det.get('예상성장률(g)',0):.1f}%  |  Y: {dcf_det.get('적용금리(Y)',0):.2f}%")
-            with col3:
-                st.plotly_chart(gauge(m_score, f"🌍 매크로+금리  ({w_macro}%)"), use_container_width=True)
-                with st.expander("세부 점수"):
-                    for k in ['금리환경','장단기금리차','VIX','달러지수','신용스프레드','원자재/인플레']:
-                        v = m_det.get(k, 50)
-                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
-                    st.divider()
-                    if '10Y금리' in m_data:
-                        st.caption(f"10Y 금리: {m_data['10Y금리']:.2f}%  |  3M변화: {m_data.get('3M금리변화',0):+.2f}%p")
-                    if '장단기스프레드' in m_data:
-                        st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
-                    if 'VIX' in m_data:
-                        st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
-                    if '신용스프레드(HYG-LQD)' in m_data:
-                        st.caption(f"신용스프레드(HYG-LQD 3M): {m_data['신용스프레드(HYG-LQD)']:+.2f}%p")
-                    if 'GLD변화(3M)' in m_data:
-                        st.caption(f"금(GLD) 3M 변화: {m_data['GLD변화(3M)']:+.2f}%")
-            st.divider()
-
-            # ── 멀티 타임프레임 분석 ──────────────────
-            st.subheader("🕐 멀티 타임프레임 분석")
-            mtf_labels = ['일봉 (Daily)', '주봉 (Weekly)', '월봉 (Monthly)']
-            mtf_keys   = ['일봉', '주봉', '월봉']
-            mtf_cols_ui = st.columns(3)
-            signals = []
-            for col_mtf, lbl, key in zip(mtf_cols_ui, mtf_labels, mtf_keys):
-                info_mtf = mtf_scores.get(key)
-                if info_mtf:
-                    sc  = info_mtf['score']
-                    det = info_mtf['det']
-                    col_mtf.metric(lbl, f"{sc:.1f}점", score_label(sc))
-                    signals.append(sc)
-                    with col_mtf:
-                        st.caption(" · ".join(f"{k} {v:.0f}" for k, v in det.items() if k not in ('RSI값',)))
-                else:
-                    col_mtf.metric(lbl, "N/A")
-
-            if signals:
-                consensus = sum(signals) / len(signals)
-                bull_cnt  = sum(1 for s in signals if s >= 65)
-                bear_cnt  = sum(1 for s in signals if s < 50)
-                if bull_cnt == len(signals):
-                    mtf_msg = "🟢 **전 타임프레임 강세** — 추세 일치, 신호 신뢰도 높음"
-                elif bear_cnt == len(signals):
-                    mtf_msg = "🔴 **전 타임프레임 약세** — 하락 추세 강함"
-                elif bull_cnt > bear_cnt:
-                    mtf_msg = "🟡 **중장기 강세, 단기 조정** — 눌림목 매수 고려"
-                elif bear_cnt > bull_cnt:
-                    mtf_msg = "🟠 **중장기 약세, 단기 반등** — 데드캣 주의"
-                else:
-                    mtf_msg = "⚪ **혼조세** — 방향성 확인 후 진입 권장"
-                st.info(mtf_msg)
-            # ── 섹터 상대 강도 ─────────────────────────
-            sector_name = info.get('sector', '') if info else ''
-            if sector_name and not is_krw:
-                with st.expander(f"📊 섹터 상대 강도 — {sector_name} ({SECTOR_ETF.get(sector_name, 'ETF 없음')})"):
-                    with st.spinner("섹터 데이터 로딩 중..."):
-                        sr = calc_sector_relative(ticker, sector_name, df)
-                    if sr and sr.get('data'):
-                        sr_data = sr['data']
-                        sr_horizons = list(sr_data.keys())
-                        sr_cols = st.columns(len(sr_horizons))
-                        for sri, hor in enumerate(sr_horizons):
-                            d = sr_data[hor]
-                            tk_r   = d['tk_ret']
-                            etf_r  = d.get('etf_ret')
-                            spy_r  = d.get('spy_ret')
-                            rs_etf = d.get('rs_etf')
-                            with sr_cols[sri]:
-                                st.markdown(f"**{hor}**")
-                                st.metric(ticker, f"{tk_r:+.1f}%")
-                                if etf_r is not None:
-                                    st.metric(sr['etf'], f"{etf_r:+.1f}%",
-                                              delta=f"RS {rs_etf:+.1f}%p",
-                                              delta_color="normal" if rs_etf >= 0 else "inverse")
-                                if spy_r is not None:
-                                    st.metric("SPY", f"{spy_r:+.1f}%",
-                                              delta=f"RS {d['rs_spy']:+.1f}%p",
-                                              delta_color="normal" if d['rs_spy'] >= 0 else "inverse")
-
-                        # 3개월 기준 막대차트
-                        if '3개월' in sr_data:
-                            d3 = sr_data['3개월']
-                            bar_labels = [ticker]
-                            bar_vals   = [d3['tk_ret']]
-                            if d3['etf_ret'] is not None:
-                                bar_labels.append(sr['etf'])
-                                bar_vals.append(d3['etf_ret'])
-                            if d3['spy_ret'] is not None:
-                                bar_labels.append('SPY')
-                                bar_vals.append(d3['spy_ret'])
-                            bar_clr = [TV_UP if v >= 0 else TV_DOWN for v in bar_vals]
-                            fig_sr = go.Figure(go.Bar(
-                                x=bar_labels, y=bar_vals,
-                                marker_color=bar_clr,
-                                text=[f"{v:+.1f}%" for v in bar_vals],
-                                textposition='outside'))
-                            fig_sr.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
-                            fig_sr.update_layout(
-                                title=dict(text="3개월 수익률 비교", font=dict(size=12)),
-                                height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        if ab is not None and not ab.empty:
+                            fig_in = go.Figure(go.Candlestick(
+                                x=ab.index, open=ab['Open'], high=ab['High'],
+                                low=ab['Low'], close=ab['Close'],
+                                increasing_line_color=TV_UP,
+                                decreasing_line_color=TV_DOWN,
+                                name='5분봉'))
+                            fig_in.update_layout(
+                                height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                                 font=dict(color=TV_TEXT),
-                                yaxis=dict(gridcolor=TV_GRID, zeroline=False),
-                                xaxis=dict(gridcolor=TV_GRID),
-                                margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                            st.plotly_chart(fig_sr, use_container_width=True)
+                                title=dict(text=f"{ticker} 장중 5분봉  (조회: {fetched_at})",
+                                           font=dict(size=12)),
+                                xaxis=dict(gridcolor=TV_GRID, rangeslider_visible=False,
+                                           type='category',
+                                           tickformat='%H:%M',
+                                           nticks=12),
+                                yaxis=dict(gridcolor=TV_GRID, side='right'),
+                                margin=dict(l=0, r=60, t=35, b=0))
+                            st.plotly_chart(fig_in, use_container_width=True)
+                        else:
+                            st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
+
+                # ── 차트 ──────────────────────────────────────
+                st.subheader("📈 차트")
+                st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
+
+            with sub1:
+                # ── 매매 시그널 ──────────────────────────────
+                trade_signals = detect_trading_signals(df, t_det)
+                if trade_signals:
+                    st.subheader("🚨 매매 시그널")
+                    sig_n = min(len(trade_signals), 3)
+                    sig_cols = st.columns(sig_n)
+                    for sig_i, (sig_ico, sig_nm, sig_dc) in enumerate(trade_signals):
+                        sig_clr = ('#26a69a' if sig_ico == '🟢' else
+                                   '#ef5350' if sig_ico == '🔴' else
+                                   '#ff9800' if sig_ico == '🟡' else '#42a5f5')
+                        sig_cols[sig_i % sig_n].markdown(
+                            f"<div style='background:{sig_clr}18;border:1px solid {sig_clr}44;"
+                            f"border-radius:8px;padding:10px 14px;margin:4px 0'>"
+                            f"<span style='font-size:18px'>{sig_ico}</span> "
+                            f"<span style='color:{sig_clr};font-weight:600;font-size:14px'>{sig_nm}</span><br>"
+                            f"<span style='color:#888;font-size:12px'>{sig_dc}</span></div>",
+                            unsafe_allow_html=True)
+
+                st.subheader("📋 분석 요약")
+                mtf_d = mtf_scores.get('일봉'); mtf_w = mtf_scores.get('주봉'); mtf_m = mtf_scores.get('월봉')
+                mtf_list = [x['score'] for x in [mtf_d, mtf_w, mtf_m] if x is not None]
+                mtf_avg  = sum(mtf_list) / len(mtf_list) if mtf_list else 50.0
+                mtf_summary = (f"일봉 {mtf_d['score']:.0f} / 주봉 {mtf_w['score']:.0f} / 월봉 {mtf_m['score']:.0f}"
+                               if mtf_d and mtf_w and mtf_m else "N/A")
+                mom_3 = mom_data.get('3M'); mom_12 = mom_data.get('12M')
+                mom_summary = (f"3M {mom_3:+.1f}% / 12M {mom_12:+.1f}%"
+                               if mom_3 is not None and mom_12 is not None else "N/A")
+                dcf_summary = (f"기본 {fmt_p(dcf_det.get('내재가치_기본',0))} ({dcf_det.get('상승여력_기본',0):+.1f}%)"
+                               if dcf_det else "N/A")
+                st.dataframe(pd.DataFrame([
+                    {'카테고리':'종합 점수',          '점수':f"{total:.1f}",       '등급':score_label(total),       '비고': f"시장: {regime_icon}"},
+                    {'카테고리':'📈 차트+파동',       '점수':f"{t_score:.1f}",     '등급':score_label(t_score),     '비고':f'가중치 {w_tech}%'},
+                    {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",     '등급':score_label(f_score),     '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
+                    {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",     '등급':score_label(m_score),     '비고':f'가중치 {w_macro}%'},
+                    {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mtf_avg:.1f}",     '등급':score_label(mtf_avg),     '비고': mtf_summary},
+                    {'카테고리':'📊 모멘텀',          '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mom_summary},
+                    {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',             '등급':'-',                      '비고': dcf_summary},
+                    {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",  '등급':score_label(news_score),  '비고':'참고용'},
+                ]), use_container_width=True, hide_index=True)
+                st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
+
+            with sub3:
+                st.subheader("카테고리별 점수")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.plotly_chart(gauge(t_score, f"📈 차트+파동  ({w_tech}%)"), use_container_width=True)
+                    with st.expander("세부 점수 · 캔들 패턴 · 모멘텀"):
+                        SKIP = {'RSI값', 'ADX값', 'Stoch값'}
+                        HINT = {
+                            'RSI':      f"RSI {t_det.get('RSI값','N/A')}",
+                            'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if float(t_det.get('ADX값',0)) > 25 else '횡보'})",
+                            '스토캐스틱': f"%K {t_det.get('Stoch값','N/A')}",
+                        }
+                        for k, v in t_det.items():
+                            if k in SKIP: continue
+                            hint = f" *({HINT[k]})*" if k in HINT else ''
+                            st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{hint}")
+                        st.divider()
+                        st.caption("**📊 모멘텀**")
+                        m_cols = st.columns(4)
+                        for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data['1M']),('3M', mom_data['3M']),('6M', mom_data['6M']),('12M', mom_data['12M'])]):
+                            if val is not None:
+                                col_m.metric(lbl, f"{val:+.1f}%")
+                            else:
+                                col_m.metric(lbl, "N/A")
+                        st.divider()
+                        st.caption("**🕯️ 캔들 패턴 (최근 3일)**")
+                        if candle_pats:
+                            st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
+                        else:
+                            st.caption("  특이 패턴 없음")
+                    with st.expander("🔬 지표 예측력 분석 (IC · 정보계수)"):
+                        ics, suggested_w, default_w = ic_data
+                        ic_items = sorted(ics.items(), key=lambda x: abs(x[1]), reverse=True)
+                        ic_labels = [k for k, _ in ic_items]
+                        ic_values = [v for _, v in ic_items]
+                        ic_colors = [TV_UP if v >= 0 else TV_DOWN for v in ic_values]
+                        fig_ic = go.Figure()
+                        fig_ic.add_trace(go.Bar(
+                            x=ic_labels, y=ic_values,
+                            marker_color=ic_colors,
+                            text=[f"{v:+.3f}" for v in ic_values],
+                            textposition='outside', textfont=dict(size=10)))
+                        fig_ic.add_hline(y=0,    line_color=TV_TEXT,    line_width=1, opacity=0.5)
+                        fig_ic.add_hline(y=0.05,  line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
+                        fig_ic.add_hline(y=-0.05, line_color='#ff9800', line_width=1, line_dash='dash', opacity=0.6)
+                        fig_ic.update_layout(
+                            title=dict(text=f"20일 후 수익률 예측력 (IC)", font=dict(size=11)),
+                            height=270, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT),
+                            xaxis=dict(gridcolor=TV_GRID, tickfont=dict(size=10)),
+                            yaxis=dict(gridcolor=TV_GRID, zeroline=False),
+                            margin=dict(l=5, r=5, t=35, b=5), showlegend=False)
+                        st.plotly_chart(fig_ic, use_container_width=True)
+                        st.caption("주황 점선 = |IC| 0.05 기준 (유효 예측력) | IC > 0: 점수 높을수록 수익↑")
+                        st.divider()
+                        st.caption("**지표별 IC vs 현재·권장 가중치**")
+                        w_rows = []
+                        for k in ic_labels:
+                            ic_v = ics[k]
+                            grade = '강함 💪' if abs(ic_v) >= 0.10 else ('보통 🔶' if abs(ic_v) >= 0.05 else '약함 ❌')
+                            w_rows.append({
+                                '지표': k,
+                                'IC': f"{ic_v:+.3f}",
+                                '예측력': grade,
+                                'IC 권장(%)': f"{suggested_w.get(k,0)*100:.1f}",
+                                '현재(%)':    f"{default_w.get(k,0)*100:.1f}",
+                            })
+                        st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
+                with col2:
+                    st.plotly_chart(gauge(f_score, f"💰 재무제표+퀀트  ({w_fund}%)"), use_container_width=True)
+                    with st.expander("세부 점수"):
+                        for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
+                            v = f_det.get(k, 50)
+                            st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
+                        st.divider()
+                        sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
+                        st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
+                        peg_v = f_det.get('PEG'); ev_v = f_det.get('EV/EBITDA')
+                        st.caption(f"PER: {fmt(f_det.get('PER'))}  |  PBR: {fmt(f_det.get('PBR'))}  |  PEG: {fmt(peg_v)}  |  EV/EBITDA: {fmt(ev_v)}")
+                        st.caption(f"ROE: {fmt(f_det.get('ROE'),pct=True)}  |  ROA: {fmt(f_det.get('ROA'),pct=True)}  |  순이익률: {fmt(f_det.get('순이익률'),pct=True)}")
+                        fcf_y = f_det.get('FCF수익률')
+                        st.caption(f"FCF수익률: {f'{fcf_y:.1f}%' if fcf_y is not None else 'N/A'}  |  이자보상배율: {fmt(f_det.get('이자보상배율'))}")
+                        st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
+                        mdd_v = f_det.get('MDD값')
+                        st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v else 'N/A'}")
+                        fs_v = f_det.get('F-Score값')
+                        st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
+                        for sk, sv in f_det.get('F-Score시그널', {}).items():
+                            if '오류' not in sk: st.caption(f"  {sv} {sk}")
+                        if dcf_det:
+                            st.divider()
+                            st.caption("**💵 DCF 내재가치 (그레이엄 공식)**")
+                            dv_b = dcf_det.get('내재가치_기본', 0)
+                            dv_c = dcf_det.get('내재가치_보수', 0)
+                            up_b = dcf_det.get('상승여력_기본', 0)
+                            up_c = dcf_det.get('상승여력_보수', 0)
+                            dc1, dc2 = st.columns(2)
+                            dc1.metric("내재가치 (기본)", fmt_p(dv_b), f"{up_b:+.1f}%")
+                            dc2.metric("내재가치 (보수)", fmt_p(dv_c), f"{up_c:+.1f}%")
+                            st.caption(f"EPS: {fmt(dcf_det.get('EPS'))}  |  g: {dcf_det.get('예상성장률(g)',0):.1f}%  |  Y: {dcf_det.get('적용금리(Y)',0):.2f}%")
+                with col3:
+                    st.plotly_chart(gauge(m_score, f"🌍 매크로+금리  ({w_macro}%)"), use_container_width=True)
+                    with st.expander("세부 점수"):
+                        for k in ['금리환경','장단기금리차','VIX','달러지수','신용스프레드','원자재/인플레']:
+                            v = m_det.get(k, 50)
+                            st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
+                        st.divider()
+                        if '10Y금리' in m_data:
+                            st.caption(f"10Y 금리: {m_data['10Y금리']:.2f}%  |  3M변화: {m_data.get('3M금리변화',0):+.2f}%p")
+                        if '장단기스프레드' in m_data:
+                            st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
+                        if 'VIX' in m_data:
+                            st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
+                        if '신용스프레드(HYG-LQD)' in m_data:
+                            st.caption(f"신용스프레드(HYG-LQD 3M): {m_data['신용스프레드(HYG-LQD)']:+.2f}%p")
+                        if 'GLD변화(3M)' in m_data:
+                            st.caption(f"금(GLD) 3M 변화: {m_data['GLD변화(3M)']:+.2f}%")
+
+                # ── 멀티 타임프레임 분석 ──────────────────
+                st.subheader("🕐 멀티 타임프레임 분석")
+                mtf_labels = ['일봉 (Daily)', '주봉 (Weekly)', '월봉 (Monthly)']
+                mtf_keys   = ['일봉', '주봉', '월봉']
+                mtf_cols_ui = st.columns(3)
+                signals = []
+                for col_mtf, lbl, key in zip(mtf_cols_ui, mtf_labels, mtf_keys):
+                    info_mtf = mtf_scores.get(key)
+                    if info_mtf:
+                        sc  = info_mtf['score']
+                        det = info_mtf['det']
+                        col_mtf.metric(lbl, f"{sc:.1f}점", score_label(sc))
+                        signals.append(sc)
+                        with col_mtf:
+                            st.caption(" · ".join(f"{k} {v:.0f}" for k, v in det.items() if k not in ('RSI값',)))
                     else:
-                        st.info("섹터 데이터를 가져올 수 없습니다.")
-            st.divider()
+                        col_mtf.metric(lbl, "N/A")
 
-            # ── 매수/매도 추천가 ──────────────────────
-            st.subheader("💡 매매 추천가")
-            lv    = calc_trade_levels(df, total)
-            fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
-            cp_lv = lv['cp']
-            dt    = lv['dantta']
-            sw    = lv['swing']
+                if signals:
+                    consensus = sum(signals) / len(signals)
+                    bull_cnt  = sum(1 for s in signals if s >= 65)
+                    bear_cnt  = sum(1 for s in signals if s < 50)
+                    if bull_cnt == len(signals):
+                        mtf_msg = "🟢 **전 타임프레임 강세** — 추세 일치, 신호 신뢰도 높음"
+                    elif bear_cnt == len(signals):
+                        mtf_msg = "🔴 **전 타임프레임 약세** — 하락 추세 강함"
+                    elif bull_cnt > bear_cnt:
+                        mtf_msg = "🟡 **중장기 강세, 단기 조정** — 눌림목 매수 고려"
+                    elif bear_cnt > bull_cnt:
+                        mtf_msg = "🟠 **중장기 약세, 단기 반등** — 데드캣 주의"
+                    else:
+                        mtf_msg = "⚪ **혼조세** — 방향성 확인 후 진입 권장"
+                    st.info(mtf_msg)
+                # ── 섹터 상대 강도 ─────────────────────────
+                sector_name = info.get('sector', '') if info else ''
+                if sector_name and not is_krw:
+                    with st.expander(f"📊 섹터 상대 강도 — {sector_name} ({SECTOR_ETF.get(sector_name, 'ETF 없음')})"):
+                        with st.spinner("섹터 데이터 로딩 중..."):
+                            sr = calc_sector_relative(ticker, sector_name, df)
+                        if sr and sr.get('data'):
+                            sr_data = sr['data']
+                            sr_horizons = list(sr_data.keys())
+                            sr_cols = st.columns(len(sr_horizons))
+                            for sri, hor in enumerate(sr_horizons):
+                                d = sr_data[hor]
+                                tk_r   = d['tk_ret']
+                                etf_r  = d.get('etf_ret')
+                                spy_r  = d.get('spy_ret')
+                                rs_etf = d.get('rs_etf')
+                                with sr_cols[sri]:
+                                    st.markdown(f"**{hor}**")
+                                    st.metric(ticker, f"{tk_r:+.1f}%")
+                                    if etf_r is not None:
+                                        st.metric(sr['etf'], f"{etf_r:+.1f}%",
+                                                  delta=f"RS {rs_etf:+.1f}%p",
+                                                  delta_color="normal" if rs_etf >= 0 else "inverse")
+                                    if spy_r is not None:
+                                        st.metric("SPY", f"{spy_r:+.1f}%",
+                                                  delta=f"RS {d['rs_spy']:+.1f}%p",
+                                                  delta_color="normal" if d['rs_spy'] >= 0 else "inverse")
 
-            lv_c1, lv_c2 = st.columns(2)
+                            # 3개월 기준 막대차트
+                            if '3개월' in sr_data:
+                                d3 = sr_data['3개월']
+                                bar_labels = [ticker]
+                                bar_vals   = [d3['tk_ret']]
+                                if d3['etf_ret'] is not None:
+                                    bar_labels.append(sr['etf'])
+                                    bar_vals.append(d3['etf_ret'])
+                                if d3['spy_ret'] is not None:
+                                    bar_labels.append('SPY')
+                                    bar_vals.append(d3['spy_ret'])
+                                bar_clr = [TV_UP if v >= 0 else TV_DOWN for v in bar_vals]
+                                fig_sr = go.Figure(go.Bar(
+                                    x=bar_labels, y=bar_vals,
+                                    marker_color=bar_clr,
+                                    text=[f"{v:+.1f}%" for v in bar_vals],
+                                    textposition='outside'))
+                                fig_sr.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
+                                fig_sr.update_layout(
+                                    title=dict(text="3개월 수익률 비교", font=dict(size=12)),
+                                    height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                    font=dict(color=TV_TEXT),
+                                    yaxis=dict(gridcolor=TV_GRID, zeroline=False),
+                                    xaxis=dict(gridcolor=TV_GRID),
+                                    margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                                st.plotly_chart(fig_sr, use_container_width=True)
+                        else:
+                            st.info("섹터 데이터를 가져올 수 없습니다.")
 
-            with lv_c1:
-                dt_rr_color = '#4caf50' if dt['rr1'] >= 2 else ('#ff9800' if dt['rr1'] >= 1 else '#ef5350')
-                st.markdown(
-                    f"<div style='background:#0d1b2e;border:1px solid #42a5f544;border-radius:10px;"
-                    f"padding:12px 16px;margin-bottom:8px'>"
-                    f"<div style='color:#42a5f5;font-weight:700;font-size:15px'>⚡ 단타 전략 (1~5일)</div>"
-                    f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{dt['strategy']}</div>"
-                    f"<div style='color:#888;font-size:11px;margin-top:2px'>"
-                    f"손익비 <b style='color:{dt_rr_color}'>R {dt['rr1']:.1f}:1</b>"
-                    f" · 손절폭 <b style='color:#ef5350'>{dt['risk_pct']:.1f}%</b>"
-                    f" · 비중 <b>{dt.get('alloc','')}</b></div>"
-                    f"<div style='color:#666;font-size:10px;margin-top:2px'>"
-                    f"트레일링: {dt.get('trailing','')}</div>"
-                    f"</div>", unsafe_allow_html=True)
-                dt_rows = [
-                    {'구분':'🟢 1차 매수','가격':fmt_p(dt['entry1']),'현재가 대비':f"{(dt['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e1']},
-                    {'구분':'🟩 2차 매수','가격':fmt_p(dt['entry2']),'현재가 대비':f"{(dt['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e2']},
-                    {'구분':'🔵 1차 목표','가격':fmt_p(dt['target1']),'현재가 대비':f"+{dt['ret1']:.1f}%",'근거':dt['basis_t1']},
-                    {'구분':'🔷 2차 목표','가격':fmt_p(dt['target2']),'현재가 대비':f"+{dt['ret2']:.1f}%",'근거':dt['basis_t2']},
-                    {'구분':'🔴 손절가',  '가격':fmt_p(dt['stop']),  '현재가 대비':f"-{dt['risk_pct']:.1f}%",'근거':dt['basis_stop']},
-                ]
-                st.dataframe(pd.DataFrame(dt_rows), use_container_width=True, hide_index=True)
+            with sub4:
+                # ── 매수/매도 추천가 ──────────────────────
+                st.subheader("💡 매매 추천가")
+                lv    = calc_trade_levels(df, total)
+                fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
+                cp_lv = lv['cp']
+                dt    = lv['dantta']
+                sw    = lv['swing']
 
-            with lv_c2:
-                sw_rr_color = '#4caf50' if sw['rr1'] >= 2 else ('#ff9800' if sw['rr1'] >= 1 else '#ef5350')
-                st.markdown(
-                    f"<div style='background:#1a1a0a;border:1px solid #ff980044;border-radius:10px;"
-                    f"padding:12px 16px;margin-bottom:8px'>"
-                    f"<div style='color:#ff9800;font-weight:700;font-size:15px'>📈 스윙 전략 (2~4주)</div>"
-                    f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{sw['strategy']}</div>"
-                    f"<div style='color:#888;font-size:11px;margin-top:2px'>"
-                    f"손익비 <b style='color:{sw_rr_color}'>R {sw['rr1']:.1f}:1</b>"
-                    f" · 손절폭 <b style='color:#ef5350'>{sw['risk_pct']:.1f}%</b>"
-                    f" · 비중 <b>{sw.get('alloc','')}</b></div>"
-                    f"<div style='color:#666;font-size:10px;margin-top:2px'>"
-                    f"트레일링: {sw.get('trailing','')}</div>"
-                    f"</div>", unsafe_allow_html=True)
-                sw_rows = [
-                    {'구분':'🟢 1차 매수','가격':fmt_p(sw['entry1']),'현재가 대비':f"{(sw['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e1']},
-                    {'구분':'🟩 2차 매수','가격':fmt_p(sw['entry2']),'현재가 대비':f"{(sw['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e2']},
-                    {'구분':'🔵 1차 목표','가격':fmt_p(sw['target1']),'현재가 대비':f"+{sw['ret1']:.1f}%",'근거':sw['basis_t1']},
-                    {'구분':'🔷 2차 목표','가격':fmt_p(sw['target2']),'현재가 대비':f"+{sw['ret2']:.1f}%",'근거':sw['basis_t2']},
-                    {'구분':'🔴 손절가',  '가격':fmt_p(sw['stop']),  '현재가 대비':f"-{sw['risk_pct']:.1f}%",'근거':sw['basis_stop']},
-                ]
-                st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
+                lv_c1, lv_c2 = st.columns(2)
 
-            st.markdown("#### 🛡️ 실전 포지션 플랜")
-            exec_plans = build_execution_plan(
-                lv, total, total_adj, regime, risk_data,
-                acct_capital, risk_per_trade, max_position_pct, min_rr)
-            plan_cols = st.columns(2)
-            for plan_col, plan_key in zip(plan_cols, ['dantta', 'swing']):
-                plan = exec_plans[plan_key]
-                verdict_color = (
-                    '#26a69a' if plan['verdict'] == '진입 가능'
-                    else ('#ff9800' if plan['verdict'] == '조건부 진입' else '#ef5350')
-                )
-                qty_text = f"{plan['qty']:,.0f}주" if is_krw else f"{plan['qty']:,.2f}주"
-                notes = plan['blockers'] + plan['warnings']
-                notes_text = " · ".join(notes) if notes else "조건 충족"
-                with plan_col:
+                with lv_c1:
+                    dt_rr_color = '#4caf50' if dt['rr1'] >= 2 else ('#ff9800' if dt['rr1'] >= 1 else '#ef5350')
                     st.markdown(
-                        f"<div style='background:#151923;border:1px solid {verdict_color}66;"
-                        f"border-radius:8px;padding:12px 14px;margin-bottom:8px'>"
-                        f"<div style='display:flex;justify-content:space-between;gap:10px'>"
-                        f"<b>{plan['label']} 실행 판정</b>"
-                        f"<b style='color:{verdict_color}'>{plan['verdict']}</b></div>"
-                        f"<div style='color:#999;font-size:12px;margin-top:6px'>{notes_text}</div>"
+                        f"<div style='background:#0d1b2e;border:1px solid #42a5f544;border-radius:10px;"
+                        f"padding:12px 16px;margin-bottom:8px'>"
+                        f"<div style='color:#42a5f5;font-weight:700;font-size:15px'>⚡ 단타 전략 (1~5일)</div>"
+                        f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{dt['strategy']}</div>"
+                        f"<div style='color:#888;font-size:11px;margin-top:2px'>"
+                        f"손익비 <b style='color:{dt_rr_color}'>R {dt['rr1']:.1f}:1</b>"
+                        f" · 손절폭 <b style='color:#ef5350'>{dt['risk_pct']:.1f}%</b>"
+                        f" · 비중 <b>{dt.get('alloc','')}</b></div>"
+                        f"<div style='color:#666;font-size:10px;margin-top:2px'>"
+                        f"트레일링: {dt.get('trailing','')}</div>"
                         f"</div>", unsafe_allow_html=True)
-                    pc1, pc2, pc3 = st.columns(3)
-                    pc1.metric("최대 수량", qty_text)
-                    pc2.metric("투입 금액", fmt_p(plan['position_value']),
-                               f"{plan['alloc_pct_of_account']:.1f}%")
-                    pc3.metric("예상 손실", fmt_p(plan['risk_amount']),
-                               f"{plan['risk_pct_of_account']:.2f}%")
-                    pc4, pc5 = st.columns(2)
-                    pc4.metric("1차 기대수익", fmt_p(plan['reward_amount']))
-                    pc5.metric("손익비", f"R {plan['rr']:.1f}:1")
+                    dt_rows = [
+                        {'구분':'🟢 1차 매수','가격':fmt_p(dt['entry1']),'현재가 대비':f"{(dt['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e1']},
+                        {'구분':'🟩 2차 매수','가격':fmt_p(dt['entry2']),'현재가 대비':f"{(dt['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e2']},
+                        {'구분':'🔵 1차 목표','가격':fmt_p(dt['target1']),'현재가 대비':f"+{dt['ret1']:.1f}%",'근거':dt['basis_t1']},
+                        {'구분':'🔷 2차 목표','가격':fmt_p(dt['target2']),'현재가 대비':f"+{dt['ret2']:.1f}%",'근거':dt['basis_t2']},
+                        {'구분':'🔴 손절가',  '가격':fmt_p(dt['stop']),  '현재가 대비':f"-{dt['risk_pct']:.1f}%",'근거':dt['basis_stop']},
+                    ]
+                    st.dataframe(pd.DataFrame(dt_rows), use_container_width=True, hide_index=True)
 
-            st.caption(
-                f"계산 기준: 계좌 {fmt_p(acct_capital)} · 거래당 손실 {risk_per_trade:.1f}% "
-                f"· 종목당 최대 {max_position_pct}% · 최소 손익비 R {min_rr:.1f}"
-            )
+                with lv_c2:
+                    sw_rr_color = '#4caf50' if sw['rr1'] >= 2 else ('#ff9800' if sw['rr1'] >= 1 else '#ef5350')
+                    st.markdown(
+                        f"<div style='background:#1a1a0a;border:1px solid #ff980044;border-radius:10px;"
+                        f"padding:12px 16px;margin-bottom:8px'>"
+                        f"<div style='color:#ff9800;font-weight:700;font-size:15px'>📈 스윙 전략 (2~4주)</div>"
+                        f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{sw['strategy']}</div>"
+                        f"<div style='color:#888;font-size:11px;margin-top:2px'>"
+                        f"손익비 <b style='color:{sw_rr_color}'>R {sw['rr1']:.1f}:1</b>"
+                        f" · 손절폭 <b style='color:#ef5350'>{sw['risk_pct']:.1f}%</b>"
+                        f" · 비중 <b>{sw.get('alloc','')}</b></div>"
+                        f"<div style='color:#666;font-size:10px;margin-top:2px'>"
+                        f"트레일링: {sw.get('trailing','')}</div>"
+                        f"</div>", unsafe_allow_html=True)
+                    sw_rows = [
+                        {'구분':'🟢 1차 매수','가격':fmt_p(sw['entry1']),'현재가 대비':f"{(sw['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e1']},
+                        {'구분':'🟩 2차 매수','가격':fmt_p(sw['entry2']),'현재가 대비':f"{(sw['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e2']},
+                        {'구분':'🔵 1차 목표','가격':fmt_p(sw['target1']),'현재가 대비':f"+{sw['ret1']:.1f}%",'근거':sw['basis_t1']},
+                        {'구분':'🔷 2차 목표','가격':fmt_p(sw['target2']),'현재가 대비':f"+{sw['ret2']:.1f}%",'근거':sw['basis_t2']},
+                        {'구분':'🔴 손절가',  '가격':fmt_p(sw['stop']),  '현재가 대비':f"-{sw['risk_pct']:.1f}%",'근거':sw['basis_stop']},
+                    ]
+                    st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
 
-            with st.expander("📐 피보나치 & 피봇 포인트 세부"):
-                fa, fb = st.columns(2)
-                with fa:
-                    st.caption("**피보나치 되돌림·확장 (60일 스윙)**")
-                    for k, v in lv['fib'].items():
-                        marker = " ◀ 현재가 근처" if abs(v - cp_lv) < lv['atr']*0.5 else ""
-                        st.caption(f"  {k}: {fmt_p(v)}{marker}")
-                with fb:
-                    st.caption("**피봇 포인트 (전일 기준)**")
-                    for k, v in lv['piv'].items():
-                        marker = " ◀ 현재가 근처" if abs(v - cp_lv) < lv['atr']*0.5 else ""
-                        st.caption(f"  {k}: {fmt_p(v)}{marker}")
-                st.caption(f"ATR(14): {fmt_p(lv['atr'])}  |  현재가: {fmt_p(cp_lv)}")
+                st.markdown("#### 🛡️ 실전 포지션 플랜")
+                exec_plans = build_execution_plan(
+                    lv, total, total_adj, regime, risk_data,
+                    acct_capital, risk_per_trade, max_position_pct, min_rr)
+                plan_cols = st.columns(2)
+                for plan_col, plan_key in zip(plan_cols, ['dantta', 'swing']):
+                    plan = exec_plans[plan_key]
+                    verdict_color = (
+                        '#26a69a' if plan['verdict'] == '진입 가능'
+                        else ('#ff9800' if plan['verdict'] == '조건부 진입' else '#ef5350')
+                    )
+                    qty_text = f"{plan['qty']:,.0f}주" if is_krw else f"{plan['qty']:,.2f}주"
+                    notes = plan['blockers'] + plan['warnings']
+                    notes_text = " · ".join(notes) if notes else "조건 충족"
+                    with plan_col:
+                        st.markdown(
+                            f"<div style='background:#151923;border:1px solid {verdict_color}66;"
+                            f"border-radius:8px;padding:12px 14px;margin-bottom:8px'>"
+                            f"<div style='display:flex;justify-content:space-between;gap:10px'>"
+                            f"<b>{plan['label']} 실행 판정</b>"
+                            f"<b style='color:{verdict_color}'>{plan['verdict']}</b></div>"
+                            f"<div style='color:#999;font-size:12px;margin-top:6px'>{notes_text}</div>"
+                            f"</div>", unsafe_allow_html=True)
+                        pc1, pc2, pc3 = st.columns(3)
+                        pc1.metric("최대 수량", qty_text)
+                        pc2.metric("투입 금액", fmt_p(plan['position_value']),
+                                   f"{plan['alloc_pct_of_account']:.1f}%")
+                        pc3.metric("예상 손실", fmt_p(plan['risk_amount']),
+                                   f"{plan['risk_pct_of_account']:.2f}%")
+                        pc4, pc5 = st.columns(2)
+                        pc4.metric("1차 기대수익", fmt_p(plan['reward_amount']))
+                        pc5.metric("손익비", f"R {plan['rr']:.1f}:1")
 
-            st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정의 책임은 본인에게 있습니다.")
-            st.divider()
+                st.caption(
+                    f"계산 기준: 계좌 {fmt_p(acct_capital)} · 거래당 손실 {risk_per_trade:.1f}% "
+                    f"· 종목당 최대 {max_position_pct}% · 최소 손익비 R {min_rr:.1f}"
+                )
 
-            # ── 뉴스 감성 ──────────────────────────────
-            st.subheader("📰 뉴스 감성 분석")
-            if _get_anthropic_key():
-                st.caption("🤖 Claude AI 감성 분석")
-            else:
-                st.caption("📝 키워드 기반 분석 (Claude API 키 설정 시 AI 분석으로 업그레이드)")
-            ns_col1, ns_col2 = st.columns([1, 3])
-            with ns_col1:
-                ns_color = score_color(news_score)
-                ns_label = '긍정적' if news_score >= 60 else ('부정적' if news_score < 40 else '중립')
-                st.markdown(
-                    f"<div style='text-align:center;padding:15px 5px'>"
-                    f"<div style='font-size:42px;font-weight:bold;color:{ns_color}'>{news_score:.0f}</div>"
-                    f"<div style='color:{ns_color};font-size:14px'>{ns_label}</div>"
-                    f"<div style='color:#888;font-size:11px;margin-top:4px'>감성 점수</div>"
-                    f"</div>", unsafe_allow_html=True)
-            with ns_col2:
-                if news_articles:
-                    st.dataframe(pd.DataFrame(news_articles), use_container_width=True, hide_index=True)
+                with st.expander("📐 피보나치 & 피봇 포인트 세부"):
+                    fa, fb = st.columns(2)
+                    with fa:
+                        st.caption("**피보나치 되돌림·확장 (60일 스윙)**")
+                        for k, v in lv['fib'].items():
+                            marker = " ◀ 현재가 근처" if abs(v - cp_lv) < lv['atr']*0.5 else ""
+                            st.caption(f"  {k}: {fmt_p(v)}{marker}")
+                    with fb:
+                        st.caption("**피봇 포인트 (전일 기준)**")
+                        for k, v in lv['piv'].items():
+                            marker = " ◀ 현재가 근처" if abs(v - cp_lv) < lv['atr']*0.5 else ""
+                            st.caption(f"  {k}: {fmt_p(v)}{marker}")
+                    st.caption(f"ATR(14): {fmt_p(lv['atr'])}  |  현재가: {fmt_p(cp_lv)}")
+
+                st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정의 책임은 본인에게 있습니다.")
+
+            with sub5:
+                # ── 뉴스 감성 ──────────────────────────────
+                st.subheader("📰 뉴스 감성 분석")
+                if _get_anthropic_key():
+                    st.caption("🤖 Claude AI 감성 분석")
                 else:
-                    st.info("뉴스 데이터를 가져올 수 없습니다.")
-            st.divider()
+                    st.caption("📝 키워드 기반 분석 (Claude API 키 설정 시 AI 분석으로 업그레이드)")
+                ns_col1, ns_col2 = st.columns([1, 3])
+                with ns_col1:
+                    ns_color = score_color(news_score)
+                    ns_label = '긍정적' if news_score >= 60 else ('부정적' if news_score < 40 else '중립')
+                    st.markdown(
+                        f"<div style='text-align:center;padding:15px 5px'>"
+                        f"<div style='font-size:42px;font-weight:bold;color:{ns_color}'>{news_score:.0f}</div>"
+                        f"<div style='color:{ns_color};font-size:14px'>{ns_label}</div>"
+                        f"<div style='color:#888;font-size:11px;margin-top:4px'>감성 점수</div>"
+                        f"</div>", unsafe_allow_html=True)
+                with ns_col2:
+                    if news_articles:
+                        st.dataframe(pd.DataFrame(news_articles), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("뉴스 데이터를 가져올 수 없습니다.")
 
-            # ── 리스크 분석 ────────────────────────────
-            st.subheader("⚠️ 리스크 분석")
-            if risk_data:
-                rk_cols = st.columns(3)
-                beta_val = risk_data.get('Beta', 1.0)
-                beta_str = f"{beta_val:.2f}"
-                beta_desc = ("📈 고베타 (시장보다 변동 큼)" if beta_val > 1.2
-                             else ("📉 저베타 (시장보다 안정)" if beta_val < 0.8
-                                   else "➡️ 시장 수준 변동성"))
-                rk_cols[0].metric("Beta (vs SPY)", beta_str, beta_desc)
-                rk_cols[1].metric("VaR 95% (1일)", risk_data.get('VaR 95% (1일)', 'N/A'),
-                                  help="95% 신뢰수준: 하루 최대 손실 추정")
-                rk_cols[2].metric("연간 변동성", risk_data.get('연간 변동성', 'N/A'))
-                rk_cols2 = st.columns(3)
-                rk_cols2[0].metric("VaR 99% (1일)", risk_data.get('VaR 99% (1일)', 'N/A'),
-                                   help="99% 신뢰수준: 극단적 하루 손실 추정")
-                rk_cols2[1].metric("CVaR 95%", risk_data.get('CVaR 95%', 'N/A'),
-                                   help="VaR 초과 시 평균 손실 (Expected Shortfall)")
-                sharpe = risk_data.get('Sharpe (RF 4.5%)', 0)
-                sharpe_desc = ("우수" if sharpe > 1 else ("보통" if sharpe > 0 else "저조"))
-                rk_cols2[2].metric("Sharpe Ratio", f"{sharpe:.2f}", sharpe_desc)
-                with st.expander("💡 리스크 지표 해석"):
-                    st.markdown("""
-| 지표 | 의미 | 해석 기준 |
-|---|---|---|
-| **Beta** | 시장(SPY) 대비 민감도 | >1.2 고위험, 0.8~1.2 중간, <0.8 방어적 |
-| **VaR 95%** | 하루 95% 확률로 이 손실 이내 | 절댓값 클수록 단기 위험 높음 |
-| **CVaR 95%** | VaR 초과 시 예상 평균 손실 | 꼬리 리스크 측정 |
-| **연간 변동성** | 연율화 표준편차 | 20% 이하 안정, 40% 이상 고변동 |
-| **Sharpe** | 위험 단위당 초과 수익 | >1 우수, 0~1 보통, <0 저조 |
-""")
-            else:
-                st.info("리스크 데이터를 불러올 수 없습니다.")
-            st.divider()
+                # ── 리스크 분석 ────────────────────────────
+                st.subheader("⚠️ 리스크 분석")
+                if risk_data:
+                    rk_cols = st.columns(3)
+                    beta_val = risk_data.get('Beta', 1.0)
+                    beta_str = f"{beta_val:.2f}"
+                    beta_desc = ("📈 고베타 (시장보다 변동 큼)" if beta_val > 1.2
+                                 else ("📉 저베타 (시장보다 안정)" if beta_val < 0.8
+                                       else "➡️ 시장 수준 변동성"))
+                    rk_cols[0].metric("Beta (vs SPY)", beta_str, beta_desc)
+                    rk_cols[1].metric("VaR 95% (1일)", risk_data.get('VaR 95% (1일)', 'N/A'),
+                                      help="95% 신뢰수준: 하루 최대 손실 추정")
+                    rk_cols[2].metric("연간 변동성", risk_data.get('연간 변동성', 'N/A'))
+                    rk_cols2 = st.columns(3)
+                    rk_cols2[0].metric("VaR 99% (1일)", risk_data.get('VaR 99% (1일)', 'N/A'),
+                                       help="99% 신뢰수준: 극단적 하루 손실 추정")
+                    rk_cols2[1].metric("CVaR 95%", risk_data.get('CVaR 95%', 'N/A'),
+                                       help="VaR 초과 시 평균 손실 (Expected Shortfall)")
+                    sharpe = risk_data.get('Sharpe (RF 4.5%)', 0)
+                    sharpe_desc = ("우수" if sharpe > 1 else ("보통" if sharpe > 0 else "저조"))
+                    rk_cols2[2].metric("Sharpe Ratio", f"{sharpe:.2f}", sharpe_desc)
+                    with st.expander("💡 리스크 지표 해석"):
+                        st.markdown("""
+    | 지표 | 의미 | 해석 기준 |
+    |---|---|---|
+    | **Beta** | 시장(SPY) 대비 민감도 | >1.2 고위험, 0.8~1.2 중간, <0.8 방어적 |
+    | **VaR 95%** | 하루 95% 확률로 이 손실 이내 | 절댓값 클수록 단기 위험 높음 |
+    | **CVaR 95%** | VaR 초과 시 예상 평균 손실 | 꼬리 리스크 측정 |
+    | **연간 변동성** | 연율화 표준편차 | 20% 이하 안정, 40% 이상 고변동 |
+    | **Sharpe** | 위험 단위당 초과 수익 | >1 우수, 0~1 보통, <0 저조 |
+    """)
+                else:
+                    st.info("리스크 데이터를 불러올 수 없습니다.")
 
-            # ── 몬테카를로 시뮬레이션 ─────────────────
-            st.subheader("🎲 몬테카를로 시뮬레이션")
-            st.caption("과거 변동성을 기반으로 미래 가격 분포를 시뮬레이션합니다.")
+                # ── 몬테카를로 시뮬레이션 ─────────────────
+                st.subheader("🎲 몬테카를로 시뮬레이션")
+                st.caption("과거 변동성을 기반으로 미래 가격 분포를 시뮬레이션합니다.")
 
-            mc_c1, mc_c2, mc_c3 = st.columns(3)
-            mc_days = mc_c1.selectbox("예측 기간", [30, 60, 90, 120, 180, 252],
-                                      index=1, format_func=lambda x: f"{x}거래일 (~{x//21}개월)")
-            mc_sims = mc_c2.selectbox("시뮬레이션 횟수", [200, 500, 1000, 2000], index=1)
-            mc_run = mc_c3.button("🎲 시뮬레이션 실행", key="mc_run")
+                mc_c1, mc_c2, mc_c3 = st.columns(3)
+                mc_days = mc_c1.selectbox("예측 기간", [30, 60, 90, 120, 180, 252],
+                                          index=1, format_func=lambda x: f"{x}거래일 (~{x//21}개월)")
+                mc_sims = mc_c2.selectbox("시뮬레이션 횟수", [200, 500, 1000, 2000], index=1)
+                mc_run = mc_c3.button("🎲 시뮬레이션 실행", key="mc_run")
 
-            if mc_run:
-                with st.spinner("시뮬레이션 실행 중..."):
-                    mc_paths, mc_stats = calc_monte_carlo(df, days=mc_days, n_sims=mc_sims)
+                if mc_run:
+                    with st.spinner("시뮬레이션 실행 중..."):
+                        mc_paths, mc_stats = calc_monte_carlo(df, days=mc_days, n_sims=mc_sims)
 
-                mc_m1, mc_m2, mc_m3, mc_m4 = st.columns(4)
-                mc_m1.metric("상승 확률", f"{mc_stats['prob_up']:.1f}%")
-                mc_m2.metric("예상 중앙값", fmt_p(mc_stats['median']),
-                             f"{mc_stats['ret_median']:+.1f}%")
-                mc_m3.metric("낙관 (95%)", fmt_p(mc_stats['p95']),
-                             f"{mc_stats['ret_p95']:+.1f}%")
-                mc_m4.metric("비관 (5%)", fmt_p(mc_stats['p5']),
-                             f"{mc_stats['ret_p5']:+.1f}%")
+                    mc_m1, mc_m2, mc_m3, mc_m4 = st.columns(4)
+                    mc_m1.metric("상승 확률", f"{mc_stats['prob_up']:.1f}%")
+                    mc_m2.metric("예상 중앙값", fmt_p(mc_stats['median']),
+                                 f"{mc_stats['ret_median']:+.1f}%")
+                    mc_m3.metric("낙관 (95%)", fmt_p(mc_stats['p95']),
+                                 f"{mc_stats['ret_p95']:+.1f}%")
+                    mc_m4.metric("비관 (5%)", fmt_p(mc_stats['p5']),
+                                 f"{mc_stats['ret_p5']:+.1f}%")
 
-                mc_m5, mc_m6, mc_m7 = st.columns(3)
-                mc_m5.metric("10%+ 상승 확률", f"{mc_stats['prob_up10']:.1f}%")
-                mc_m6.metric("10%+ 하락 확률", f"{mc_stats['prob_down10']:.1f}%")
-                mc_m7.metric("일간 변동성", f"{mc_stats['daily_vol']*100:.2f}%")
+                    mc_m5, mc_m6, mc_m7 = st.columns(3)
+                    mc_m5.metric("10%+ 상승 확률", f"{mc_stats['prob_up10']:.1f}%")
+                    mc_m6.metric("10%+ 하락 확률", f"{mc_stats['prob_down10']:.1f}%")
+                    mc_m7.metric("일간 변동성", f"{mc_stats['daily_vol']*100:.2f}%")
 
-                # 시뮬레이션 경로 차트
-                fig_mc = go.Figure()
-                future_dates = pd.bdate_range(df.index[-1], periods=mc_days+1)[1:]
-                n_show = min(mc_sims, 100)
-                for i in range(n_show):
-                    fig_mc.add_trace(go.Scatter(
-                        x=future_dates, y=mc_paths[i],
-                        mode='lines', line=dict(width=0.5, color='rgba(41,98,255,0.08)'),
-                        showlegend=False, hoverinfo='skip'))
+                    # 시뮬레이션 경로 차트
+                    fig_mc = go.Figure()
+                    future_dates = pd.bdate_range(df.index[-1], periods=mc_days+1)[1:]
+                    n_show = min(mc_sims, 100)
+                    for i in range(n_show):
+                        fig_mc.add_trace(go.Scatter(
+                            x=future_dates, y=mc_paths[i],
+                            mode='lines', line=dict(width=0.5, color='rgba(41,98,255,0.08)'),
+                            showlegend=False, hoverinfo='skip'))
 
-                p5_path  = np.percentile(mc_paths, 5, axis=0)
-                p50_path = np.percentile(mc_paths, 50, axis=0)
-                p95_path = np.percentile(mc_paths, 95, axis=0)
+                    p5_path  = np.percentile(mc_paths, 5, axis=0)
+                    p50_path = np.percentile(mc_paths, 50, axis=0)
+                    p95_path = np.percentile(mc_paths, 95, axis=0)
 
-                fig_mc.add_trace(go.Scatter(x=future_dates, y=p95_path, name='95% (낙관)',
-                    line=dict(color='#26a69a', width=1.5, dash='dash')))
-                fig_mc.add_trace(go.Scatter(x=future_dates, y=p50_path, name='50% (중앙)',
-                    line=dict(color='#FFD700', width=2.5)))
-                fig_mc.add_trace(go.Scatter(x=future_dates, y=p5_path, name='5% (비관)',
-                    line=dict(color='#ef5350', width=1.5, dash='dash')))
+                    fig_mc.add_trace(go.Scatter(x=future_dates, y=p95_path, name='95% (낙관)',
+                        line=dict(color='#26a69a', width=1.5, dash='dash')))
+                    fig_mc.add_trace(go.Scatter(x=future_dates, y=p50_path, name='50% (중앙)',
+                        line=dict(color='#FFD700', width=2.5)))
+                    fig_mc.add_trace(go.Scatter(x=future_dates, y=p5_path, name='5% (비관)',
+                        line=dict(color='#ef5350', width=1.5, dash='dash')))
 
-                fig_mc.add_hline(y=cp, line_dash='dot', line_color='#888', line_width=1,
-                    annotation_text=f"현재가 {fmt_p(cp)}", annotation_position="left",
-                    annotation_font=dict(color='#888', size=10))
+                    fig_mc.add_hline(y=cp, line_dash='dot', line_color='#888', line_width=1,
+                        annotation_text=f"현재가 {fmt_p(cp)}", annotation_position="left",
+                        annotation_font=dict(color='#888', size=10))
 
-                fig_mc.update_layout(
-                    height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    font=dict(color=TV_TEXT),
-                    title=dict(text=f"{mc_days}거래일 후 가격 분포 ({mc_sims}회 시뮬레이션)",
-                               font=dict(size=13)),
-                    xaxis=dict(gridcolor=TV_GRID),
-                    yaxis=dict(gridcolor=TV_GRID, side='right', tickformat=',.0f'),
-                    legend=dict(orientation='h', y=1.02, bgcolor='rgba(0,0,0,0)'),
-                    margin=dict(l=0, r=60, t=40, b=0))
-                st.plotly_chart(fig_mc, use_container_width=True)
+                    fig_mc.update_layout(
+                        height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        title=dict(text=f"{mc_days}거래일 후 가격 분포 ({mc_sims}회 시뮬레이션)",
+                                   font=dict(size=13)),
+                        xaxis=dict(gridcolor=TV_GRID),
+                        yaxis=dict(gridcolor=TV_GRID, side='right', tickformat=',.0f'),
+                        legend=dict(orientation='h', y=1.02, bgcolor='rgba(0,0,0,0)'),
+                        margin=dict(l=0, r=60, t=40, b=0))
+                    st.plotly_chart(fig_mc, use_container_width=True)
 
-                # 최종 가격 분포 히스토그램
-                final_returns = (mc_paths[:, -1] - cp) / cp * 100
-                fig_hist = go.Figure()
-                fig_hist.add_trace(go.Histogram(
-                    x=final_returns, nbinsx=50,
-                    marker_color=['#26a69a' if r >= 0 else '#ef5350' for r in sorted(final_returns)],
-                    opacity=0.75, name='수익률 분포'))
-                fig_hist.add_vline(x=0, line_color='#FFD700', line_width=2,
-                    annotation_text="현재가", annotation_position="top",
-                    annotation_font=dict(color='#FFD700', size=10))
-                fig_hist.add_vline(x=float(np.median(final_returns)),
-                    line_color='#2962ff', line_width=1.5, line_dash='dash',
-                    annotation_text=f"중앙값 {np.median(final_returns):+.1f}%",
-                    annotation_position="top",
-                    annotation_font=dict(color='#2962ff', size=10))
-                fig_hist.update_layout(
-                    height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    font=dict(color=TV_TEXT),
-                    title=dict(text=f"{mc_days}거래일 후 예상 수익률 분포", font=dict(size=13)),
-                    xaxis=dict(title='수익률 (%)', gridcolor=TV_GRID),
-                    yaxis=dict(title='빈도', gridcolor=TV_GRID),
-                    margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                st.plotly_chart(fig_hist, use_container_width=True)
+                    # 최종 가격 분포 히스토그램
+                    final_returns = (mc_paths[:, -1] - cp) / cp * 100
+                    fig_hist = go.Figure()
+                    fig_hist.add_trace(go.Histogram(
+                        x=final_returns, nbinsx=50,
+                        marker_color=['#26a69a' if r >= 0 else '#ef5350' for r in sorted(final_returns)],
+                        opacity=0.75, name='수익률 분포'))
+                    fig_hist.add_vline(x=0, line_color='#FFD700', line_width=2,
+                        annotation_text="현재가", annotation_position="top",
+                        annotation_font=dict(color='#FFD700', size=10))
+                    fig_hist.add_vline(x=float(np.median(final_returns)),
+                        line_color='#2962ff', line_width=1.5, line_dash='dash',
+                        annotation_text=f"중앙값 {np.median(final_returns):+.1f}%",
+                        annotation_position="top",
+                        annotation_font=dict(color='#2962ff', size=10))
+                    fig_hist.update_layout(
+                        height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        title=dict(text=f"{mc_days}거래일 후 예상 수익률 분포", font=dict(size=13)),
+                        xaxis=dict(title='수익률 (%)', gridcolor=TV_GRID),
+                        yaxis=dict(title='빈도', gridcolor=TV_GRID),
+                        margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
+                    st.plotly_chart(fig_hist, use_container_width=True)
 
-                st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
-            st.divider()
-
-            # ── 차트 ──────────────────────────────────
-            st.subheader("📈 차트")
-            st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
-
-            st.subheader("📋 분석 요약")
-            mtf_d = mtf_scores.get('일봉'); mtf_w = mtf_scores.get('주봉'); mtf_m = mtf_scores.get('월봉')
-            mtf_list = [x['score'] for x in [mtf_d, mtf_w, mtf_m] if x is not None]
-            mtf_avg  = sum(mtf_list) / len(mtf_list) if mtf_list else 50.0
-            mtf_summary = (f"일봉 {mtf_d['score']:.0f} / 주봉 {mtf_w['score']:.0f} / 월봉 {mtf_m['score']:.0f}"
-                           if mtf_d and mtf_w and mtf_m else "N/A")
-            mom_3 = mom_data.get('3M'); mom_12 = mom_data.get('12M')
-            mom_summary = (f"3M {mom_3:+.1f}% / 12M {mom_12:+.1f}%"
-                           if mom_3 is not None and mom_12 is not None else "N/A")
-            dcf_summary = (f"기본 {fmt_p(dcf_det.get('내재가치_기본',0))} ({dcf_det.get('상승여력_기본',0):+.1f}%)"
-                           if dcf_det else "N/A")
-            st.dataframe(pd.DataFrame([
-                {'카테고리':'종합 점수',          '점수':f"{total:.1f}",       '등급':score_label(total),       '비고': f"시장: {regime_icon}"},
-                {'카테고리':'📈 차트+파동',       '점수':f"{t_score:.1f}",     '등급':score_label(t_score),     '비고':f'가중치 {w_tech}%'},
-                {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",     '등급':score_label(f_score),     '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
-                {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",     '등급':score_label(m_score),     '비고':f'가중치 {w_macro}%'},
-                {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mtf_avg:.1f}",     '등급':score_label(mtf_avg),     '비고': mtf_summary},
-                {'카테고리':'📊 모멘텀',          '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mom_summary},
-                {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',             '등급':'-',                      '비고': dcf_summary},
-                {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",  '등급':score_label(news_score),  '비고':'참고용'},
-            ]), use_container_width=True, hide_index=True)
-            st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
+                    st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
 
     # ── Tab 2: 스크리너 ───────────────────────
     with tab2:
