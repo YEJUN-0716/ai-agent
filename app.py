@@ -1907,12 +1907,13 @@ def calc_monte_carlo(df, days=60, n_sims=500, initial=None):
 
 def calc_trade_levels(df, total_score):
     """단타(1~5일)·스윙(2~4주) 실전 매매가 산출.
-    지지/저항 클러스터링, 변동성 적응형 손절, 분할 매수 비중 포함."""
+    RSI/MACD/스토캐스틱/거래량 조건 통합, VWAP, 3분할 매수, 시간손절 포함."""
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     cp  = float(p.iloc[-1])
     atr = float((h - l).rolling(14).mean().iloc[-1])
 
     ma5   = float(p.rolling(5).mean().iloc[-1])
+    ma10  = float(p.rolling(10).mean().iloc[-1])
     ma20  = float(p.rolling(20).mean().iloc[-1])
     ma60  = float(p.rolling(60).mean().iloc[-1])
     ma120 = float(p.rolling(120).mean().iloc[-1])
@@ -1930,37 +1931,39 @@ def calc_trade_levels(df, total_score):
     low60  = float(l.tail(60).min())
 
     vr = float(v.iloc[-1]) / (float(v.rolling(20).mean().iloc[-1]) + 1e-9)
+    vwap = float((p * v).rolling(20).sum().iloc[-1] / (v.rolling(20).sum().iloc[-1] + 1e-9))
+
+    rsi_v = float(calc_rsi(p).iloc[-1])
+    ml, sl, _ = calc_macd(p)
+    macd_bull = float(ml.iloc[-1]) > float(sl.iloc[-1])
+    sk_s, sd_s = calc_stochastic(h, l, p)
+    stoch_v = float(sk_s.iloc[-1])
+    adx_s, pdi_s, ndi_s = calc_adx(h, l, p)
+    adx_v = float(adx_s.iloc[-1]) if not np.isnan(float(adx_s.iloc[-1])) else 20
+    trend_up = float(pdi_s.iloc[-1]) > float(ndi_s.iloc[-1])
+    above_vwap = cp > vwap
 
     # ── 피보나치 (60일 스윙) ───────────────────────
-    sw_high  = high60
-    sw_low   = low60
-    fib_rng  = sw_high - sw_low
+    sw_high = high60; sw_low = low60; fib_rng = sw_high - sw_low
     fib = {
-        '23.6%':       sw_high - 0.236 * fib_rng,
-        '38.2%':       sw_high - 0.382 * fib_rng,
-        '50.0%':       sw_high - 0.500 * fib_rng,
-        '61.8%':       sw_high - 0.618 * fib_rng,
-        '78.6%':       sw_high - 0.786 * fib_rng,
-        '확장 127.2%': sw_high + 0.272 * fib_rng,
-        '확장 161.8%': sw_high + 0.618 * fib_rng,
+        '23.6%': sw_high - 0.236*fib_rng, '38.2%': sw_high - 0.382*fib_rng,
+        '50.0%': sw_high - 0.500*fib_rng, '61.8%': sw_high - 0.618*fib_rng,
+        '78.6%': sw_high - 0.786*fib_rng,
+        '확장 127.2%': sw_high + 0.272*fib_rng, '확장 161.8%': sw_high + 0.618*fib_rng,
     }
 
-    # ── 피봇 포인트 (전일 기준) ────────────────────
+    # ── 피봇 포인트 ───────────────────────────────
     prev_h = float(h.iloc[-2]) if len(h) >= 2 else float(h.iloc[-1])
     prev_l = float(l.iloc[-2]) if len(l) >= 2 else float(l.iloc[-1])
     prev_c = float(p.iloc[-2]) if len(p) >= 2 else float(p.iloc[-1])
     pivot  = (prev_h + prev_l + prev_c) / 3
     piv = {
-        'R3': pivot + 2*(prev_h - prev_l),
-        'R2': pivot + (prev_h - prev_l),
-        'R1': 2*pivot - prev_l,
-        'PP': pivot,
-        'S1': 2*pivot - prev_h,
-        'S2': pivot - (prev_h - prev_l),
-        'S3': pivot - 2*(prev_h - prev_l),
+        'R3': pivot + 2*(prev_h-prev_l), 'R2': pivot + (prev_h-prev_l),
+        'R1': 2*pivot - prev_l, 'PP': pivot,
+        'S1': 2*pivot - prev_h, 'S2': pivot - (prev_h-prev_l),
+        'S3': pivot - 2*(prev_h-prev_l),
     }
 
-    # ── 지지/저항 클러스터 (가까운 가격대 그룹핑) ──
     def _nearest_below(levels, ref, max_dist_pct=5.0):
         valid = [x for x in levels if ref * (1 - max_dist_pct/100) < x <= ref]
         return sorted(valid, reverse=True)
@@ -1969,112 +1972,147 @@ def calc_trade_levels(df, total_score):
         valid = [x for x in levels if ref < x < ref * (1 + max_dist_pct/100)]
         return sorted(valid)
 
-    sup_pool = [ma20, ma60, ma120, bb_lower, bb_middle, piv['S1'], piv['S2'],
-                fib['38.2%'], fib['50.0%'], fib['61.8%'], low5, low20]
-    res_pool = [ma20, ma60, ma120, bb_upper, piv['R1'], piv['R2'],
+    sup_pool = [ma10, ma20, ma60, ma120, bb_lower, bb_middle, vwap,
+                piv['S1'], piv['S2'], fib['38.2%'], fib['50.0%'], fib['61.8%'], low5, low20]
+    res_pool = [ma10, ma20, ma60, ma120, bb_upper, piv['R1'], piv['R2'],
                 fib['23.6%'], fib['확장 127.2%'], high5, high20, high60]
 
+    safe = lambda a, b: a / b * 100 if b > 0 else 0.0
+
+    # ── 진입 조건 체크 ─────────────────────────────
+    dt_conditions = []
+    if rsi_v < 35: dt_conditions.append('RSI 과매도 ✅')
+    elif rsi_v > 65: dt_conditions.append('RSI 과매수 ⚠️')
+    else: dt_conditions.append(f'RSI {rsi_v:.0f} 중립')
+    if macd_bull: dt_conditions.append('MACD 매수 ✅')
+    else: dt_conditions.append('MACD 매도 ⚠️')
+    if stoch_v < 25: dt_conditions.append('스토캐 과매도 ✅')
+    elif stoch_v > 75: dt_conditions.append('스토캐 과매수 ⚠️')
+    if above_vwap: dt_conditions.append('VWAP 위 ✅')
+    else: dt_conditions.append('VWAP 아래 ⚠️')
+    if vr >= 1.0: dt_conditions.append(f'거래량 {vr:.1f}x ✅')
+    else: dt_conditions.append(f'거래량 {vr:.1f}x 부족 ⚠️')
+    dt_bull_cnt = sum(1 for c in dt_conditions if '✅' in c)
+
     # ── 단타 (1~5일) ──────────────────────────────
-    if total_score >= 70:
-        dt_e1 = cp;  dt_be1 = '현재가 (강세 즉시진입)'
-        dt_strategy = '✅ 즉시 진입 — 1차 60% / 눌림 시 2차 40%'
-        dt_alloc = '1차 60% / 2차 40%'
-    elif total_score >= 55:
+    if total_score >= 70 and dt_bull_cnt >= 3:
+        dt_e1 = cp;  dt_be1 = '현재가 (강세 + 지표 합류)'
+        dt_strategy = f'✅ 즉시 진입 ({dt_bull_cnt}/5 조건 충족)'
+        dt_alloc = '1차 60% / 2차 30% / 3차 10%'
+    elif total_score >= 55 and dt_bull_cnt >= 2:
         sups = _nearest_below(sup_pool, cp, 3.0)
-        dt_e1 = sups[0] if sups else cp - atr * 0.3
-        dt_be1 = '최근접 지지선'
-        dt_strategy = '⏳ 지지 확인 후 진입 — 1차 50% / 2차 50%'
-        dt_alloc = '1차 50% / 2차 50%'
+        dt_e1 = sups[0] if sups else max(cp - atr * 0.3, vwap)
+        dt_be1 = f'지지선 / VWAP {safe(vwap-cp, cp):+.1f}%'
+        dt_strategy = f'⏳ 지지 확인 후 ({dt_bull_cnt}/5 조건)'
+        dt_alloc = '1차 50% / 2차 30% / 3차 20%'
     else:
         sups = _nearest_below(sup_pool, cp, 5.0)
         dt_e1 = sups[0] if sups else piv['S1']
         dt_be1 = '하방 지지선'
-        dt_strategy = '🔍 강한 지지 + 반등 캔들 확인 후 — 1차 40% / 2차 60%'
-        dt_alloc = '1차 40% / 2차 60%'
+        dt_strategy = f'🔍 반등 확인 필수 ({dt_bull_cnt}/5 조건)'
+        dt_alloc = '1차 40% / 2차 30% / 3차 30%'
 
-    sups_below_e1 = _nearest_below(sup_pool, dt_e1 * 0.999, 4.0)
-    dt_e2 = sups_below_e1[0] if sups_below_e1 else dt_e1 - atr * 0.8
+    sups2 = _nearest_below(sup_pool, dt_e1 * 0.999, 4.0)
+    dt_e2 = sups2[0] if sups2 else dt_e1 - atr * 0.6
+    sups3 = _nearest_below(sup_pool, dt_e2 * 0.999, 4.0)
+    dt_e3 = sups3[0] if sups3 else dt_e2 - atr * 0.6
 
-    dt_stop = dt_e2 - atr * 0.8
-    if dt_stop >= dt_e2 * 0.995:
-        dt_stop = dt_e2 - atr * 1.0
+    dt_stop = dt_e3 - atr * 0.5
+    if dt_stop >= dt_e3 * 0.995: dt_stop = dt_e3 - atr * 0.8
 
     res_above = _nearest_above(res_pool, cp, 8.0)
-    dt_t1 = res_above[0] if res_above else cp + atr * 1.5
-    dt_t2_cands = [x for x in res_above if x > dt_t1 * 1.005]
-    dt_t2 = dt_t2_cands[0] if dt_t2_cands else dt_t1 + atr * 1.5
+    dt_t1 = res_above[0] if res_above else cp + atr * 1.2
+    dt_t2_c = [x for x in res_above if x > dt_t1 * 1.005]
+    dt_t2 = dt_t2_c[0] if dt_t2_c else dt_t1 + atr * 1.0
 
-    dt_trailing = f"고점 대비 −{atr*0.7:.2f} (ATR×0.7)"
-
+    dt_trailing = f"고점 −ATR×0.7 ({atr*0.7:.2f})"
+    dt_time_stop = '3일 내 +1% 미달 시 청산 검토'
     dt_risk = max(dt_e1 - dt_stop, 1e-9)
-    dt_rr1  = (dt_t1 - dt_e1) / dt_risk
-    dt_rr2  = (dt_t2 - dt_e1) / dt_risk
+
+    # ── 스윙 진입 조건 ─────────────────────────────
+    sw_conditions = []
+    if trend_up: sw_conditions.append('추세 상승(DI+>DI−) ✅')
+    else: sw_conditions.append('추세 하락(DI−>DI+) ⚠️')
+    if adx_v > 20: sw_conditions.append(f'ADX {adx_v:.0f} 추세 ✅')
+    else: sw_conditions.append(f'ADX {adx_v:.0f} 횡보 ⚠️')
+    if cp > ma20: sw_conditions.append('MA20 위 ✅')
+    else: sw_conditions.append('MA20 아래 ⚠️')
+    if cp > ma60: sw_conditions.append('MA60 위 ✅')
+    else: sw_conditions.append('MA60 아래 ⚠️')
+    if macd_bull: sw_conditions.append('MACD 매수 ✅')
+    else: sw_conditions.append('MACD 매도 ⚠️')
+    sw_bull_cnt = sum(1 for c in sw_conditions if '✅' in c)
 
     # ── 스윙 (2~4주) ──────────────────────────────
-    if total_score >= 70:
-        sw_e1 = cp;  sw_be1 = '현재가 (강세 즉시진입)'
-        sw_strategy = '✅ 분할 매수 시작 — 1차 50% / 눌림 시 2차 50%'
-        sw_alloc = '1차 50% / 2차 50%'
-    elif total_score >= 55:
-        sw_sups = _nearest_below([fib['38.2%'], fib['50.0%'], ma20, ma60, low20], cp, 5.0)
+    if total_score >= 70 and sw_bull_cnt >= 3:
+        sw_e1 = cp;  sw_be1 = '현재가 (추세 + 지표 합류)'
+        sw_strategy = f'✅ 분할 매수 시작 ({sw_bull_cnt}/5 조건)'
+        sw_alloc = '1차 40% / 2차 30% / 3차 30%'
+    elif total_score >= 55 and sw_bull_cnt >= 2:
+        sw_sups = _nearest_below([fib['38.2%'], fib['50.0%'], ma20, ma60, vwap, low20], cp, 5.0)
         sw_e1 = sw_sups[0] if sw_sups else cp - atr * 0.5
-        sw_be1 = 'Fib/MA 지지'
-        sw_strategy = '⏳ 지지 대기 — 1차 50% / 2차 50%'
-        sw_alloc = '1차 50% / 2차 50%'
+        sw_be1 = 'Fib / MA / VWAP 지지'
+        sw_strategy = f'⏳ 지지 대기 ({sw_bull_cnt}/5 조건)'
+        sw_alloc = '1차 40% / 2차 30% / 3차 30%'
     else:
         sw_sups = _nearest_below([fib['50.0%'], fib['61.8%'], ma60, ma120, low60], cp, 8.0)
         sw_e1 = sw_sups[0] if sw_sups else fib['61.8%']
         sw_be1 = '깊은 지지선'
-        sw_strategy = '🔍 추세 전환 확인 후 — 1차 40% / 2차 60%'
-        sw_alloc = '1차 40% / 2차 60%'
+        sw_strategy = f'🔍 추세 전환 확인 필수 ({sw_bull_cnt}/5 조건)'
+        sw_alloc = '1차 30% / 2차 30% / 3차 40%'
 
-    sw_sups_below = _nearest_below([fib['50.0%'], fib['61.8%'], fib['78.6%'], ma60, ma120, low60],
-                                    sw_e1 * 0.999, 6.0)
-    sw_e2 = sw_sups_below[0] if sw_sups_below else sw_e1 - atr * 1.5
-    sw_be2 = 'Fib 50~61.8% / MA60'
+    sw_sups2 = _nearest_below([fib['50.0%'], fib['61.8%'], fib['78.6%'], ma60, ma120, low60],
+                               sw_e1 * 0.999, 6.0)
+    sw_e2 = sw_sups2[0] if sw_sups2 else sw_e1 - atr * 1.2
+    sw_sups3 = _nearest_below([fib['61.8%'], fib['78.6%'], ma120, low60],
+                               sw_e2 * 0.999, 6.0)
+    sw_e3 = sw_sups3[0] if sw_sups3 else sw_e2 - atr * 1.2
 
-    sw_stop = sw_e2 - atr * 1.5
-    if sw_stop >= sw_e2 * 0.995:
-        sw_stop = sw_e2 - atr * 2.0
+    sw_stop = sw_e3 - atr * 1.2
+    if sw_stop >= sw_e3 * 0.995: sw_stop = sw_e3 - atr * 1.8
 
     sw_res = _nearest_above([fib['23.6%'], fib['확장 127.2%'], fib['확장 161.8%'],
                               sw_high, ma120, high60], cp, 15.0)
     sw_t1 = sw_res[0] if sw_res else cp * 1.08
-    sw_t2_cands = [x for x in sw_res if x > sw_t1 * 1.005]
-    sw_t2 = sw_t2_cands[0] if sw_t2_cands else sw_t1 * 1.05
+    sw_t2_c = [x for x in sw_res if x > sw_t1 * 1.005]
+    sw_t2 = sw_t2_c[0] if sw_t2_c else sw_t1 * 1.05
+    sw_t3 = sw_t2 * 1.05
 
-    sw_trailing = f"고점 대비 −{atr*1.2:.2f} (ATR×1.2)"
-
+    sw_trailing = f"고점 −ATR×1.5 ({atr*1.5:.2f})"
+    sw_time_stop = '2주 내 +3% 미달 시 비중 축소 검토'
     sw_risk = max(sw_e1 - sw_stop, 1e-9)
-    sw_rr1  = (sw_t1 - sw_e1) / sw_risk
-    sw_rr2  = (sw_t2 - sw_e1) / sw_risk
-
-    safe = lambda a, b: a / b * 100 if b > 0 else 0.0
 
     return {
-        'cp': cp, 'atr': atr, 'pivot': pivot, 'fib': fib, 'piv': piv,
+        'cp': cp, 'atr': atr, 'pivot': pivot, 'fib': fib, 'piv': piv, 'vwap': vwap,
         'dantta': {
             'strategy': dt_strategy, 'alloc': dt_alloc,
-            'entry1':  dt_e1,  'basis_e1':   dt_be1,
-            'entry2':  dt_e2,  'basis_e2':   '차순위 지지선',
-            'target1': dt_t1,  'basis_t1':   '최근접 저항선',
-            'target2': dt_t2,  'basis_t2':   '차순위 저항선',
-            'stop':    dt_stop,'basis_stop':  '2차매수 −ATR×0.8',
-            'trailing': dt_trailing,
-            'rr1': round(dt_rr1,1), 'rr2': round(dt_rr2,1),
+            'conditions': dt_conditions, 'bull_cnt': dt_bull_cnt,
+            'entry1': dt_e1, 'basis_e1': dt_be1,
+            'entry2': dt_e2, 'basis_e2': '2차 지지선',
+            'entry3': dt_e3, 'basis_e3': '3차 지지선 (최종)',
+            'target1': dt_t1, 'basis_t1': '최근접 저항선',
+            'target2': dt_t2, 'basis_t2': '차순위 저항선',
+            'stop': dt_stop, 'basis_stop': '3차매수 −ATR×0.5',
+            'trailing': dt_trailing, 'time_stop': dt_time_stop,
+            'rr1': round((dt_t1-dt_e1)/dt_risk, 1),
+            'rr2': round((dt_t2-dt_e1)/dt_risk, 1),
             'ret1': safe(dt_t1-dt_e1, dt_e1),
             'ret2': safe(dt_t2-dt_e1, dt_e1),
             'risk_pct': safe(dt_e1-dt_stop, dt_e1),
         },
         'swing': {
             'strategy': sw_strategy, 'alloc': sw_alloc,
-            'entry1':  sw_e1,  'basis_e1':   sw_be1,
-            'entry2':  sw_e2,  'basis_e2':   sw_be2,
-            'target1': sw_t1,  'basis_t1':   '최근접 저항선',
-            'target2': sw_t2,  'basis_t2':   '차순위 저항선',
-            'stop':    sw_stop,'basis_stop':  '2차매수 −ATR×1.5',
-            'trailing': sw_trailing,
-            'rr1': round(sw_rr1,1), 'rr2': round(sw_rr2,1),
+            'conditions': sw_conditions, 'bull_cnt': sw_bull_cnt,
+            'entry1': sw_e1, 'basis_e1': sw_be1,
+            'entry2': sw_e2, 'basis_e2': 'Fib 50~61.8% / MA60',
+            'entry3': sw_e3, 'basis_e3': 'Fib 78.6% / MA120 (최종)',
+            'target1': sw_t1, 'basis_t1': '최근접 저항선',
+            'target2': sw_t2, 'basis_t2': '차순위 저항선',
+            'target3': sw_t3, 'basis_t3': '확장 목표 (+5%)',
+            'stop': sw_stop, 'basis_stop': '3차매수 −ATR×1.2',
+            'trailing': sw_trailing, 'time_stop': sw_time_stop,
+            'rr1': round((sw_t1-sw_e1)/sw_risk, 1),
+            'rr2': round((sw_t2-sw_e1)/sw_risk, 1),
             'ret1': safe(sw_t1-sw_e1, sw_e1),
             'ret2': safe(sw_t2-sw_e1, sw_e1),
             'risk_pct': safe(sw_e1-sw_stop, sw_e1),
@@ -2947,53 +2985,51 @@ def main():
                 dt    = lv['dantta']
                 sw    = lv['swing']
 
-                lv_c1, lv_c2 = st.columns(2)
-
-                with lv_c1:
-                    dt_rr_color = '#4caf50' if dt['rr1'] >= 2 else ('#ff9800' if dt['rr1'] >= 1 else '#ef5350')
+                def _render_strategy(label, icon, color, bg, tr, cp_ref):
+                    rr_c = '#4caf50' if tr['rr1'] >= 2 else ('#ff9800' if tr['rr1'] >= 1 else '#ef5350')
                     st.markdown(
-                        f"<div style='background:#0d1b2e;border:1px solid #42a5f544;border-radius:10px;"
-                        f"padding:12px 16px;margin-bottom:8px'>"
-                        f"<div style='color:#42a5f5;font-weight:700;font-size:15px'>⚡ 단타 전략 (1~5일)</div>"
-                        f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{dt['strategy']}</div>"
-                        f"<div style='color:#888;font-size:11px;margin-top:2px'>"
-                        f"손익비 <b style='color:{dt_rr_color}'>R {dt['rr1']:.1f}:1</b>"
-                        f" · 손절폭 <b style='color:#ef5350'>{dt['risk_pct']:.1f}%</b>"
-                        f" · 비중 <b>{dt.get('alloc','')}</b></div>"
-                        f"<div style='color:#666;font-size:10px;margin-top:2px'>"
-                        f"트레일링: {dt.get('trailing','')}</div>"
+                        f"<div style='background:{bg};border:1px solid {color}44;border-radius:10px;"
+                        f"padding:14px 16px;margin-bottom:8px'>"
+                        f"<div style='color:{color};font-weight:700;font-size:16px'>{icon} {label}</div>"
+                        f"<div style='color:#ccc;font-size:13px;margin-top:4px'>{tr['strategy']}</div>"
+                        f"<div style='color:#888;font-size:11px;margin-top:4px'>"
+                        f"손익비 <b style='color:{rr_c}'>R {tr['rr1']:.1f}:1</b>"
+                        f" · 손절 <b style='color:#ef5350'>{tr['risk_pct']:.1f}%</b>"
+                        f" · 비중 <b>{tr['alloc']}</b></div>"
                         f"</div>", unsafe_allow_html=True)
-                    dt_rows = [
-                        {'구분':'🟢 1차 매수','가격':fmt_p(dt['entry1']),'현재가 대비':f"{(dt['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e1']},
-                        {'구분':'🟩 2차 매수','가격':fmt_p(dt['entry2']),'현재가 대비':f"{(dt['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':dt['basis_e2']},
-                        {'구분':'🔵 1차 목표','가격':fmt_p(dt['target1']),'현재가 대비':f"+{dt['ret1']:.1f}%",'근거':dt['basis_t1']},
-                        {'구분':'🔷 2차 목표','가격':fmt_p(dt['target2']),'현재가 대비':f"+{dt['ret2']:.1f}%",'근거':dt['basis_t2']},
-                        {'구분':'🔴 손절가',  '가격':fmt_p(dt['stop']),  '현재가 대비':f"-{dt['risk_pct']:.1f}%",'근거':dt['basis_stop']},
-                    ]
-                    st.dataframe(pd.DataFrame(dt_rows), use_container_width=True, hide_index=True)
 
-                with lv_c2:
-                    sw_rr_color = '#4caf50' if sw['rr1'] >= 2 else ('#ff9800' if sw['rr1'] >= 1 else '#ef5350')
-                    st.markdown(
-                        f"<div style='background:#1a1a0a;border:1px solid #ff980044;border-radius:10px;"
-                        f"padding:12px 16px;margin-bottom:8px'>"
-                        f"<div style='color:#ff9800;font-weight:700;font-size:15px'>📈 스윙 전략 (2~4주)</div>"
-                        f"<div style='color:#aaa;font-size:12px;margin-top:3px'>{sw['strategy']}</div>"
-                        f"<div style='color:#888;font-size:11px;margin-top:2px'>"
-                        f"손익비 <b style='color:{sw_rr_color}'>R {sw['rr1']:.1f}:1</b>"
-                        f" · 손절폭 <b style='color:#ef5350'>{sw['risk_pct']:.1f}%</b>"
-                        f" · 비중 <b>{sw.get('alloc','')}</b></div>"
-                        f"<div style='color:#666;font-size:10px;margin-top:2px'>"
-                        f"트레일링: {sw.get('trailing','')}</div>"
-                        f"</div>", unsafe_allow_html=True)
-                    sw_rows = [
-                        {'구분':'🟢 1차 매수','가격':fmt_p(sw['entry1']),'현재가 대비':f"{(sw['entry1']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e1']},
-                        {'구분':'🟩 2차 매수','가격':fmt_p(sw['entry2']),'현재가 대비':f"{(sw['entry2']-cp_lv)/cp_lv*100:+.1f}%",'근거':sw['basis_e2']},
-                        {'구분':'🔵 1차 목표','가격':fmt_p(sw['target1']),'현재가 대비':f"+{sw['ret1']:.1f}%",'근거':sw['basis_t1']},
-                        {'구분':'🔷 2차 목표','가격':fmt_p(sw['target2']),'현재가 대비':f"+{sw['ret2']:.1f}%",'근거':sw['basis_t2']},
-                        {'구분':'🔴 손절가',  '가격':fmt_p(sw['stop']),  '현재가 대비':f"-{sw['risk_pct']:.1f}%",'근거':sw['basis_stop']},
+                    st.caption("**진입 조건 체크**")
+                    cond_text = " &nbsp;|&nbsp; ".join(tr.get('conditions', []))
+                    st.markdown(f"<div style='font-size:12px;color:#aaa'>{cond_text}</div>",
+                                unsafe_allow_html=True)
+
+                    rows = [
+                        {'구분':'🟢 1차 매수','가격':fmt_p(tr['entry1']),
+                         '대비':f"{(tr['entry1']-cp_ref)/cp_ref*100:+.1f}%",'근거':tr['basis_e1']},
+                        {'구분':'🟡 2차 매수','가격':fmt_p(tr['entry2']),
+                         '대비':f"{(tr['entry2']-cp_ref)/cp_ref*100:+.1f}%",'근거':tr['basis_e2']},
+                        {'구분':'🟠 3차 매수','가격':fmt_p(tr['entry3']),
+                         '대비':f"{(tr['entry3']-cp_ref)/cp_ref*100:+.1f}%",'근거':tr['basis_e3']},
+                        {'구분':'🔵 1차 목표','가격':fmt_p(tr['target1']),
+                         '대비':f"+{tr['ret1']:.1f}%",'근거':tr['basis_t1']},
+                        {'구분':'🔷 2차 목표','가격':fmt_p(tr['target2']),
+                         '대비':f"+{tr['ret2']:.1f}%",'근거':tr['basis_t2']},
                     ]
-                    st.dataframe(pd.DataFrame(sw_rows), use_container_width=True, hide_index=True)
+                    if 'target3' in tr:
+                        rows.append({'구분':'💎 3차 목표','가격':fmt_p(tr['target3']),
+                                     '대비':f"+{(tr['target3']-tr['entry1'])/tr['entry1']*100:.1f}%",
+                                     '근거':tr.get('basis_t3','확장 목표')})
+                    rows.append({'구분':'🔴 손절가','가격':fmt_p(tr['stop']),
+                                 '대비':f"-{tr['risk_pct']:.1f}%",'근거':tr['basis_stop']})
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                    st.caption(f"📏 트레일링: {tr.get('trailing','')}  |  ⏰ 시간손절: {tr.get('time_stop','')}")
+                    if lv.get('vwap'):
+                        vwap_diff = (lv['vwap'] - cp_ref) / cp_ref * 100
+                        st.caption(f"📊 VWAP: {fmt_p(lv['vwap'])} ({vwap_diff:+.1f}%)")
+
+                _render_strategy("단타 전략 (1~5일)", "⚡", "#42a5f5", "#0d1b2e", dt, cp_lv)
+                _render_strategy("스윙 전략 (2~4주)", "📈", "#ff9800", "#1a1a0a", sw, cp_lv)
 
                 st.markdown("#### 🛡️ 실전 포지션 플랜")
                 exec_plans = build_execution_plan(
