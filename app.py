@@ -2656,8 +2656,39 @@ def main():
                             st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
 
                 # ── 차트 ──────────────────────────────────────
-                st.subheader("📈 차트")
-                st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
+                st.subheader("📈 실시간 차트")
+                if is_krw:
+                    _tv_sym = f"KRX:{ticker.split('.')[0]}"
+                else:
+                    _tv_sym = ticker
+                import streamlit.components.v1 as components
+                _tv_html = f"""
+                <div id="tv_chart" style="height:700px;width:100%"></div>
+                <script src="https://s3.tradingview.com/tv.js"></script>
+                <script>
+                new TradingView.widget({{
+                    "autosize": true,
+                    "symbol": "{_tv_sym}",
+                    "interval": "D",
+                    "timezone": "Asia/Seoul",
+                    "theme": "dark",
+                    "style": "1",
+                    "locale": "kr",
+                    "toolbar_bg": "#131722",
+                    "enable_publishing": false,
+                    "hide_side_toolbar": false,
+                    "allow_symbol_change": true,
+                    "studies": ["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],
+                    "container_id": "tv_chart",
+                    "width": "100%",
+                    "height": 700
+                }});
+                </script>
+                """
+                components.html(_tv_html, height=720)
+
+                with st.expander("📊 자체 기술적 분석 차트"):
+                    st.plotly_chart(_draw_chart(df, ticker, is_krw), use_container_width=True)
 
             with sub1:
                 # ── 매매 시그널 ──────────────────────────────
