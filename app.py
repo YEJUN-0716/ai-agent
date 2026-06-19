@@ -2178,7 +2178,7 @@ def _draw_chart(df, ticker, is_krw):
                         row_heights=[0.52,0.14,0.17,0.17], vertical_spacing=0.02)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name='', increasing=dict(line=dict(color=TV_UP,width=1),fillcolor=TV_UP),
+        name='캔들', increasing=dict(line=dict(color=TV_UP,width=1),fillcolor=TV_UP),
         decreasing=dict(line=dict(color=TV_DOWN,width=1),fillcolor=TV_DOWN)), row=1, col=1)
 
     fig.add_trace(go.Scatter(x=df.index, y=bb_u, name='BB',
@@ -2210,14 +2210,20 @@ def _draw_chart(df, ticker, is_krw):
                              line=dict(color='#2962ff',width=1.3)), row=3, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=sig_l,  name='Signal',
                              line=dict(color='#ff6d00',width=1.3)), row=3, col=1)
-    fig.add_hline(y=0, line_color=TV_BORDER, line_width=1, row=3, col=1)
+    fig.add_hline(y=0, line_color=TV_BORDER, line_width=1, row=3, col=1,
+        annotation_text="기준선", annotation_position="right",
+        annotation_font=dict(color=TV_BORDER, size=10))
 
     fig.add_hrect(y0=30, y1=70, fillcolor='rgba(255,255,255,0.03)', line_width=0, row=4, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=rsi_s, name='RSI',
                              line=dict(color='#ce93d8',width=1.4)), row=4, col=1)
-    fig.add_hline(y=70, line_color=TV_DOWN, line_width=0.8, line_dash='dash', row=4, col=1)
+    fig.add_hline(y=70, line_color=TV_DOWN, line_width=0.8, line_dash='dash', row=4, col=1,
+        annotation_text="과매수", annotation_position="right",
+        annotation_font=dict(color=TV_DOWN, size=10))
     fig.add_hline(y=50, line_color=TV_BORDER, line_width=0.8, row=4, col=1)
-    fig.add_hline(y=30, line_color=TV_UP,   line_width=0.8, line_dash='dash', row=4, col=1)
+    fig.add_hline(y=30, line_color=TV_UP,   line_width=0.8, line_dash='dash', row=4, col=1,
+        annotation_text="과매도", annotation_position="right",
+        annotation_font=dict(color=TV_UP, size=10))
 
     ax = dict(gridcolor=TV_GRID, gridwidth=1, zerolinecolor=TV_BORDER,
               tickfont=dict(color=TV_TEXT,size=10), showline=True, linecolor=TV_BORDER, side='right')
@@ -2227,16 +2233,17 @@ def _draw_chart(df, ticker, is_krw):
         hoverlabel=dict(bgcolor='#1e2334', font_color=TV_TEXT, bordercolor=TV_BORDER),
         legend=dict(orientation='h', y=1.01, x=0,
                     bgcolor='rgba(19,23,34,0.8)', bordercolor=TV_BORDER, borderwidth=1, font=dict(size=11)),
-        margin=dict(l=0, r=60, t=30, b=0))
+        title=dict(text=f'{ticker} 기술적 차트', font=dict(size=14)),
+        margin=dict(l=0, r=60, t=40, b=0))
     for i in range(1, 5):
         fig.update_xaxes(row=i, col=1, gridcolor=TV_GRID, showgrid=True,
                          tickfont=dict(color=TV_TEXT,size=10), showline=True, linecolor=TV_BORDER,
                          showticklabels=(i==4))
         fig.update_yaxes(row=i, col=1, **ax)
-    for rn, lbl in [(1,'Price'),(2,'Vol'),(3,'MACD'),(4,'RSI')]:
+    for rn, lbl in [(1,'가격 (캔들)'),(2,'거래량'),(3,'MACD (추세)'),(4,'RSI (과매수/과매도)')]:
         fig.add_annotation(text=lbl, xref='paper', yref=f'y{rn}',
                            x=0.003, y=1, showarrow=False,
-                           font=dict(color=TV_TEXT, size=10), xanchor='left', yanchor='top')
+                           font=dict(color=TV_TEXT, size=12), xanchor='left', yanchor='top')
     return fig
 
 
@@ -3050,11 +3057,11 @@ def main():
                     p95_path = np.percentile(mc_paths, 95, axis=0)
 
                     fig_mc.add_trace(go.Scatter(x=future_dates, y=p95_path, name='95% (낙관)',
-                        line=dict(color='#26a69a', width=1.5, dash='dash')))
+                        line=dict(color='#26a69a', width=2.0, dash='dash')))
                     fig_mc.add_trace(go.Scatter(x=future_dates, y=p50_path, name='50% (중앙)',
                         line=dict(color='#FFD700', width=2.5)))
                     fig_mc.add_trace(go.Scatter(x=future_dates, y=p5_path, name='5% (비관)',
-                        line=dict(color='#ef5350', width=1.5, dash='dash')))
+                        line=dict(color='#ef5350', width=2.0, dash='dash')))
 
                     fig_mc.add_hline(y=cp, line_dash='dot', line_color='#888', line_width=1,
                         annotation_text=f"현재가 {fmt_p(cp)}", annotation_position="left",
@@ -3066,7 +3073,7 @@ def main():
                         title=dict(text=f"{mc_days}거래일 후 가격 분포 ({mc_sims}회 시뮬레이션)",
                                    font=dict(size=13)),
                         xaxis=dict(gridcolor=TV_GRID),
-                        yaxis=dict(gridcolor=TV_GRID, side='right', tickformat=',.0f'),
+                        yaxis=dict(gridcolor=TV_GRID, side='right', tickformat=',.0f', title='예상 가격'),
                         legend=dict(orientation='h', y=1.02, bgcolor='rgba(0,0,0,0)'),
                         margin=dict(l=0, r=60, t=40, b=0))
                     st.plotly_chart(fig_mc, use_container_width=True)
@@ -3090,7 +3097,7 @@ def main():
                         height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                         font=dict(color=TV_TEXT),
                         title=dict(text=f"{mc_days}거래일 후 예상 수익률 분포", font=dict(size=13)),
-                        xaxis=dict(title='수익률 (%)', gridcolor=TV_GRID),
+                        xaxis=dict(title='예상 수익률 (%)', gridcolor=TV_GRID),
                         yaxis=dict(title='빈도', gridcolor=TV_GRID),
                         margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
                     st.plotly_chart(fig_hist, use_container_width=True)
@@ -3265,9 +3272,10 @@ def main():
                     annotation_font=dict(color=TV_DOWN, size=11))
                 fig_dist.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                     font=dict(color=TV_TEXT), showlegend=False,
+                    title=dict(text='신호 점수 분포', font=dict(size=13)),
                     xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
                     yaxis=dict(title='빈도', gridcolor=TV_GRID),
-                    margin=dict(l=10, r=10, t=10, b=10))
+                    margin=dict(l=10, r=10, t=40, b=10))
                 st.plotly_chart(fig_dist, use_container_width=True)
                 st.caption("매수 구간이 5~15%, 매도 구간이 5~15% 정도면 적절합니다. 슬라이더로 조절하세요.")
 
@@ -3286,21 +3294,22 @@ def main():
                     row = eq_df[eq_df['날짜'] == bdate]
                     if not row.empty:
                         fig_eq.add_trace(go.Scatter(x=[bdate], y=[float(row['전략'].iloc[0])],
-                            mode='markers', marker=dict(symbol='triangle-up', size=12, color=TV_UP),
-                            showlegend=False))
+                            mode='markers', marker=dict(symbol='triangle-up', size=14, color=TV_UP),
+                            name='매수', showlegend=False))
                 for sdate in sells_df['날짜']:
                     row = eq_df[eq_df['날짜'] == sdate]
                     if not row.empty:
                         fig_eq.add_trace(go.Scatter(x=[sdate], y=[float(row['전략'].iloc[0])],
-                            mode='markers', marker=dict(symbol='triangle-down', size=12, color=TV_DOWN),
-                            showlegend=False))
+                            mode='markers', marker=dict(symbol='triangle-down', size=14, color=TV_DOWN),
+                            name='매도', showlegend=False))
 
             fig_eq.update_layout(height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                 font=dict(color=TV_TEXT), hovermode='x unified',
-                yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right'),
+                title=dict(text='전략 vs 매수보유 자산 곡선', font=dict(size=14)),
+                yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right', title='자산 (원)'),
                 xaxis=dict(gridcolor=TV_GRID),
                 legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)'),
-                margin=dict(l=0, r=60, t=20, b=0))
+                margin=dict(l=0, r=60, t=50, b=0))
             st.plotly_chart(fig_eq, use_container_width=True)
 
             if not trades_df.empty:
