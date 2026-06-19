@@ -1073,13 +1073,14 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
                  f_score=None, m_score=None,
                  w_tech=100, w_fund=0, w_macro=0):
     """수수료·슬리피지 반영 백테스트.
-    f_score/m_score 전달 시 실전과 동일한 종합점수 기반으로 매매.
+    f_score/m_score 전달 시 펀더멘털/매크로로 임계값을 보정.
+    좋은 펀더멘털 → 매수 조건 완화, 나쁜 펀더멘털 → 매수 조건 강화.
     """
-    tech_sigs = bt_signals_full(df)
+    sigs = bt_signals_full(df)
     if f_score is not None and m_score is not None and w_tech < 100:
-        sigs = tech_sigs * (w_tech / 100) + f_score * (w_fund / 100) + m_score * (w_macro / 100)
-    else:
-        sigs = tech_sigs
+        fm_offset = (f_score - 50) * (w_fund / 100) + (m_score - 50) * (w_macro / 100)
+        buy_th  = buy_th - fm_offset
+        sell_th = sell_th - fm_offset
     prices = df['Close'].values
     dates  = df.index
     n      = len(df)
@@ -3222,7 +3223,8 @@ def main():
             bt_f_score = _bt['bt_f_score']; bt_m_score = _bt['bt_m_score']
 
             if bt_f_score is not None:
-                st.info(f"📊 종합점수 백테스트 — 차트 {_bt['w_tech']}% (동적) + 재무 {bt_f_score:.0f}점 × {_bt['w_fund']}% + 매크로 {bt_m_score:.0f}점 × {_bt['w_macro']}%")
+                _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
+                st.info(f"📊 재무 {bt_f_score:.0f}점 · 매크로 {bt_m_score:.0f}점 → 임계값 보정 {_fm_off:+.1f}점 (매수 {_bt['buy_th']-_fm_off:.0f} / 매도 {_bt['sell_th']-_fm_off:.0f})")
 
             # ── 지표 12개 (3행×4열) ──────────────────
             m_keys = list(metrics.keys()); m_vals = list(metrics.values())
