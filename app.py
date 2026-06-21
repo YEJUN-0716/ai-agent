@@ -2763,7 +2763,7 @@ def main():
             if earn_str:
                 st.caption(earn_str)
             st.markdown(
-                f"<span style='background:{regime_color}22;color:{regime_color};"
+                f"<span style='background:{regime_color}35;color:{regime_color};"
                 f"border:1px solid {regime_color};border-radius:6px;"
                 f"padding:3px 10px;font-size:13px;font-weight:600'>"
                 f"시장 국면: {regime_icon}  (SPY vs MA200 {regime_diff:+.1f}%)</span>",
@@ -2791,8 +2791,8 @@ def main():
             diff = total_adj - total
             diff_str = f"{diff:+.1f}점"
             st.markdown(
-                f"<div style='background:{regime_color_map[regime]}18;"
-                f"border:1px solid {regime_color_map[regime]}55;"
+                f"<div style='background:{regime_color_map[regime]}30;"
+                f"border:1px solid {regime_color_map[regime]}88;"
                 f"border-radius:8px;padding:10px 16px;"
                 f"display:flex;justify-content:space-between;align-items:center'>"
                 f"<span style='color:{regime_color_map[regime]};font-weight:600'>"
@@ -2932,7 +2932,7 @@ def main():
                                    '#ef5350' if sig_ico == '🔴' else
                                    '#ff9800' if sig_ico == '🟡' else '#42a5f5')
                         sig_cols[sig_i % sig_n].markdown(
-                            f"<div style='background:{sig_clr}18;border:1px solid {sig_clr}44;"
+                            f"<div style='background:{sig_clr}30;border:1px solid {sig_clr}66;"
                             f"border-radius:8px;padding:10px 14px;margin:4px 0'>"
                             f"<span style='font-size:18px'>{sig_ico}</span> "
                             f"<span style='color:{sig_clr};font-weight:600;font-size:14px'>{sig_nm}</span><br>"
@@ -3160,7 +3160,7 @@ def main():
                 def _render_strategy(label, icon, color, bg, tr, cp_ref):
                     rr_c = '#4caf50' if tr['rr1'] >= 2 else ('#ff9800' if tr['rr1'] >= 1 else '#ef5350')
                     st.markdown(
-                        f"<div style='background:{bg};border:1px solid {color}44;border-radius:10px;"
+                        f"<div style='background:{bg};border:1px solid {color}66;border-radius:10px;"
                         f"padding:14px 16px;margin-bottom:8px'>"
                         f"<div style='color:{color};font-weight:700;font-size:16px'>{icon} {label}</div>"
                         f"<div style='color:#f0f0f0;font-size:13px;margin-top:4px'>{tr['strategy']}</div>"
@@ -3200,8 +3200,8 @@ def main():
                         vwap_diff = (lv['vwap'] - cp_ref) / cp_ref * 100
                         st.caption(f"📊 VWAP: {fmt_p(lv['vwap'])} ({vwap_diff:+.1f}%)")
 
-                _render_strategy("단타 전략 (1~5일)", "⚡", "#42a5f5", "#0d1b2e", dt, cp_lv)
-                _render_strategy("스윙 전략 (2~4주)", "📈", "#ff9800", "#1a1a0a", sw, cp_lv)
+                _render_strategy("단타 전략 (1~5일)", "⚡", "#42a5f5", "#162640", dt, cp_lv)
+                _render_strategy("스윙 전략 (2~4주)", "📈", "#ff9800", "#2a2210", sw, cp_lv)
 
                 st.markdown("#### 🛡️ 실전 포지션 플랜")
                 exec_plans = build_execution_plan(
@@ -3219,7 +3219,7 @@ def main():
                     notes_text = " · ".join(notes) if notes else "조건 충족"
                     with plan_col:
                         st.markdown(
-                            f"<div style='background:#151923;border:1px solid {verdict_color}66;"
+                            f"<div style='background:#1e2836;border:1px solid {verdict_color}88;"
                             f"border-radius:8px;padding:12px 14px;margin-bottom:8px'>"
                             f"<div style='display:flex;justify-content:space-between;gap:10px'>"
                             f"<b>{plan['label']} 실행 판정</b>"
@@ -3870,7 +3870,7 @@ def main():
                 for _, r in top5.iterrows():
                     comp_c = '#26a69a' if r['composite'] >= 65 else ('#ff9800' if r['composite'] >= 45 else '#ef5350')
                     st.markdown(
-                        f"<div style='background:#151923;border-left:3px solid {comp_c};"
+                        f"<div style='background:#1e2836;border-left:3px solid {comp_c};"
                         f"border-radius:6px;padding:8px 14px;margin:4px 0;"
                         f"display:flex;justify-content:space-between;align-items:center'>"
                         f"<span><b>#{int(r['rank'])} {r['ticker']}</b> "
@@ -3991,7 +3991,7 @@ def main():
                                  f"border-radius:3px;font-size:10px'>HIGH</span>"
                                  if a['priority'] == 'HIGH' else '')
                     st.markdown(
-                        f"<div style='background:#151923;border-left:3px solid {ac};"
+                        f"<div style='background:#1e2836;border-left:3px solid {ac};"
                         f"border-radius:6px;padding:8px 14px;margin:3px 0;"
                         f"display:flex;justify-content:space-between;align-items:center'>"
                         f"<span><b>{a['ticker']}</b> {a['action']} {pri_badge}"
