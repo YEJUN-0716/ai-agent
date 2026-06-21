@@ -2335,19 +2335,38 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
             oversold = rsi < 35; overbought = rsi > 70
             target_w = weights.get(tk, 0) if weights else (1.0/top_n if in_buy else 0)
 
-            if in_buy and (trend_up or oversold) and not overbought:
+            f_score_v = 0
+            if factor_df is not None and not factor_df.empty:
+                f_row = factor_df[factor_df['ticker'] == tk]
+                if not f_row.empty:
+                    f_score_v = float(f_row['composite'].iloc[0])
+
+            is_top_factor = f_score_v >= 75
+            is_strong_factor = f_score_v >= 50
+
+            if in_buy and is_top_factor and not overbought:
                 actions.append({'ticker': tk, 'action': '🟢 매수',
                     'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 상위 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
+                    'reason': f"팩터 {f_score_v:.0f}점 (최상위) — 추세 무관 진입 (RSI {rsi:.0f})",
+                    'priority': 'HIGH', 'mom': f"{mom_3m:+.1f}%"})
+            elif in_buy and (trend_up or oversold) and not overbought:
+                actions.append({'ticker': tk, 'action': '🟢 매수',
+                    'weight': f"{target_w*100:.1f}%",
+                    'reason': f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
                     'priority': 'HIGH' if oversold else 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
+            elif in_buy and is_strong_factor:
+                actions.append({'ticker': tk, 'action': '🟡 조건부 매수',
+                    'weight': f"{target_w*70:.1f}%",
+                    'reason': f"팩터 {f_score_v:.0f}점 — 추세 확인 시 비중 확대 (RSI {rsi:.0f})",
+                    'priority': 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
             elif in_buy:
                 actions.append({'ticker': tk, 'action': '🟡 대기',
                     'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 상위, 추세 미확인 (RSI {rsi:.0f})",
+                    'reason': f"팩터 {f_score_v:.0f}점, 추세·팩터 모두 약함 (RSI {rsi:.0f})",
                     'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
             elif in_sell or (trend_dn and overbought):
                 actions.append({'ticker': tk, 'action': '🔴 매도', 'weight': '0%',
-                    'reason': f"팩터 하위{'+ 하락추세' if trend_dn else ''} (RSI {rsi:.0f})",
+                    'reason': f"팩터 {f_score_v:.0f}점 하위{'+ 하락추세' if trend_dn else ''} (RSI {rsi:.0f})",
                     'priority': 'HIGH', 'mom': f"{mom_3m:+.1f}%"})
             elif trend_dn:
                 actions.append({'ticker': tk, 'action': '🟠 비중축소',
@@ -2357,7 +2376,7 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
             else:
                 actions.append({'ticker': tk, 'action': '⚪ 보유',
                     'weight': f"{target_w*100:.1f}%",
-                    'reason': f"유지 (RSI {rsi:.0f})",
+                    'reason': f"팩터 {f_score_v:.0f}점 유지 (RSI {rsi:.0f})",
                     'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
         except Exception:
             continue
