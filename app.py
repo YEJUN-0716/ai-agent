@@ -2371,6 +2371,233 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
     }
     return actions, rebal_info
 
+
+UNIVERSE_PRESETS = {
+    'S&P 500 대형 30': ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','BRK-B','JPM','V',
+                        'JNJ','UNH','XOM','PG','HD','MA','ABBV','MRK','KO','PEP',
+                        'COST','AVGO','LLY','WMT','MCD','CRM','ADBE','CSCO','ACN','TMO'],
+    'NASDAQ 기술주 20': ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','AVGO','ADBE','CRM',
+                        'AMD','INTC','QCOM','NFLX','PYPL','INTU','AMAT','MU','LRCX','SNPS'],
+    '반도체 15': ['NVDA','AMD','INTC','TSM','ASML','QCOM','AVGO','MU','LRCX','AMAT',
+                 'MRVL','ON','NXPI','TXN','KLAC'],
+    '배당 귀족 15': ['JNJ','PG','KO','PEP','MMM','EMR','ABT','ADP','AFL','SHW',
+                    'GD','ITW','ED','WMT','MCD'],
+    '한국 대형 15': ['005930.KS','000660.KS','035420.KS','005380.KS','051910.KS',
+                    '006400.KS','035720.KS','003670.KS','105560.KS','055550.KS',
+                    '000270.KS','068270.KS','028260.KS','034730.KS','012330.KS'],
+}
+
+
+def get_factor_timing_weights():
+    """VIX/금리 환경 기반 팩터 가중치 자동 조절.
+    고변동성(VIX↑): 저변동성·퀄리티 강조 / 저변동성(VIX↓): 모멘텀 강조
+    금리 상승기: 밸류 강조 / 금리 하락기: 모멘텀·성장 강조"""
+    try:
+        vix_df = yf.download('^VIX', period='3mo', progress=False)
+        tnx_df = yf.download('^TNX', period='3mo', progress=False)
+        for d in [vix_df, tnx_df]:
+            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+        vix = float(vix_df['Close'].iloc[-1]) if not vix_df.empty else 20
+        vix_avg = float(vix_df['Close'].mean()) if not vix_df.empty else 20
+        rate = float(tnx_df['Close'].iloc[-1]) if not tnx_df.empty else 4.0
+        rate_chg = float(tnx_df['Close'].iloc[-1] - tnx_df['Close'].iloc[-30]) if len(tnx_df) >= 30 else 0
+    except Exception:
+        vix, vix_avg, rate, rate_chg = 20, 20, 4.0, 0
+
+    if vix > 25:
+        w = {'momentum': 0.15, 'value': 0.25, 'quality': 0.35, 'low_vol': 0.25}
+        regime = '고변동성 — 퀄리티·저변동 강조'
+    elif vix < 15:
+        w = {'momentum': 0.40, 'value': 0.20, 'quality': 0.25, 'low_vol': 0.15}
+        regime = '저변동성 — 모멘텀 강조'
+    else:
+        w = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+        regime = '보통'
+
+    if rate_chg > 0.3:
+        w['value'] = min(w['value'] + 0.10, 0.40)
+        w['momentum'] = max(w['momentum'] - 0.10, 0.10)
+        regime += ' + 금리상승(밸류↑)'
+    elif rate_chg < -0.3:
+        w['momentum'] = min(w['momentum'] + 0.10, 0.45)
+        w['value'] = max(w['value'] - 0.10, 0.10)
+        regime += ' + 금리하락(모멘텀↑)'
+
+    total = sum(w.values())
+    w = {k: round(v/total, 2) for k, v in w.items()}
+    env = {'vix': round(vix, 1), 'vix_avg': round(vix_avg, 1),
+           'rate': round(rate, 2), 'rate_chg': round(rate_chg, 2), 'regime': regime}
+    return w, env
+
+
+def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, prog_text=None):
+    """섹터 중립 멀티팩터 랭킹. 섹터 내에서 팩터를 정규화하여 섹터 편향 제거."""
+    if factor_weights is None:
+        factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+    end = datetime.now(); start = end - timedelta(days=520)
+    results = []
+    for i, tk in enumerate(tickers):
+        if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
+        if prog_bar: prog_bar.progress((i+1)/len(tickers))
+        try:
+            df = download_stock(tk, start=start, end=end)
+            if df.empty or len(df) < 60: continue
+            df = df.dropna(subset=['Close'])
+            info = yf.Ticker(tk).info
+            cp = float(df['Close'].iloc[-1])
+            sector = info.get('sector', 'Unknown')
+            mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
+            mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+            per = info.get('trailingPE') or info.get('forwardPE')
+            pbr = info.get('priceToBook')
+            ep = (1.0/per*100) if per and per > 0 else 0
+            bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
+            roe = info.get('returnOnEquity')
+            roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
+            pm = info.get('profitMargins')
+            pm_v = (pm*100 if pm else 0)
+            rg = info.get('revenueGrowth')
+            rg_v = (rg*100 if rg else 0)
+            daily_ret = df['Close'].pct_change().dropna()
+            annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
+            results.append({
+                'ticker': tk, 'name': info.get('shortName', tk)[:20], 'price': cp,
+                'sector': sector,
+                'momentum_raw': mom_12m - mom_1m, 'value_raw': ep*0.5+bp*0.5,
+                'quality_raw': roe_v*0.4+pm_v*0.3+rg_v*0.3,
+                'low_vol_raw': max(100-annual_vol, 0),
+                'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
+            })
+        except Exception:
+            continue
+    if not results: return pd.DataFrame()
+    rdf = pd.DataFrame(results)
+    for col in ['momentum_raw','value_raw','quality_raw','low_vol_raw']:
+        fname = col.replace('_raw','')
+        rdf[f'{fname}_global'] = rdf[col].rank(pct=True) * 100
+        rdf[fname] = rdf.groupby('sector')[col].rank(pct=True) * 100
+        rdf[fname] = rdf[fname].fillna(rdf[f'{fname}_global'])
+
+    rdf['composite'] = sum(rdf[k] * v for k, v in factor_weights.items())
+    rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
+    rdf['rank'] = range(1, len(rdf)+1)
+    return rdf
+
+
+def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
+                              factor_weights=None, commission=0.001):
+    """팩터 전략 백테스트: 매월 팩터 Top N 매수, 리밸런싱."""
+    if factor_weights is None:
+        factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+    end = datetime.now()
+    start = end - timedelta(days=years*365+60)
+
+    all_prices = {}
+    for tk in tickers:
+        try:
+            df = download_stock(tk, start=start, end=end)
+            if not df.empty and len(df) >= 60:
+                all_prices[tk] = df['Close']
+        except Exception:
+            continue
+    if len(all_prices) < top_n + 2: return {}, pd.DataFrame(), []
+
+    price_df = pd.DataFrame(all_prices).dropna(how='all').ffill()
+    returns = price_df.pct_change().dropna()
+
+    months = pd.date_range(start=price_df.index[252] if len(price_df) > 252 else price_df.index[60],
+                           end=price_df.index[-1], freq=f'{rebal_months}MS')
+
+    equity = 10000.0
+    eq_history = []
+    holdings = []
+    trade_log = []
+    total_turnover = 0.0
+
+    for mi, month_start in enumerate(months):
+        avail = price_df.loc[:month_start].tail(252)
+        if len(avail) < 60: continue
+
+        scores = {}
+        for tk in all_prices:
+            if tk not in avail.columns: continue
+            col = avail[tk].dropna()
+            if len(col) < 60: continue
+            cp_m = float(col.iloc[-1])
+            mom12 = (cp_m / float(col.iloc[-252])-1)*100 if len(col) >= 252 else 0
+            mom1  = (cp_m / float(col.iloc[-21])-1)*100 if len(col) >= 21 else 0
+            vol_m = float(col.pct_change().dropna().std()) * np.sqrt(252) * 100
+            scores[tk] = {
+                'momentum': mom12 - mom1,
+                'value': 50, 'quality': 50,
+                'low_vol': max(100-vol_m, 0),
+            }
+        if len(scores) < top_n: continue
+
+        sdf = pd.DataFrame(scores).T
+        for f in ['momentum','value','quality','low_vol']:
+            sdf[f] = sdf[f].rank(pct=True)*100
+        sdf['composite'] = sum(sdf[f]*factor_weights.get(f, 0.25) for f in factor_weights)
+        top = sdf.nlargest(top_n, 'composite').index.tolist()
+
+        old_set = set(holdings)
+        new_set = set(top)
+        turnover = len(old_set.symmetric_difference(new_set)) / max(len(new_set), 1)
+        total_turnover += turnover
+        cost = equity * turnover * commission
+        equity -= cost
+
+        month_end_idx = price_df.index[price_df.index >= month_start]
+        if mi + 1 < len(months):
+            next_month = months[mi+1]
+            period_idx = price_df.index[(price_df.index >= month_start) & (price_df.index < next_month)]
+        else:
+            period_idx = price_df.index[price_df.index >= month_start]
+
+        if len(period_idx) == 0: continue
+        period_ret = price_df.loc[period_idx, top].pct_change().mean(axis=1).fillna(0)
+        for d, r in period_ret.items():
+            equity *= (1 + r)
+            eq_history.append({'date': d, 'equity': equity})
+
+        trade_log.append({
+            'date': month_start.strftime('%Y-%m'),
+            'holdings': ', '.join(top),
+            'turnover': f"{turnover*100:.0f}%",
+            'cost': f"{cost:.0f}",
+        })
+        holdings = top
+
+    if not eq_history: return {}, pd.DataFrame(), trade_log
+    eq_df = pd.DataFrame(eq_history)
+
+    total_ret = (equity / 10000 - 1) * 100
+    y = max(years, 0.01)
+    cagr = ((equity/10000)**(1/y)-1)*100
+    eq_s = eq_df['equity']
+    roll_max = eq_s.expanding().max()
+    mdd = float(((eq_s - roll_max)/roll_max*100).min())
+    daily_r = eq_s.pct_change().dropna()
+    sharpe = float(daily_r.mean()/daily_r.std()*np.sqrt(252)) if daily_r.std() > 0 else 0
+    avg_turnover = total_turnover / max(len(trade_log), 1) * 100
+    total_cost_pct = total_turnover * commission * 100
+
+    spy_df = download_stock('SPY', start=start, end=end)
+    spy_ret = 0
+    if not spy_df.empty:
+        spy_start = spy_df['Close'].loc[spy_df.index >= eq_df['date'].iloc[0]].iloc[0]
+        spy_end = float(spy_df['Close'].iloc[-1])
+        spy_ret = (spy_end/float(spy_start)-1)*100
+
+    metrics = {
+        'total_return': round(total_ret, 1), 'cagr': round(cagr, 1),
+        'mdd': round(mdd, 1), 'sharpe': round(sharpe, 2),
+        'avg_turnover': round(avg_turnover, 1), 'total_cost': round(total_cost_pct, 2),
+        'spy_return': round(spy_ret, 1), 'alpha': round(total_ret - spy_ret, 1),
+        'n_rebalances': len(trade_log),
+    }
+    return metrics, eq_df, trade_log
+
 # ─────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────
@@ -3841,20 +4068,49 @@ def main():
     # ── Tab 6: 퀀트 ──────────────────────────────────
     with tab6:
         st.subheader("🧬 퀀트 트레이딩 시스템")
-        st.caption("멀티팩터 랭킹 → 포트폴리오 최적화 → 시스템 시그널")
+        st.caption("멀티팩터 랭킹 → 포트폴리오 최적화 → 시스템 시그널 → 전략 백테스트")
 
-        qt_input = st.text_input("유니버스 (쉼표 구분, 10~30개 권장)",
-            "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,JPM,V,JNJ,UNH,XOM,PG,HD,MA",
-            key="qt_universe")
-        qt_tickers = [t.strip().upper() for t in qt_input.split(',') if t.strip()]
+        qu_c1, qu_c2 = st.columns([1, 2])
+        with qu_c1:
+            qt_preset = st.selectbox("유니버스 프리셋", ["직접 입력"] + list(UNIVERSE_PRESETS.keys()), key="qt_preset")
+        with qu_c2:
+            if qt_preset == "직접 입력":
+                qt_input = st.text_input("종목 (쉼표 구분, 10~30개 권장)",
+                    "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,JPM,V,JNJ,UNH,XOM,PG,HD,MA", key="qt_universe")
+                qt_tickers = [t.strip().upper() for t in qt_input.split(',') if t.strip()]
+            else:
+                qt_tickers = UNIVERSE_PRESETS[qt_preset]
+                st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
-        qt_sub1, qt_sub2, qt_sub3 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널"])
+        qt_sub1, qt_sub2, qt_sub3, qt_sub4 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트"])
 
         with qt_sub1:
-            st.caption("모멘텀(30%) · 퀄리티(30%) · 밸류(25%) · 저변동성(15%) 복합 팩터로 종목 순위화")
+            qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
+            qt_sector_neutral = st.checkbox("🏭 섹터 중립화 (섹터 편향 제거)", value=True, key="qt_sector")
+
+            if qt_use_timing:
+                _ft_w, _ft_env = get_factor_timing_weights()
+                st.markdown(
+                    f"<div style='background:#1e2836;border-radius:8px;padding:10px 14px;margin:6px 0'>"
+                    f"<b style='color:#42a5f5'>📡 시장 환경:</b> "
+                    f"<span style='color:#ffffff'>VIX {_ft_env['vix']} (평균 {_ft_env['vix_avg']}) · "
+                    f"10Y금리 {_ft_env['rate']}% ({_ft_env['rate_chg']:+.2f}%p)</span><br>"
+                    f"<b style='color:#ff9800'>팩터 가중치:</b> "
+                    f"<span style='color:#ffffff'>모멘텀 {_ft_w['momentum']*100:.0f}% · "
+                    f"밸류 {_ft_w['value']*100:.0f}% · 퀄리티 {_ft_w['quality']*100:.0f}% · "
+                    f"저변동 {_ft_w['low_vol']*100:.0f}%</span><br>"
+                    f"<span style='color:#26a69a;font-size:12px'>{_ft_env['regime']}</span>"
+                    f"</div>", unsafe_allow_html=True)
+                qt_fw = _ft_w
+            else:
+                qt_fw = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+
             if st.button("📊 팩터 분석 실행", type="primary", key="qt_factor_run"):
                 pb = st.progress(0); pt = st.empty()
-                fdf = calc_factor_scores(qt_tickers, pb, pt)
+                if qt_sector_neutral:
+                    fdf = calc_factor_scores_sectoral(qt_tickers, factor_weights=qt_fw, prog_bar=pb, prog_text=pt)
+                else:
+                    fdf = calc_factor_scores(qt_tickers, pb, pt)
                 pb.empty(); pt.empty()
                 if fdf.empty:
                     st.error("분석 가능한 종목이 없습니다.")
@@ -3879,10 +4135,14 @@ def main():
                         f"{r['composite']:.0f}점</span></div>", unsafe_allow_html=True)
 
                 with st.expander("📋 전체 팩터 테이블", expanded=True):
-                    disp = fdf[['rank','ticker','name','composite','momentum','value',
-                                'quality','low_vol','vol','per','pbr','roe']].copy()
-                    disp.columns = ['순위','티커','종목명','종합','모멘텀','밸류',
-                                    '퀄리티','저변동','변동성%','PER','PBR','ROE%']
+                    cols = ['rank','ticker','name']
+                    col_names = ['순위','티커','종목명']
+                    if 'sector' in fdf.columns:
+                        cols.append('sector'); col_names.append('섹터')
+                    cols += ['composite','momentum','value','quality','low_vol','vol','per','pbr','roe']
+                    col_names += ['종합','모멘텀','밸류','퀄리티','저변동','변동성%','PER','PBR','ROE%']
+                    disp = fdf[[c for c in cols if c in fdf.columns]].copy()
+                    disp.columns = col_names[:len(disp.columns)]
                     for c in ['종합','모멘텀','밸류','퀄리티','저변동']:
                         disp[c] = disp[c].round(0).astype(int)
                     st.dataframe(disp, use_container_width=True, hide_index=True, height=400)
@@ -4000,6 +4260,66 @@ def main():
                         f" · 3M {a['mom']}</span></div>", unsafe_allow_html=True)
 
                 st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
+
+        with qt_sub4:
+            st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
+
+            btc1, btc2, btc3 = st.columns(3)
+            bt_years = btc1.selectbox("백테스트 기간", [1, 2, 3, 5], index=2, format_func=lambda x: f"{x}년", key="qt_bt_years")
+            bt_topn = btc2.slider("Top N 종목", 3, 10, 5, key="qt_bt_topn")
+            bt_cost = btc3.slider("거래비용 (편도 %)", 0.0, 0.5, 0.1, 0.05, key="qt_bt_cost")
+
+            if st.button("📉 팩터 전략 백테스트 실행", type="primary", key="qt_bt_run"):
+                with st.spinner(f"{len(qt_tickers)}개 종목 × {bt_years}년 백테스트 중... (1~3분 소요)"):
+                    bt_m, bt_eq, bt_log = backtest_factor_strategy(
+                        qt_tickers, top_n=bt_topn, years=bt_years,
+                        factor_weights=qt_fw if qt_use_timing else None,
+                        commission=bt_cost/100)
+                if not bt_m:
+                    st.error("데이터 부족 — 종목 수를 늘리거나 기간을 줄여주세요.")
+                else:
+                    st.session_state['qt_bt'] = {'metrics': bt_m, 'eq_df': bt_eq, 'log': bt_log}
+
+            if 'qt_bt' in st.session_state:
+                qbt = st.session_state['qt_bt']
+                bt_m, bt_eq, bt_log = qbt['metrics'], qbt['eq_df'], qbt['log']
+
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                alpha_c = '#26a69a' if bt_m['alpha'] >= 0 else '#ef5350'
+                mc1.metric("전략 수익률", f"{bt_m['total_return']:+.1f}%",
+                          f"CAGR {bt_m['cagr']:+.1f}%")
+                mc2.metric("SPY 수익률", f"{bt_m['spy_return']:+.1f}%")
+                mc3.metric("알파 (초과수익)", f"{bt_m['alpha']:+.1f}%")
+                mc4.metric("MDD", f"{bt_m['mdd']:.1f}%")
+
+                mc5, mc6, mc7, mc8 = st.columns(4)
+                mc5.metric("샤프 비율", f"{bt_m['sharpe']:.2f}")
+                mc6.metric("평균 턴오버", f"{bt_m['avg_turnover']:.0f}%")
+                mc7.metric("총 거래비용", f"{bt_m['total_cost']:.2f}%")
+                mc8.metric("리밸런싱 횟수", f"{bt_m['n_rebalances']}회")
+
+                if not bt_eq.empty:
+                    fig_bt = go.Figure()
+                    fig_bt.add_trace(go.Scatter(x=bt_eq['date'], y=bt_eq['equity'],
+                        name='팩터 전략', line=dict(color='#2962ff', width=2.5),
+                        fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
+                    fig_bt.add_hline(y=10000, line_dash='dot', line_color='#ffffff',
+                        line_width=0.8, annotation_text="시작점",
+                        annotation_font=dict(color='#ffffff', size=10))
+                    fig_bt.update_layout(
+                        title=dict(text='팩터 전략 자산 곡선', font=dict(size=14, color='#ffffff')),
+                        height=400, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color='#ffffff'),
+                        yaxis=dict(title='자산', gridcolor=TV_GRID, tickformat=',.0f', side='right'),
+                        xaxis=dict(gridcolor=TV_GRID),
+                        margin=dict(l=0, r=60, t=50, b=0), showlegend=False)
+                    st.plotly_chart(fig_bt, use_container_width=True)
+
+                if bt_log:
+                    with st.expander("📋 리밸런싱 내역"):
+                        st.dataframe(pd.DataFrame(bt_log), use_container_width=True, hide_index=True, height=300)
+
+                st.caption("⚠️ 과거 성과는 미래 수익을 보장하지 않습니다. 거래비용·슬리피지 반영.")
 
     # ── Tab 4: 알림 ──────────────────────────────────
     with tab4:
