@@ -2311,7 +2311,7 @@ def optimize_portfolio(tickers, method='equal', risk_free=0.045):
     return weights, stats, corr
 
 
-def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
+def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capital=10000):
     """시스템 트레이딩 엔진: 규칙 기반 매수/매도/리밸런싱 시그널."""
     actions = []
     end = datetime.now()
@@ -2343,41 +2343,40 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
 
             is_top_factor = f_score_v >= 75
             is_strong_factor = f_score_v >= 50
+            is_krx = tk.endswith('.KS') or tk.endswith('.KQ')
+            fp = f"₩{cp:,.0f}" if is_krx else f"${cp:.2f}"
+
+            def _make_action(action, tw, reason, priority):
+                alloc = capital * tw
+                qty = alloc / cp if cp > 0 else 0
+                qty_str = f"{qty:,.0f}주" if is_krx else f"{qty:,.2f}주"
+                alloc_str = f"₩{alloc:,.0f}" if is_krx else f"${alloc:,.0f}"
+                return {'ticker': tk, 'action': action, 'weight': f"{tw*100:.1f}%",
+                        'price': fp, 'alloc': alloc_str, 'qty': qty_str,
+                        'reason': reason, 'priority': priority, 'mom': f"{mom_3m:+.1f}%"}
 
             if in_buy and is_top_factor and not overbought:
-                actions.append({'ticker': tk, 'action': '🟢 매수',
-                    'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 {f_score_v:.0f}점 (최상위) — 추세 무관 진입 (RSI {rsi:.0f})",
-                    'priority': 'HIGH', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('🟢 매수', target_w,
+                    f"팩터 {f_score_v:.0f}점 (최상위) — 추세 무관 진입 (RSI {rsi:.0f})", 'HIGH'))
             elif in_buy and (trend_up or oversold) and not overbought:
-                actions.append({'ticker': tk, 'action': '🟢 매수',
-                    'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
-                    'priority': 'HIGH' if oversold else 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('🟢 매수', target_w,
+                    f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
+                    'HIGH' if oversold else 'NORMAL'))
             elif in_buy and is_strong_factor:
-                actions.append({'ticker': tk, 'action': '🟡 조건부 매수',
-                    'weight': f"{target_w*70:.1f}%",
-                    'reason': f"팩터 {f_score_v:.0f}점 — 추세 확인 시 비중 확대 (RSI {rsi:.0f})",
-                    'priority': 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('🟡 조건부 매수', target_w * 0.7,
+                    f"팩터 {f_score_v:.0f}점 — 추세 확인 시 비중 확대 (RSI {rsi:.0f})", 'NORMAL'))
             elif in_buy:
-                actions.append({'ticker': tk, 'action': '🟡 대기',
-                    'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 {f_score_v:.0f}점, 추세·팩터 모두 약함 (RSI {rsi:.0f})",
-                    'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('🟡 대기', target_w,
+                    f"팩터 {f_score_v:.0f}점, 추세·팩터 모두 약함 (RSI {rsi:.0f})", 'LOW'))
             elif in_sell or (trend_dn and overbought):
-                actions.append({'ticker': tk, 'action': '🔴 매도', 'weight': '0%',
-                    'reason': f"팩터 {f_score_v:.0f}점 하위{'+ 하락추세' if trend_dn else ''} (RSI {rsi:.0f})",
-                    'priority': 'HIGH', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('🔴 매도', 0,
+                    f"팩터 {f_score_v:.0f}점 하위{'+ 하락추세' if trend_dn else ''} (RSI {rsi:.0f})", 'HIGH'))
             elif trend_dn:
-                actions.append({'ticker': tk, 'action': '🟠 비중축소',
-                    'weight': f"{target_w*50:.1f}%",
-                    'reason': f"하락추세 (RSI {rsi:.0f})",
-                    'priority': 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('🟠 비중축소', target_w * 0.5,
+                    f"하락추세 (RSI {rsi:.0f})", 'NORMAL'))
             else:
-                actions.append({'ticker': tk, 'action': '⚪ 관망',
-                    'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 {f_score_v:.0f}점 — 뚜렷한 방향 없음 (RSI {rsi:.0f})",
-                    'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
+                actions.append(_make_action('⚪ 관망', target_w,
+                    f"팩터 {f_score_v:.0f}점 — 뚜렷한 방향 없음 (RSI {rsi:.0f})", 'LOW'))
         except Exception:
             continue
 
@@ -4236,11 +4235,11 @@ def main():
         with qt_sub3:
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
 
-            sc1, sc2 = st.columns(2)
+            sc1, sc2, sc3 = st.columns(3)
             qt_top_n = sc1.slider("매수 후보 수 (Top N)", 3, 10, 5, key="qt_top_n")
-            qt_rebal = sc2.selectbox("리밸런싱 주기", ["월간 (20일)", "격주 (10일)", "주간 (5일)"],
+            qt_capital = sc2.number_input("총 투자금", min_value=100, value=10000, step=1000, key="qt_capital")
+            qt_rebal = sc3.selectbox("리밸런싱 주기", ["월간 (20일)", "격주 (10일)", "주간 (5일)"],
                                       key="qt_rebal")
-            rebal_map = {"월간 (20일)": 20, "격주 (10일)": 10, "주간 (5일)": 5}
 
             if st.button("🤖 시스템 시그널 생성", type="primary", key="qt_sig_run"):
                 fdf = st.session_state.get('qt_factors')
@@ -4248,7 +4247,8 @@ def main():
                 opt_w = qo['weights'] if qo else None
                 with st.spinner("시그널 생성 중..."):
                     actions, rebal = generate_system_signals(
-                        qt_tickers, factor_df=fdf, weights=opt_w, top_n=qt_top_n)
+                        qt_tickers, factor_df=fdf, weights=opt_w,
+                        top_n=qt_top_n, capital=qt_capital)
                 st.session_state['qt_signals'] = {'actions': actions, 'rebal': rebal}
 
             if 'qt_signals' in st.session_state:
@@ -4264,19 +4264,25 @@ def main():
                 st.markdown("#### 📋 액션 리스트")
                 for a in sorted(actions, key=lambda x: {'HIGH':0,'NORMAL':1,'LOW':2}.get(x['priority'],3)):
                     act_colors = {'🟢 매수':'#26a69a','🔴 매도':'#ef5350',
-                                  '🟠 비중축소':'#ff9800','🟡 대기':'#ffeb3b','⚪ 보유':'#888'}
-                    ac = act_colors.get(a['action'], '#888')
-                    pri_badge = (f"<span style='background:#ef535033;color:#ef5350;padding:1px 6px;"
-                                 f"border-radius:3px;font-size:10px'>HIGH</span>"
+                                  '🟠 비중축소':'#ff9800','🟡 조건부 매수':'#ff9800',
+                                  '🟡 대기':'#ffeb3b','⚪ 관망':'#999999'}
+                    ac = act_colors.get(a['action'], '#999999')
+                    pri_badge = (f"<span style='background:#ef535022;color:#ef5350;padding:1px 6px;"
+                                 f"border-radius:3px;font-size:10px;margin-left:4px'>HIGH</span>"
                                  if a['priority'] == 'HIGH' else '')
+                    price_str = a.get('price', '')
+                    alloc_str = a.get('alloc', '')
+                    qty_str = a.get('qty', '')
+                    detail = f"{price_str} · {alloc_str} · {qty_str}" if price_str else ''
                     st.markdown(
-                        f"<div style='background:#ffffff;border-left:3px solid {ac};"
-                        f"border-radius:6px;padding:8px 14px;margin:3px 0;"
-                        f"display:flex;justify-content:space-between;align-items:center'>"
-                        f"<span><b>{a['ticker']}</b> {a['action']} {pri_badge}"
-                        f" <span style='color:#1a1a1a;font-size:11px'>{a['reason']}</span></span>"
-                        f"<span style='color:#1a1a1a;font-size:12px'>목표 {a['weight']}"
-                        f" · 3M {a['mom']}</span></div>", unsafe_allow_html=True)
+                        f"<div style='background:#ffffff;border-left:4px solid {ac};"
+                        f"border-radius:6px;padding:10px 14px;margin:4px 0'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span style='font-size:15px'><b>{a['ticker']}</b> {a['action']}{pri_badge}</span>"
+                        f"<span style='color:#1a1a1a;font-size:12px'>비중 {a['weight']} · 3M {a['mom']}</span></div>"
+                        f"<div style='color:#555;font-size:12px;margin-top:4px'>{a['reason']}</div>"
+                        f"{'<div style=\"color:#1a1a1a;font-weight:600;font-size:13px;margin-top:4px\">' + detail + '</div>' if detail else ''}"
+                        f"</div>", unsafe_allow_html=True)
 
                 st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
 
