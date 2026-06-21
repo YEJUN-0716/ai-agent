@@ -704,8 +704,7 @@ def calc_piotroski_fscore(ticker):
     except Exception as e:
         return None, {'오류': str(e)}
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fundamental_score(ticker, _df=None):
+def fundamental_score(ticker, df=None):
     try:
         info = yf.Ticker(ticker).info
         det  = {}
@@ -757,7 +756,7 @@ def fundamental_score(ticker, _df=None):
         det['D/E'] = de; det['유동비율'] = cr; det['이자보상배율'] = int_cov
 
         # ── MDD (8%) ──────────────────────────────────
-        mdd_v = calc_mdd(_df['Close']) if _df is not None else None
+        mdd_v = calc_mdd(df['Close']) if df is not None else None
         det['MDD']  = float(_score_mdd(mdd_v)) if mdd_v is not None else 50.0
         det['MDD값'] = mdd_v
 
@@ -768,10 +767,10 @@ def fundamental_score(ticker, _df=None):
         det['F-Score시그널'] = fsig
 
         # ── 52주 위치 (7%) ────────────────────────────
-        if _df is not None and len(_df) >= 30:
-            cp52 = float(_df['Close'].iloc[-1])
-            h52  = float(_df['High'].tail(252).max())
-            l52  = float(_df['Low'].tail(252).min())
+        if df is not None and len(df) >= 30:
+            cp52 = float(df['Close'].iloc[-1])
+            h52  = float(df['High'].tail(252).max())
+            l52  = float(df['Low'].tail(252).min())
             det['52주위치'] = float(_score_52w_position(cp52, h52, l52))
             det['52주고가'] = h52; det['52주저가'] = l52
         else:
@@ -2563,17 +2562,33 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
     start = end - timedelta(days=years*365+60)
 
     all_prices = {}
+    ticker_info = {}
     for tk in tickers:
         try:
             df = download_stock(tk, start=start, end=end)
             if not df.empty and len(df) >= 60:
                 all_prices[tk] = df['Close']
+            info = yf.Ticker(tk).info
+            if info:
+                per = info.get('trailingPE') or info.get('forwardPE')
+                pbr = info.get('priceToBook')
+                roe = info.get('returnOnEquity')
+                pm = info.get('profitMargins')
+                rg = info.get('revenueGrowth')
+                ep = (1.0/per*100) if per and per > 0 else 0
+                bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
+                roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
+                pm_v = (pm*100 if pm else 0)
+                rg_v = (rg*100 if rg else 0)
+                ticker_info[tk] = {
+                    'value': ep*0.5 + bp*0.5,
+                    'quality': roe_v*0.4 + pm_v*0.3 + rg_v*0.3,
+                }
         except Exception:
             continue
     if len(all_prices) < top_n + 2: return {}, pd.DataFrame(), []
 
     price_df = pd.DataFrame(all_prices).dropna(how='all').ffill()
-    returns = price_df.pct_change().dropna()
 
     months = pd.date_range(start=price_df.index[252] if len(price_df) > 252 else price_df.index[60],
                            end=price_df.index[-1], freq=f'{rebal_months}MS')
@@ -2597,16 +2612,18 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
             mom12 = (cp_m / float(col.iloc[-252])-1)*100 if len(col) >= 252 else 0
             mom1  = (cp_m / float(col.iloc[-21])-1)*100 if len(col) >= 21 else 0
             vol_m = float(col.pct_change().dropna().std()) * np.sqrt(252) * 100
+            ti = ticker_info.get(tk, {})
             scores[tk] = {
                 'momentum': mom12 - mom1,
-                'value': 50, 'quality': 50,
+                'value': ti.get('value', 50),
+                'quality': ti.get('quality', 50),
                 'low_vol': max(100-vol_m, 0),
             }
         if len(scores) < top_n: continue
 
         sdf = pd.DataFrame(scores).T
         for f in ['momentum','value','quality','low_vol']:
-            sdf[f] = sdf[f].rank(pct=True)*100
+            sdf[f] = _zscore_to_score(sdf[f])
         sdf['composite'] = sum(sdf[f]*factor_weights.get(f, 0.25) for f in factor_weights)
         top = sdf.nlargest(top_n, 'composite').index.tolist()
 
