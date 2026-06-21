@@ -14,10 +14,10 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide")
 
-TV_BG = TV_PAPER = '#131722'
-TV_GRID = '#1e2334'
-TV_BORDER = '#2a2e39'
-TV_TEXT = '#b2b5be'
+TV_BG = TV_PAPER = '#ffffff'
+TV_GRID = '#e0e0e0'
+TV_BORDER = '#cccccc'
+TV_TEXT = '#1a1a1a'
 TV_UP = '#26a69a'
 TV_DOWN = '#ef5350'
 
@@ -2643,12 +2643,12 @@ def _draw_chart_legacy(df, ticker, is_krw):
     fig.add_annotation(x=df.index[-1], y=cp,
         text=f"  {fp(cp)}", showarrow=False, xanchor='left',
         font=dict(color='#FFD700', size=11, family='monospace'),
-        bgcolor='#131722', bordercolor='#FFD700', borderwidth=1, borderpad=2,
+        bgcolor='#ffffff', bordercolor='#FFD700', borderwidth=1, borderpad=2,
         xref='x', yref='y')
     fig.add_hline(y=cp, line_dash='dot', line_color='#FFD700', line_width=0.8, row=1, col=1)
 
     fig.add_annotation(text=ticker, x=0.5, y=0.5, xref='paper', yref='y',
-        showarrow=False, font=dict(color='rgba(255,255,255,0.04)', size=72),
+        showarrow=False, font=dict(color='rgba(0,0,0,0.04)', size=72),
         xanchor='center', yanchor='middle')
 
     o_l, h_l, l_l, c_l = float(df['Open'].iloc[-1]), float(h.iloc[-1]), float(l.iloc[-1]), cp
@@ -2660,7 +2660,7 @@ def _draw_chart_legacy(df, ticker, is_krw):
               f"<b>C</b> {fp(c_l)}  <span style='color:{chg_c}'>{chg_d:+.2f} ({chg_p:+.2f}%)</span>"),
         x=0.003, y=1.0, xref='paper', yref='y domain',
         showarrow=False, font=dict(color=TV_TEXT, size=11, family='monospace'),
-        xanchor='left', yanchor='top', bgcolor='rgba(19,23,34,0.9)')
+        xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.9)')
 
     # ── 2) 거래량 ────────────────────────────────
     fig.add_trace(go.Bar(x=df.index, y=v, name='', showlegend=False,
@@ -2685,7 +2685,7 @@ def _draw_chart_legacy(df, ticker, is_krw):
         showarrow=False, xanchor='left', font=dict(color='#ff6d00', size=9), xref='x3', yref='y3')
 
     # ── 4) RSI ───────────────────────────────────
-    fig.add_hrect(y0=30, y1=70, fillcolor='rgba(255,255,255,0.03)', line_width=0, row=4, col=1)
+    fig.add_hrect(y0=30, y1=70, fillcolor='rgba(0,0,0,0.03)', line_width=0, row=4, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=rsi_s, name='', showlegend=False,
         line=dict(color='#ce93d8', width=1.4)), row=4, col=1)
     fig.add_hline(y=70, line_color=TV_DOWN, line_width=0.7, line_dash='dash', row=4, col=1)
@@ -2698,7 +2698,7 @@ def _draw_chart_legacy(df, ticker, is_krw):
         xref='x4', yref='y4')
 
     # ── 5) 스토캐스틱 ────────────────────────────
-    fig.add_hrect(y0=20, y1=80, fillcolor='rgba(255,255,255,0.03)', line_width=0, row=5, col=1)
+    fig.add_hrect(y0=20, y1=80, fillcolor='rgba(0,0,0,0.03)', line_width=0, row=5, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=sk_s, name='', showlegend=False,
         line=dict(color='#42a5f5', width=1.3)), row=5, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=sd_s, name='', showlegend=False,
@@ -2725,7 +2725,7 @@ def _draw_chart_legacy(df, ticker, is_krw):
         height=900, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
         font=dict(color=TV_TEXT, family='Inter,sans-serif', size=11),
         xaxis_rangeslider_visible=False, hovermode='x unified',
-        hoverlabel=dict(bgcolor='#1e2334', font_color=TV_TEXT, bordercolor=TV_BORDER, font_size=11),
+        hoverlabel=dict(bgcolor='#ffffff', font_color=TV_TEXT, bordercolor=TV_BORDER, font_size=11),
         legend=dict(visible=False),
         margin=dict(l=0, r=80, t=10, b=0),
     )
@@ -4303,13 +4303,13 @@ def main():
                     fig_bt.add_trace(go.Scatter(x=bt_eq['date'], y=bt_eq['equity'],
                         name='팩터 전략', line=dict(color='#2962ff', width=2.5),
                         fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
-                    fig_bt.add_hline(y=10000, line_dash='dot', line_color='#ffffff',
+                    fig_bt.add_hline(y=10000, line_dash='dot', line_color='#999999',
                         line_width=0.8, annotation_text="시작점",
-                        annotation_font=dict(color='#ffffff', size=10))
+                        annotation_font=dict(color='#1a1a1a', size=10))
                     fig_bt.update_layout(
                         title=dict(text='팩터 전략 자산 곡선', font=dict(size=14, color='#ffffff')),
                         height=400, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color='#ffffff'),
+                        font=dict(color='#1a1a1a'),
                         yaxis=dict(title='자산', gridcolor=TV_GRID, tickformat=',.0f', side='right'),
                         xaxis=dict(gridcolor=TV_GRID),
                         margin=dict(l=0, r=60, t=50, b=0), showlegend=False)
