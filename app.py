@@ -3004,11 +3004,11 @@ def main():
                 <div style='text-align:center;padding:20px 0'>
                   <div style='font-size:72px;font-weight:bold;color:{score_color(total)}'>{total:.1f}</div>
                   <div style='font-size:28px;color:{score_color(total)}'>{score_label(total)}</div>
-                  <br><div style='color:#ffffff;font-size:15px'>
+                  <br><div style='color:#1a1a1a;font-size:15px'>
                   차트+파동 <b>{t_score:.0f}</b>점 &nbsp;|&nbsp;
                   재무+퀀트 <b>{f_score:.0f}</b>점 &nbsp;|&nbsp;
                   매크로+금리 <b>{m_score:.0f}</b>점</div>
-                  <div style='color:#ffffff;font-size:11px;margin-top:6px'>
+                  <div style='color:#1a1a1a;font-size:11px;margin-top:6px'>
                   📐 {score_method}</div>
                 </div>""", unsafe_allow_html=True)
 
@@ -3163,7 +3163,7 @@ def main():
                             f"border-radius:8px;padding:10px 14px;margin:4px 0'>"
                             f"<span style='font-size:18px'>{sig_ico}</span> "
                             f"<span style='color:{sig_clr};font-weight:600;font-size:14px'>{sig_nm}</span><br>"
-                            f"<span style='color:#ffffff;font-size:12px'>{sig_dc}</span></div>",
+                            f"<span style='color:#1a1a1a;font-size:12px'>{sig_dc}</span></div>",
                             unsafe_allow_html=True)
 
                 st.subheader("📋 분석 요약")
@@ -3390,8 +3390,8 @@ def main():
                         f"<div style='background:{bg};border:1px solid {color}66;border-radius:10px;"
                         f"padding:14px 16px;margin-bottom:8px'>"
                         f"<div style='color:{color};font-weight:700;font-size:16px'>{icon} {label}</div>"
-                        f"<div style='color:#ffffff;font-size:13px;margin-top:4px'>{tr['strategy']}</div>"
-                        f"<div style='color:#ffffff;font-size:11px;margin-top:4px'>"
+                        f"<div style='color:#1a1a1a;font-size:13px;margin-top:4px'>{tr['strategy']}</div>"
+                        f"<div style='color:#1a1a1a;font-size:11px;margin-top:4px'>"
                         f"손익비 <b style='color:{rr_c}'>R {tr['rr1']:.1f}:1</b>"
                         f" · 손절 <b style='color:#ef5350'>{tr['risk_pct']:.1f}%</b>"
                         f" · 비중 <b>{tr['alloc']}</b></div>"
@@ -3399,7 +3399,7 @@ def main():
 
                     st.caption("**진입 조건 체크**")
                     cond_text = " &nbsp;|&nbsp; ".join(tr.get('conditions', []))
-                    st.markdown(f"<div style='font-size:12px;color:#ffffff'>{cond_text}</div>",
+                    st.markdown(f"<div style='font-size:12px;color:#1a1a1a'>{cond_text}</div>",
                                 unsafe_allow_html=True)
 
                     rows = [
@@ -3446,12 +3446,12 @@ def main():
                     notes_text = " · ".join(notes) if notes else "조건 충족"
                     with plan_col:
                         st.markdown(
-                            f"<div style='background:#1e2836;border:1px solid {verdict_color}88;"
+                            f"<div style='background:#ffffff;border:1px solid {verdict_color}88;"
                             f"border-radius:8px;padding:12px 14px;margin-bottom:8px'>"
                             f"<div style='display:flex;justify-content:space-between;gap:10px'>"
                             f"<b>{plan['label']} 실행 판정</b>"
                             f"<b style='color:{verdict_color}'>{plan['verdict']}</b></div>"
-                            f"<div style='color:#ffffff;font-size:12px;margin-top:6px'>{notes_text}</div>"
+                            f"<div style='color:#1a1a1a;font-size:12px;margin-top:6px'>{notes_text}</div>"
                             f"</div>", unsafe_allow_html=True)
                         pc1, pc2, pc3 = st.columns(3)
                         pc1.metric("최대 수량", qty_text)
@@ -3499,7 +3499,7 @@ def main():
                         f"<div style='text-align:center;padding:15px 5px'>"
                         f"<div style='font-size:42px;font-weight:bold;color:{ns_color}'>{news_score:.0f}</div>"
                         f"<div style='color:{ns_color};font-size:14px'>{ns_label}</div>"
-                        f"<div style='color:#ffffff;font-size:11px;margin-top:4px'>감성 점수</div>"
+                        f"<div style='color:#1a1a1a;font-size:11px;margin-top:4px'>감성 점수</div>"
                         f"</div>", unsafe_allow_html=True)
                 with ns_col2:
                     if news_articles:
@@ -4091,12 +4091,12 @@ def main():
             if qt_use_timing:
                 _ft_w, _ft_env = get_factor_timing_weights()
                 st.markdown(
-                    f"<div style='background:#1e2836;border-radius:8px;padding:10px 14px;margin:6px 0'>"
+                    f"<div style='background:#ffffff;border-radius:8px;padding:10px 14px;margin:6px 0'>"
                     f"<b style='color:#42a5f5'>📡 시장 환경:</b> "
-                    f"<span style='color:#ffffff'>VIX {_ft_env['vix']} (평균 {_ft_env['vix_avg']}) · "
+                    f"<span style='color:#1a1a1a'>VIX {_ft_env['vix']} (평균 {_ft_env['vix_avg']}) · "
                     f"10Y금리 {_ft_env['rate']}% ({_ft_env['rate_chg']:+.2f}%p)</span><br>"
                     f"<b style='color:#ff9800'>팩터 가중치:</b> "
-                    f"<span style='color:#ffffff'>모멘텀 {_ft_w['momentum']*100:.0f}% · "
+                    f"<span style='color:#1a1a1a'>모멘텀 {_ft_w['momentum']*100:.0f}% · "
                     f"밸류 {_ft_w['value']*100:.0f}% · 퀄리티 {_ft_w['quality']*100:.0f}% · "
                     f"저변동 {_ft_w['low_vol']*100:.0f}%</span><br>"
                     f"<span style='color:#26a69a;font-size:12px'>{_ft_env['regime']}</span>"
@@ -4126,11 +4126,11 @@ def main():
                 for _, r in top5.iterrows():
                     comp_c = '#26a69a' if r['composite'] >= 65 else ('#ff9800' if r['composite'] >= 45 else '#ef5350')
                     st.markdown(
-                        f"<div style='background:#1e2836;border-left:3px solid {comp_c};"
+                        f"<div style='background:#ffffff;border-left:3px solid {comp_c};"
                         f"border-radius:6px;padding:8px 14px;margin:4px 0;"
                         f"display:flex;justify-content:space-between;align-items:center'>"
                         f"<span><b>#{int(r['rank'])} {r['ticker']}</b> "
-                        f"<span style='color:#ffffff'>{r['name']}</span></span>"
+                        f"<span style='color:#1a1a1a'>{r['name']}</span></span>"
                         f"<span style='color:{comp_c};font-weight:700;font-size:18px'>"
                         f"{r['composite']:.0f}점</span></div>", unsafe_allow_html=True)
 
@@ -4251,12 +4251,12 @@ def main():
                                  f"border-radius:3px;font-size:10px'>HIGH</span>"
                                  if a['priority'] == 'HIGH' else '')
                     st.markdown(
-                        f"<div style='background:#1e2836;border-left:3px solid {ac};"
+                        f"<div style='background:#ffffff;border-left:3px solid {ac};"
                         f"border-radius:6px;padding:8px 14px;margin:3px 0;"
                         f"display:flex;justify-content:space-between;align-items:center'>"
                         f"<span><b>{a['ticker']}</b> {a['action']} {pri_badge}"
-                        f" <span style='color:#ffffff;font-size:11px'>{a['reason']}</span></span>"
-                        f"<span style='color:#ffffff;font-size:12px'>목표 {a['weight']}"
+                        f" <span style='color:#1a1a1a;font-size:11px'>{a['reason']}</span></span>"
+                        f"<span style='color:#1a1a1a;font-size:12px'>목표 {a['weight']}"
                         f" · 3M {a['mom']}</span></div>", unsafe_allow_html=True)
 
                 st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
