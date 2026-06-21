@@ -2234,52 +2234,56 @@ def _zscore_to_score(series):
     return (z * 15 + 50).clip(20, 80)
 
 def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
-    """멀티팩터 랭킹: 모멘텀·밸류·퀄리티·저변동성 4팩터 스코어링.
-    Z-score 정규화(20~80 범위)로 1등=100점 문제 해결."""
+    """멀티팩터 랭킹: 모멘텀·밸류·퀄리티·저변동성 4팩터 스코어링."""
+    import time
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
     failed = []
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
-        for attempt in range(2):
+        try:
+            df = download_stock(tk, start=start, end=end)
+            if df is None or df.empty:
+                failed.append(tk); continue
+            df = df.dropna(subset=['Close'])
+            if len(df) < 30:
+                failed.append(tk); continue
+            cp = float(df['Close'].iloc[-1])
+            mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
+            mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+            daily_ret = df['Close'].pct_change().dropna()
+            annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
+
+            per, pbr, roe_v, pm_v, rg_v, name = None, None, 0, 0, 0, tk
             try:
-                df = download_stock(tk, start=start, end=end)
-                if df.empty or len(df) < 60:
-                    if attempt == 0: continue
-                    else: break
-                df = df.dropna(subset=['Close'])
-                info = yf.Ticker(tk).info
-                if not info or not info.get('regularMarketPrice'):
-                    if attempt == 0: continue
-                    else: break
-                cp = float(df['Close'].iloc[-1])
-                mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
-                mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+                info = yf.Ticker(tk).info or {}
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
-                ep = (1.0/per*100) if per and per > 0 else 0
-                bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
                 roe = info.get('returnOnEquity')
                 roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
                 pm = info.get('profitMargins')
                 pm_v = (pm*100 if pm else 0)
                 rg = info.get('revenueGrowth')
                 rg_v = (rg*100 if rg else 0)
-                daily_ret = df['Close'].pct_change().dropna()
-                annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
-                results.append({
-                    'ticker': tk, 'name': info.get('shortName', tk)[:20], 'price': cp,
-                    'momentum_raw': round(mom_12m - mom_1m, 2),
-                    'value_raw': round(ep*0.5+bp*0.5, 2),
-                    'quality_raw': round(roe_v*0.4+pm_v*0.3+rg_v*0.3, 2),
-                    'low_vol_raw': round(max(100-annual_vol, 0), 2),
-                    'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
-                })
-                break
+                name = info.get('shortName', tk)[:20]
             except Exception:
-                if attempt == 1: failed.append(tk)
-                continue
+                pass
+
+            ep = (1.0/per*100) if per and per > 0 else 0
+            bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
+            results.append({
+                'ticker': tk, 'name': name, 'price': cp,
+                'momentum_raw': round(mom_12m - mom_1m, 2),
+                'value_raw': round(ep*0.5+bp*0.5, 2),
+                'quality_raw': round(roe_v*0.4+pm_v*0.3+rg_v*0.3, 2),
+                'low_vol_raw': round(max(100-annual_vol, 0), 2),
+                'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
+            })
+            if i < len(tickers) - 1:
+                time.sleep(0.3)
+        except Exception:
+            failed.append(tk)
     if not results: return pd.DataFrame()
     rdf = pd.DataFrame(results)
     for col in ['momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw']:
@@ -2491,6 +2495,7 @@ def get_factor_timing_weights():
 
 def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, prog_text=None):
     """섹터 중립 멀티팩터 랭킹. 섹터 내 Z-score 정규화로 섹터 편향 제거."""
+    import time
     if factor_weights is None:
         factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
     end = datetime.now(); start = end - timedelta(days=520)
@@ -2498,44 +2503,46 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
-        for attempt in range(2):
+        try:
+            df = download_stock(tk, start=start, end=end)
+            if df is None or df.empty: continue
+            df = df.dropna(subset=['Close'])
+            if len(df) < 30: continue
+            cp = float(df['Close'].iloc[-1])
+            daily_ret = df['Close'].pct_change().dropna()
+            annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
+            mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
+            mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+
+            sector, per, pbr, roe_v, pm_v, rg_v, name = 'Unknown', None, None, 0, 0, 0, tk
             try:
-                df = download_stock(tk, start=start, end=end)
-                if df.empty or len(df) < 60:
-                    if attempt == 0: continue
-                    else: break
-                df = df.dropna(subset=['Close'])
-                info = yf.Ticker(tk).info
-                if not info or not info.get('regularMarketPrice'):
-                    if attempt == 0: continue
-                    else: break
-                cp = float(df['Close'].iloc[-1])
+                info = yf.Ticker(tk).info or {}
                 sector = info.get('sector', 'Unknown')
-                mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
-                mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
-                ep = (1.0/per*100) if per and per > 0 else 0
-                bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
                 roe = info.get('returnOnEquity')
                 roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
                 pm = info.get('profitMargins')
                 pm_v = (pm*100 if pm else 0)
                 rg = info.get('revenueGrowth')
                 rg_v = (rg*100 if rg else 0)
-                daily_ret = df['Close'].pct_change().dropna()
-                annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
-                results.append({
-                    'ticker': tk, 'name': info.get('shortName', tk)[:20], 'price': cp,
-                    'sector': sector,
-                    'momentum_raw': mom_12m - mom_1m, 'value_raw': ep*0.5+bp*0.5,
-                    'quality_raw': roe_v*0.4+pm_v*0.3+rg_v*0.3,
-                    'low_vol_raw': max(100-annual_vol, 0),
-                    'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
-                })
-                break
+                name = info.get('shortName', tk)[:20]
             except Exception:
-                continue
+                pass
+
+            ep = (1.0/per*100) if per and per > 0 else 0
+            bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
+            results.append({
+                'ticker': tk, 'name': name, 'price': cp, 'sector': sector,
+                'momentum_raw': mom_12m - mom_1m, 'value_raw': ep*0.5+bp*0.5,
+                'quality_raw': roe_v*0.4+pm_v*0.3+rg_v*0.3,
+                'low_vol_raw': max(100-annual_vol, 0),
+                'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
+            })
+            if i < len(tickers) - 1:
+                time.sleep(0.3)
+        except Exception:
+            continue
     if not results: return pd.DataFrame()
     rdf = pd.DataFrame(results)
     for col in ['momentum_raw','value_raw','quality_raw','low_vol_raw']:
