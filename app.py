@@ -2374,9 +2374,9 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
                     'reason': f"하락추세 (RSI {rsi:.0f})",
                     'priority': 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
             else:
-                actions.append({'ticker': tk, 'action': '⚪ 보유',
+                actions.append({'ticker': tk, 'action': '⚪ 관망',
                     'weight': f"{target_w*100:.1f}%",
-                    'reason': f"팩터 {f_score_v:.0f}점 유지 (RSI {rsi:.0f})",
+                    'reason': f"팩터 {f_score_v:.0f}점 — 뚜렷한 방향 없음 (RSI {rsi:.0f})",
                     'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
         except Exception:
             continue
@@ -2386,7 +2386,7 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
         'next_rebal': f"{rebal_days}일 후",
         'buy_count': sum(1 for a in actions if '매수' in a['action']),
         'sell_count': sum(1 for a in actions if '매도' in a['action'] or '축소' in a['action']),
-        'hold_count': sum(1 for a in actions if '보유' in a['action'] or '대기' in a['action']),
+        'hold_count': sum(1 for a in actions if '관망' in a['action'] or '대기' in a['action']),
     }
     return actions, rebal_info
 
@@ -4258,7 +4258,7 @@ def main():
                 rc1, rc2, rc3, rc4 = st.columns(4)
                 rc1.metric("🟢 매수", f"{rebal['buy_count']}종목")
                 rc2.metric("🔴 매도/축소", f"{rebal['sell_count']}종목")
-                rc3.metric("⚪ 보유/대기", f"{rebal['hold_count']}종목")
+                rc3.metric("⚪ 관망/대기", f"{rebal['hold_count']}종목")
                 rc4.metric("📅 다음 리밸런싱", rebal['next_rebal'])
 
                 st.markdown("#### 📋 액션 리스트")
