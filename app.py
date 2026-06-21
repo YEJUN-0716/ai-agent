@@ -14,6 +14,28 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide")
 
+st.markdown("""<style>
+/* 모바일 반응형 */
+@media (max-width: 768px) {
+    .block-container { padding: 0.5rem 0.8rem !important; }
+    h1 { font-size: 1.4rem !important; }
+    h2 { font-size: 1.1rem !important; }
+    h3 { font-size: 1rem !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 0; }
+    .stTabs [data-baseweb="tab"] { padding: 6px 8px; font-size: 12px; }
+    [data-testid="metric-container"] { padding: 8px 6px; }
+    [data-testid="metric-container"] label { font-size: 11px !important; }
+    [data-testid="metric-container"] [data-testid="stMetricValue"] { font-size: 18px !important; }
+    .stDataFrame { font-size: 11px; }
+}
+/* 탭 스타일 */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; }
+.stTabs [data-baseweb="tab"] { border-radius: 6px 6px 0 0; }
+/* 카드 그림자 */
+div[style*="border-left"] { box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+div[style*="border-radius:10px"] { box-shadow: 0 1px 4px rgba(0,0,0,0.10); }
+</style>""", unsafe_allow_html=True)
+
 TV_BG = TV_PAPER = '#ffffff'
 TV_GRID = '#e0e0e0'
 TV_BORDER = '#cccccc'
@@ -122,6 +144,7 @@ def db_delete(pos_id):
 # 통합 주식 데이터 다운로드
 # ─────────────────────────────────────────────
 
+@st.cache_data(ttl=900, show_spinner=False)
 def download_stock(ticker, start, end, interval='1d'):
     """한국 주식: FinanceDataReader 우선, yfinance 폴백.
     그 외: yfinance 사용."""
@@ -681,7 +704,8 @@ def calc_piotroski_fscore(ticker):
     except Exception as e:
         return None, {'오류': str(e)}
 
-def fundamental_score(ticker, df=None):
+@st.cache_data(ttl=1800, show_spinner=False)
+def fundamental_score(ticker, _df=None):
     try:
         info = yf.Ticker(ticker).info
         det  = {}
@@ -733,7 +757,7 @@ def fundamental_score(ticker, df=None):
         det['D/E'] = de; det['유동비율'] = cr; det['이자보상배율'] = int_cov
 
         # ── MDD (8%) ──────────────────────────────────
-        mdd_v = calc_mdd(df['Close']) if df is not None else None
+        mdd_v = calc_mdd(_df['Close']) if _df is not None else None
         det['MDD']  = float(_score_mdd(mdd_v)) if mdd_v is not None else 50.0
         det['MDD값'] = mdd_v
 
@@ -744,10 +768,10 @@ def fundamental_score(ticker, df=None):
         det['F-Score시그널'] = fsig
 
         # ── 52주 위치 (7%) ────────────────────────────
-        if df is not None and len(df) >= 30:
-            cp52 = float(df['Close'].iloc[-1])
-            h52  = float(df['High'].tail(252).max())
-            l52  = float(df['Low'].tail(252).min())
+        if _df is not None and len(_df) >= 30:
+            cp52 = float(_df['Close'].iloc[-1])
+            h52  = float(_df['High'].tail(252).max())
+            l52  = float(_df['Low'].tail(252).min())
             det['52주위치'] = float(_score_52w_position(cp52, h52, l52))
             det['52주고가'] = h52; det['52주저가'] = l52
         else:
@@ -2254,6 +2278,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
     return rdf
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
 def optimize_portfolio(tickers, method='equal', risk_free=0.045):
     """포트폴리오 최적화: equal/min_vol/risk_parity/max_sharpe"""
     end = datetime.now(); start = end - timedelta(days=390)
@@ -4192,7 +4217,7 @@ def main():
 
             if st.button("⚖️ 포트폴리오 최적화 실행", type="primary", key="qt_opt_run"):
                 with st.spinner("최적화 계산 중..."):
-                    w, stats, corr = optimize_portfolio(opt_tickers, method=opt_method[1])
+                    w, stats, corr = optimize_portfolio(tuple(opt_tickers), method=opt_method[1])
                 if not w:
                     st.error("최적화 실패 — 종목 2개 이상 필요")
                 else:
