@@ -2200,6 +2200,178 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 
 
 # ─────────────────────────────────────────────
+# QUANT ENGINE
+# ─────────────────────────────────────────────
+
+def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
+    """멀티팩터 랭킹: 모멘텀·밸류·퀄리티·저변동성 4팩터 스코어링."""
+    end = datetime.now(); start = end - timedelta(days=520)
+    results = []
+    for i, tk in enumerate(tickers):
+        if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
+        if prog_bar: prog_bar.progress((i+1)/len(tickers))
+        try:
+            df = download_stock(tk, start=start, end=end)
+            if df.empty or len(df) < 60: continue
+            df = df.dropna(subset=['Close'])
+            info = yf.Ticker(tk).info
+            cp = float(df['Close'].iloc[-1])
+            mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
+            mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+            momentum = mom_12m - mom_1m
+            per = info.get('trailingPE') or info.get('forwardPE')
+            pbr = info.get('priceToBook')
+            ep = (1.0 / per * 100) if per and per > 0 else 0
+            bp = (1.0 / pbr * 100) if pbr and pbr > 0 else 0
+            value = ep * 0.5 + bp * 0.5
+            roe = info.get('returnOnEquity')
+            roe_v = (roe * 100 if roe and abs(roe) <= 1 else (roe or 0))
+            pm = info.get('profitMargins')
+            pm_v = (pm * 100 if pm else 0)
+            rg = info.get('revenueGrowth')
+            rg_v = (rg * 100 if rg else 0)
+            quality = roe_v * 0.4 + pm_v * 0.3 + rg_v * 0.3
+            daily_ret = df['Close'].pct_change().dropna()
+            annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
+            low_vol = max(100 - annual_vol, 0)
+            results.append({
+                'ticker': tk, 'name': info.get('shortName', tk)[:20], 'price': cp,
+                'momentum_raw': round(momentum, 2), 'value_raw': round(value, 2),
+                'quality_raw': round(quality, 2), 'low_vol_raw': round(low_vol, 2),
+                'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
+            })
+        except Exception:
+            continue
+    if not results: return pd.DataFrame()
+    rdf = pd.DataFrame(results)
+    for col in ['momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw']:
+        fname = col.replace('_raw', '')
+        rdf[fname] = rdf[col].rank(pct=True) * 100
+    rdf['composite'] = (rdf['momentum']*0.30 + rdf['value']*0.25 +
+                        rdf['quality']*0.30 + rdf['low_vol']*0.15)
+    rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
+    rdf['rank'] = range(1, len(rdf) + 1)
+    return rdf
+
+
+def optimize_portfolio(tickers, method='equal', risk_free=0.045):
+    """포트폴리오 최적화: equal/min_vol/risk_parity/max_sharpe"""
+    end = datetime.now(); start = end - timedelta(days=390)
+    prices = pd.DataFrame()
+    valid_tickers = []
+    for tk in tickers:
+        try:
+            df = download_stock(tk, start=start, end=end)
+            if not df.empty and len(df) >= 60:
+                prices[tk] = df['Close']
+                valid_tickers.append(tk)
+        except Exception:
+            continue
+    if len(valid_tickers) < 2: return {}, {}, pd.DataFrame()
+    returns = prices.pct_change().dropna()
+    n = len(valid_tickers)
+    cov = returns.cov() * 252
+    corr = returns.corr()
+    mean_ret = returns.mean() * 252
+
+    if method == 'equal':
+        w = np.array([1.0/n]*n)
+    elif method == 'min_vol':
+        from scipy.optimize import minimize
+        cons = {'type': 'eq', 'fun': lambda w: w.sum() - 1}
+        bounds = [(0.02, 0.40)] * n
+        x0 = np.array([1.0/n]*n)
+        res = minimize(lambda w: np.sqrt(w @ cov.values @ w),
+                       x0, method='SLSQP', bounds=bounds, constraints=cons)
+        w = res.x if res.success else x0
+    elif method == 'risk_parity':
+        vol = np.sqrt(np.diag(cov.values))
+        inv_vol = 1.0 / (vol + 1e-10)
+        w = inv_vol / inv_vol.sum()
+    elif method == 'max_sharpe':
+        from scipy.optimize import minimize
+        def neg_sharpe(w):
+            ret = w @ mean_ret.values
+            vol = np.sqrt(w @ cov.values @ w)
+            return -(ret - risk_free) / (vol + 1e-10)
+        cons = {'type': 'eq', 'fun': lambda w: w.sum() - 1}
+        bounds = [(0.02, 0.40)] * n
+        x0 = np.array([1.0/n]*n)
+        res = minimize(neg_sharpe, x0, method='SLSQP', bounds=bounds, constraints=cons)
+        w = res.x if res.success else x0
+    else:
+        w = np.array([1.0/n]*n)
+    w = w / w.sum()
+    port_ret = float(w @ mean_ret.values) * 100
+    port_vol = float(np.sqrt(w @ cov.values @ w)) * 100
+    port_sharpe = (port_ret/100 - risk_free) / (port_vol/100 + 1e-10)
+    weights = {tk: round(float(wt), 4) for tk, wt in zip(valid_tickers, w)}
+    stats = {'expected_return': round(port_ret, 2), 'volatility': round(port_vol, 2),
+             'sharpe': round(port_sharpe, 2), 'n_assets': n}
+    return weights, stats, corr
+
+
+def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5):
+    """시스템 트레이딩 엔진: 규칙 기반 매수/매도/리밸런싱 시그널."""
+    actions = []
+    end = datetime.now()
+    if factor_df is not None and not factor_df.empty:
+        buy_candidates = factor_df.head(top_n)['ticker'].tolist()
+        sell_candidates = factor_df.tail(max(len(factor_df)//3, 1))['ticker'].tolist()
+    else:
+        buy_candidates = tickers[:top_n]; sell_candidates = []
+
+    for tk in tickers:
+        try:
+            df = download_stock(tk, start=end - timedelta(days=120), end=end)
+            if df.empty or len(df) < 30: continue
+            df = df.dropna(subset=['Close']); p = df['Close']; cp = float(p.iloc[-1])
+            rsi = float(calc_rsi(p).iloc[-1])
+            ma20 = float(p.rolling(20).mean().iloc[-1])
+            ma60 = float(p.rolling(60).mean().iloc[-1])
+            mom = calc_momentum(df); mom_3m = mom.get('3M', 0) or 0
+            in_buy = tk in buy_candidates; in_sell = tk in sell_candidates
+            trend_up = cp > ma20 > ma60; trend_dn = cp < ma20 < ma60
+            oversold = rsi < 35; overbought = rsi > 70
+            target_w = weights.get(tk, 0) if weights else (1.0/top_n if in_buy else 0)
+
+            if in_buy and (trend_up or oversold) and not overbought:
+                actions.append({'ticker': tk, 'action': '🟢 매수',
+                    'weight': f"{target_w*100:.1f}%",
+                    'reason': f"팩터 상위 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
+                    'priority': 'HIGH' if oversold else 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
+            elif in_buy:
+                actions.append({'ticker': tk, 'action': '🟡 대기',
+                    'weight': f"{target_w*100:.1f}%",
+                    'reason': f"팩터 상위, 추세 미확인 (RSI {rsi:.0f})",
+                    'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
+            elif in_sell or (trend_dn and overbought):
+                actions.append({'ticker': tk, 'action': '🔴 매도', 'weight': '0%',
+                    'reason': f"팩터 하위{'+ 하락추세' if trend_dn else ''} (RSI {rsi:.0f})",
+                    'priority': 'HIGH', 'mom': f"{mom_3m:+.1f}%"})
+            elif trend_dn:
+                actions.append({'ticker': tk, 'action': '🟠 비중축소',
+                    'weight': f"{target_w*50:.1f}%",
+                    'reason': f"하락추세 (RSI {rsi:.0f})",
+                    'priority': 'NORMAL', 'mom': f"{mom_3m:+.1f}%"})
+            else:
+                actions.append({'ticker': tk, 'action': '⚪ 보유',
+                    'weight': f"{target_w*100:.1f}%",
+                    'reason': f"유지 (RSI {rsi:.0f})",
+                    'priority': 'LOW', 'mom': f"{mom_3m:+.1f}%"})
+        except Exception:
+            continue
+
+    rebal_days = 20 - (datetime.now().timetuple().tm_yday % 20)
+    rebal_info = {
+        'next_rebal': f"{rebal_days}일 후",
+        'buy_count': sum(1 for a in actions if '매수' in a['action']),
+        'sell_count': sum(1 for a in actions if '매도' in a['action'] or '축소' in a['action']),
+        'hold_count': sum(1 for a in actions if '보유' in a['action'] or '대기' in a['action']),
+    }
+    return actions, rebal_info
+
+# ─────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────
 
@@ -2364,7 +2536,7 @@ def main():
         min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
                            help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 종목 분석", "🔍 스크리너", "📉 백테스팅", "🔔 알림", "💼 포트폴리오"])
+    tab1, tab2, tab3, tab6, tab4, tab5 = st.tabs(["📊 종목 분석", "🔍 스크리너", "📉 백테스팅", "🧬 퀀트", "🔔 알림", "💼 포트폴리오"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -3665,6 +3837,169 @@ def main():
                     pm2.metric("CAGR",             f"{pf_cagr:+.1f}%")
                     pm3.metric("MDD",              f"{pf_mdd:.1f}%")
                     pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
+
+    # ── Tab 6: 퀀트 ──────────────────────────────────
+    with tab6:
+        st.subheader("🧬 퀀트 트레이딩 시스템")
+        st.caption("멀티팩터 랭킹 → 포트폴리오 최적화 → 시스템 시그널")
+
+        qt_input = st.text_input("유니버스 (쉼표 구분, 10~30개 권장)",
+            "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,JPM,V,JNJ,UNH,XOM,PG,HD,MA",
+            key="qt_universe")
+        qt_tickers = [t.strip().upper() for t in qt_input.split(',') if t.strip()]
+
+        qt_sub1, qt_sub2, qt_sub3 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널"])
+
+        with qt_sub1:
+            st.caption("모멘텀(30%) · 퀄리티(30%) · 밸류(25%) · 저변동성(15%) 복합 팩터로 종목 순위화")
+            if st.button("📊 팩터 분석 실행", type="primary", key="qt_factor_run"):
+                pb = st.progress(0); pt = st.empty()
+                fdf = calc_factor_scores(qt_tickers, pb, pt)
+                pb.empty(); pt.empty()
+                if fdf.empty:
+                    st.error("분석 가능한 종목이 없습니다.")
+                else:
+                    st.session_state['qt_factors'] = fdf
+
+            if 'qt_factors' in st.session_state:
+                fdf = st.session_state['qt_factors']
+                st.success(f"📊 {len(fdf)}개 종목 팩터 분석 완료")
+
+                top5 = fdf.head(5)
+                st.markdown("#### 🏆 팩터 Top 5")
+                for _, r in top5.iterrows():
+                    comp_c = '#26a69a' if r['composite'] >= 65 else ('#ff9800' if r['composite'] >= 45 else '#ef5350')
+                    st.markdown(
+                        f"<div style='background:#151923;border-left:3px solid {comp_c};"
+                        f"border-radius:6px;padding:8px 14px;margin:4px 0;"
+                        f"display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span><b>#{int(r['rank'])} {r['ticker']}</b> "
+                        f"<span style='color:#888'>{r['name']}</span></span>"
+                        f"<span style='color:{comp_c};font-weight:700;font-size:18px'>"
+                        f"{r['composite']:.0f}점</span></div>", unsafe_allow_html=True)
+
+                with st.expander("📋 전체 팩터 테이블", expanded=True):
+                    disp = fdf[['rank','ticker','name','composite','momentum','value',
+                                'quality','low_vol','vol','per','pbr','roe']].copy()
+                    disp.columns = ['순위','티커','종목명','종합','모멘텀','밸류',
+                                    '퀄리티','저변동','변동성%','PER','PBR','ROE%']
+                    for c in ['종합','모멘텀','밸류','퀄리티','저변동']:
+                        disp[c] = disp[c].round(0).astype(int)
+                    st.dataframe(disp, use_container_width=True, hide_index=True, height=400)
+
+                fig_radar = go.Figure()
+                for _, r in top5.iterrows():
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=[r['momentum'], r['value'], r['quality'], r['low_vol']],
+                        theta=['모멘텀','밸류','퀄리티','저변동성'],
+                        fill='toself', name=r['ticker'], opacity=0.6))
+                fig_radar.update_layout(
+                    height=350, polar=dict(radialaxis=dict(range=[0,100], gridcolor=TV_GRID),
+                                           bgcolor=TV_BG, angularaxis=dict(gridcolor=TV_GRID)),
+                    plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    font=dict(color=TV_TEXT), margin=dict(l=40, r=40, t=30, b=30),
+                    legend=dict(orientation='h', y=-0.1))
+                st.plotly_chart(fig_radar, use_container_width=True)
+
+        with qt_sub2:
+            st.caption("선택한 종목들의 최적 비중을 계산합니다.")
+            opt_method = st.selectbox("최적화 방법", [
+                ("균등 배분", "equal"), ("리스크 패리티", "risk_parity"),
+                ("최소 변동성", "min_vol"), ("최대 샤프", "max_sharpe"),
+            ], format_func=lambda x: x[0], key="qt_opt_method")
+
+            opt_input = st.text_input("최적화 종목 (팩터 Top N 또는 직접 입력)",
+                value=", ".join(qt_tickers[:8]), key="qt_opt_tickers")
+            opt_tickers = [t.strip().upper() for t in opt_input.split(',') if t.strip()]
+
+            if st.button("⚖️ 포트폴리오 최적화 실행", type="primary", key="qt_opt_run"):
+                with st.spinner("최적화 계산 중..."):
+                    w, stats, corr = optimize_portfolio(opt_tickers, method=opt_method[1])
+                if not w:
+                    st.error("최적화 실패 — 종목 2개 이상 필요")
+                else:
+                    st.session_state['qt_opt'] = {'weights': w, 'stats': stats, 'corr': corr}
+
+            if 'qt_opt' in st.session_state:
+                qo = st.session_state['qt_opt']
+                w, stats, corr = qo['weights'], qo['stats'], qo['corr']
+
+                oc1, oc2, oc3 = st.columns(3)
+                oc1.metric("기대 수익률", f"{stats['expected_return']:+.1f}%")
+                oc2.metric("변동성", f"{stats['volatility']:.1f}%")
+                oc3.metric("샤프 비율", f"{stats['sharpe']:.2f}")
+
+                st.markdown("#### 📊 최적 비중")
+                w_sorted = sorted(w.items(), key=lambda x: x[1], reverse=True)
+                for tk, wt in w_sorted:
+                    bar_w = max(wt * 100, 1)
+                    st.markdown(
+                        f"<div style='display:flex;align-items:center;gap:8px;margin:3px 0'>"
+                        f"<span style='width:60px;font-weight:600'>{tk}</span>"
+                        f"<div style='flex:1;background:#1e2334;border-radius:4px;height:20px'>"
+                        f"<div style='background:#2962ff;width:{bar_w}%;height:20px;"
+                        f"border-radius:4px;text-align:center;color:white;font-size:11px;"
+                        f"line-height:20px'>{wt*100:.1f}%</div></div></div>",
+                        unsafe_allow_html=True)
+
+                if not corr.empty:
+                    st.markdown("#### 🔗 상관관계 히트맵")
+                    fig_corr = go.Figure(go.Heatmap(
+                        z=corr.values, x=corr.columns, y=corr.index,
+                        colorscale='RdBu_r', zmid=0, zmin=-1, zmax=1,
+                        text=corr.round(2).values, texttemplate='%{text}',
+                        textfont=dict(size=10)))
+                    fig_corr.update_layout(
+                        height=max(300, len(corr)*35), plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT), margin=dict(l=10, r=10, t=10, b=10))
+                    st.plotly_chart(fig_corr, use_container_width=True)
+
+        with qt_sub3:
+            st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
+
+            sc1, sc2 = st.columns(2)
+            qt_top_n = sc1.slider("매수 후보 수 (Top N)", 3, 10, 5, key="qt_top_n")
+            qt_rebal = sc2.selectbox("리밸런싱 주기", ["월간 (20일)", "격주 (10일)", "주간 (5일)"],
+                                      key="qt_rebal")
+            rebal_map = {"월간 (20일)": 20, "격주 (10일)": 10, "주간 (5일)": 5}
+
+            if st.button("🤖 시스템 시그널 생성", type="primary", key="qt_sig_run"):
+                fdf = st.session_state.get('qt_factors')
+                qo = st.session_state.get('qt_opt')
+                opt_w = qo['weights'] if qo else None
+                with st.spinner("시그널 생성 중..."):
+                    actions, rebal = generate_system_signals(
+                        qt_tickers, factor_df=fdf, weights=opt_w, top_n=qt_top_n)
+                st.session_state['qt_signals'] = {'actions': actions, 'rebal': rebal}
+
+            if 'qt_signals' in st.session_state:
+                qs = st.session_state['qt_signals']
+                actions, rebal = qs['actions'], qs['rebal']
+
+                rc1, rc2, rc3, rc4 = st.columns(4)
+                rc1.metric("🟢 매수", f"{rebal['buy_count']}종목")
+                rc2.metric("🔴 매도/축소", f"{rebal['sell_count']}종목")
+                rc3.metric("⚪ 보유/대기", f"{rebal['hold_count']}종목")
+                rc4.metric("📅 다음 리밸런싱", rebal['next_rebal'])
+
+                st.markdown("#### 📋 액션 리스트")
+                for a in sorted(actions, key=lambda x: {'HIGH':0,'NORMAL':1,'LOW':2}.get(x['priority'],3)):
+                    act_colors = {'🟢 매수':'#26a69a','🔴 매도':'#ef5350',
+                                  '🟠 비중축소':'#ff9800','🟡 대기':'#ffeb3b','⚪ 보유':'#888'}
+                    ac = act_colors.get(a['action'], '#888')
+                    pri_badge = (f"<span style='background:#ef535033;color:#ef5350;padding:1px 6px;"
+                                 f"border-radius:3px;font-size:10px'>HIGH</span>"
+                                 if a['priority'] == 'HIGH' else '')
+                    st.markdown(
+                        f"<div style='background:#151923;border-left:3px solid {ac};"
+                        f"border-radius:6px;padding:8px 14px;margin:3px 0;"
+                        f"display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span><b>{a['ticker']}</b> {a['action']} {pri_badge}"
+                        f" <span style='color:#666;font-size:11px'>{a['reason']}</span></span>"
+                        f"<span style='color:#888;font-size:12px'>목표 {a['weight']}"
+                        f" · 3M {a['mom']}</span></div>", unsafe_allow_html=True)
+
+                st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
 
     # ── Tab 4: 알림 ──────────────────────────────────
     with tab4:
