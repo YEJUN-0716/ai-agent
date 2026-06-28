@@ -1,0 +1,31 @@
+name: 퀀트 시그널 알림
+
+on:
+  schedule:
+    # 21:30 UTC = 17:30 EDT / 16:30 EST — 미국 본장 마감(16:00 ET) 이후, DST 양쪽 모두 안전
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  signal-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 시그널 스캔 + 텔레그램 발송
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          UNIVERSE: 'S&P 500 대형 30'
+          TOP_N: '5'
+          CAPITAL: '10000'
+          SECTOR_NEUTRAL: 'true'
+          FACTOR_TIMING: 'true'
+        run: python signal_worker.py

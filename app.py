@@ -4427,6 +4427,7 @@ def main():
     # ── Tab 4: 알림 ──────────────────────────────────
     with tab4:
         st.subheader("🔔 텔레그램 알림 설정")
+        st.caption("⚙️ 퀀트 시스템 시그널은 GitHub Actions로 매일 장마감 후 자동 스캔되어 같은 텔레그램으로 발송됩니다 (signal_worker.py).")
 
         with st.expander("📱 봇 설정 방법 보기"):
             st.markdown("""
