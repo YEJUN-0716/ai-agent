@@ -1478,6 +1478,81 @@ def _get_anthropic_key():
     if k: return k
     return st.session_state.get('anthropic_key', '')
 
+@st.cache_data(ttl=300)
+def _fetch_dashboard_data():
+    """실전 대시보드용 시장 데이터 수집 (yfinance + CNN F&G). 5분 캐시."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import datetime
+
+    MACRO_MAP = {
+        'btcPrice': 'BTC-USD',
+        'dxy':      'DX-Y.NYB',
+        'oil':      'CL=F',
+        'nq':       'NQ=F',
+        'vix':      '^VIX',
+        'jpy':      'JPY=X',
+    }
+    CHG_KEY = {
+        'BTC-USD':   'btcChgPct',
+        'DX-Y.NYB':  'dxyChgPct',
+        'CL=F':      'oilChgPct',
+        'NQ=F':      'nqChgPct',
+        '^VIX':      'vixChgPct',
+        'JPY=X':     'jpyChgPct',
+    }
+    STOCKS = ['SNDK', 'MRVL', 'ARM', 'PLTR', 'META', 'MSFT', 'AMZN', 'DDOG', 'AMAT']
+
+    def _get(sym):
+        try:
+            fi = yf.Ticker(sym).fast_info
+            p  = fi.last_price
+            p0 = fi.previous_close
+            chg = float((p - p0) / p0 * 100) if p and p0 else None
+            return sym, float(p) if p else None, chg
+        except Exception:
+            return sym, None, None
+
+    all_syms = list(MACRO_MAP.values()) + STOCKS
+    raw = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for sym, price, chg in ex.map(_get, all_syms):
+            raw[sym] = (price, chg)
+
+    result = {}
+    for key, sym in MACRO_MAP.items():
+        p, chg = raw.get(sym, (None, None))
+        result[key] = p
+        ck = CHG_KEY.get(sym)
+        if ck:
+            result[ck] = chg
+
+    stocks_out = {}
+    for sym in STOCKS:
+        p, chg = raw.get(sym, (None, None))
+        if p is not None:
+            stocks_out[sym] = {
+                'price':       round(p, 2),
+                'chgPct':      round(chg, 2) if chg is not None else None,
+                'isAfterHours': False,
+            }
+    result['stocks'] = stocks_out
+
+    try:
+        r = requests.get(
+            'https://production.dataviz.cnn.io/index/fearandgreed/graphdata',
+            headers={'User-Agent': 'Mozilla/5.0'},
+            timeout=5
+        )
+        result['fgi'] = round(r.json()['fear_and_greed']['score'])
+    except Exception:
+        result['fgi'] = None
+
+    result['etfFlow'] = 'unknown'
+    result['etfNote'] = '수동 확인 필요 — farside.co.uk/bitcoin-etf-flow-data 참고'
+    result['fetchedAt'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    return result
+
+
 def get_news_sentiment(ticker):
     """뉴스 감성 분석 (Claude API 우선, 키워드 폴백)"""
     api_key = _get_anthropic_key()
@@ -4196,24 +4271,37 @@ def main():
     # ── Tab: 실전 대시보드 ──────────────────────────────────────
     with tab_dash:
         import os as _os
+        import json as _json
         import streamlit.components.v1 as _c1
-        _ant_key = _get_anthropic_key()
-        if not _ant_key:
-            st.error(
-                "Anthropic API Key가 필요합니다. "
-                "Streamlit Secrets에 `ANTHROPIC_API_KEY`를 등록하세요."
+
+        _col_info, _col_btn = st.columns([4, 1])
+        with _col_btn:
+            if st.button("🔄 새로고침", use_container_width=True, key="dash_refresh"):
+                st.cache_data.clear()
+                st.rerun()
+
+        with st.spinner("시장 데이터 수집 중 (yfinance)..."):
+            _dash_data = _fetch_dashboard_data()
+
+        with _col_info:
+            st.caption(
+                f"마지막 업데이트: {_dash_data.get('fetchedAt', '--')} · "
+                "5분 캐시 · API 비용 없음 (yfinance + CNN)"
             )
-        else:
-            _dash_path = _os.path.join(
-                _os.path.dirname(_os.path.abspath(__file__)), "dashboard.html"
+
+        _dash_path = _os.path.join(
+            _os.path.dirname(_os.path.abspath(__file__)), "dashboard.html"
+        )
+        try:
+            with open(_dash_path, encoding="utf-8") as _f:
+                _html = _f.read()
+            _html = _html.replace(
+                "%%MARKET_DATA_JSON%%",
+                _json.dumps(_dash_data, ensure_ascii=False)
             )
-            try:
-                with open(_dash_path, encoding="utf-8") as _f:
-                    _html = _f.read()
-                _html = _html.replace("%%ANTHROPIC_KEY%%", _ant_key)
-                _c1.html(_html, height=4600, scrolling=True)
-            except FileNotFoundError:
-                st.error("dashboard.html 파일을 찾을 수 없습니다.")
+            _c1.html(_html, height=4600, scrolling=True)
+        except FileNotFoundError:
+            st.error("dashboard.html 파일을 찾을 수 없습니다.")
 
 
 if __name__ == "__main__":
