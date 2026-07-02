@@ -167,12 +167,6 @@ def download_stock(ticker, start, end, interval='1d'):
         df.columns = df.columns.droplevel(1)
     return df
 
-PRESETS = {
-    '미국 대형주':  ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','JPM','V','JNJ'],
-    '한국 대형주':  ['005930.KS','000660.KS','035420.KS','005380.KS','051910.KS','006400.KS'],
-    '반도체':       ['NVDA','AMD','INTC','TSM','ASML','QCOM','000660.KS','005930.KS'],
-    'ETF':          ['SPY','QQQ','IWM','GLD','TLT','EEM','069500.KS','114800.KS'],
-}
 
 SECTOR_ETF = {
     'Technology':             'XLK',
@@ -885,53 +879,6 @@ def macro_score():
 # SCREENER
 # ─────────────────────────────────────────────
 
-def run_screener(tickers, w_tech, w_fund, w_macro, prog_bar=None, prog_text=None):
-    m_s, _, _ = macro_score()
-    results = []
-    for i, ticker in enumerate(tickers):
-        if prog_text: prog_text.text(f"분석 중: {ticker} ({i+1}/{len(tickers)})")
-        if prog_bar:  prog_bar.progress((i+1)/len(tickers))
-        try:
-            end = datetime.now(); start = end - timedelta(days=520)
-            df  = download_stock(ticker, start=start, end=end)
-            if df.empty: continue
-            df  = df.dropna(subset=['Close'])
-            if len(df) < 30: continue
-
-            t_s, t_det_sc = technical_score(df)
-            f_s, _ = fundamental_score(ticker, df)
-            total  = t_s*(w_tech/100) + f_s*(w_fund/100) + m_s*(w_macro/100)
-            mom    = calc_momentum(df)
-            cp  = float(df['Close'].iloc[-1])
-            pp  = float(df['Close'].iloc[-2]) if len(df) >= 2 else cp
-            chg = (cp-pp)/pp*100
-            m3  = mom.get('3M')
-            sigs = []
-            rsi_sc = t_det_sc.get('RSI값', 50)
-            if rsi_sc < 30: sigs.append('RSI과매도')
-            elif rsi_sc > 70: sigs.append('RSI과매수')
-            bbu_sc, _, bbl_sc = calc_bb(df['Close'])
-            bw_sc  = (float(bbu_sc.iloc[-1])-float(bbl_sc.iloc[-1]))/(cp+1e-9)
-            bwa_sc = float(((bbu_sc-bbl_sc)/df['Close']).rolling(20).mean().iloc[-1])
-            if bw_sc < bwa_sc*0.7: sigs.append('BB스퀴즈')
-            ma20_sc = df['Close'].rolling(20).mean(); ma60_sc = df['Close'].rolling(60).mean()
-            if len(df) >= 22 and float(ma20_sc.iloc[-2]) <= float(ma60_sc.iloc[-2]) and float(ma20_sc.iloc[-1]) > float(ma60_sc.iloc[-1]):
-                sigs.append('골든크로스')
-            ml_sc, sl_sc, _ = calc_macd(df['Close'])
-            if len(ml_sc) >= 2 and float(ml_sc.iloc[-2]) <= float(sl_sc.iloc[-2]) and float(ml_sc.iloc[-1]) > float(sl_sc.iloc[-1]):
-                sigs.append('MACD↑')
-            results.append({
-                '티커': ticker, '종합점수': round(total,1),
-                '차트+파동': round(t_s,1), '재무+퀀트': round(f_s,1), '매크로': round(m_s,1),
-                '모멘텀(3M)': f"{m3:+.1f}%" if m3 is not None else 'N/A',
-                '등급': score_label(total), '등락(%)': round(chg,2),
-                '시그널': ' '.join(sigs) or '-',
-            })
-        except: continue
-
-    if not results: return pd.DataFrame()
-    return pd.DataFrame(results).sort_values('종합점수', ascending=False).reset_index(drop=True)
-
 # ─────────────────────────────────────────────
 # BACKTESTING
 # ─────────────────────────────────────────────
@@ -1527,29 +1474,6 @@ def send_telegram(token, chat_id, msg):
     except Exception as e:
         return False, str(e)
 
-def check_alerts(watchlist, token, chat_id, threshold, w_tech, w_fund, w_macro):
-    m_s, _, _ = macro_score()
-    sent = []
-    for ticker in watchlist:
-        try:
-            end = datetime.now(); start = end - timedelta(days=520)
-            df  = download_stock(ticker, start=start, end=end)
-            if df.empty: continue
-            df  = df.dropna(subset=['Close'])
-            if len(df) < 30: continue
-            t_s, _ = technical_score(df)
-            f_s, _ = fundamental_score(ticker, df)
-            total  = t_s*(w_tech/100) + f_s*(w_fund/100) + m_s*(w_macro/100)
-            cp     = float(df['Close'].iloc[-1])
-            if total >= threshold:
-                msg = (f"📊 *종합 주식 분석 알림*\n\n*{ticker}*  현재가: {cp:,.2f}\n"
-                       f"종합점수: *{total:.1f}점* ({score_label(total)})\n"
-                       f"차트: {t_s:.0f} | 재무: {f_s:.0f} | 매크로: {m_s:.0f}\n"
-                       f"_{datetime.now().strftime('%Y-%m-%d %H:%M')}_")
-                ok, err = send_telegram(token, chat_id, msg)
-                sent.append({'티커': ticker, '점수': round(total,1), '발송': '✅ 성공' if ok else f'❌ {err}'})
-        except: continue
-    return sent
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -2857,7 +2781,7 @@ def main():
         min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
                            help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
-    tab1, tab2, tab3, tab6, tab4, tab5 = st.tabs(["📊 종목 분석", "🔍 스크리너", "📉 백테스팅", "🧬 퀀트", "🔔 알림", "💼 포트폴리오"])
+    tab1, tab3, tab6, tab5 = st.tabs(["📊 종목 분석", "📉 백테스팅", "🧬 퀀트", "💼 포트폴리오"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -3725,66 +3649,6 @@ def main():
 
                     st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
 
-    # ── Tab 2: 스크리너 ───────────────────────
-    with tab2:
-        st.subheader("🔍 멀티 종목 스크리너")
-        st.caption("여러 종목을 한번에 분석해 점수 순으로 랭킹합니다.")
-
-        c1, c2 = st.columns([1,2])
-        with c1:
-            preset = st.selectbox("프리셋", ["직접 입력"] + list(PRESETS.keys()))
-        with c2:
-            if preset == "직접 입력":
-                ticker_str  = st.text_input("티커 입력 (쉼표 구분)", "AAPL,MSFT,NVDA,GOOGL,TSLA")
-                ticker_list = [t.strip().upper() for t in ticker_str.split(',') if t.strip()]
-            else:
-                ticker_list = PRESETS[preset]
-                st.info(f"선택된 종목: {', '.join(ticker_list)}")
-
-        with st.expander("🔎 시그널 필터 (선택)"):
-            sf1, sf2, sf3, sf4 = st.columns(4)
-            flt_rsi  = sf1.checkbox("RSI 과매도 (<30)")
-            flt_sqz  = sf2.checkbox("BB 스퀴즈")
-            flt_gold = sf3.checkbox("골든크로스")
-            flt_macd = sf4.checkbox("MACD 상향")
-            sc_min_sc = st.slider("최소 종합점수", 0, 90, 0, 5, key="sc_min_sc")
-
-        if st.button("🔍 스크리닝 시작", type="primary", disabled=(total_w!=100)):
-            pb = st.progress(0); pt = st.empty()
-            result_df = run_screener(ticker_list, w_tech, w_fund, w_macro, pb, pt)
-            pb.empty(); pt.empty()
-
-            if result_df.empty:
-                st.warning("분석 가능한 종목이 없습니다.")
-            else:
-                if flt_rsi:       result_df = result_df[result_df['시그널'].str.contains('RSI과매도',  na=False)]
-                if flt_sqz:       result_df = result_df[result_df['시그널'].str.contains('BB스퀴즈',   na=False)]
-                if flt_gold:      result_df = result_df[result_df['시그널'].str.contains('골든크로스', na=False)]
-                if flt_macd:      result_df = result_df[result_df['시그널'].str.contains('MACD↑',     na=False)]
-                if sc_min_sc > 0: result_df = result_df[result_df['종합점수'] >= sc_min_sc]
-
-                if result_df.empty:
-                    st.warning("필터 조건에 맞는 종목이 없습니다.")
-                else:
-                    st.success(f"총 {len(result_df)}개 종목 분석 완료")
-                    try:
-                        styled = result_df.style.map(_style_score,
-                                                     subset=['종합점수','차트+파동','재무+퀀트','매크로'])
-                    except AttributeError:
-                        styled = result_df.style.applymap(_style_score,
-                                                          subset=['종합점수','차트+파동','재무+퀀트','매크로'])
-                    st.dataframe(styled, use_container_width=True, height=460)
-
-                    top5 = result_df.head(5)
-                    fig_bar = go.Figure()
-                    for col, c in [('차트+파동','#f5c518'),('재무+퀀트','#2962ff'),('매크로','#ff6d00')]:
-                        fig_bar.add_trace(go.Bar(name=col, x=top5['티커'], y=top5[col], marker_color=c))
-                    fig_bar.update_layout(barmode='group', height=300,
-                        plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER, font=dict(color=TV_TEXT),
-                        legend=dict(orientation='h'), yaxis=dict(range=[0,100], gridcolor=TV_GRID),
-                        xaxis=dict(gridcolor=TV_GRID), margin=dict(t=20,b=20))
-                    st.plotly_chart(fig_bar, use_container_width=True)
-
     # ── Tab 3: 백테스팅 ───────────────────────
     with tab3:
         st.subheader("📉 전략 백테스팅")
@@ -4423,155 +4287,6 @@ def main():
                         st.dataframe(pd.DataFrame(bt_log), use_container_width=True, hide_index=True, height=300)
 
                 st.caption("⚠️ 과거 성과는 미래 수익을 보장하지 않습니다. 거래비용·슬리피지 반영.")
-
-    # ── Tab 4: 알림 ──────────────────────────────────
-    with tab4:
-        st.subheader("🔔 텔레그램 알림 설정")
-        st.caption("⚙️ 퀀트 시스템 시그널은 GitHub Actions로 매일 장마감 후 자동 스캔되어 같은 텔레그램으로 발송됩니다 (signal_worker.py).")
-
-        with st.expander("📱 봇 설정 방법 보기"):
-            st.markdown("""
-            1. 텔레그램에서 **@BotFather** 검색 → `/newbot` → 봇 이름 입력 → **토큰** 복사
-            2. 만든 봇에게 아무 메시지나 먼저 보내기
-            3. **@userinfobot** 검색 → `/start` → **Chat ID** 확인
-            4. 아래에 입력 후 테스트 메시지로 확인
-            """)
-
-        c1, c2 = st.columns(2)
-        tg_token  = c1.text_input("봇 토큰", placeholder="1234567890:AAF...", type="password")
-        tg_chatid = c2.text_input("Chat ID", placeholder="123456789")
-        st.divider()
-
-        alert_str  = st.text_input("감시 종목 (쉼표 구분)", "AAPL,NVDA,005930.KS")
-        alert_list = [t.strip().upper() for t in alert_str.split(',') if t.strip()]
-        alert_th   = st.slider("알림 기준 점수 (이상일 때 발송)", 50, 95, 65, 5)
-
-        c1, c2 = st.columns(2)
-        if c1.button("📤 테스트 메시지 발송"):
-            if not tg_token or not tg_chatid:
-                st.error("토큰과 Chat ID를 입력해주세요.")
-            else:
-                ok, err = send_telegram(tg_token, tg_chatid,
-                    "✅ *종합 주식 분석 시스템* 연결 성공!\n\n알림이 정상 작동합니다.")
-                if ok: st.success("테스트 메시지 발송 성공! 텔레그램을 확인하세요.")
-                else:  st.error(f"발송 실패: {err}")
-
-        if c2.button("🔍 지금 점검하고 알림 발송", type="primary"):
-            if not tg_token or not tg_chatid:
-                st.error("토큰과 Chat ID를 입력해주세요.")
-            elif total_w != 100:
-                st.error("가중치 합계를 100%로 맞춰주세요.")
-            else:
-                with st.spinner(f"{len(alert_list)}개 종목 점검 중..."):
-                    sent = check_alerts(alert_list, tg_token, tg_chatid, alert_th, w_tech, w_fund, w_macro)
-                if sent:
-                    st.success(f"{len(sent)}개 종목 알림 발송 완료")
-                    st.dataframe(pd.DataFrame(sent), use_container_width=True, hide_index=True)
-                else:
-                    st.info(f"기준 점수 {alert_th}점 이상인 종목이 없습니다.")
-
-        # ── ⚡ Alpaca 실시간 데이터 설정 ──────────────
-        st.divider()
-        st.subheader("⚡ Alpaca 실시간 데이터 연동")
-        st.caption(
-            "Alpaca API를 연결하면 **미국 주식 실시간 호가(bid/ask)** 및 "
-            "**장중 분봉 차트**를 Tab 1에서 확인할 수 있습니다. "
-            "무료 계정(IEX 피드) 기준 15분 지연 데이터 제공.")
-
-        with st.expander("📋 Alpaca 가입 및 키 발급 방법"):
-            st.markdown("""
-            1. [alpaca.markets](https://alpaca.markets) 에서 무료 계정 생성
-            2. **Paper Trading** 계정으로 시작 (신용카드 불필요)
-            3. 대시보드 → **API Keys** → `Generate New Key`
-            4. API Key ID 와 Secret Key 를 아래에 입력
-            5. 유료 플랜(Unlimited, $9/월) 가입 시 진짜 실시간 데이터 제공
-            """)
-
-        al_c1, al_c2 = st.columns(2)
-        al_key    = al_c1.text_input("Alpaca API Key ID",
-                                      value=st.session_state.get('alpaca_key', ''),
-                                      placeholder="PKXXXXXXXXXXXXXXXXXXXXXXXX",
-                                      type="password")
-        al_secret = al_c2.text_input("Alpaca Secret Key",
-                                      value=st.session_state.get('alpaca_secret', ''),
-                                      placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-                                      type="password")
-
-        al_c3, al_c4 = st.columns(2)
-        if al_c3.button("🔌 연결 테스트", key="alpaca_test"):
-            if not al_key or not al_secret:
-                st.error("API Key와 Secret Key를 모두 입력해주세요.")
-            else:
-                with st.spinner("연결 테스트 중..."):
-                    ok, msg = test_alpaca_connection(al_key, al_secret)
-                if ok:
-                    st.success(msg)
-                    st.session_state['alpaca_key']    = al_key
-                    st.session_state['alpaca_secret'] = al_secret
-                else:
-                    st.error(f"연결 실패: {msg}")
-
-        if al_c4.button("💾 키 저장 (세션)", key="alpaca_save"):
-            if al_key and al_secret:
-                st.session_state['alpaca_key']    = al_key
-                st.session_state['alpaca_secret'] = al_secret
-                st.success("✅ 세션에 저장됨 — Tab 1 종목 분석 시 실시간 위젯이 표시됩니다.")
-            else:
-                st.warning("키를 입력한 후 저장하세요.")
-
-        if st.session_state.get('alpaca_key'):
-            st.info(f"⚡ Alpaca 연결 중 — Tab 1에서 미국 주식 분석 시 실시간 호가가 표시됩니다.")
-
-        # ── 🤖 Claude AI 뉴스 감성 분석 설정 ─────────
-        st.divider()
-        st.subheader("🤖 Claude AI 뉴스 감성 분석")
-        st.caption(
-            "Anthropic Claude API를 연결하면 뉴스 헤드라인의 감성을 AI가 정밀 분석합니다. "
-            "미설정 시 키워드 기반 분석이 사용됩니다.")
-
-        with st.expander("📋 API 키 발급 방법"):
-            st.markdown("""
-1. [console.anthropic.com](https://console.anthropic.com) 에서 계정 생성
-2. **API Keys** → `Create Key` 클릭
-3. 발급된 키(`sk-ant-...`)를 아래에 입력하거나 Streamlit Secrets에 등록
-
-**Streamlit Cloud Secrets 방식** (권장):
-```toml
-ANTHROPIC_API_KEY = "sk-ant-api03-..."
-```
-""")
-
-        ant_key = st.text_input("Anthropic API Key",
-                                value=st.session_state.get('anthropic_key', ''),
-                                placeholder="sk-ant-api03-...",
-                                type="password", key="ant_key_input")
-
-        ant_c1, ant_c2 = st.columns(2)
-        if ant_c1.button("🔌 연결 테스트", key="ant_test"):
-            if not ant_key:
-                st.error("API Key를 입력해주세요.")
-            else:
-                try:
-                    import anthropic
-                    client = anthropic.Anthropic(api_key=ant_key)
-                    resp = client.messages.create(
-                        model="claude-haiku-4-5-20251001",
-                        max_tokens=20,
-                        messages=[{"role": "user", "content": "Say OK"}])
-                    st.success(f"✅ 연결 성공 — {resp.model}")
-                    st.session_state['anthropic_key'] = ant_key
-                except Exception as e:
-                    st.error(f"연결 실패: {str(e)[:80]}")
-
-        if ant_c2.button("💾 키 저장 (세션)", key="ant_save"):
-            if ant_key:
-                st.session_state['anthropic_key'] = ant_key
-                st.success("✅ 세션에 저장됨 — 종목 분석 시 AI 뉴스 감성 분석이 활성화됩니다.")
-            else:
-                st.warning("키를 입력한 후 저장하세요.")
-
-        if _get_anthropic_key():
-            st.info("🤖 Claude AI 연결 중 — Tab 1 뉴스 감성 분석에 AI가 적용됩니다.")
 
     # ── Tab 5: 포트폴리오 ────────────────────────
     with tab5:
