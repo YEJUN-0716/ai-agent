@@ -2684,7 +2684,7 @@ def main():
         min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
                            help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
-    tab1, tab6 = st.tabs(["📊 종목 분석", "🧬 퀀트"])
+    tab1, tab6, tab_dash = st.tabs(["📊 종목 분석", "🧬 퀀트", "📡 실전 대시보드"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -4192,6 +4192,28 @@ def main():
                         pm2.metric("CAGR",             f"{pf_cagr:+.1f}%")
                         pm3.metric("MDD",              f"{pf_mdd:.1f}%")
                         pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
+
+    # ── Tab: 실전 대시보드 ──────────────────────────────────────
+    with tab_dash:
+        import os as _os
+        import streamlit.components.v1 as _c1
+        _ant_key = _get_anthropic_key()
+        if not _ant_key:
+            st.error(
+                "Anthropic API Key가 필요합니다. "
+                "Streamlit Secrets에 `ANTHROPIC_API_KEY`를 등록하세요."
+            )
+        else:
+            _dash_path = _os.path.join(
+                _os.path.dirname(_os.path.abspath(__file__)), "dashboard.html"
+            )
+            try:
+                with open(_dash_path, encoding="utf-8") as _f:
+                    _html = _f.read()
+                _html = _html.replace("%%ANTHROPIC_KEY%%", _ant_key)
+                _c1.html(_html, height=4600, scrolling=True)
+            except FileNotFoundError:
+                st.error("dashboard.html 파일을 찾을 수 없습니다.")
 
 
 if __name__ == "__main__":

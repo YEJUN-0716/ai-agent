@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>실전 신호 대시보드</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b0e17;color:#e2e8f0;font-family:'Space Grotesk',sans-serif;padding:16px;min-height:100vh}
+a{color:inherit;text-decoration:none}
+/* ── header ── */
+.header{text-align:center;margin-bottom:20px}
+.header h1{font-size:1.6rem;font-weight:700;letter-spacing:-.5px;color:#f8fafc}
+.header p{font-size:.8rem;color:#94a3b8;margin-top:4px}
+.warn-badge{display:inline-block;background:#1e293b;border:1px solid #334155;color:#f59e0b;font-size:.72rem;padding:4px 10px;border-radius:6px;margin-top:8px}
+/* ── status bar ── */
+.status-bar{display:flex;align-items:center;justify-content:space-between;background:#111827;border:1px solid #1e293b;border-radius:8px;padding:8px 14px;margin-bottom:16px;font-size:.78rem;color:#64748b;gap:8px;flex-wrap:wrap}
+.status-left{display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;background:#64748b;flex-shrink:0;transition:background .4s}
+.dot.live{background:#22c55e;box-shadow:0 0 6px #22c55e88}
+.dot.loading{background:#f59e0b;animation:pulse 1s infinite}
+.dot.err{background:#ef4444}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.refresh-btn{background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:.75rem;font-family:inherit;transition:all .2s}
+.refresh-btn:hover{background:#334155;color:#e2e8f0}
+/* ── score banner ── */
+.score-banner{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:20px 24px;margin-bottom:20px;display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.score-circle{width:76px;height:76px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;border:3px solid #1e293b;transition:all .5s}
+.score-circle.green{border-color:#22c55e;background:#052e16}
+.score-circle.yellow{border-color:#f59e0b;background:#1c1400}
+.score-circle.red{border-color:#ef4444;background:#1a0000}
+.score-num{font-size:1.8rem;font-weight:700;line-height:1;font-family:'JetBrains Mono',monospace}
+.score-denom{font-size:.7rem;color:#94a3b8}
+.score-info{flex:1;min-width:0}
+.score-label{font-size:1rem;font-weight:600;color:#f8fafc;margin-bottom:4px}
+.score-desc{font-size:.8rem;color:#94a3b8;line-height:1.5}
+.verdict-badge{padding:6px 16px;border-radius:8px;font-size:.85rem;font-weight:600;flex-shrink:0}
+.verdict-badge.enter{background:#052e16;border:1px solid #16a34a;color:#4ade80}
+.verdict-badge.caution{background:#1c1400;border:1px solid #d97706;color:#fbbf24}
+.verdict-badge.hold{background:#1a0000;border:1px solid #dc2626;color:#f87171}
+/* ── section ── */
+.section-title{font-size:.8rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}
+/* ── checklist ── */
+.checklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-bottom:24px}
+.check-card{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:12px 14px;display:flex;align-items:flex-start;gap:10px;transition:border-color .3s}
+.check-card.met{border-color:#16a34a}
+.check-card.partial{border-color:#d97706}
+.check-card.unmet{border-color:#374151}
+.check-badge{font-size:.82rem;font-weight:600;padding:2px 8px;border-radius:5px;flex-shrink:0;margin-top:1px}
+.check-badge.met{background:#052e16;color:#4ade80}
+.check-badge.partial{background:#1c1400;color:#fbbf24}
+.check-badge.unmet{background:#1a0000;color:#f87171}
+.check-text{min-width:0}
+.check-title{font-size:.84rem;font-weight:600;color:#f1f5f9;margin-bottom:2px}
+.check-detail{font-size:.73rem;color:#64748b;line-height:1.4}
+.check-value{font-size:.72rem;color:#94a3b8;margin-top:3px;font-family:'JetBrains Mono',monospace}
+/* ── macro grid ── */
+.macro-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:24px}
+.macro-card{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:12px;position:relative;overflow:hidden}
+.macro-card:hover{border-color:#334155}
+.macro-card a.card-link{display:block;text-decoration:none;color:inherit}
+.card-icon{font-size:1.2rem;margin-bottom:6px}
+.card-title{font-size:.73rem;color:#64748b;margin-bottom:4px;font-weight:500}
+.card-val{font-size:1.05rem;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f8fafc;margin-bottom:3px}
+.card-chg{font-size:.75rem;font-weight:600;font-family:'JetBrains Mono',monospace}
+.card-chg.up{color:#4ade80}
+.card-chg.dn{color:#f87171}
+.card-note{font-size:.68rem;color:#475569;margin-top:4px;line-height:1.3}
+.card-loading{font-size:.78rem;color:#475569;font-style:italic}
+/* ── ETF card (wide) ── */
+.etf-card{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;margin-bottom:24px;display:flex;align-items:flex-start;gap:14px}
+.etf-main{flex:1}
+.etf-title{font-size:.82rem;color:#64748b;font-weight:500;margin-bottom:4px}
+.etf-detail{font-size:.8rem;color:#94a3b8;line-height:1.5}
+.etf-badge{padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:600;flex-shrink:0}
+.etf-badge.inflow{background:#052e16;color:#4ade80;border:1px solid #16a34a}
+.etf-badge.outflow{background:#1a0000;color:#f87171;border:1px solid #dc2626}
+.etf-badge.unknown{background:#1e293b;color:#64748b;border:1px solid #334155}
+/* ── overlay ── */
+.overlay{position:fixed;inset:0;background:#0b0e17cc;backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:999;flex-direction:column;gap:12px}
+.overlay.hidden{display:none}
+.spinner{width:36px;height:36px;border:3px solid #1e293b;border-top-color:#6366f1;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.overlay-msg{font-size:.82rem;color:#94a3b8}
+/* ── entry table ── */
+.entry-table-wrap{overflow-x:auto;margin-bottom:24px}
+.entry-header{font-size:.75rem;color:#64748b;margin-bottom:8px;font-weight:500}
+table.entry{width:100%;border-collapse:collapse;font-size:.78rem}
+table.entry th{background:#111827;color:#64748b;font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid #1e293b;white-space:nowrap}
+table.entry td{padding:7px 10px;border-bottom:1px solid #131b2b;vertical-align:top;white-space:nowrap}
+table.entry tr:hover td{background:#0f172a}
+.tkr-badge{display:inline-block;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:2px 7px;border-radius:5px;font-family:'JetBrains Mono',monospace;font-weight:500;font-size:.8rem}
+.buy1{color:#f8fafc}
+.buy2{color:#94a3b8}
+.stop{color:#f87171}
+.tgt1{color:#4ade80}
+.tgt2{color:#22d3ee}
+/* ── calendar ── */
+.cal-wrap{margin-bottom:24px}
+.cal-note{font-size:.75rem;color:#64748b;margin-bottom:8px;font-style:italic}
+table.cal{width:100%;border-collapse:collapse;font-size:.78rem}
+table.cal th{background:#111827;color:#64748b;font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid #1e293b}
+table.cal td{padding:7px 10px;border-bottom:1px solid #131b2b;vertical-align:top}
+table.cal tr:hover td{background:#0f172a}
+.cal-star{color:#f59e0b}
+.footnote{font-size:.7rem;color:#475569;margin-top:8px;line-height:1.5;font-style:italic}
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div class="overlay" id="overlay">
+  <div class="spinner"></div>
+  <div class="overlay-msg" id="overlayMsg">Claude AI로 시장 데이터 수집 중...</div>
+</div>
+
+<!-- Header -->
+<div class="header">
+  <h1>📡 실전 신호 대시보드</h1>
+  <p>3개 이상 충족 시 분할 매수 진입 고려 · 일내 종가 기준</p>
+  <div class="warn-badge">⚠️ 카드 가격은 검색 기반 추정치 → 정확한 가격은 각 카드 버튼 클릭</div>
+</div>
+
+<!-- Status bar -->
+<div class="status-bar">
+  <div class="status-left">
+    <div class="dot loading" id="statusDot"></div>
+    <span id="statusMsg">초기화 중...</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span id="lastUpdate" style="font-size:.72rem;color:#475569"></span>
+    <button class="refresh-btn" onclick="fetchAll()">↻ 새로고침</button>
+  </div>
+</div>
+
+<!-- Score banner -->
+<div class="score-banner">
+  <div class="score-circle red" id="scoreCircle">
+    <span class="score-num" id="scoreNum" style="color:#f87171">--</span>
+    <span class="score-denom">/5</span>
+  </div>
+  <div class="score-info">
+    <div class="score-label" id="scoreLabel">로딩 중...</div>
+    <div class="score-desc" id="scoreDesc">AI가 시장 데이터를 분석하고 있습니다</div>
+  </div>
+  <div class="verdict-badge hold" id="verdictBadge">⏳ 대기</div>
+</div>
+
+<!-- Checklist -->
+<div class="section-title">🎯 실전 체크리스트</div>
+<div class="checklist" id="checklist">
+  <!-- populated by JS -->
+</div>
+
+<!-- Macro cards -->
+<div class="section-title">📊 매크로 현황</div>
+<div class="macro-grid" id="macroGrid">
+  <!-- populated by JS -->
+</div>
+
+<!-- BTC ETF flow -->
+<div class="section-title">🦁 BTC ETF 흐름</div>
+<div class="etf-card" id="etfCard">
+  <div class="etf-main">
+    <div class="etf-title">BTC 현물 ETF 유입량 / 유출량</div>
+    <div class="etf-detail" id="etfDetail">데이터 로딩 중...</div>
+  </div>
+  <div class="etf-badge unknown" id="etfBadge">⏳ 확인중</div>
+</div>
+
+<!-- Entry table -->
+<div class="section-title">📋 종목별 매수 전략</div>
+<div class="entry-table-wrap">
+  <div class="entry-header">직접 진입 (신호 3개 이상 충족 후) · 반도체 4종 + AI활용 5종</div>
+  <table class="entry">
+    <thead>
+      <tr>
+        <th>종목</th><th>1차 매수</th><th>2차 매수</th><th>손절</th><th>1차 목표</th><th>2차 목표</th>
+      </tr>
+    </thead>
+    <tbody id="entryBody">
+      <!-- populated by JS -->
+    </tbody>
+  </table>
+</div>
+
+<!-- Earnings calendar -->
+<div class="section-title">📅 CAPEX 확인 실적 캘린더</div>
+<div class="cal-wrap">
+  <div class="cal-note">7월 말 ~ 8월 초 → 하락 노이즈 vs 지지 신호 분기점</div>
+  <table class="cal">
+    <thead>
+      <tr><th>날짜</th><th>종목</th><th>확인 포인트</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>7/23 (수)</td><td><span class="cal-star">GOOGL*</span></td><td>Cloud 성장률 → 하이퍼스케일러 CAPEX 지향지표</td></tr>
+      <tr><td>7/29 (화)</td><td>META</td><td>CAPEX $125~145B 유지 여부 · Meta Compute 매출 기여</td></tr>
+      <tr><td>7/29 (화)</td><td>MSFT</td><td>Azure 성장률 · AI 매출 배런이트 지속 여부</td></tr>
+      <tr><td>7/30 (수)</td><td>AMZN</td><td>AWS 성장률 · $200B CAPEX 유지 여부</td></tr>
+      <tr><td>8/10 (수)</td><td>PLTR</td><td>정부·상업 매출 성장률 지속 여부</td></tr>
+    </tbody>
+  </table>
+  <div class="footnote">* GOOGL은 대시보드 보유 종목에 없지만 하이퍼스케일러 CAPEX 흐름의 지향지표로 참고</div>
+</div>
+
+<script>
+const API_KEY = "%%ANTHROPIC_KEY%%";
+const MODEL   = "claude-sonnet-4-6";
+
+// ── Static data ──────────────────────────────────────────────
+const ENTRY_ROWS = [
+  { tkr:'SNDK', b1:'$1,900~1,950', b2:'$1,800', stop:'$1,750 종가↓', t1:'$2,300', t2:'$2,739' },
+  { tkr:'MRVL', b1:'$260~270',     b2:'$245',   stop:'$230 종가↓',   t1:'$300',   t2:'$385 (TD Cowen)' },
+  { tkr:'ARM',  b1:'$360~375',     b2:'$335',   stop:'$320 종가↓',   t1:'$420',   t2:'$500 (Bernstein)' },
+  { tkr:'AMAT', b1:'$595~610',     b2:'$560',   stop:'$530 종가↓',   t1:'$700',   t2:'$850 (Cantor)' },
+  { tkr:'PLTR', b1:'$105~110',     b2:'$95',    stop:'$90 종가↓',    t1:'$150',   t2:'$183 (평균)' },
+  { tkr:'META', b1:'$560~575',     b2:'$520',   stop:'$500 종가↓',   t1:'$700',   t2:'$827 (평균)' },
+  { tkr:'MSFT', b1:'$355~365',     b2:'$340',   stop:'$330 종가↓',   t1:'$450',   t2:'$561 (평균)' },
+  { tkr:'AMZN', b1:'$220~230',     b2:'$205',   stop:'$196 종가↓',   t1:'$278 (신고가)', t2:'$313 (평균)' },
+  { tkr:'DDOG', b1:'$240~250',     b2:'$220',   stop:'$200 종가↓',   t1:'$280 (신고가)', t2:'$320 (BofA)' },
+];
+
+const MACRO_CARDS = [
+  { id:'btc',  icon:'₿', title:'BTC', urlHint:'https://finance.yahoo.com/quote/BTC-USD', note:'목표 지지 $52,500~55,000' },
+  { id:'dxy',  icon:'💵', title:'DXY', urlHint:'https://finance.yahoo.com/quote/DX-Y.NYB', note:'목표 100 이하' },
+  { id:'oil',  icon:'🛢', title:'WTI Oil', urlHint:'https://finance.yahoo.com/quote/CL=F', note:'강 지지 구간 $67~70' },
+  { id:'nq',   icon:'📈', title:'NQ Futures', urlHint:'https://finance.yahoo.com/quote/NQ=F', note:'하락 추세선 29,500 지지' },
+  { id:'vix',  icon:'😰', title:'VIX', urlHint:'https://finance.yahoo.com/quote/%5EVIX', note:'목표 20 이하' },
+  { id:'fgi',  icon:'😱', title:'Fear & Greed', urlHint:'https://edition.cnn.com/markets/fear-and-greed', note:'목표 10 이하 (극단적 공포)' },
+  { id:'jpy',  icon:'¥',  title:'USD/JPY', urlHint:'https://finance.yahoo.com/quote/JPY=X', note:'¥162 BOJ 개입 경고 구간 · 엔캐리 청산 리스크' },
+  { id:'sndk', icon:'💾', title:'SNDK', urlHint:'https://finance.yahoo.com/quote/SNDK', note:'1차 $1,900~1,950 · 2차 $1,800' },
+  { id:'mrvl', icon:'🔮', title:'MRVL', urlHint:'https://finance.yahoo.com/quote/MRVL', note:'1차 $260~270 · 2차 $245' },
+  { id:'arm',  icon:'⚙️', title:'ARM', urlHint:'https://finance.yahoo.com/quote/ARM', note:'1차 $360~375 · 2차 $335' },
+  { id:'pltr', icon:'🛡', title:'PLTR', urlHint:'https://finance.yahoo.com/quote/PLTR', note:'1차 $105~110 · 2차 $95' },
+  { id:'meta', icon:'🌐', title:'META', urlHint:'https://finance.yahoo.com/quote/META', note:'1차 $560~575 · 2차 $520' },
+  { id:'msft', icon:'🪟', title:'MSFT', urlHint:'https://finance.yahoo.com/quote/MSFT', note:'1차 $355~365 · 2차 $340' },
+  { id:'amzn', icon:'📦', title:'AMZN', urlHint:'https://finance.yahoo.com/quote/AMZN', note:'1차 $220~230 · 2차 $205' },
+  { id:'ddog', icon:'🐕', title:'DDOG', urlHint:'https://finance.yahoo.com/quote/DDOG', note:'1차 $240~250 · 2차 $220' },
+  { id:'amat', icon:'🏭', title:'AMAT', urlHint:'https://finance.yahoo.com/quote/AMAT', note:'1차 $595~610 · 2차 $560' },
+];
+
+// ── Render static structures ──────────────────────────────────
+function renderMacroGrid() {
+  const el = document.getElementById('macroGrid');
+  el.innerHTML = MACRO_CARDS.map(c => `
+    <div class="macro-card" id="mc_${c.id}">
+      <a class="card-link" href="${c.urlHint}" target="_blank" rel="noopener">
+        <div class="card-icon">${c.icon}</div>
+        <div class="card-title">${c.title}</div>
+        <div class="card-val" id="val_${c.id}"><span class="card-loading">---</span></div>
+        <div class="card-chg" id="chg_${c.id}"></div>
+        <div class="card-note">${c.note}</div>
+      </a>
+    </div>`).join('');
+}
+
+function renderEntryTable() {
+  const tb = document.getElementById('entryBody');
+  tb.innerHTML = ENTRY_ROWS.map(r => `
+    <tr>
+      <td><span class="tkr-badge">${r.tkr}</span></td>
+      <td class="buy1">${r.b1}</td>
+      <td class="buy2">${r.b2}</td>
+      <td class="stop">${r.stop}</td>
+      <td class="tgt1">${r.t1}</td>
+      <td class="tgt2">${r.t2}</td>
+    </tr>`).join('');
+}
+
+// ── Claude AI call ────────────────────────────────────────────
+const PROMPT = `지금 실시간 시장 데이터와 시간외 거래(프리마켓/애프터마켓) 데이터를 웹에서 검색해서 아래 JSON 형식으로만 답해줘. JSON 외 다른 텍스트 없이.
+미국 주식시장이 현재 닫혔다면 각 종목의 가장 최근 시간외(애프터마켓 또는 프리마켓) 가격과 정규장 종가 대비 변동률을 함께 찾아줘.
+종목: SNDK, MRVL, ARM, PLTR, META, MSFT, AMZN, DDOG, AMAT.
+
+{
+  "btcPrice": <BTC/USD 현재가 숫자>,
+  "btcChgPct": <BTC 24h 변동률 숫자 (예: -2.3)>,
+  "dxy": <DXY 현재가 숫자>,
+  "dxyChgPct": <DXY 변동률>,
+  "oil": <WTI 원유 현재가 숫자>,
+  "oilChgPct": <Oil 변동률>,
+  "nq": <NQ 선물 현재가 숫자>,
+  "nqChgPct": <NQ 변동률>,
+  "vix": <VIX 현재가 숫자>,
+  "vixChgPct": <VIX 변동률>,
+  "fgi": <CNN Fear & Greed Index 숫자 0~100>,
+  "jpy": <USD/JPY 환율 숫자>,
+  "jpyChgPct": <JPY 변동률>,
+  "etfFlow": "inflow" | "outflow" | "unknown",
+  "etfNote": "<BTC 현물 ETF 최근 유입/유출 상황 한 줄 설명>",
+  "stocks": {
+    "SNDK": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "MRVL": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "ARM":  {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "PLTR": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "META": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "MSFT": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "AMZN": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "DDOG": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>},
+    "AMAT": {"price": <숫자>, "chgPct": <숫자>, "isAfterHours": <true|false>}
+  }
+}`;
+
+async function askClaude() {
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": API_KEY,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 2000,
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      messages: [{ role: "user", content: PROMPT }]
+    })
+  });
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`API ${resp.status}: ${err}`);
+  }
+  const data = await resp.json();
+  // Extract text content from response
+  const texts = (data.content || []).filter(b => b.type === 'text').map(b => b.text);
+  const raw = texts.join('');
+  // Parse JSON (allow markdown code block)
+  const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/(\{[\s\S]*\})/);
+  if (!m) throw new Error('JSON not found in response');
+  return JSON.parse(m[1]);
+}
+
+// ── Signal evaluation ─────────────────────────────────────────
+function evalSignals(D) {
+  const fmt = v => v != null ? v : '--';
+  const chgFmt = v => v != null ? (v >= 0 ? `+${v.toFixed(2)}%` : `${v.toFixed(2)}%`) : '';
+
+  const signals = [
+    {
+      title: '① BTC 지지 확인',
+      detail: '$52,500~55,000 지지 + 공포지수 10 이하',
+      valueText: D.btcPrice ? `$${Math.round(D.btcPrice).toLocaleString()} / FGI ${fmt(D.fgi)}` : '데이터 없음',
+      state: (() => {
+        if (D.btcPrice == null) return 'unknown';
+        const btcOk = D.btcPrice <= 55000;
+        const fgiOk = D.fgi != null && D.fgi <= 15;
+        if (btcOk && fgiOk) return 'met';
+        if (btcOk || fgiOk) return 'partial';
+        return 'unmet';
+      })()
+    },
+    {
+      title: '② BTC ETF 3일↑ 유입',
+      detail: '기관 레버리지 해소 후 재진입 신호',
+      valueText: D.etfNote || '--',
+      state: D.etfFlow === 'inflow' ? 'met' : D.etfFlow === 'unknown' ? 'unknown' : 'unmet'
+    },
+    {
+      title: '③ VIX 20 이하',
+      detail: '공포 진정 통과 신호',
+      valueText: D.vix != null ? `${D.vix.toFixed(2)} ${chgFmt(D.vixChgPct)}` : '데이터 없음',
+      state: (() => {
+        if (D.vix == null) return 'unknown';
+        if (D.vix < 20) return 'met';
+        if (D.vix < 25) return 'partial';
+        return 'unmet';
+      })()
+    },
+    {
+      title: '④ 유가 $67~70 지지 확인',
+      detail: '강 성수기 마무리 + 반등 신호',
+      valueText: D.oil ? `$${D.oil.toFixed(2)} ${chgFmt(D.oilChgPct)}` : '데이터 없음',
+      state: (() => {
+        if (D.oil == null) return 'unknown';
+        const inRange = D.oil >= 67 && D.oil <= 71;
+        const bouncing = D.oilChgPct != null && D.oilChgPct >= 0;
+        if (inRange && bouncing) return 'met';
+        if (inRange || bouncing) return 'partial';
+        return 'unmet';
+      })()
+    },
+    {
+      title: '⑤ 달러 인덱스 100 이하',
+      detail: 'DXY < 100 → 성장주 반등 조건',
+      valueText: D.dxy ? `${D.dxy.toFixed(2)} ${chgFmt(D.dxyChgPct)}` : '데이터 없음',
+      state: (() => {
+        if (D.dxy == null) return 'unknown';
+        if (D.dxy < 100) return 'met';
+        if (D.dxy < 103) return 'partial';
+        return 'unmet';
+      })()
+    }
+  ];
+  return signals;
+}
+
+// ── Render checklist ──────────────────────────────────────────
+function renderChecklist(signals) {
+  const LABEL = { met:'✅ 충족', partial:'⚠️ 부분', unmet:'❌ 미충족', unknown:'⏳ 확인중' };
+  const el = document.getElementById('checklist');
+  el.innerHTML = signals.map(s => `
+    <div class="check-card ${s.state}">
+      <span class="check-badge ${s.state === 'unknown' ? 'unmet' : s.state}">${LABEL[s.state]}</span>
+      <div class="check-text">
+        <div class="check-title">${s.title}</div>
+        <div class="check-detail">${s.detail}</div>
+        <div class="check-value">${s.valueText}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ── Render score ──────────────────────────────────────────────
+function renderScore(signals) {
+  const met     = signals.filter(s => s.state === 'met').length;
+  const partial = signals.filter(s => s.state === 'partial').length;
+
+  let color, label, desc, vCls, vText;
+  if (met >= 3) {
+    color='green'; label='직접 검토 가능'; desc='3개 이상 충족 → 분할 매수 시점 고려'; vCls='enter'; vText='🟢 직접 검토';
+  } else if (met >= 2 || partial >= 2) {
+    color='yellow'; label='신호 접근 중'; desc='조건 근접 → 추가 확인 필요'; vCls='caution'; vText='⚠️ 대기';
+  } else {
+    color='red'; label='현금 보유'; desc='신호 부족 → 실전 조건 미충족'; vCls='hold'; vText='⏳ 관망';
+  }
+
+  const numColor = color === 'green' ? '#4ade80' : color === 'yellow' ? '#fbbf24' : '#f87171';
+  const circle = document.getElementById('scoreCircle');
+  circle.className = `score-circle ${color}`;
+  document.getElementById('scoreNum').textContent = met;
+  document.getElementById('scoreNum').style.color = numColor;
+  document.getElementById('scoreLabel').textContent = label;
+  document.getElementById('scoreDesc').textContent = desc;
+  const vb = document.getElementById('verdictBadge');
+  vb.className = `verdict-badge ${vCls}`;
+  vb.textContent = vText;
+}
+
+// ── Update macro cards ─────────────────────────────────────────
+function fmtPrice(v, decimals) {
+  if (v == null) return '---';
+  return typeof v === 'number' ? v.toLocaleString(undefined, {minimumFractionDigits: decimals, maximumFractionDigits: decimals}) : String(v);
+}
+
+function setCard(id, val, chgPct) {
+  const ve = document.getElementById(`val_${id}`);
+  const ce = document.getElementById(`chg_${id}`);
+  if (!ve) return;
+  ve.textContent = val || '---';
+  if (ce && chgPct != null) {
+    const up = chgPct >= 0;
+    ce.className = `card-chg ${up ? 'up' : 'dn'}`;
+    ce.textContent = `${up ? '+' : ''}${chgPct.toFixed(2)}%`;
+  }
+}
+
+function updateCards(D) {
+  setCard('btc',  D.btcPrice ? `$${Math.round(D.btcPrice).toLocaleString()}` : null, D.btcChgPct);
+  setCard('dxy',  D.dxy ? fmtPrice(D.dxy, 2) : null, D.dxyChgPct);
+  setCard('oil',  D.oil ? `$${fmtPrice(D.oil, 2)}` : null, D.oilChgPct);
+  setCard('nq',   D.nq ? fmtPrice(D.nq, 0) : null, D.nqChgPct);
+  setCard('vix',  D.vix ? fmtPrice(D.vix, 2) : null, D.vixChgPct);
+  setCard('fgi',  D.fgi != null ? String(D.fgi) : null, null);
+  setCard('jpy',  D.jpy ? fmtPrice(D.jpy, 2) : null, D.jpyChgPct);
+  if (D.stocks) {
+    ['sndk','mrvl','arm','pltr','meta','msft','amzn','ddog','amat'].forEach(t => {
+      const key = t.toUpperCase();
+      const s = D.stocks[key];
+      if (!s) return;
+      const label = s.isAfterHours ? `$${fmtPrice(s.price,2)} AH` : `$${fmtPrice(s.price,2)}`;
+      setCard(t, label, s.chgPct);
+    });
+  }
+}
+
+// ── ETF badge ─────────────────────────────────────────────────
+function updateEtf(D) {
+  const badge = document.getElementById('etfBadge');
+  const detail = document.getElementById('etfDetail');
+  if (D.etfFlow === 'inflow') {
+    badge.className = 'etf-badge inflow'; badge.textContent = '↑ 유입세';
+  } else if (D.etfFlow === 'outflow') {
+    badge.className = 'etf-badge outflow'; badge.textContent = '↓ 유출세';
+  } else {
+    badge.className = 'etf-badge unknown'; badge.textContent = '⏳ 확인중';
+  }
+  detail.textContent = D.etfNote || '데이터 없음';
+}
+
+// ── Status helpers ────────────────────────────────────────────
+function setStatus(state, msg) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusMsg');
+  dot.className = `dot ${state}`;
+  txt.textContent = msg;
+}
+
+// ── Main fetch ────────────────────────────────────────────────
+async function fetchAll() {
+  document.getElementById('overlay').classList.remove('hidden');
+  document.getElementById('overlayMsg').textContent = 'Claude AI로 시장 데이터 수집 중...';
+  setStatus('loading', 'Claude AI로 데이터 수집 중...');
+  try {
+    const D = await askClaude();
+    const signals = evalSignals(D);
+    renderChecklist(signals);
+    renderScore(signals);
+    updateCards(D);
+    updateEtf(D);
+    document.getElementById('lastUpdate').textContent = '최종 업데이트: ' + new Date().toLocaleTimeString('ko-KR');
+    setStatus('live', '⚠️ 검색 기반 추정가 (실시간 아님) · 정확한 시세는 카드의 버튼 클릭');
+  } catch(e) {
+    console.error(e);
+    setStatus('err', '오류 발생 → 새로고침 시도: ' + e.message);
+    document.getElementById('overlayMsg').textContent = '오류: ' + e.message;
+  } finally {
+    document.getElementById('overlay').classList.add('hidden');
+  }
+}
+
+// ── Boot ──────────────────────────────────────────────────────
+renderMacroGrid();
+renderEntryTable();
+
+if (!API_KEY || API_KEY === '%%ANTHROPIC_KEY%%') {
+  setStatus('err', 'API 키가 설정되지 않았습니다. Streamlit Secrets에 ANTHROPIC_API_KEY를 등록하세요.');
+  document.getElementById('overlay').classList.add('hidden');
+} else {
+  fetchAll();
+  setInterval(fetchAll, 5 * 60 * 1000);  // auto-refresh every 5 min
+}
+</script>
+</body>
+</html>
