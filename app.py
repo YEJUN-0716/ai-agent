@@ -2684,7 +2684,7 @@ def main():
         min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
                            help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
-    tab1, tab3, tab6 = st.tabs(["📊 종목 분석", "📉 백테스팅", "🧬 퀀트"])
+    tab1, tab6 = st.tabs(["📊 종목 분석", "🧬 퀀트"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -3552,379 +3552,6 @@ def main():
 
                     st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
 
-    # ── Tab 3: 백테스팅 ───────────────────────
-    with tab3:
-        st.subheader("📉 전략 백테스팅")
-        st.caption("사이드바 가중치와 동일한 **종합점수**(차트+재무+매크로) 기반으로 과거 성과를 검증합니다. 수수료·슬리피지 반영.")
-
-        c1, c2, c3 = st.columns(3)
-        bt_ticker  = c1.text_input("티커", "AAPL").strip().upper()
-        bt_period  = c2.selectbox("기간", ["1년","2년","3년","5년"], index=1)
-        bt_capital = c3.number_input("초기자금 (원)", value=10_000_000, step=1_000_000, min_value=100_000)
-
-        c4, c5 = st.columns(2)
-        buy_th  = c4.slider("매수 임계값", 50, 80, 58, 1, help="신호가 이 점수를 넘으면 매수 (낮을수록 매매 많음)")
-        sell_th = c5.slider("매도 임계값", 30, 55, 42, 1, help="신호가 이 점수 아래로 내려오면 매도 (높을수록 매매 많음)")
-
-        with st.expander("⚙️ 비용 설정 (수수료 · 슬리피지)"):
-            cc1, cc2 = st.columns(2)
-            bt_commission = cc1.slider("수수료율 (편도, %)", 0.0, 0.5, 0.05, 0.01,
-                                        help="증권사 매매 수수료. 미국 주식 ~0.05%, 한국 주식 ~0.015%") / 100
-            bt_slippage   = cc2.slider("슬리피지율 (편도, %)", 0.0, 0.5, 0.03, 0.01,
-                                        help="호가 스프레드 + 체결 지연. 유동성 낮을수록 증가") / 100
-            total_cost = (bt_commission + bt_slippage) * 2 * 100
-            st.caption(f"왕복 총비용: **{total_cost:.2f}%** / 매매 — 거래 빈도가 높을수록 수익률 압박 증가")
-
-        period_days = {"1년":365, "2년":730, "3년":1095, "5년":1825}
-
-        if st.button("📉 백테스팅 시작", type="primary"):
-            with st.spinner("백테스팅 실행 중..."):
-                end_dt2   = datetime.now()
-                start_dt2 = end_dt2 - timedelta(days=period_days[bt_period]+60)
-                _bt_df = download_stock(bt_ticker, start=start_dt2, end=end_dt2)
-                _bt_df = _bt_df.dropna(subset=['Close'])
-
-            if _bt_df.empty or len(_bt_df) < 60:
-                st.error("데이터가 부족합니다.")
-            else:
-                _bt_f, _bt_m = None, None
-                if total_w == 100 and (w_fund > 0 or w_macro > 0):
-                    with st.spinner("재무·매크로 점수 산출 중..."):
-                        _bt_f, _ = fundamental_score(bt_ticker, _bt_df)
-                        _bt_m, _, _ = macro_score()
-
-                _metrics, _eq_df, _trades_df = run_backtest(
-                    _bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
-                    f_score=_bt_f, m_score=_bt_m,
-                    w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
-
-                _corr_results = analyze_score_correlation(_bt_df)
-
-                _bt_sigs = bt_signals_full(_bt_df)
-
-                st.session_state['tab3'] = {
-                    'bt_df': _bt_df, 'metrics': _metrics, 'eq_df': _eq_df,
-                    'trades_df': _trades_df, 'corr_results': _corr_results,
-                    'bt_sigs': _bt_sigs,
-                    'bt_f_score': _bt_f, 'bt_m_score': _bt_m,
-                    'bt_ticker': bt_ticker, 'bt_capital': bt_capital,
-                    'buy_th': buy_th, 'sell_th': sell_th,
-                    'bt_commission': bt_commission, 'bt_slippage': bt_slippage,
-                    'w_tech': w_tech, 'w_fund': w_fund, 'w_macro': w_macro,
-                }
-
-        if 'tab3' in st.session_state:
-            _bt = st.session_state['tab3']
-            bt_df = _bt['bt_df']; metrics = _bt['metrics']
-            eq_df = _bt['eq_df']; trades_df = _bt['trades_df']
-            corr_results = _bt['corr_results']
-            bt_f_score = _bt['bt_f_score']; bt_m_score = _bt['bt_m_score']
-
-            if bt_f_score is not None and bt_m_score is not None:
-                _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
-                st.info(f"📊 재무 {bt_f_score:.0f}점 · 매크로 {bt_m_score:.0f}점 → 임계값 보정 {_fm_off:+.1f}점 (매수 {_bt['buy_th']-_fm_off:.0f} / 매도 {_bt['sell_th']-_fm_off:.0f})")
-
-            # ── 지표 12개 (3행×4열) ──────────────────
-            m_keys = list(metrics.keys()); m_vals = list(metrics.values())
-            for row_start in range(0, len(m_keys), 4):
-                row_keys = m_keys[row_start:row_start+4]
-                row_vals = m_vals[row_start:row_start+4]
-                row_cols = st.columns(len(row_keys))
-                for ci, (k, v) in enumerate(zip(row_keys, row_vals)):
-                    row_cols[ci].metric(k, v)
-            st.divider()
-
-            # ── 신호 분포 ─────────────────────────────
-            with st.expander("📊 신호 점수 분포 (임계값 튜닝 참고)"):
-                _sig_vals = _bt['bt_sigs'].dropna().iloc[20:]
-                _adj_buy = _bt['buy_th']
-                _adj_sell = _bt['sell_th']
-                if bt_f_score is not None and bt_m_score is not None:
-                    _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
-                    _adj_buy = _bt['buy_th'] - _fm_off
-                    _adj_sell = _bt['sell_th'] - _fm_off
-                _pct_above = float((_sig_vals > _adj_buy).sum() / len(_sig_vals) * 100)
-                _pct_below = float((_sig_vals < _adj_sell).sum() / len(_sig_vals) * 100)
-                sc1, sc2, sc3 = st.columns(3)
-                sc1.metric("매수 구간 비율", f"{_pct_above:.1f}%", f"점수 > {_adj_buy:.0f}")
-                sc2.metric("매도 구간 비율", f"{_pct_below:.1f}%", f"점수 < {_adj_sell:.0f}")
-                sc3.metric("평균 신호 점수", f"{float(_sig_vals.mean()):.1f}")
-                fig_dist = go.Figure()
-                fig_dist.add_trace(go.Histogram(x=_sig_vals, nbinsx=40,
-                    marker_color='rgba(41,98,255,0.5)', name='신호 분포'))
-                fig_dist.add_vline(x=_adj_buy, line_color=TV_UP, line_width=2,
-                    annotation_text=f"매수 {_adj_buy:.0f}", annotation_position="top",
-                    annotation_font=dict(color=TV_UP, size=11))
-                fig_dist.add_vline(x=_adj_sell, line_color=TV_DOWN, line_width=2,
-                    annotation_text=f"매도 {_adj_sell:.0f}", annotation_position="top",
-                    annotation_font=dict(color=TV_DOWN, size=11))
-                fig_dist.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    font=dict(color=TV_TEXT), showlegend=False,
-                    title=dict(text='신호 점수 분포', font=dict(size=13)),
-                    xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
-                    yaxis=dict(title='빈도', gridcolor=TV_GRID),
-                    margin=dict(l=10, r=10, t=40, b=10))
-                st.plotly_chart(fig_dist, use_container_width=True)
-                st.caption("매수 구간이 5~15%, 매도 구간이 5~15% 정도면 적절합니다. 슬라이더로 조절하세요.")
-
-            # ── 자산 곡선 ─────────────────────────────
-            fig_eq = go.Figure()
-            fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['전략'], name='전략',
-                line=dict(color='#2962ff', width=2),
-                fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
-            fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['매수보유'], name='매수보유',
-                line=dict(color='#888', width=1.5, dash='dash')))
-
-            if not trades_df.empty:
-                buys_df  = trades_df[trades_df['구분'].str.contains('매수')]
-                sells_df = trades_df[trades_df['구분'].str.contains('매도')]
-                for bdate in buys_df['날짜']:
-                    row = eq_df[eq_df['날짜'] == bdate]
-                    if not row.empty:
-                        fig_eq.add_trace(go.Scatter(x=[bdate], y=[float(row['전략'].iloc[0])],
-                            mode='markers', marker=dict(symbol='triangle-up', size=14, color=TV_UP),
-                            name='매수', showlegend=False))
-                for sdate in sells_df['날짜']:
-                    row = eq_df[eq_df['날짜'] == sdate]
-                    if not row.empty:
-                        fig_eq.add_trace(go.Scatter(x=[sdate], y=[float(row['전략'].iloc[0])],
-                            mode='markers', marker=dict(symbol='triangle-down', size=14, color=TV_DOWN),
-                            name='매도', showlegend=False))
-
-            fig_eq.update_layout(height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                font=dict(color=TV_TEXT), hovermode='x unified',
-                title=dict(text='전략 vs 매수보유 자산 곡선', font=dict(size=14)),
-                yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right', title='자산 (원)'),
-                xaxis=dict(gridcolor=TV_GRID),
-                legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)'),
-                margin=dict(l=0, r=60, t=50, b=0))
-            st.plotly_chart(fig_eq, use_container_width=True)
-
-            if not trades_df.empty:
-                st.subheader(f"매매 내역 ({len(trades_df)}건)")
-                st.dataframe(trades_df, use_container_width=True, hide_index=True)
-
-            # ── 📊 점수-수익률 상관관계 검증 ─────────────
-            st.divider()
-            st.subheader("📊 점수-수익률 상관관계 검증")
-            st.caption(
-                "신호 점수가 실제 미래 수익률과 얼마나 연관되는지 검증합니다. "
-                "**IC(정보계수)** > 0 이면 점수가 높을수록 수익률이 높은 경향이 있음을 의미합니다.")
-
-            corr_results = _bt['corr_results']
-
-            # IC 카드 3개
-            ic_cols = st.columns(3)
-            for ci, cr in enumerate(corr_results):
-                ic_val = cr['IC']
-                ic_color = "normal" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "off")
-                ic_cols[ci].metric(
-                    f"IC ({cr['horizon']}일 후 수익률)",
-                    f"{ic_val:+.3f}",
-                    delta=("유효 신호 ✅" if abs(ic_val) >= 0.05 else "신호 미약 ⚠️"),
-                    delta_color=ic_color)
-
-            st.caption("IC 해석: |IC| ≥ 0.05 → 약한 예측력 / ≥ 0.10 → 의미있는 예측력 / ≥ 0.15 → 강한 예측력")
-            st.divider()
-
-            # 20일 기준 점수 구간별 평균 수익률 막대차트
-            cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1])
-            bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)'])
-            if not bs.empty:
-                bar_colors = [TV_UP if v >= 0 else TV_DOWN for v in bs['평균수익률(%)'].tolist()]
-                fig_bar = go.Figure()
-                fig_bar.add_trace(go.Bar(
-                    x=bs['점수구간'], y=bs['평균수익률(%)'],
-                    marker_color=bar_colors,
-                    error_y=dict(type='data', array=bs['표준편차'].tolist(), visible=True,
-                                 color=TV_TEXT, thickness=1.2, width=4),
-                    text=[f"{v:+.2f}%" for v in bs['평균수익률(%)'].tolist()],
-                    textposition='outside', textfont=dict(size=11)))
-                fig_bar.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
-                fig_bar.update_layout(
-                    title=dict(text=f"점수 구간별 평균 20일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
-                    height=340, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    font=dict(color=TV_TEXT),
-                    xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
-                    yaxis=dict(title='평균 수익률 (%)', gridcolor=TV_GRID, zeroline=False),
-                    margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-                # 구간별 상세 통계 테이블
-                with st.expander("📋 구간별 상세 통계"):
-                    display_bs = bs.copy()
-                    display_bs['평균수익률(%)'] = display_bs['평균수익률(%)'].map(lambda x: f"{x:+.2f}%")
-                    display_bs['표준편차']       = display_bs['표준편차'].map(lambda x: f"{x:.2f}%")
-                    st.dataframe(display_bs, use_container_width=True, hide_index=True)
-
-                    # 5일, 10일 IC 도 표로
-                    ic_summary = pd.DataFrame([
-                        {'기간': f"{cr['horizon']}일 후", 'IC': f"{cr['IC']:+.3f}",
-                         '예측력': ('강함 💪' if abs(cr['IC']) >= 0.15 else
-                                   ('보통 🔶' if abs(cr['IC']) >= 0.10 else
-                                    ('약함 🔸' if abs(cr['IC']) >= 0.05 else '없음 ❌')))}
-                        for cr in corr_results
-                    ])
-                    st.dataframe(ic_summary, use_container_width=True, hide_index=True)
-
-            # ── 📐 워크-포워드 검증 ──────────────────────
-            st.divider()
-            st.subheader("📐 워크-포워드 검증 (과적합 진단)")
-            st.caption(
-                "전체 기간을 **학습 70%** / **검증 30%** 로 분리해 동일 전략을 각각 실행합니다. "
-                "학습 성과와 검증 성과 차이가 클수록 **과적합** 가능성이 높습니다.")
-
-            if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
-                wf_results, wf_overfit, wf_split_date = run_walkforward(
-                    bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
-                    f_score=bt_f_score, m_score=bt_m_score,
-                    w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
-
-                wf_col1, wf_col2 = st.columns(2)
-                wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
-                                'Sharpe Ratio', 'Calmar Ratio', '승률', '총 매매']
-                for wf_ci, (wf_label, wf_m) in enumerate(wf_results.items()):
-                    col = wf_col1 if wf_ci == 0 else wf_col2
-                    bg  = 'rgba(41,98,255,0.08)' if wf_ci == 0 else 'rgba(255,82,82,0.08)'
-                    bdr = '#2962ff' if wf_ci == 0 else '#ef5350'
-                    col.markdown(
-                        f"<div style='background:{bg};border-left:3px solid {bdr};"
-                        f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
-                        f"<b>{wf_label}</b></div>", unsafe_allow_html=True)
-                    for wf_k in wf_key_order:
-                        if wf_k in wf_m:
-                            col.metric(wf_k, wf_m[wf_k])
-
-                # 과적합 진단 메시지
-                st.divider()
-                if abs(wf_overfit) < 3:
-                    st.success(f"✅ **과적합 없음** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p (기준 ±3%p 이내)")
-                elif abs(wf_overfit) < 8:
-                    st.warning(f"🔶 **경미한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값 재검토 권장")
-                else:
-                    st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
-                st.caption(f"분할 기준일: {wf_split_date}")
-
-        # ── 📦 멀티 종목 포트폴리오 백테스트 ──────────
-        st.divider()
-        st.subheader("📦 멀티 종목 포트폴리오 백테스트")
-        st.caption("여러 종목에 자본을 배분해 포트폴리오 전체의 백테스트 성과를 확인합니다.")
-
-        with st.expander("⚙️ 포트폴리오 설정", expanded=True):
-            pbt_str = st.text_input("종목 목록 (쉼표 구분, 최대 5개)",
-                                     "AAPL,MSFT,NVDA,GOOGL,META",
-                                     help="미국: AAPL / 한국: 005930.KS")
-            pbt_tickers = [t.strip().upper() for t in pbt_str.split(',') if t.strip()][:5]
-
-            pbt_wt_mode = st.radio("비중 방식", ["균등 배분", "직접 입력"], horizontal=True)
-            if pbt_wt_mode == "균등 배분":
-                pbt_weights = [1.0 / len(pbt_tickers)] * len(pbt_tickers) if pbt_tickers else []
-            else:
-                pbt_wt_cols = st.columns(len(pbt_tickers))
-                pbt_weights = []
-                for pi, tk in enumerate(pbt_tickers):
-                    w = pbt_wt_cols[pi].number_input(tk, 0.0, 1.0,
-                        round(1.0 / len(pbt_tickers), 2), 0.05, key=f"pbt_w_{pi}")
-                    pbt_weights.append(w)
-                wt_sum = sum(pbt_weights)
-                if abs(wt_sum - 1.0) > 0.01:
-                    st.warning(f"비중 합계: {wt_sum:.2f} (1.00이 되어야 합니다)")
-                else:
-                    pbt_weights = [w / wt_sum for w in pbt_weights]  # 정규화
-
-            pbt_c1, pbt_c2, pbt_c3 = st.columns(3)
-            pbt_period  = pbt_c1.selectbox("기간", ["1년","2년","3년","5년"], index=1, key="pbt_period")
-            pbt_capital = pbt_c2.number_input("초기자금 (원)", value=10_000_000,
-                                               step=1_000_000, min_value=100_000, key="pbt_cap")
-            pbt_buy_th  = pbt_c3.slider("매수 임계값", 50, 80, 58, 1, key="pbt_buy")
-
-        pbt_period_days = {"1년": 365, "2년": 730, "3년": 1095, "5년": 1825}
-
-        if st.button("📦 포트폴리오 백테스트 실행", type="primary", key="pbt_run"):
-            if not pbt_tickers:
-                st.error("종목을 입력해주세요.")
-            else:
-                with st.spinner(f"{len(pbt_tickers)}개 종목 다운로드 및 백테스트 실행 중..."):
-                    pbt_results, pbt_eq, pbt_spy = run_portfolio_backtest(
-                        pbt_tickers, pbt_weights,
-                        pbt_period_days[pbt_period],
-                        pbt_buy_th, sell_th,
-                        pbt_capital, bt_commission, bt_slippage,
-                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
-
-                # ── 개별 종목 성과 ────────────────────────
-                st.markdown("#### 종목별 성과")
-                ok_res  = [r for r in pbt_results if not r.get('error')]
-                err_res = [r for r in pbt_results if r.get('error')]
-                if err_res:
-                    for r in err_res:
-                        st.warning(f"⚠️ {r['ticker']}: {r['error']}")
-
-                if ok_res:
-                    sum_rows = []
-                    for r in ok_res:
-                        m = r['metrics']
-                        sum_rows.append({
-                            '종목':      r['ticker'],
-                            '비중':      f"{r['weight']*100:.0f}%",
-                            '전략수익률': m.get('전략 수익률', '-'),
-                            'CAGR':      m.get('CAGR', '-'),
-                            'MDD':       m.get('최대낙폭(MDD)', '-'),
-                            'Sharpe':    m.get('Sharpe Ratio', '-'),
-                            '승률':      m.get('승률', '-'),
-                        })
-                    st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
-
-                # ── 포트폴리오 통합 자산 곡선 ─────────────
-                if pbt_eq is not None and not pbt_eq.empty:
-                    st.markdown("#### 포트폴리오 자산 곡선 (SPY 벤치마크 포함)")
-                    fig_pbt = go.Figure()
-                    fig_pbt.add_trace(go.Scatter(
-                        x=pbt_eq.index, y=pbt_eq.values,
-                        name='포트폴리오',
-                        line=dict(color='#2962ff', width=2.5),
-                        fill='tozeroy', fillcolor='rgba(41,98,255,0.07)'))
-                    if pbt_spy is not None:
-                        # align spy to portfolio start capital
-                        spy_norm = pbt_spy / float(pbt_spy.iloc[0]) * pbt_capital
-                        fig_pbt.add_trace(go.Scatter(
-                            x=spy_norm.index, y=spy_norm.values,
-                            name='SPY (벤치마크)',
-                            line=dict(color='#888', width=1.5, dash='dash')))
-                    # 개별 종목 곡선 (얇게)
-                    pal = ['#ff6b6b','#ffa94d','#69db7c','#74c0fc','#da77f2']
-                    for ri, r in enumerate(ok_res):
-                        eq_s = r['eq_df'].set_index('날짜')['전략']
-                        fig_pbt.add_trace(go.Scatter(
-                            x=eq_s.index, y=eq_s.values,
-                            name=f"{r['ticker']} ({r['weight']*100:.0f}%)",
-                            line=dict(color=pal[ri % len(pal)], width=1, dash='dot'),
-                            opacity=0.7))
-                    fig_pbt.update_layout(
-                        height=450, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color=TV_TEXT), hovermode='x unified',
-                        yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right'),
-                        xaxis=dict(gridcolor=TV_GRID),
-                        legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)',
-                                    yanchor='bottom', y=1.02),
-                        margin=dict(l=0, r=60, t=40, b=0))
-                    st.plotly_chart(fig_pbt, use_container_width=True)
-
-                    # 포트폴리오 요약 지표
-                    pf_final  = float(pbt_eq.iloc[-1])
-                    pf_ret    = (pf_final / pbt_capital - 1) * 100
-                    pf_days   = (pbt_eq.index[-1] - pbt_eq.index[0]).days
-                    pf_years  = max(pf_days / 365, 0.01)
-                    pf_cagr   = ((pf_final / pbt_capital) ** (1 / pf_years) - 1) * 100
-                    pf_dr     = pd.Series(pbt_eq.values).pct_change().dropna()
-                    pf_sharpe = float(pf_dr.mean() / pf_dr.std() * np.sqrt(252)) if pf_dr.std() > 0 else 0
-                    roll_max  = pd.Series(pbt_eq.values).expanding().max()
-                    pf_mdd    = float(((pd.Series(pbt_eq.values) - roll_max) / roll_max * 100).min())
-                    pm1, pm2, pm3, pm4 = st.columns(4)
-                    pm1.metric("포트폴리오 수익률", f"{pf_ret:+.1f}%")
-                    pm2.metric("CAGR",             f"{pf_cagr:+.1f}%")
-                    pm3.metric("MDD",              f"{pf_mdd:.1f}%")
-                    pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
 
     # ── Tab 6: 퀀트 ──────────────────────────────────
     with tab6:
@@ -3943,7 +3570,7 @@ def main():
                 qt_tickers = UNIVERSE_PRESETS[qt_preset]
                 st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
-        qt_sub1, qt_sub2, qt_sub3, qt_sub4 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트"])
+        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트", "📉 종목 백테스팅"])
 
         with qt_sub1:
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
@@ -4190,6 +3817,381 @@ def main():
                         st.dataframe(pd.DataFrame(bt_log), use_container_width=True, hide_index=True, height=300)
 
                 st.caption("⚠️ 과거 성과는 미래 수익을 보장하지 않습니다. 거래비용·슬리피지 반영.")
+
+
+
+        with qt_sub5:
+            st.subheader("📉 전략 백테스팅")
+            st.caption("사이드바 가중치와 동일한 **종합점수**(차트+재무+매크로) 기반으로 과거 성과를 검증합니다. 수수료·슬리피지 반영.")
+
+            c1, c2, c3 = st.columns(3)
+            bt_ticker  = c1.text_input("티커", "AAPL").strip().upper()
+            bt_period  = c2.selectbox("기간", ["1년","2년","3년","5년"], index=1)
+            bt_capital = c3.number_input("초기자금 (원)", value=10_000_000, step=1_000_000, min_value=100_000)
+
+            c4, c5 = st.columns(2)
+            buy_th  = c4.slider("매수 임계값", 50, 80, 58, 1, help="신호가 이 점수를 넘으면 매수 (낮을수록 매매 많음)")
+            sell_th = c5.slider("매도 임계값", 30, 55, 42, 1, help="신호가 이 점수 아래로 내려오면 매도 (높을수록 매매 많음)")
+
+            with st.expander("⚙️ 비용 설정 (수수료 · 슬리피지)"):
+                cc1, cc2 = st.columns(2)
+                bt_commission = cc1.slider("수수료율 (편도, %)", 0.0, 0.5, 0.05, 0.01,
+                                            help="증권사 매매 수수료. 미국 주식 ~0.05%, 한국 주식 ~0.015%") / 100
+                bt_slippage   = cc2.slider("슬리피지율 (편도, %)", 0.0, 0.5, 0.03, 0.01,
+                                            help="호가 스프레드 + 체결 지연. 유동성 낮을수록 증가") / 100
+                total_cost = (bt_commission + bt_slippage) * 2 * 100
+                st.caption(f"왕복 총비용: **{total_cost:.2f}%** / 매매 — 거래 빈도가 높을수록 수익률 압박 증가")
+
+            period_days = {"1년":365, "2년":730, "3년":1095, "5년":1825}
+
+            if st.button("📉 백테스팅 시작", type="primary"):
+                with st.spinner("백테스팅 실행 중..."):
+                    end_dt2   = datetime.now()
+                    start_dt2 = end_dt2 - timedelta(days=period_days[bt_period]+60)
+                    _bt_df = download_stock(bt_ticker, start=start_dt2, end=end_dt2)
+                    _bt_df = _bt_df.dropna(subset=['Close'])
+
+                if _bt_df.empty or len(_bt_df) < 60:
+                    st.error("데이터가 부족합니다.")
+                else:
+                    _bt_f, _bt_m = None, None
+                    if total_w == 100 and (w_fund > 0 or w_macro > 0):
+                        with st.spinner("재무·매크로 점수 산출 중..."):
+                            _bt_f, _ = fundamental_score(bt_ticker, _bt_df)
+                            _bt_m, _, _ = macro_score()
+
+                    _metrics, _eq_df, _trades_df = run_backtest(
+                        _bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
+                        f_score=_bt_f, m_score=_bt_m,
+                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
+
+                    _corr_results = analyze_score_correlation(_bt_df)
+
+                    _bt_sigs = bt_signals_full(_bt_df)
+
+                    st.session_state['tab3'] = {
+                        'bt_df': _bt_df, 'metrics': _metrics, 'eq_df': _eq_df,
+                        'trades_df': _trades_df, 'corr_results': _corr_results,
+                        'bt_sigs': _bt_sigs,
+                        'bt_f_score': _bt_f, 'bt_m_score': _bt_m,
+                        'bt_ticker': bt_ticker, 'bt_capital': bt_capital,
+                        'buy_th': buy_th, 'sell_th': sell_th,
+                        'bt_commission': bt_commission, 'bt_slippage': bt_slippage,
+                        'w_tech': w_tech, 'w_fund': w_fund, 'w_macro': w_macro,
+                    }
+
+            if 'tab3' in st.session_state:
+                _bt = st.session_state['tab3']
+                bt_df = _bt['bt_df']; metrics = _bt['metrics']
+                eq_df = _bt['eq_df']; trades_df = _bt['trades_df']
+                corr_results = _bt['corr_results']
+                bt_f_score = _bt['bt_f_score']; bt_m_score = _bt['bt_m_score']
+
+                if bt_f_score is not None and bt_m_score is not None:
+                    _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
+                    st.info(f"📊 재무 {bt_f_score:.0f}점 · 매크로 {bt_m_score:.0f}점 → 임계값 보정 {_fm_off:+.1f}점 (매수 {_bt['buy_th']-_fm_off:.0f} / 매도 {_bt['sell_th']-_fm_off:.0f})")
+
+                # ── 지표 12개 (3행×4열) ──────────────────
+                m_keys = list(metrics.keys()); m_vals = list(metrics.values())
+                for row_start in range(0, len(m_keys), 4):
+                    row_keys = m_keys[row_start:row_start+4]
+                    row_vals = m_vals[row_start:row_start+4]
+                    row_cols = st.columns(len(row_keys))
+                    for ci, (k, v) in enumerate(zip(row_keys, row_vals)):
+                        row_cols[ci].metric(k, v)
+                st.divider()
+
+                # ── 신호 분포 ─────────────────────────────
+                with st.expander("📊 신호 점수 분포 (임계값 튜닝 참고)"):
+                    _sig_vals = _bt['bt_sigs'].dropna().iloc[20:]
+                    _adj_buy = _bt['buy_th']
+                    _adj_sell = _bt['sell_th']
+                    if bt_f_score is not None and bt_m_score is not None:
+                        _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
+                        _adj_buy = _bt['buy_th'] - _fm_off
+                        _adj_sell = _bt['sell_th'] - _fm_off
+                    _pct_above = float((_sig_vals > _adj_buy).sum() / len(_sig_vals) * 100)
+                    _pct_below = float((_sig_vals < _adj_sell).sum() / len(_sig_vals) * 100)
+                    sc1, sc2, sc3 = st.columns(3)
+                    sc1.metric("매수 구간 비율", f"{_pct_above:.1f}%", f"점수 > {_adj_buy:.0f}")
+                    sc2.metric("매도 구간 비율", f"{_pct_below:.1f}%", f"점수 < {_adj_sell:.0f}")
+                    sc3.metric("평균 신호 점수", f"{float(_sig_vals.mean()):.1f}")
+                    fig_dist = go.Figure()
+                    fig_dist.add_trace(go.Histogram(x=_sig_vals, nbinsx=40,
+                        marker_color='rgba(41,98,255,0.5)', name='신호 분포'))
+                    fig_dist.add_vline(x=_adj_buy, line_color=TV_UP, line_width=2,
+                        annotation_text=f"매수 {_adj_buy:.0f}", annotation_position="top",
+                        annotation_font=dict(color=TV_UP, size=11))
+                    fig_dist.add_vline(x=_adj_sell, line_color=TV_DOWN, line_width=2,
+                        annotation_text=f"매도 {_adj_sell:.0f}", annotation_position="top",
+                        annotation_font=dict(color=TV_DOWN, size=11))
+                    fig_dist.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT), showlegend=False,
+                        title=dict(text='신호 점수 분포', font=dict(size=13)),
+                        xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
+                        yaxis=dict(title='빈도', gridcolor=TV_GRID),
+                        margin=dict(l=10, r=10, t=40, b=10))
+                    st.plotly_chart(fig_dist, use_container_width=True)
+                    st.caption("매수 구간이 5~15%, 매도 구간이 5~15% 정도면 적절합니다. 슬라이더로 조절하세요.")
+
+                # ── 자산 곡선 ─────────────────────────────
+                fig_eq = go.Figure()
+                fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['전략'], name='전략',
+                    line=dict(color='#2962ff', width=2),
+                    fill='tozeroy', fillcolor='rgba(41,98,255,0.08)'))
+                fig_eq.add_trace(go.Scatter(x=eq_df['날짜'], y=eq_df['매수보유'], name='매수보유',
+                    line=dict(color='#888', width=1.5, dash='dash')))
+
+                if not trades_df.empty:
+                    buys_df  = trades_df[trades_df['구분'].str.contains('매수')]
+                    sells_df = trades_df[trades_df['구분'].str.contains('매도')]
+                    for bdate in buys_df['날짜']:
+                        row = eq_df[eq_df['날짜'] == bdate]
+                        if not row.empty:
+                            fig_eq.add_trace(go.Scatter(x=[bdate], y=[float(row['전략'].iloc[0])],
+                                mode='markers', marker=dict(symbol='triangle-up', size=14, color=TV_UP),
+                                name='매수', showlegend=False))
+                    for sdate in sells_df['날짜']:
+                        row = eq_df[eq_df['날짜'] == sdate]
+                        if not row.empty:
+                            fig_eq.add_trace(go.Scatter(x=[sdate], y=[float(row['전략'].iloc[0])],
+                                mode='markers', marker=dict(symbol='triangle-down', size=14, color=TV_DOWN),
+                                name='매도', showlegend=False))
+
+                fig_eq.update_layout(height=420, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    font=dict(color=TV_TEXT), hovermode='x unified',
+                    title=dict(text='전략 vs 매수보유 자산 곡선', font=dict(size=14)),
+                    yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right', title='자산 (원)'),
+                    xaxis=dict(gridcolor=TV_GRID),
+                    legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)'),
+                    margin=dict(l=0, r=60, t=50, b=0))
+                st.plotly_chart(fig_eq, use_container_width=True)
+
+                if not trades_df.empty:
+                    st.subheader(f"매매 내역 ({len(trades_df)}건)")
+                    st.dataframe(trades_df, use_container_width=True, hide_index=True)
+
+                # ── 📊 점수-수익률 상관관계 검증 ─────────────
+                st.divider()
+                st.subheader("📊 점수-수익률 상관관계 검증")
+                st.caption(
+                    "신호 점수가 실제 미래 수익률과 얼마나 연관되는지 검증합니다. "
+                    "**IC(정보계수)** > 0 이면 점수가 높을수록 수익률이 높은 경향이 있음을 의미합니다.")
+
+                corr_results = _bt['corr_results']
+
+                # IC 카드 3개
+                ic_cols = st.columns(3)
+                for ci, cr in enumerate(corr_results):
+                    ic_val = cr['IC']
+                    ic_color = "normal" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "off")
+                    ic_cols[ci].metric(
+                        f"IC ({cr['horizon']}일 후 수익률)",
+                        f"{ic_val:+.3f}",
+                        delta=("유효 신호 ✅" if abs(ic_val) >= 0.05 else "신호 미약 ⚠️"),
+                        delta_color=ic_color)
+
+                st.caption("IC 해석: |IC| ≥ 0.05 → 약한 예측력 / ≥ 0.10 → 의미있는 예측력 / ≥ 0.15 → 강한 예측력")
+                st.divider()
+
+                # 20일 기준 점수 구간별 평균 수익률 막대차트
+                cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1])
+                bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)'])
+                if not bs.empty:
+                    bar_colors = [TV_UP if v >= 0 else TV_DOWN for v in bs['평균수익률(%)'].tolist()]
+                    fig_bar = go.Figure()
+                    fig_bar.add_trace(go.Bar(
+                        x=bs['점수구간'], y=bs['평균수익률(%)'],
+                        marker_color=bar_colors,
+                        error_y=dict(type='data', array=bs['표준편차'].tolist(), visible=True,
+                                     color=TV_TEXT, thickness=1.2, width=4),
+                        text=[f"{v:+.2f}%" for v in bs['평균수익률(%)'].tolist()],
+                        textposition='outside', textfont=dict(size=11)))
+                    fig_bar.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
+                    fig_bar.update_layout(
+                        title=dict(text=f"점수 구간별 평균 20일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
+                        height=340, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
+                        yaxis=dict(title='평균 수익률 (%)', gridcolor=TV_GRID, zeroline=False),
+                        margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # 구간별 상세 통계 테이블
+                    with st.expander("📋 구간별 상세 통계"):
+                        display_bs = bs.copy()
+                        display_bs['평균수익률(%)'] = display_bs['평균수익률(%)'].map(lambda x: f"{x:+.2f}%")
+                        display_bs['표준편차']       = display_bs['표준편차'].map(lambda x: f"{x:.2f}%")
+                        st.dataframe(display_bs, use_container_width=True, hide_index=True)
+
+                        # 5일, 10일 IC 도 표로
+                        ic_summary = pd.DataFrame([
+                            {'기간': f"{cr['horizon']}일 후", 'IC': f"{cr['IC']:+.3f}",
+                             '예측력': ('강함 💪' if abs(cr['IC']) >= 0.15 else
+                                       ('보통 🔶' if abs(cr['IC']) >= 0.10 else
+                                        ('약함 🔸' if abs(cr['IC']) >= 0.05 else '없음 ❌')))}
+                            for cr in corr_results
+                        ])
+                        st.dataframe(ic_summary, use_container_width=True, hide_index=True)
+
+                # ── 📐 워크-포워드 검증 ──────────────────────
+                st.divider()
+                st.subheader("📐 워크-포워드 검증 (과적합 진단)")
+                st.caption(
+                    "전체 기간을 **학습 70%** / **검증 30%** 로 분리해 동일 전략을 각각 실행합니다. "
+                    "학습 성과와 검증 성과 차이가 클수록 **과적합** 가능성이 높습니다.")
+
+                if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
+                    wf_results, wf_overfit, wf_split_date = run_walkforward(
+                        bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
+                        f_score=bt_f_score, m_score=bt_m_score,
+                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
+
+                    wf_col1, wf_col2 = st.columns(2)
+                    wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
+                                    'Sharpe Ratio', 'Calmar Ratio', '승률', '총 매매']
+                    for wf_ci, (wf_label, wf_m) in enumerate(wf_results.items()):
+                        col = wf_col1 if wf_ci == 0 else wf_col2
+                        bg  = 'rgba(41,98,255,0.08)' if wf_ci == 0 else 'rgba(255,82,82,0.08)'
+                        bdr = '#2962ff' if wf_ci == 0 else '#ef5350'
+                        col.markdown(
+                            f"<div style='background:{bg};border-left:3px solid {bdr};"
+                            f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
+                            f"<b>{wf_label}</b></div>", unsafe_allow_html=True)
+                        for wf_k in wf_key_order:
+                            if wf_k in wf_m:
+                                col.metric(wf_k, wf_m[wf_k])
+
+                    # 과적합 진단 메시지
+                    st.divider()
+                    if abs(wf_overfit) < 3:
+                        st.success(f"✅ **과적합 없음** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p (기준 ±3%p 이내)")
+                    elif abs(wf_overfit) < 8:
+                        st.warning(f"🔶 **경미한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값 재검토 권장")
+                    else:
+                        st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
+                    st.caption(f"분할 기준일: {wf_split_date}")
+
+            # ── 📦 멀티 종목 포트폴리오 백테스트 ──────────
+            st.divider()
+            st.subheader("📦 멀티 종목 포트폴리오 백테스트")
+            st.caption("여러 종목에 자본을 배분해 포트폴리오 전체의 백테스트 성과를 확인합니다.")
+
+            with st.expander("⚙️ 포트폴리오 설정", expanded=True):
+                pbt_str = st.text_input("종목 목록 (쉼표 구분, 최대 5개)",
+                                         "AAPL,MSFT,NVDA,GOOGL,META",
+                                         help="미국: AAPL / 한국: 005930.KS")
+                pbt_tickers = [t.strip().upper() for t in pbt_str.split(',') if t.strip()][:5]
+
+                pbt_wt_mode = st.radio("비중 방식", ["균등 배분", "직접 입력"], horizontal=True)
+                if pbt_wt_mode == "균등 배분":
+                    pbt_weights = [1.0 / len(pbt_tickers)] * len(pbt_tickers) if pbt_tickers else []
+                else:
+                    pbt_wt_cols = st.columns(len(pbt_tickers))
+                    pbt_weights = []
+                    for pi, tk in enumerate(pbt_tickers):
+                        w = pbt_wt_cols[pi].number_input(tk, 0.0, 1.0,
+                            round(1.0 / len(pbt_tickers), 2), 0.05, key=f"pbt_w_{pi}")
+                        pbt_weights.append(w)
+                    wt_sum = sum(pbt_weights)
+                    if abs(wt_sum - 1.0) > 0.01:
+                        st.warning(f"비중 합계: {wt_sum:.2f} (1.00이 되어야 합니다)")
+                    else:
+                        pbt_weights = [w / wt_sum for w in pbt_weights]  # 정규화
+
+                pbt_c1, pbt_c2, pbt_c3 = st.columns(3)
+                pbt_period  = pbt_c1.selectbox("기간", ["1년","2년","3년","5년"], index=1, key="pbt_period")
+                pbt_capital = pbt_c2.number_input("초기자금 (원)", value=10_000_000,
+                                                   step=1_000_000, min_value=100_000, key="pbt_cap")
+                pbt_buy_th  = pbt_c3.slider("매수 임계값", 50, 80, 58, 1, key="pbt_buy")
+
+            pbt_period_days = {"1년": 365, "2년": 730, "3년": 1095, "5년": 1825}
+
+            if st.button("📦 포트폴리오 백테스트 실행", type="primary", key="pbt_run"):
+                if not pbt_tickers:
+                    st.error("종목을 입력해주세요.")
+                else:
+                    with st.spinner(f"{len(pbt_tickers)}개 종목 다운로드 및 백테스트 실행 중..."):
+                        pbt_results, pbt_eq, pbt_spy = run_portfolio_backtest(
+                            pbt_tickers, pbt_weights,
+                            pbt_period_days[pbt_period],
+                            pbt_buy_th, sell_th,
+                            pbt_capital, bt_commission, bt_slippage,
+                            w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
+
+                    # ── 개별 종목 성과 ────────────────────────
+                    st.markdown("#### 종목별 성과")
+                    ok_res  = [r for r in pbt_results if not r.get('error')]
+                    err_res = [r for r in pbt_results if r.get('error')]
+                    if err_res:
+                        for r in err_res:
+                            st.warning(f"⚠️ {r['ticker']}: {r['error']}")
+
+                    if ok_res:
+                        sum_rows = []
+                        for r in ok_res:
+                            m = r['metrics']
+                            sum_rows.append({
+                                '종목':      r['ticker'],
+                                '비중':      f"{r['weight']*100:.0f}%",
+                                '전략수익률': m.get('전략 수익률', '-'),
+                                'CAGR':      m.get('CAGR', '-'),
+                                'MDD':       m.get('최대낙폭(MDD)', '-'),
+                                'Sharpe':    m.get('Sharpe Ratio', '-'),
+                                '승률':      m.get('승률', '-'),
+                            })
+                        st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
+
+                    # ── 포트폴리오 통합 자산 곡선 ─────────────
+                    if pbt_eq is not None and not pbt_eq.empty:
+                        st.markdown("#### 포트폴리오 자산 곡선 (SPY 벤치마크 포함)")
+                        fig_pbt = go.Figure()
+                        fig_pbt.add_trace(go.Scatter(
+                            x=pbt_eq.index, y=pbt_eq.values,
+                            name='포트폴리오',
+                            line=dict(color='#2962ff', width=2.5),
+                            fill='tozeroy', fillcolor='rgba(41,98,255,0.07)'))
+                        if pbt_spy is not None:
+                            # align spy to portfolio start capital
+                            spy_norm = pbt_spy / float(pbt_spy.iloc[0]) * pbt_capital
+                            fig_pbt.add_trace(go.Scatter(
+                                x=spy_norm.index, y=spy_norm.values,
+                                name='SPY (벤치마크)',
+                                line=dict(color='#888', width=1.5, dash='dash')))
+                        # 개별 종목 곡선 (얇게)
+                        pal = ['#ff6b6b','#ffa94d','#69db7c','#74c0fc','#da77f2']
+                        for ri, r in enumerate(ok_res):
+                            eq_s = r['eq_df'].set_index('날짜')['전략']
+                            fig_pbt.add_trace(go.Scatter(
+                                x=eq_s.index, y=eq_s.values,
+                                name=f"{r['ticker']} ({r['weight']*100:.0f}%)",
+                                line=dict(color=pal[ri % len(pal)], width=1, dash='dot'),
+                                opacity=0.7))
+                        fig_pbt.update_layout(
+                            height=450, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT), hovermode='x unified',
+                            yaxis=dict(gridcolor=TV_GRID, tickformat=',.0f', side='right'),
+                            xaxis=dict(gridcolor=TV_GRID),
+                            legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)',
+                                        yanchor='bottom', y=1.02),
+                            margin=dict(l=0, r=60, t=40, b=0))
+                        st.plotly_chart(fig_pbt, use_container_width=True)
+
+                        # 포트폴리오 요약 지표
+                        pf_final  = float(pbt_eq.iloc[-1])
+                        pf_ret    = (pf_final / pbt_capital - 1) * 100
+                        pf_days   = (pbt_eq.index[-1] - pbt_eq.index[0]).days
+                        pf_years  = max(pf_days / 365, 0.01)
+                        pf_cagr   = ((pf_final / pbt_capital) ** (1 / pf_years) - 1) * 100
+                        pf_dr     = pd.Series(pbt_eq.values).pct_change().dropna()
+                        pf_sharpe = float(pf_dr.mean() / pf_dr.std() * np.sqrt(252)) if pf_dr.std() > 0 else 0
+                        roll_max  = pd.Series(pbt_eq.values).expanding().max()
+                        pf_mdd    = float(((pd.Series(pbt_eq.values) - roll_max) / roll_max * 100).min())
+                        pm1, pm2, pm3, pm4 = st.columns(4)
+                        pm1.metric("포트폴리오 수익률", f"{pf_ret:+.1f}%")
+                        pm2.metric("CAGR",             f"{pf_cagr:+.1f}%")
+                        pm3.metric("MDD",              f"{pf_mdd:.1f}%")
+                        pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
 
 
 if __name__ == "__main__":
