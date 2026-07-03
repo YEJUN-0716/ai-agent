@@ -42,6 +42,50 @@ TV_TEXT = '#1a1a1a'
 TV_UP = '#26a69a'
 TV_DOWN = '#ef5350'
 
+# 종목 → 섹터 ETF 매핑
+SECTOR_ETF = {
+    # 반도체
+    'NVDA':'SMH','AMD':'SMH','INTC':'SMH','MU':'SMH','TSM':'SMH',
+    'AMAT':'SMH','LRCX':'SMH','KLAC':'SMH','ASML':'SMH','ARM':'SMH',
+    'MRVL':'SMH','SNDK':'SMH','ON':'SMH','TXN':'SMH','QCOM':'SMH',
+    # 빅테크/소프트웨어
+    'MSFT':'XLK','AAPL':'XLK','ORCL':'XLK','CRM':'XLK','NOW':'XLK',
+    'ADBE':'XLK','PLTR':'XLK','DDOG':'XLK','PANW':'XLK','CRWD':'XLK',
+    'SNOW':'XLK','NET':'XLK','MDB':'XLK','ZS':'XLK',
+    # 커뮤니케이션
+    'META':'XLC','GOOGL':'XLC','GOOG':'XLC','NFLX':'XLC','DIS':'XLC',
+    # 소비재
+    'AMZN':'XLY','TSLA':'XLY','NKE':'XLY','SBUX':'XLY','BKNG':'XLY',
+    # 금융
+    'JPM':'XLF','BAC':'XLF','GS':'XLF','MS':'XLF','V':'XLF','MA':'XLF',
+    # 헬스케어
+    'JNJ':'XLV','UNH':'XLV','PFE':'XLV','ABBV':'XLV','LLY':'XLV','MRK':'XLV',
+    # 에너지
+    'XOM':'XLE','CVX':'XLE','COP':'XLE','SLB':'XLE',
+    # 산업재
+    'CAT':'XLI','BA':'XLI','HON':'XLI','GE':'XLI','UPS':'XLI',
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_market_regime():
+    """SPY·QQQ vs MA200으로 시장 레짐 판단. 1시간 캐시."""
+    try:
+        data = yf.download(['SPY', 'QQQ'], period='1y', interval='1d',
+                           progress=False, auto_adjust=True)
+        closes = data['Close']
+        flags = {}
+        for sym in ['SPY', 'QQQ']:
+            c = closes[sym].dropna()
+            if len(c) >= 200:
+                flags[sym] = float(c.iloc[-1]) > float(c.rolling(200).mean().iloc[-1])
+        spy_b, qqq_b = flags.get('SPY'), flags.get('QQQ')
+        if spy_b and qqq_b:    return 'bull'
+        if spy_b is False and qqq_b is False: return 'bear'
+        return 'mixed'
+    except Exception:
+        return 'unknown'
+
 
 # ─────────────────────────────────────────────
 # 통합 주식 데이터 다운로드
@@ -1587,16 +1631,64 @@ def find_sr_levels(close_s, high_s, low_s):
 
 
 def detect_chart_pattern(ticker, period='6mo'):
-    """종목의 차트 패턴 감지. bullish/bearish/neutral 시그널과 S/R 레벨 반환."""
+    """종목 차트 패턴 감지 — 4가지 정확도 강화 포함.
+    ① 시장 레짐(SPY/QQQ MA200) ② 멀티타임프레임(일+주봉)
+    ③ 실적 발표 근접 여부 ④ 섹터 대비 상대강도
+    """
     from scipy.signal import find_peaks as _fp
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import date as _date, datetime as _dt
 
-    try:
-        df = yf.Ticker(ticker).history(period=period, auto_adjust=True)
-    except Exception:
-        return None
+    sec_etf = SECTOR_ETF.get(ticker.upper(), 'SPY')
+
+    # ── 병렬 데이터 수집 ───────────────────────
+    def _dl_daily():
+        return yf.Ticker(ticker).history(period=period, auto_adjust=True)
+
+    def _dl_weekly():
+        return yf.Ticker(ticker).history(period='2y', interval='1wk', auto_adjust=True)
+
+    def _dl_sector():
+        syms = list({ticker, sec_etf})
+        return yf.download(syms, period='3mo', interval='1d',
+                           progress=False, auto_adjust=True)
+
+    def _dl_earnings():
+        try:
+            cal = yf.Ticker(ticker).calendar
+            if cal is None:
+                return None
+            earn = None
+            if isinstance(cal, dict):
+                raw = cal.get('Earnings Date')
+                earn = raw[0] if isinstance(raw, list) and raw else raw
+            elif isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.index:
+                earn = cal.loc['Earnings Date'].iloc[0]
+            if earn is None:
+                return None
+            if isinstance(earn, (pd.Timestamp, _dt)):
+                earn = earn.date()
+            elif isinstance(earn, str):
+                earn = _dt.strptime(earn[:10], '%Y-%m-%d').date()
+            days = (earn - _date.today()).days
+            return int(days) if days >= 0 else None
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=4) as _ex:
+        _fd = _ex.submit(_dl_daily)
+        _fw = _ex.submit(_dl_weekly)
+        _fs = _ex.submit(_dl_sector)
+        _fe = _ex.submit(_dl_earnings)
+        df     = _fd.result()
+        df_w   = _fw.result()
+        df_sec = _fs.result()
+        earn_days = _fe.result()
+
     if df is None or len(df) < 40:
         return None
 
+    # ── 일봉 기본 분석 ─────────────────────────
     close = df['Close'].values.astype(float)
     high  = df['High'].values.astype(float)
     low   = df['Low'].values.astype(float)
@@ -1606,12 +1698,10 @@ def detect_chart_pattern(ticker, period='6mo'):
 
     ma20 = c_s.rolling(20).mean().values
     ma50 = c_s.rolling(50).mean().values
-
-    m20 = float(ma20[-1]) if not np.isnan(ma20[-1]) else None
-    m50 = float(ma50[-1]) if not np.isnan(ma50[-1]) else None
+    m20  = float(ma20[-1]) if not np.isnan(ma20[-1]) else None
+    m50  = float(ma50[-1]) if not np.isnan(ma50[-1]) else None
     ma_bull = bool(m20 and m50 and cur > m20 > m50)
 
-    # 골든/데드 크로스 (최근 10봉 이내 교차)
     golden = death = False
     if m20 and m50:
         for k in range(2, min(11, len(ma20))):
@@ -1623,7 +1713,6 @@ def detect_chart_pattern(ticker, period='6mo'):
             if not death and float(ma20[-1]) < float(ma50[-1]) and p20 >= p50:
                 death = True; break
 
-    # 상승/하락 추세 (HH·HL / LH·LL)
     pk, _ = _fp(close, distance=8)
     tr, _ = _fp(-close, distance=8)
     uptrend = downtrend = False
@@ -1631,19 +1720,59 @@ def detect_chart_pattern(ticker, period='6mo'):
         uptrend   = bool(close[pk[-1]] > close[pk[-2]] and close[tr[-1]] > close[tr[-2]])
         downtrend = bool(close[pk[-1]] < close[pk[-2]] and close[tr[-1]] < close[tr[-2]])
 
-    # RSI
     d = c_s.diff()
     rsi_v = float(100 - 100 / (1 + d.clip(lower=0).rolling(14).mean() /
                                     (-d.clip(upper=0)).rolling(14).mean()).iloc[-1])
 
-    # 거래량 확인 (최근 5봉 상승일 vs 20일 평균)
     up_vol = np.mean([vol[i] for i in range(-5, 0) if close[i] > close[i-1]] or [0])
     vol_ok = bool(up_vol > np.mean(vol[-20:]) * 1.1)
 
-    # BB 수렴
     bb_u, _, bb_l = calc_bb(c_s)
     bb_squeeze = bool((float(bb_u.iloc[-1]) - float(bb_l.iloc[-1])) / cur < 0.05)
 
+    # ── ② 주봉 멀티타임프레임 ─────────────────
+    weekly_signal = 'unknown'
+    if df_w is not None and len(df_w) >= 20:
+        wc = df_w['Close'].values.astype(float)
+        wh = df_w['High'].values.astype(float)
+        wc_s = pd.Series(wc)
+        wma20 = float(wc_s.rolling(20).mean().iloc[-1])
+        bull_w = float(wc[-1]) > wma20 and not np.isnan(wma20)
+        wpk, _ = _fp(wc, distance=4)
+        wtr, _ = _fp(-wc, distance=4)
+        up_w = (len(wpk) >= 2 and len(wtr) >= 2 and
+                wc[wpk[-1]] > wc[wpk[-2]] and wc[wtr[-1]] > wc[wtr[-2]])
+        weekly_signal = ('bullish' if (bull_w and up_w) else
+                         'bearish' if (not bull_w and not up_w) else 'neutral')
+
+    # ── ③ 실적 발표 근접 ─────────────────────
+    earn_risk = ('high'    if earn_days is not None and earn_days <= 7  else
+                 'medium'  if earn_days is not None and earn_days <= 14 else
+                 'low')
+
+    # ── ④ 섹터 대비 상대강도 ────────────────
+    sector_rs = None
+    try:
+        if df_sec is not None and not df_sec.empty:
+            cl = df_sec['Close']
+            # MultiIndex: cl[ticker], cl[sec_etf]
+            if ticker in cl.columns and sec_etf in cl.columns:
+                tkr_c = cl[ticker].dropna()
+                etf_c = cl[sec_etf].dropna()
+                if len(tkr_c) >= 2 and len(etf_c) >= 2:
+                    tkr_r = float(tkr_c.iloc[-1] / tkr_c.iloc[0] - 1) * 100
+                    etf_r = float(etf_c.iloc[-1] / etf_c.iloc[0] - 1) * 100
+                    sector_rs = {
+                        'etf':        sec_etf,
+                        'ticker_ret': round(tkr_r, 1),
+                        'etf_ret':    round(etf_r, 1),
+                        'rs':         round(tkr_r - etf_r, 1),
+                        'outperform': tkr_r > etf_r,
+                    }
+    except Exception:
+        pass
+
+    # ── 종합 시그널 ────────────────────────────
     patterns = []
     if golden:     patterns.append('골든크로스')
     if uptrend:    patterns.append('상승추세 (HH·HL)')
@@ -1654,20 +1783,32 @@ def detect_chart_pattern(ticker, period='6mo'):
     if bb_squeeze: patterns.append('BB 수렴')
     if rsi_v < 30: patterns.append('RSI 과매도')
     if rsi_v > 70: patterns.append('RSI 과매수')
+    if weekly_signal == 'bullish': patterns.append('주봉 강세')
+    if weekly_signal == 'bearish': patterns.append('주봉 약세')
+    if sector_rs and sector_rs['outperform']:  patterns.append(f"섹터 아웃퍼폼 vs {sec_etf}")
+    if sector_rs and not sector_rs['outperform']: patterns.append(f"섹터 언더퍼폼 vs {sec_etf}")
 
-    bull = sum([golden, uptrend, ma_bull, vol_ok])
-    bear = sum([death,  downtrend, not ma_bull and not uptrend])
-    signal = 'bullish' if bull >= 2 else 'bearish' if bear >= 2 else 'neutral'
+    bull = sum([golden, uptrend, ma_bull, vol_ok,
+                weekly_signal == 'bullish',
+                bool(sector_rs and sector_rs['outperform'])])
+    bear = sum([death, downtrend, not ma_bull and not uptrend,
+                weekly_signal == 'bearish',
+                bool(sector_rs and not sector_rs['outperform'])])
+    signal = 'bullish' if bull >= 3 else 'bearish' if bear >= 3 else 'neutral'
 
     return {
-        'ticker':    ticker,
-        'signal':    signal,
-        'patterns':  patterns,
-        'rsi':       round(rsi_v, 1),
-        'ma_bull':   ma_bull,
-        'uptrend':   uptrend,
-        'sr_levels': find_sr_levels(df['Close'], df['High'], df['Low']),
-        'price':     round(cur, 2),
+        'ticker':        ticker,
+        'signal':        signal,
+        'patterns':      patterns,
+        'rsi':           round(rsi_v, 1),
+        'ma_bull':       ma_bull,
+        'uptrend':       uptrend,
+        'weekly_signal': weekly_signal,
+        'earn_days':     earn_days,
+        'earn_risk':     earn_risk,
+        'sector_rs':     sector_rs,
+        'sr_levels':     find_sr_levels(df['Close'], df['High'], df['Low']),
+        'price':         round(cur, 2),
     }
 
 
@@ -3991,10 +4132,25 @@ def main():
                 # ── 패턴 필터 ──────────────────────────────────
                 buy_tkrs = [a['ticker'] for a in actions if '매수' in a['action']]
                 if buy_tkrs:
-                    with st.expander(f"🔍 패턴 필터 — 매수 후보 {len(buy_tkrs)}종목 차트 이중확인", expanded=False):
-                        st.caption("퀀트 팩터 매수 시그널 + 차트 패턴 이중 검증 · 두 신호 모두 강세일 때 진입 신뢰도 ↑")
+                    with st.expander(f"🔍 패턴 필터 — 매수 후보 {len(buy_tkrs)}종목 (4중 검증)", expanded=False):
+                        st.caption("① 시장 레짐 ② 일봉+주봉 패턴 ③ 실적 발표 근접 ④ 섹터 상대강도")
+
+                        # ① 시장 레짐 배너 (항상 표시)
+                        _regime = _get_market_regime()
+                        _r_color = {'bull':'#26a69a','bear':'#ef5350','mixed':'#ff9800','unknown':'#9e9e9e'}
+                        _r_label = {'bull':'🟢 강세장 (SPY·QQQ > MA200) — 롱 우호적',
+                                    'bear':'🔴 약세장 (SPY·QQQ < MA200) — 개별 강세 패턴도 실패율 높음',
+                                    'mixed':'🟡 혼조 (SPY·QQQ 엇갈림) — 선택적 진입',
+                                    'unknown':'⚪ 레짐 확인 불가'}
+                        _rc = _r_color.get(_regime, '#9e9e9e')
+                        st.markdown(
+                            f"<div style='background:{_rc}18;border:1px solid {_rc}55;"
+                            f"border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                            f"<b>시장 레짐:</b> {_r_label.get(_regime,'')}</div>",
+                            unsafe_allow_html=True)
+
                         if st.button("📊 패턴 분석 실행", key="pat_run"):
-                            with st.spinner("차트 패턴 분석 중..."):
+                            with st.spinner("차트 패턴 분석 중 (일봉+주봉+섹터 병렬 수집)..."):
                                 _pat_results = [detect_chart_pattern(t) for t in buy_tkrs]
                                 _pat_results = [r for r in _pat_results if r]
                             st.session_state['qt_patterns'] = _pat_results
@@ -4002,29 +4158,40 @@ def main():
                         if 'qt_patterns' in st.session_state:
                             _prs = st.session_state['qt_patterns']
                             if _prs:
-                                _sig_icon = {'bullish':'🟢','bearish':'🔴','neutral':'⚪'}
-                                _rec_map  = {'bullish':'✅ 이중 확인','neutral':'➖ 중립','bearish':'⚠️ 패턴 불일치'}
-                                _pf_rows  = [{
-                                    '종목':     r['ticker'],
-                                    '현재가':   f"${r['price']:,.2f}",
-                                    '패턴 시그널': f"{_sig_icon.get(r['signal'],'⚪')} {r['signal'].upper()}",
-                                    'RSI':      r['rsi'],
-                                    '검출 패턴': ' · '.join(r['patterns'][:3]) or '없음',
-                                    '권장':     _rec_map.get(r['signal'], '➖'),
-                                } for r in _prs]
+                                _si = {'bullish':'🟢','bearish':'🔴','neutral':'⚪'}
+                                _wi = {'bullish':'🟢 강세','bearish':'🔴 약세','neutral':'⚪ 중립','unknown':'- -'}
+                                _ei = {'low':'✅ 여유','medium':'⚠️ 14일내','high':'🚨 7일내'}
+                                _rec = {'bullish':'✅ 이중확인','neutral':'➖ 중립','bearish':'⚠️ 불일치'}
+                                _pf_rows = []
+                                for r in _prs:
+                                    _rs = r.get('sector_rs')
+                                    _pf_rows.append({
+                                        '종목':       r['ticker'],
+                                        '현재가':     f"${r['price']:,.2f}",
+                                        '일봉 패턴':  f"{_si.get(r['signal'],'⚪')} {r['signal'].upper()}",
+                                        '주봉':       _wi.get(r.get('weekly_signal','unknown'),'--'),
+                                        'RSI':        r['rsi'],
+                                        '실적':       _ei.get(r.get('earn_risk','low'),'--') + (f" ({r['earn_days']}일)" if r.get('earn_days') is not None else ''),
+                                        '섹터 RS':    (f"{'↑' if _rs['outperform'] else '↓'} {_rs['rs']:+.1f}% vs {_rs['etf']}" if _rs else '--'),
+                                        '권장':       _rec.get(r['signal'],'➖'),
+                                    })
                                 st.dataframe(pd.DataFrame(_pf_rows), use_container_width=True, hide_index=True)
 
+                                st.markdown("---")
                                 for r in _prs:
-                                    sr_txt = ', '.join(
-                                        f"{'저항' if s['above'] else '지지'} ${s['level']:.2f} ({s['dist_pct']:+.1f}%)"
-                                        for s in r['sr_levels'][:4]
-                                    )
+                                    _sr_txt = ' · '.join(
+                                        f"{'저항' if s['above'] else '지지'} ${s['level']:.2f}({s['dist_pct']:+.1f}%)"
+                                        for s in r.get('sr_levels', [])[:3])
+                                    _earn_note = (f" · ⚠️ 실적 {r['earn_days']}일 후" if r.get('earn_days') is not None and r['earn_days'] <= 14 else '')
+                                    _rs = r.get('sector_rs')
+                                    _rs_note = (f" · {'아웃' if _rs['outperform'] else '언더'}퍼폼 {_rs['rs']:+.1f}% vs {_rs['etf']}" if _rs else '')
+                                    _msg = f"**{r['ticker']}** | {_sr_txt}{_earn_note}{_rs_note}"
                                     if r['signal'] == 'bullish':
-                                        st.success(f"**{r['ticker']}** 강세 패턴 확인 — {sr_txt}")
+                                        st.success(_msg)
                                     elif r['signal'] == 'bearish':
-                                        st.warning(f"**{r['ticker']}** 약세 패턴 주의 — 퀀트와 패턴 불일치. {sr_txt}")
+                                        st.warning(_msg)
                                     else:
-                                        st.info(f"**{r['ticker']}** 중립 — {sr_txt}")
+                                        st.info(_msg)
 
         with qt_sub4:
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
