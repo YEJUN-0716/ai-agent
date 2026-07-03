@@ -1553,6 +1553,124 @@ def _fetch_dashboard_data():
     return result
 
 
+def find_sr_levels(close_s, high_s, low_s):
+    """피벗 포인트 클러스터링으로 주요 지지/저항 레벨 반환."""
+    from scipy.signal import find_peaks as _fp
+
+    close = np.array(close_s, dtype=float)
+    high  = np.array(high_s,  dtype=float)
+    low   = np.array(low_s,   dtype=float)
+    cur   = close[-1]
+
+    prom  = cur * 0.008
+    pk,  _ = _fp(high, distance=5, prominence=prom)
+    tr,  _ = _fp(-low, distance=5, prominence=prom)
+
+    raw = ([(float(high[i]), 'resistance') for i in pk[-25:]] +
+           [(float(low[i]),  'support')    for i in tr[-25:]])
+    raw.sort(key=lambda x: x[0])
+
+    clusters = []
+    for lvl, typ in raw:
+        if clusters and abs(lvl - clusters[-1]['level']) / clusters[-1]['level'] < 0.015:
+            clusters[-1]['level'] = (clusters[-1]['level'] + lvl) / 2
+            clusters[-1]['count'] += 1
+        else:
+            clusters.append({'level': lvl, 'type': typ, 'count': 1})
+
+    for c in clusters:
+        c['dist_pct'] = (c['level'] - cur) / cur * 100
+        c['above']    = c['level'] > cur
+
+    clusters.sort(key=lambda x: abs(x['dist_pct']))
+    return clusters[:8]
+
+
+def detect_chart_pattern(ticker, period='6mo'):
+    """종목의 차트 패턴 감지. bullish/bearish/neutral 시그널과 S/R 레벨 반환."""
+    from scipy.signal import find_peaks as _fp
+
+    try:
+        df = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+    except Exception:
+        return None
+    if df is None or len(df) < 40:
+        return None
+
+    close = df['Close'].values.astype(float)
+    high  = df['High'].values.astype(float)
+    low   = df['Low'].values.astype(float)
+    vol   = df['Volume'].values.astype(float)
+    c_s   = pd.Series(close)
+    cur   = float(close[-1])
+
+    ma20 = c_s.rolling(20).mean().values
+    ma50 = c_s.rolling(50).mean().values
+
+    m20 = float(ma20[-1]) if not np.isnan(ma20[-1]) else None
+    m50 = float(ma50[-1]) if not np.isnan(ma50[-1]) else None
+    ma_bull = bool(m20 and m50 and cur > m20 > m50)
+
+    # 골든/데드 크로스 (최근 10봉 이내 교차)
+    golden = death = False
+    if m20 and m50:
+        for k in range(2, min(11, len(ma20))):
+            p20, p50 = float(ma20[-k]), float(ma50[-k])
+            if np.isnan(p20) or np.isnan(p50):
+                break
+            if not golden and float(ma20[-1]) > float(ma50[-1]) and p20 <= p50:
+                golden = True; break
+            if not death and float(ma20[-1]) < float(ma50[-1]) and p20 >= p50:
+                death = True; break
+
+    # 상승/하락 추세 (HH·HL / LH·LL)
+    pk, _ = _fp(close, distance=8)
+    tr, _ = _fp(-close, distance=8)
+    uptrend = downtrend = False
+    if len(pk) >= 2 and len(tr) >= 2:
+        uptrend   = bool(close[pk[-1]] > close[pk[-2]] and close[tr[-1]] > close[tr[-2]])
+        downtrend = bool(close[pk[-1]] < close[pk[-2]] and close[tr[-1]] < close[tr[-2]])
+
+    # RSI
+    d = c_s.diff()
+    rsi_v = float(100 - 100 / (1 + d.clip(lower=0).rolling(14).mean() /
+                                    (-d.clip(upper=0)).rolling(14).mean()).iloc[-1])
+
+    # 거래량 확인 (최근 5봉 상승일 vs 20일 평균)
+    up_vol = np.mean([vol[i] for i in range(-5, 0) if close[i] > close[i-1]] or [0])
+    vol_ok = bool(up_vol > np.mean(vol[-20:]) * 1.1)
+
+    # BB 수렴
+    bb_u, _, bb_l = calc_bb(c_s)
+    bb_squeeze = bool((float(bb_u.iloc[-1]) - float(bb_l.iloc[-1])) / cur < 0.05)
+
+    patterns = []
+    if golden:     patterns.append('골든크로스')
+    if uptrend:    patterns.append('상승추세 (HH·HL)')
+    if ma_bull:    patterns.append('MA 정배열')
+    if vol_ok:     patterns.append('상승 거래량')
+    if death:      patterns.append('데드크로스')
+    if downtrend:  patterns.append('하락추세 (LH·LL)')
+    if bb_squeeze: patterns.append('BB 수렴')
+    if rsi_v < 30: patterns.append('RSI 과매도')
+    if rsi_v > 70: patterns.append('RSI 과매수')
+
+    bull = sum([golden, uptrend, ma_bull, vol_ok])
+    bear = sum([death,  downtrend, not ma_bull and not uptrend])
+    signal = 'bullish' if bull >= 2 else 'bearish' if bear >= 2 else 'neutral'
+
+    return {
+        'ticker':    ticker,
+        'signal':    signal,
+        'patterns':  patterns,
+        'rsi':       round(rsi_v, 1),
+        'ma_bull':   ma_bull,
+        'uptrend':   uptrend,
+        'sr_levels': find_sr_levels(df['Close'], df['High'], df['Low']),
+        'price':     round(cur, 2),
+    }
+
+
 def get_news_sentiment(ticker):
     """뉴스 감성 분석 (Claude API 우선, 키워드 폴백)"""
     api_key = _get_anthropic_key()
@@ -3143,6 +3261,43 @@ def main():
                     ic7.metric("BB 상단", fmt_p(float(_bb_u.iloc[-1])))
                     ic8.metric("BB 하단", fmt_p(float(_bb_l.iloc[-1])))
 
+                    # ── 지지/저항 자동 계산 ──────────────────
+                    st.markdown("##### 📍 지지/저항 레벨 (자동)")
+                    _sr = find_sr_levels(df['Close'], df['High'], df['Low'])
+                    if _sr:
+                        _cur_p = float(df['Close'].iloc[-1])
+                        _n     = min(90, len(df))
+                        _fig_sr = go.Figure()
+                        _fig_sr.add_trace(go.Scatter(
+                            x=df.index[-_n:], y=df['Close'].values[-_n:],
+                            name='종가', line=dict(color='#2962ff', width=1.8), showlegend=False))
+                        for _sl in _sr:
+                            _sc = '#ef5350' if _sl['above'] else '#26a69a'
+                            _fig_sr.add_hline(
+                                y=_sl['level'], line_dash='dash',
+                                line_color=_sc, line_width=1,
+                                annotation_text=f"{'저항' if _sl['above'] else '지지'} {fmt_p(_sl['level'])} ({_sl['dist_pct']:+.1f}%)",
+                                annotation_font=dict(color=_sc, size=10),
+                                annotation_position='right')
+                        _fig_sr.update_layout(
+                            height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            margin=dict(l=0, r=140, t=10, b=0),
+                            xaxis=dict(gridcolor=TV_GRID, showgrid=True),
+                            yaxis=dict(gridcolor=TV_GRID, showgrid=True))
+                        st.plotly_chart(_fig_sr, use_container_width=True)
+
+                        _sup = [s for s in _sr if not s['above']]
+                        _res = [s for s in _sr if s['above']]
+                        _sr_c1, _sr_c2 = st.columns(2)
+                        with _sr_c1:
+                            st.markdown("**🟢 지지선**")
+                            for s in _sup[:3]:
+                                st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
+                        with _sr_c2:
+                            st.markdown("**🔴 저항선**")
+                            for s in _res[:3]:
+                                st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
+
             with sub1:
                 # ── 매매 시그널 ──────────────────────────────
                 trade_signals = detect_trading_signals(df, t_det)
@@ -3832,6 +3987,44 @@ def main():
                         f"</div>", unsafe_allow_html=True)
 
                 st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
+
+                # ── 패턴 필터 ──────────────────────────────────
+                buy_tkrs = [a['ticker'] for a in actions if '매수' in a['action']]
+                if buy_tkrs:
+                    with st.expander(f"🔍 패턴 필터 — 매수 후보 {len(buy_tkrs)}종목 차트 이중확인", expanded=False):
+                        st.caption("퀀트 팩터 매수 시그널 + 차트 패턴 이중 검증 · 두 신호 모두 강세일 때 진입 신뢰도 ↑")
+                        if st.button("📊 패턴 분석 실행", key="pat_run"):
+                            with st.spinner("차트 패턴 분석 중..."):
+                                _pat_results = [detect_chart_pattern(t) for t in buy_tkrs]
+                                _pat_results = [r for r in _pat_results if r]
+                            st.session_state['qt_patterns'] = _pat_results
+
+                        if 'qt_patterns' in st.session_state:
+                            _prs = st.session_state['qt_patterns']
+                            if _prs:
+                                _sig_icon = {'bullish':'🟢','bearish':'🔴','neutral':'⚪'}
+                                _rec_map  = {'bullish':'✅ 이중 확인','neutral':'➖ 중립','bearish':'⚠️ 패턴 불일치'}
+                                _pf_rows  = [{
+                                    '종목':     r['ticker'],
+                                    '현재가':   f"${r['price']:,.2f}",
+                                    '패턴 시그널': f"{_sig_icon.get(r['signal'],'⚪')} {r['signal'].upper()}",
+                                    'RSI':      r['rsi'],
+                                    '검출 패턴': ' · '.join(r['patterns'][:3]) or '없음',
+                                    '권장':     _rec_map.get(r['signal'], '➖'),
+                                } for r in _prs]
+                                st.dataframe(pd.DataFrame(_pf_rows), use_container_width=True, hide_index=True)
+
+                                for r in _prs:
+                                    sr_txt = ', '.join(
+                                        f"{'저항' if s['above'] else '지지'} ${s['level']:.2f} ({s['dist_pct']:+.1f}%)"
+                                        for s in r['sr_levels'][:4]
+                                    )
+                                    if r['signal'] == 'bullish':
+                                        st.success(f"**{r['ticker']}** 강세 패턴 확인 — {sr_txt}")
+                                    elif r['signal'] == 'bearish':
+                                        st.warning(f"**{r['ticker']}** 약세 패턴 주의 — 퀀트와 패턴 불일치. {sr_txt}")
+                                    else:
+                                        st.info(f"**{r['ticker']}** 중립 — {sr_txt}")
 
         with qt_sub4:
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
