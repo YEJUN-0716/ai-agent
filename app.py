@@ -2861,7 +2861,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
 
 
 def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
-                              factor_weights=None, commission=0.001):
+                              factor_weights=None, commission=0.001, slippage=0.0005):
     """팩터 전략 백테스트: 매월 팩터 Top N 매수, 리밸런싱."""
     if factor_weights is None:
         factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
@@ -2938,7 +2938,9 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
         new_set = set(top)
         turnover = len(old_set.symmetric_difference(new_set)) / max(len(new_set), 1)
         total_turnover += turnover
-        cost = equity * turnover * commission
+        # 왕복 비용: 수수료 + 슬리피지 각 편도, 매도·매수 양쪽 적용
+        round_trip_cost = commission + 2 * slippage
+        cost = equity * turnover * round_trip_cost
         equity -= cost
 
         month_end_idx = price_df.index[price_df.index >= month_start]
@@ -2974,7 +2976,8 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
     daily_r = eq_s.pct_change().dropna()
     sharpe = float(daily_r.mean()/daily_r.std()*np.sqrt(252)) if daily_r.std() > 0 else 0
     avg_turnover = total_turnover / max(len(trade_log), 1) * 100
-    total_cost_pct = total_turnover * commission * 100
+    round_trip_cost = commission + 2 * slippage
+    total_cost_pct = total_turnover * round_trip_cost * 100
 
     spy_df = download_stock('SPY', start=start, end=end)
     spy_ret = 0
@@ -2991,6 +2994,76 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
         'n_rebalances': len(trade_log),
     }
     return metrics, eq_df, trade_log
+
+# ─────────────────────────────────────────────
+# GOOGLE SHEETS 연동 (매매 일지 영속 저장)
+# ─────────────────────────────────────────────
+
+def _gs_configured():
+    """Streamlit secrets에 GS 설정이 있는지 확인."""
+    try:
+        return ("gcp_service_account" in st.secrets and
+                "google_sheets" in st.secrets)
+    except Exception:
+        return False
+
+@st.cache_resource(show_spinner=False)
+def _gs_client():
+    """gspread 클라이언트. 인증 실패 시 None 반환."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        scopes = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]), scopes=scopes)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+def _gs_load_trades():
+    """Google Sheets에서 매매 기록 로드. 실패 시 None."""
+    gc = _gs_client()
+    if gc is None:
+        return None
+    try:
+        sh = gc.open_by_key(st.secrets["google_sheets"]["spreadsheet_id"])
+        ws_name = st.secrets["google_sheets"].get("worksheet_name", "trades")
+        try:
+            ws = sh.worksheet(ws_name)
+        except Exception:
+            return []
+        records = ws.get_all_records()
+        # 빈 문자열 → None 변환 (수치 컬럼 복원)
+        cleaned = []
+        for r in records:
+            cleaned.append({k: (None if v == '' else v) for k, v in r.items()})
+        return cleaned
+    except Exception:
+        return None
+
+def _gs_save_trades(trades):
+    """매매 기록을 Google Sheets에 저장. 성공 시 True."""
+    gc = _gs_client()
+    if gc is None:
+        return False
+    try:
+        sh = gc.open_by_key(st.secrets["google_sheets"]["spreadsheet_id"])
+        ws_name = st.secrets["google_sheets"].get("worksheet_name", "trades")
+        try:
+            ws = sh.worksheet(ws_name)
+        except Exception:
+            ws = sh.add_worksheet(title=ws_name, rows=2000, cols=20)
+        ws.clear()
+        if trades:
+            df_gs = pd.DataFrame(trades).fillna('')
+            ws.update([df_gs.columns.tolist()] + df_gs.values.tolist())
+        return True
+    except Exception:
+        return False
+
 
 # ─────────────────────────────────────────────
 # MAIN APP
@@ -4462,17 +4535,24 @@ def main():
         with qt_sub4:
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
 
-            btc1, btc2, btc3 = st.columns(3)
+            btc1, btc2 = st.columns(2)
             bt_years = btc1.selectbox("백테스트 기간", [1, 2, 3, 5], index=2, format_func=lambda x: f"{x}년", key="qt_bt_years")
             bt_topn = btc2.slider("Top N 종목", 3, 10, 5, key="qt_bt_topn")
-            bt_cost = btc3.slider("거래비용 (편도 %)", 0.0, 0.5, 0.1, 0.05, key="qt_bt_cost")
+            with st.expander("⚙️ 비용 설정 (수수료 · 슬리피지)", expanded=False):
+                _bcc1, _bcc2 = st.columns(2)
+                bt_commission = _bcc1.slider("수수료율 (편도 %)", 0.0, 0.30, 0.10, 0.05,
+                                             help="증권사 매매 수수료. 미국 주식 ~0.05%", key="qt_bt_commission") / 100
+                bt_slippage   = _bcc2.slider("슬리피지율 (편도 %)", 0.0, 0.20, 0.05, 0.01,
+                                             help="호가 스프레드·체결 지연. 대형주 ~0.03~0.05%", key="qt_bt_slip") / 100
+                _rtrip = (bt_commission + bt_slippage) * 2 * 100
+                st.caption(f"왕복 총비용: **{_rtrip:.2f}%** / 리밸런싱 — 비용 미반영 시 수익률 {_rtrip:.1f}%p 과장됨")
 
             if st.button("📉 팩터 전략 백테스트 실행", type="primary", key="qt_bt_run"):
                 with st.spinner(f"{len(qt_tickers)}개 종목 × {bt_years}년 백테스트 중... (1~3분 소요)"):
                     bt_m, bt_eq, bt_log = backtest_factor_strategy(
                         qt_tickers, top_n=bt_topn, years=bt_years,
                         factor_weights=qt_fw if qt_use_timing else None,
-                        commission=bt_cost/100)
+                        commission=bt_commission, slippage=bt_slippage)
                 if not bt_m:
                     st.error("데이터 부족 — 종목 수를 늘리거나 기간을 줄여주세요.")
                 else:
@@ -4493,7 +4573,8 @@ def main():
                 mc5, mc6, mc7, mc8 = st.columns(4)
                 mc5.metric("샤프 비율", f"{bt_m['sharpe']:.2f}")
                 mc6.metric("평균 턴오버", f"{bt_m['avg_turnover']:.0f}%")
-                mc7.metric("총 거래비용", f"{bt_m['total_cost']:.2f}%")
+                mc7.metric("누적 비용 차감", f"-{bt_m['total_cost']:.2f}%",
+                           help="수수료 + 슬리피지 합산 (비용 0% 대비 수익률 차이)")
                 mc8.metric("리밸런싱 횟수", f"{bt_m['n_rebalances']}회")
 
                 if not bt_eq.empty:
@@ -4983,24 +5064,84 @@ def main():
 
     # ── Tab: 매매 일지 ─────────────────────────────────────────
     with tab_journal:
-        st.caption("매매 기록 추적 · 퀀트 시그널 vs 실제 결과 비교 · 세션 내 유지 + CSV 다운로드")
+        _gs_ok = _gs_configured()
+        if _gs_ok:
+            st.caption("매매 기록 추적 · Google Sheets 자동 동기화 · 시그널 적중률 분석")
+        else:
+            st.caption("매매 기록 추적 · 시그널 적중률 분석 · CSV 백업/복원")
 
-        # 초기화
+        # ── 초기화 + Google Sheets 자동 로드 ──────────────────
         if 'trades' not in st.session_state:
             st.session_state['trades'] = []
+            if _gs_ok and not st.session_state.get('_gs_loaded'):
+                with st.spinner("Google Sheets에서 기록 불러오는 중..."):
+                    _loaded = _gs_load_trades()
+                if _loaded is not None:
+                    st.session_state['trades'] = _loaded
+                    st.session_state['_gs_loaded'] = True
 
-        # CSV 업로드로 복원
-        with st.expander("📂 기존 일지 불러오기 (CSV 업로드)", expanded=False):
+        # ── Google Sheets 상태 표시줄 ──────────────────────────
+        if _gs_ok:
+            _gsc1, _gsc2, _gsc3 = st.columns([2, 1, 1])
+            sid = st.secrets["google_sheets"]["spreadsheet_id"]
+            _gsc1.success(f"Google Sheets 연결됨  |  스프레드시트 ID: `{sid[:20]}…`")
+            if _gsc2.button("☁️ GS에 저장", key="gs_push"):
+                with st.spinner("저장 중..."):
+                    _ok = _gs_save_trades(st.session_state['trades'])
+                if _ok:
+                    st.success("Google Sheets 저장 완료")
+                else:
+                    st.error("저장 실패 — 인증 또는 권한을 확인하세요")
+            if _gsc3.button("🔄 GS에서 불러오기", key="gs_pull"):
+                with st.spinner("불러오는 중..."):
+                    _pulled = _gs_load_trades()
+                if _pulled is not None:
+                    st.session_state['trades'] = _pulled
+                    st.rerun()
+                else:
+                    st.error("불러오기 실패")
+        else:
+            with st.expander("☁️ Google Sheets 연동 설정 방법", expanded=False):
+                st.markdown("""
+**설정하면 앱을 껐다 켜도 매매 기록이 유지됩니다.**
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → 새 프로젝트 생성
+2. APIs & Services → **Google Sheets API** + **Google Drive API** 활성화
+3. IAM & Admin → Service Accounts → 새 계정 생성 → JSON 키 다운로드
+4. Google Sheets에서 새 스프레드시트 생성 → 서비스 계정 이메일에 **편집자** 권한 공유
+5. Streamlit Cloud → App settings → **Secrets** 탭에 아래 형식으로 추가:
+
+```toml
+[gcp_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "..."
+private_key = "-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+client_email = "your-sa@project.iam.gserviceaccount.com"
+client_id = "..."
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+
+[google_sheets]
+spreadsheet_id = "스프레드시트_URL에서_/d/와_/edit_사이_ID"
+worksheet_name = "trades"
+```
+""")
+
+        # ── CSV 업로드로 복원 (GS 미설정 시 주 백업 수단) ──────
+        with st.expander("📂 CSV로 불러오기", expanded=False):
             _up = st.file_uploader("이전 세션 CSV 업로드", type='csv', key='journal_upload')
             if _up:
                 try:
                     _udf = pd.read_csv(_up)
                     st.session_state['trades'] = _udf.to_dict('records')
+                    if _gs_ok:
+                        _gs_save_trades(st.session_state['trades'])
                     st.success(f"{len(st.session_state['trades'])}건 복원 완료")
                 except Exception as _ue:
                     st.error(f"업로드 오류: {_ue}")
 
-        # 새 매매 입력 폼
+        # ── 새 매매 입력 폼 ────────────────────────────────────
         with st.expander("➕ 새 매매 기록 추가", expanded=True):
             _j1, _j2, _j3, _j4 = st.columns(4)
             _j_tkr   = _j1.text_input("종목 티커", key="j_tkr").upper().strip()
@@ -5027,16 +5168,21 @@ def main():
                         '손익(%)': round(_pnl_pct, 2) if _pnl_pct is not None else None,
                         '시그널': _j_sig, '메모': _j_note,
                     })
-                    st.success(f"{_j_tkr} {_j_act} 기록 추가 완료")
+                    if _gs_ok:
+                        _gs_save_trades(st.session_state['trades'])
+                    st.success(f"{_j_tkr} {_j_act} 기록 추가" + (" + GS 저장" if _gs_ok else " 완료"))
                 else:
                     st.warning("종목 티커를 입력하세요.")
 
-        # 기록 테이블 + 성과 요약
+        # ── 기록 테이블 + 전체 성과 요약 ──────────────────────
         if st.session_state['trades']:
             _tdf = pd.DataFrame(st.session_state['trades'])
 
-            # 성과 요약
-            _closed = _tdf[_tdf['손익(%)'].notna()]
+            _closed = _tdf[_tdf['손익(%)'].notna()].copy()
+            _closed['손익(%)'] = pd.to_numeric(_closed['손익(%)'], errors='coerce')
+            _closed['손익($)'] = pd.to_numeric(_closed['손익($)'], errors='coerce')
+            _closed = _closed.dropna(subset=['손익(%)'])
+
             if not _closed.empty:
                 _wins   = _closed[_closed['손익(%)'] > 0]
                 _losses = _closed[_closed['손익(%)'] <= 0]
@@ -5044,44 +5190,141 @@ def main():
                 _avg_w  = float(_wins['손익(%)'].mean()) if not _wins.empty else 0
                 _avg_l  = abs(float(_losses['손익(%)'].mean())) if not _losses.empty else 0
                 _total_pnl = float(_closed['손익($)'].sum())
+                _pf = (_wins['손익($)'].sum() / max(abs(_losses['손익($)'].sum()), 0.01)
+                       if not _wins.empty else 0)
                 _kf_calc = kelly_fraction(_wr/100, _avg_w, _avg_l) if _avg_l > 0 else 0
+                _exp_val = _wr/100 * _avg_w - (1-_wr/100) * _avg_l
 
-                _jm1, _jm2, _jm3, _jm4, _jm5 = st.columns(5)
-                _jm1.metric("승률",      f"{_wr:.1f}%",    f"{len(_closed)}건 청산")
-                _jm2.metric("평균 수익", f"+{_avg_w:.1f}%", f"{len(_wins)}승")
-                _jm3.metric("평균 손실", f"-{_avg_l:.1f}%", f"{len(_losses)}패")
-                _jm4.metric("총 손익",   f"${_total_pnl:+,.2f}")
-                _jm5.metric("권장 Kelly", f"{_kf_calc*100:.1f}%", "half-Kelly")
+                _jm1, _jm2, _jm3, _jm4, _jm5, _jm6 = st.columns(6)
+                _jm1.metric("승률",       f"{_wr:.1f}%",    f"{len(_closed)}건 청산")
+                _jm2.metric("평균 수익",  f"+{_avg_w:.1f}%", f"{len(_wins)}승")
+                _jm3.metric("평균 손실",  f"-{_avg_l:.1f}%", f"{len(_losses)}패")
+                _jm4.metric("수익 팩터",  f"{_pf:.2f}",      "1.5+ 우수")
+                _jm5.metric("기대값/매매", f"{_exp_val:+.2f}%")
+                _jm6.metric("권장 Kelly", f"{_kf_calc*100:.1f}%", "half-Kelly")
 
             # 전체 기록 표
             st.markdown("#### 📋 전체 매매 기록")
             _edit_df = st.data_editor(_tdf, use_container_width=True, num_rows="dynamic",
                                       key="journal_editor")
-            if st.button("💾 변경사항 저장", key="j_save"):
+            _sv1, _sv2 = st.columns(2)
+            if _sv1.button("💾 변경사항 저장", key="j_save"):
                 st.session_state['trades'] = _edit_df.to_dict('records')
-                st.success("저장 완료")
-
-            # CSV 다운로드
+                if _gs_ok:
+                    _gs_save_trades(st.session_state['trades'])
+                st.success("저장 완료" + (" + GS 동기화" if _gs_ok else ""))
             _csv_data = _tdf.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("⬇️ CSV 다운로드 (다음 세션 복원용)", _csv_data,
-                               file_name=f"trades_{datetime.now().strftime('%Y%m%d')}.csv",
-                               mime='text/csv', key='j_download')
+            _sv2.download_button("⬇️ CSV 다운로드", _csv_data,
+                                 file_name=f"trades_{datetime.now().strftime('%Y%m%d')}.csv",
+                                 mime='text/csv', key='j_download')
 
-            # 종목별 손익 차트
+            # ── 시그널 출처별 적중률 분석 ──────────────────────
+            if not _closed.empty and '시그널' in _closed.columns:
+                st.markdown("#### 📡 시그널 출처별 성과 분석")
+
+                def _sig_stats(g):
+                    wins_g = g[g['손익(%)'] > 0]
+                    loss_g = g[g['손익(%)'] <= 0]
+                    wr_g = len(wins_g) / len(g) * 100
+                    avg_w_g = float(wins_g['손익(%)'].mean()) if not wins_g.empty else 0
+                    avg_l_g = abs(float(loss_g['손익(%)'].mean())) if not loss_g.empty else 0
+                    pf_g = (wins_g['손익($)'].sum() /
+                            max(abs(loss_g['손익($)'].sum()), 0.01)) if not wins_g.empty else 0
+                    ev_g = wr_g/100 * avg_w_g - (1 - wr_g/100) * avg_l_g
+                    return pd.Series({
+                        '거래수': len(g),
+                        '승률(%)': round(wr_g, 1),
+                        '평균수익(%)': round(avg_w_g, 2),
+                        '평균손실(%)': round(avg_l_g, 2),
+                        '수익팩터': round(pf_g, 2),
+                        '기대값(%)': round(ev_g, 2),
+                        '총손익($)': round(float(g['손익($)'].sum()), 2),
+                    })
+
+                _sig_df = _closed.groupby('시그널').apply(_sig_stats).reset_index()
+                _sig_df = _sig_df.sort_values('기대값(%)', ascending=False)
+
+                # 컬러 스타일 적용
+                def _color_wr(val):
+                    if isinstance(val, (int, float)):
+                        if val >= 60: return 'color: #26a69a; font-weight:600'
+                        if val < 45:  return 'color: #ef5350; font-weight:600'
+                    return ''
+                def _color_ev(val):
+                    if isinstance(val, (int, float)):
+                        if val > 0: return 'color: #26a69a'
+                        if val < 0: return 'color: #ef5350'
+                    return ''
+
+                st.dataframe(
+                    _sig_df.style
+                        .map(_color_wr, subset=['승률(%)'])
+                        .map(_color_ev, subset=['기대값(%)', '총손익($)']),
+                    use_container_width=True, hide_index=True)
+
+                # 시그널별 승률 바 차트
+                _fig_sig = go.Figure()
+                _fig_sig.add_trace(go.Bar(
+                    name='승률(%)', x=_sig_df['시그널'], y=_sig_df['승률(%)'],
+                    marker_color=['#26a69a' if v >= 50 else '#ef5350' for v in _sig_df['승률(%)']],
+                    text=[f"{v:.0f}%" for v in _sig_df['승률(%)']],
+                    textposition='outside', yaxis='y'))
+                _fig_sig.add_trace(go.Bar(
+                    name='기대값(%)', x=_sig_df['시그널'], y=_sig_df['기대값(%)'],
+                    marker_color='rgba(41,98,255,0.6)',
+                    text=[f"{v:+.2f}%" for v in _sig_df['기대값(%)']],
+                    textposition='outside', yaxis='y2'))
+                _fig_sig.update_layout(
+                    height=300, barmode='group',
+                    plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    font=dict(color=TV_TEXT),
+                    yaxis=dict(title='승률(%)', gridcolor=TV_GRID, side='left'),
+                    yaxis2=dict(title='기대값(%)', overlaying='y', side='right',
+                                showgrid=False),
+                    legend=dict(orientation='h', y=1.1),
+                    margin=dict(l=0, r=60, t=30, b=0))
+                st.plotly_chart(_fig_sig, use_container_width=True)
+
+            # ── 누적 손익 곡선 ──────────────────────────────────
+            if not _closed.empty and '날짜' in _closed.columns:
+                try:
+                    _cum = _closed.sort_values('날짜').copy()
+                    _cum['누적손익($)'] = _cum['손익($)'].cumsum()
+                    _fig_cum = go.Figure()
+                    _fig_cum.add_trace(go.Scatter(
+                        x=_cum['날짜'], y=_cum['누적손익($)'],
+                        mode='lines+markers', name='누적 손익',
+                        line=dict(color='#2962ff', width=2),
+                        fill='tozeroy',
+                        fillcolor='rgba(41,98,255,0.08)'))
+                    _fig_cum.add_hline(y=0, line_color='#999999', line_dash='dot', line_width=1)
+                    _fig_cum.update_layout(
+                        height=220, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        yaxis=dict(title='누적 손익 ($)', gridcolor=TV_GRID),
+                        xaxis=dict(gridcolor=TV_GRID),
+                        margin=dict(l=0, r=20, t=10, b=0), showlegend=False)
+                    st.plotly_chart(_fig_cum, use_container_width=True)
+                except Exception:
+                    pass
+
+            # ── 종목별 손익 바 차트 ─────────────────────────────
             if not _closed.empty:
                 _fig_j = go.Figure(go.Bar(
                     x=_closed['종목'], y=_closed['손익(%)'],
-                    marker_color=['#26a69a' if v > 0 else '#ef5350' for v in _closed['손익(%)']],
+                    marker_color=['#26a69a' if v > 0 else '#ef5350'
+                                  for v in _closed['손익(%)']],
                     text=[f"{v:+.1f}%" for v in _closed['손익(%)']],
                     textposition='outside'))
                 _fig_j.update_layout(
-                    height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                     yaxis_title="손익 (%)", font=dict(color=TV_TEXT),
                     margin=dict(l=0, r=20, t=10, b=0))
                 st.plotly_chart(_fig_j, use_container_width=True)
         else:
             st.info("아직 매매 기록이 없습니다. 위 폼으로 첫 거래를 기록하세요.")
-            st.caption("💡 세션이 종료되면 기록이 사라집니다. CSV 다운로드로 백업하세요.")
+            if not _gs_ok:
+                st.caption("💡 세션이 종료되면 기록이 사라집니다. Google Sheets 연동 또는 CSV 백업을 권장합니다.")
 
 
 if __name__ == "__main__":
