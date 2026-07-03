@@ -42,8 +42,8 @@ TV_TEXT = '#1a1a1a'
 TV_UP = '#26a69a'
 TV_DOWN = '#ef5350'
 
-# 종목 → 섹터 ETF 매핑
-SECTOR_ETF = {
+# 종목 → 섹터 ETF 매핑 (detect_chart_pattern 섹터 RS 계산용)
+TICKER_ETF = {
     # 반도체
     'NVDA':'SMH','AMD':'SMH','INTC':'SMH','MU':'SMH','TSM':'SMH',
     'AMAT':'SMH','LRCX':'SMH','KLAC':'SMH','ASML':'SMH','ARM':'SMH',
@@ -1753,7 +1753,7 @@ def detect_chart_pattern(ticker, period='6mo'):
     from concurrent.futures import ThreadPoolExecutor
     from datetime import date as _date, datetime as _dt
 
-    sec_etf = SECTOR_ETF.get(ticker.upper(), 'SPY')
+    sec_etf = TICKER_ETF.get(ticker.upper(), 'SPY')
 
     # ── 병렬 데이터 수집 ───────────────────────
     def _dl_daily():
@@ -1764,6 +1764,8 @@ def detect_chart_pattern(ticker, period='6mo'):
 
     def _dl_sector():
         syms = list({ticker, sec_etf})
+        if len(syms) < 2:
+            return None
         return yf.download(syms, period='3mo', interval='1d',
                            progress=False, auto_adjust=True)
 
@@ -2504,9 +2506,10 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 def _zscore_to_score(series):
     """Z-score를 20~80 범위의 점수로 변환. 평균=50, ±2σ가 20/80."""
     m = series.mean(); s = series.std()
-    if s < 1e-9: return pd.Series(50.0, index=series.index)
+    if pd.isna(s) or s < 1e-9:
+        return pd.Series(50.0, index=series.index)
     z = (series - m) / s
-    return (z * 15 + 50).clip(20, 80)
+    return (z * 15 + 50).clip(20, 80).fillna(50.0)
 
 def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                        extra_factors=False, min_avg_volume=0):
@@ -4254,26 +4257,29 @@ def main():
                 _mc_cap = st.number_input("시뮬레이션 투자금 ($)", min_value=1000,
                                           value=10000, step=1000, key="mc_cap")
                 _mc_days = st.slider("시뮬레이션 기간 (거래일)", 63, 504, 252, 63,
-                                     key="mc_days",
-                                     format="%d일 (~%d개월" + ")")
+                                     key="mc_days", format="%d일")
                 if st.button("🎲 몬테카를로 실행", key="mc_run"):
-                    _opt_tickers = [t.strip().upper() for t in
-                                    st.session_state.get('qt_opt_tickers_val',
-                                    opt_input if 'opt_input' in dir() else '').split(',') if t.strip()]
-                    _mc_tickers = list(w.keys()) if 'qt_opt' in st.session_state else qt_tickers[:5]
+                    _mc_tickers = list(w.keys())
                     try:
                         _mc_end = datetime.now(); _mc_start = _mc_end - timedelta(days=520)
-                        _mc_prices = pd.DataFrame({
-                            _t: download_stock(_t, _mc_start, _mc_end)['Close']
-                            for _t in _mc_tickers
-                            if download_stock(_t, _mc_start, _mc_end) is not None
-                        }).dropna()
+                        _mc_raw = {}
+                        for _t in _mc_tickers:
+                            _dl = download_stock(_t, _mc_start, _mc_end)
+                            if _dl is not None and not _dl.empty:
+                                _mc_raw[_t] = _dl['Close']
+                        _mc_prices = pd.DataFrame(_mc_raw).dropna()
                         if not _mc_prices.empty:
                             _mc_rets = _mc_prices.pct_change().dropna()
-                            _wts = st.session_state['qt_opt']['weights'] if 'qt_opt' in st.session_state else {t: 1/len(_mc_tickers) for t in _mc_tickers}
-                            _port_rets = (_mc_rets * pd.Series(_wts)).sum(axis=1)
+                            # 실제 다운로드된 컬럼에 맞춰 가중치 재정규화
+                            _valid_wts = {_t: w[_t] for _t in _mc_rets.columns if _t in w}
+                            _total_w = sum(_valid_wts.values()) or 1.0
+                            _norm_wts = {_t: _v / _total_w for _t, _v in _valid_wts.items()}
+                            _port_rets = (_mc_rets[list(_norm_wts.keys())] *
+                                          pd.Series(_norm_wts)).sum(axis=1)
                             _mc = monte_carlo_portfolio(_port_rets.values, float(_mc_cap), int(_mc_days))
                             st.session_state['qt_mc'] = _mc
+                        else:
+                            st.warning("데이터 다운로드 실패 - 종목을 확인하세요")
                     except Exception as _e:
                         st.error(f"시뮬레이션 오류: {_e}")
 
@@ -4923,7 +4929,7 @@ def main():
                         if val > 5:  return 'color: #26a69a; font-weight:600'
                         if val < -5: return 'color: #ef5350; font-weight:600'
                     return ''
-                st.dataframe(_sdf.style.applymap(_color_sr, subset=['1M%','3M%','6M%','모멘텀']),
+                st.dataframe(_sdf.style.map(_color_sr, subset=['1M%','3M%','6M%','모멘텀']),
                              use_container_width=True, hide_index=True)
 
                 # 모멘텀 바 차트
