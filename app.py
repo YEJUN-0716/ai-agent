@@ -88,6 +88,120 @@ def _get_market_regime():
 
 
 # ─────────────────────────────────────────────
+# 추가 팩터 데이터 (무료 yfinance)
+# ─────────────────────────────────────────────
+
+def _fetch_extra_factors(ticker, info):
+    """애널리스트 추천·공매도 비율·EPS 서프라이즈 팩터 수집."""
+    out = {}
+    # ① 애널리스트 추천 (1=강력매수~5=강력매도 → 인버트)
+    rec = info.get('recommendationMean')
+    if rec and 1 <= rec <= 5:
+        out['analyst_raw'] = round((5 - rec) / 4 * 100, 1)
+    # ② 공매도 비율 (낮을수록 좋음 → 인버트)
+    sr = info.get('shortRatio')
+    if sr is not None and sr >= 0:
+        out['short_raw'] = round(max(0, 100 - min(sr * 8, 100)), 1)
+    # ③ EPS 서프라이즈 (최근 4분기 평균)
+    try:
+        eh = yf.Ticker(ticker).earnings_history
+        if eh is not None and not eh.empty:
+            need = {'epsEstimate', 'epsActual'}
+            if need.issubset(eh.columns):
+                recent = eh.dropna(subset=list(need)).tail(4)
+                if not recent.empty:
+                    surp = ((recent['epsActual'] - recent['epsEstimate']) /
+                            recent['epsEstimate'].abs().clip(lower=0.01) * 100)
+                    out['eps_surprise_raw'] = round(float(surp.mean()), 1)
+    except Exception:
+        pass
+    return out
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def calc_sector_rotation():
+    """12개 섹터 ETF 모멘텀 랭킹 (1시간 캐시)."""
+    SECTORS = {
+        'XLK':'기술', 'XLC':'커뮤니케이션', 'XLY':'임의소비재',
+        'XLF':'금융', 'XLV':'헬스케어', 'XLE':'에너지',
+        'XLI':'산업재', 'XLB':'소재', 'XLRE':'부동산',
+        'XLP':'필수소비재', 'XLU':'유틸리티', 'SMH':'반도체',
+    }
+    try:
+        data = yf.download(list(SECTORS), period='1y', interval='1d',
+                           progress=False, auto_adjust=True)
+        closes = data['Close']
+        rows = []
+        for sym, name in SECTORS.items():
+            if sym not in closes.columns:
+                continue
+            c = closes[sym].dropna()
+            if len(c) < 21:
+                continue
+            cur = float(c.iloc[-1])
+            r1  = (cur / float(c.iloc[-21])  - 1) * 100 if len(c) >= 21  else None
+            r3  = (cur / float(c.iloc[-63])  - 1) * 100 if len(c) >= 63  else None
+            r6  = (cur / float(c.iloc[-126]) - 1) * 100 if len(c) >= 126 else None
+            ma50 = float(c.rolling(50).mean().iloc[-1]) if len(c) >= 50 else None
+            mom = sum(x * w for x, w in zip(
+                      [x for x in [r1, r3, r6] if x is not None],
+                      [0.5, 0.3, 0.2]) ) / sum(
+                      [w for x, w in zip([r1, r3, r6], [0.5, 0.3, 0.2]) if x is not None]
+                  ) if any(x is not None for x in [r1, r3, r6]) else 0
+            rows.append({
+                'ETF': sym, '섹터': name, '현재가': f"${cur:.2f}",
+                '1M%': round(r1, 1) if r1 is not None else None,
+                '3M%': round(r3, 1) if r3 is not None else None,
+                '6M%': round(r6, 1) if r6 is not None else None,
+                'MA50↑': '✅' if (ma50 and cur > ma50) else '❌',
+                '모멘텀': round(mom, 1),
+            })
+        df = pd.DataFrame(rows).sort_values('모멘텀', ascending=False).reset_index(drop=True)
+        df.insert(0, '순위', range(1, len(df)+1))
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
+                   half_kelly: bool = True) -> float:
+    """Kelly Criterion 최적 투입 비율. half_kelly=True 권장."""
+    if avg_loss_pct <= 0 or win_rate <= 0:
+        return 0.0
+    b = avg_win_pct / avg_loss_pct
+    f = (win_rate * b - (1 - win_rate)) / b
+    f = max(0.0, f)
+    if half_kelly:
+        f *= 0.5
+    return min(f, 0.25)
+
+
+def monte_carlo_portfolio(returns_arr, capital: float,
+                          horizon_days: int = 252, n_sim: int = 1000):
+    """수익률 배열로 몬테카를로 시뮬레이션. 백분위 결과 반환."""
+    mu  = float(np.mean(returns_arr))
+    sig = float(np.std(returns_arr))
+    paths = np.zeros((n_sim, horizon_days + 1))
+    paths[:, 0] = capital
+    rng = np.random.default_rng(42)
+    daily = rng.normal(mu, sig, (n_sim, horizon_days))
+    for t in range(1, horizon_days + 1):
+        paths[:, t] = paths[:, t - 1] * (1 + daily[:, t - 1])
+    final = paths[:, -1]
+    pct   = np.percentile(final, [5, 25, 50, 75, 95])
+    return {
+        'paths': paths,
+        'final': final,
+        'p5':  pct[0], 'p25': pct[1], 'p50': pct[2],
+        'p75': pct[3], 'p95': pct[4],
+        'prob_profit':    float(np.mean(final > capital)),
+        'prob_loss_20':   float(np.mean(final < capital * 0.80)),
+        'max_loss_p5':    round((pct[0] / capital - 1) * 100, 1),
+        'best_p95':       round((pct[4] / capital - 1) * 100, 1),
+    }
+
+
+# ─────────────────────────────────────────────
 # 통합 주식 데이터 다운로드
 # ─────────────────────────────────────────────
 
@@ -2394,8 +2508,9 @@ def _zscore_to_score(series):
     z = (series - m) / s
     return (z * 15 + 50).clip(20, 80)
 
-def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
-    """멀티팩터 랭킹: 모멘텀·밸류·퀄리티·저변동성 4팩터 스코어링."""
+def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
+                       extra_factors=False, min_avg_volume=0):
+    """멀티팩터 랭킹: 4팩터 + 선택적 3추가팩터(애널·공매도·EPS서프라이즈)."""
     import time
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
@@ -2411,12 +2526,18 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
             if len(df) < 30:
                 failed.append(tk); continue
             cp = float(df['Close'].iloc[-1])
+            # 유동성 필터
+            if min_avg_volume > 0:
+                avg_vol = float(df['Volume'].tail(20).mean()) if 'Volume' in df.columns else 0
+                if avg_vol < min_avg_volume:
+                    failed.append(tk); continue
             mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
             mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
             daily_ret = df['Close'].pct_change().dropna()
             annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
 
             per, pbr, roe_v, pm_v, rg_v, name = None, None, 0, 0, 0, tk
+            info = {}
             try:
                 info = yf.Ticker(tk).info or {}
                 per = info.get('trailingPE') or info.get('forwardPE')
@@ -2433,14 +2554,17 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
 
             ep = (1.0/per*100) if per and per > 0 else 0
             bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
-            results.append({
+            row = {
                 'ticker': tk, 'name': name, 'price': cp,
                 'momentum_raw': round(mom_12m - mom_1m, 2),
                 'value_raw': round(ep*0.5+bp*0.5, 2),
                 'quality_raw': round(roe_v*0.4+pm_v*0.3+rg_v*0.3, 2),
                 'low_vol_raw': round(max(100-annual_vol, 0), 2),
                 'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
-            })
+            }
+            if extra_factors:
+                row.update(_fetch_extra_factors(tk, info))
+            results.append(row)
             if i < len(tickers) - 1:
                 time.sleep(0.3)
         except Exception:
@@ -2448,10 +2572,22 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None):
     if not results: return pd.DataFrame()
     rdf = pd.DataFrame(results)
     for col in ['momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw']:
-        fname = col.replace('_raw', '')
-        rdf[fname] = _zscore_to_score(rdf[col])
-    rdf['composite'] = (rdf['momentum']*0.30 + rdf['value']*0.25 +
-                        rdf['quality']*0.30 + rdf['low_vol']*0.15)
+        rdf[col.replace('_raw', '')] = _zscore_to_score(rdf[col])
+    # 추가 팩터 정규화
+    extra_cols, extra_w = [], []
+    for col, w in [('analyst_raw', 0.10), ('short_raw', 0.05), ('eps_surprise_raw', 0.10)]:
+        if col in rdf.columns:
+            fname = col.replace('_raw', '')
+            rdf[fname] = _zscore_to_score(rdf[col])
+            extra_cols.append(fname)
+            extra_w.append(w)
+    base_w = 1 - sum(extra_w)
+    rdf['composite'] = (rdf['momentum'] * 0.30 * base_w / 1.0 +
+                        rdf['value']    * 0.25 * base_w / 1.0 +
+                        rdf['quality']  * 0.30 * base_w / 1.0 +
+                        rdf['low_vol']  * 0.15 * base_w / 1.0)
+    for fname, w in zip(extra_cols, extra_w):
+        rdf['composite'] += rdf[fname] * w
     rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
     rdf['rank'] = range(1, len(rdf)+1)
     if failed:
@@ -3018,7 +3154,7 @@ def main():
         min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
                            help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
-    tab1, tab6, tab_dash = st.tabs(["📊 종목 분석", "🧬 퀀트", "📡 실전 대시보드"])
+    tab1, tab6, tab_dash, tab_journal = st.tabs(["📊 종목 분석", "🧬 퀀트", "📡 실전 대시보드", "📓 매매 일지"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -3941,11 +4077,19 @@ def main():
                 qt_tickers = UNIVERSE_PRESETS[qt_preset]
                 st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
-        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트", "📉 종목 백테스팅"])
+        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션"])
 
         with qt_sub1:
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
             qt_sector_neutral = st.checkbox("🏭 섹터 중립화 (섹터 편향 제거)", value=True, key="qt_sector")
+            _ef_col, _liq_col = st.columns(2)
+            qt_extra_factors = _ef_col.checkbox(
+                "➕ 추가 팩터 (애널리스트·공매도·EPS 서프라이즈)", value=False, key="qt_extra_f",
+                help="3개 추가 팩터 활성화 — 각 종목 API 추가 호출로 약 2배 더 느림")
+            qt_min_vol = _liq_col.number_input(
+                "💧 최소 일평균 거래량 (유동성 필터)", min_value=0, value=500_000,
+                step=100_000, key="qt_min_vol",
+                help="0이면 필터 없음. 예: 500,000 = 50만주 미만 제외")
 
             if qt_use_timing:
                 _ft_w, _ft_env = get_factor_timing_weights()
@@ -3968,8 +4112,30 @@ def main():
                 pb = st.progress(0); pt = st.empty()
                 if qt_sector_neutral:
                     fdf = calc_factor_scores_sectoral(qt_tickers, factor_weights=qt_fw, prog_bar=pb, prog_text=pt)
+                    if not fdf.empty and qt_extra_factors:
+                        # extra factors only available in non-sectoral path for now
+                        _ef = calc_factor_scores(qt_tickers, extra_factors=True, min_avg_volume=0)
+                        for _ecol in ['analyst','short','eps_surprise']:
+                            if _ecol in (_ef.columns if not _ef.empty else []):
+                                fdf = fdf.merge(_ef[['ticker', _ecol]], on='ticker', how='left')
                 else:
-                    fdf = calc_factor_scores(qt_tickers, pb, pt)
+                    fdf = calc_factor_scores(qt_tickers, pb, pt,
+                                             extra_factors=qt_extra_factors,
+                                             min_avg_volume=int(qt_min_vol))
+                # Apply liquidity filter to sectoral path too
+                if qt_sector_neutral and qt_min_vol > 0 and not fdf.empty:
+                    _end = datetime.now(); _start = _end - timedelta(days=30)
+                    _keep = []
+                    for _tk in fdf['ticker']:
+                        try:
+                            _dv = download_stock(_tk, _start, _end)
+                            if _dv is not None and 'Volume' in _dv.columns:
+                                if float(_dv['Volume'].mean()) >= qt_min_vol:
+                                    _keep.append(_tk)
+                        except Exception:
+                            _keep.append(_tk)
+                    fdf = fdf[fdf['ticker'].isin(_keep)].reset_index(drop=True)
+                    fdf['rank'] = range(1, len(fdf)+1)
                 pb.empty(); pt.empty()
                 if fdf.empty:
                     st.error("분석 가능한 종목이 없습니다.")
@@ -4075,6 +4241,81 @@ def main():
                         font=dict(color=TV_TEXT), margin=dict(l=10, r=10, t=10, b=10))
                     st.plotly_chart(fig_corr, use_container_width=True)
 
+                    # ── 집중도 경고 ─────────────────────────
+                    high_corr = [(corr.columns[i], corr.columns[j], corr.values[i,j])
+                                 for i in range(len(corr)) for j in range(i+1, len(corr))
+                                 if abs(corr.values[i,j]) > 0.8]
+                    if high_corr:
+                        st.warning("⚠️ 고상관 쌍 (>0.8): " +
+                                   ", ".join(f"{a}↔{b} ({v:.2f})" for a, b, v in high_corr[:4]))
+
+                # ── 몬테카를로 시뮬레이션 ────────────────────
+                st.markdown("#### 🎲 몬테카를로 시뮬레이션")
+                _mc_cap = st.number_input("시뮬레이션 투자금 ($)", min_value=1000,
+                                          value=10000, step=1000, key="mc_cap")
+                _mc_days = st.slider("시뮬레이션 기간 (거래일)", 63, 504, 252, 63,
+                                     key="mc_days",
+                                     format="%d일 (~%d개월" + ")")
+                if st.button("🎲 몬테카를로 실행", key="mc_run"):
+                    _opt_tickers = [t.strip().upper() for t in
+                                    st.session_state.get('qt_opt_tickers_val',
+                                    opt_input if 'opt_input' in dir() else '').split(',') if t.strip()]
+                    _mc_tickers = list(w.keys()) if 'qt_opt' in st.session_state else qt_tickers[:5]
+                    try:
+                        _mc_end = datetime.now(); _mc_start = _mc_end - timedelta(days=520)
+                        _mc_prices = pd.DataFrame({
+                            _t: download_stock(_t, _mc_start, _mc_end)['Close']
+                            for _t in _mc_tickers
+                            if download_stock(_t, _mc_start, _mc_end) is not None
+                        }).dropna()
+                        if not _mc_prices.empty:
+                            _mc_rets = _mc_prices.pct_change().dropna()
+                            _wts = st.session_state['qt_opt']['weights'] if 'qt_opt' in st.session_state else {t: 1/len(_mc_tickers) for t in _mc_tickers}
+                            _port_rets = (_mc_rets * pd.Series(_wts)).sum(axis=1)
+                            _mc = monte_carlo_portfolio(_port_rets.values, float(_mc_cap), int(_mc_days))
+                            st.session_state['qt_mc'] = _mc
+                    except Exception as _e:
+                        st.error(f"시뮬레이션 오류: {_e}")
+
+                if 'qt_mc' in st.session_state:
+                    _mc = st.session_state['qt_mc']
+                    _mcc1, _mcc2, _mcc3, _mcc4 = st.columns(4)
+                    _mcc1.metric("중앙값 (50%)", f"${_mc['p50']:,.0f}",
+                                 f"{(_mc['p50']/_mc_cap-1)*100:+.1f}%")
+                    _mcc2.metric("낙관 (95%)", f"${_mc['p95']:,.0f}",
+                                 f"{_mc['best_p95']:+.1f}%")
+                    _mcc3.metric("비관 (5%)",  f"${_mc['p5']:,.0f}",
+                                 f"{_mc['max_loss_p5']:+.1f}%")
+                    _mcc4.metric("수익 확률",  f"{_mc['prob_profit']*100:.0f}%",
+                                 f"-20% 위험 {_mc['prob_loss_20']*100:.0f}%")
+                    # 팬 차트
+                    _t_axis = list(range(_mc['paths'].shape[1]))
+                    _fig_mc2 = go.Figure()
+                    # 1000개 경로 중 샘플 50개만 표시
+                    _rng2 = np.random.default_rng(0)
+                    for _p in _rng2.choice(_mc['paths'].shape[0], size=min(50, _mc['paths'].shape[0]), replace=False):
+                        _fig_mc2.add_trace(go.Scatter(
+                            x=_t_axis, y=_mc['paths'][_p], mode='lines',
+                            line=dict(color='rgba(41,98,255,0.08)', width=1),
+                            showlegend=False))
+                    for _pct_val, _col, _nm in [(_mc['p5'],'#ef5350','5%'),
+                                                 (_mc['p50'],'#ffffff','50%'),
+                                                 (_mc['p95'],'#26a69a','95%')]:
+                        _fig_mc2.add_hline(y=_pct_val, line_dash='dash',
+                                           line_color=_col, line_width=1.5,
+                                           annotation_text=f"{_nm} ${_pct_val:,.0f}",
+                                           annotation_font_color=_col)
+                    _fig_mc2.add_hline(y=_mc_cap, line_color='#ffeb3b',
+                                       line_dash='dot', line_width=1,
+                                       annotation_text="원금", annotation_font_color='#ffeb3b')
+                    _fig_mc2.update_layout(
+                        height=320, plot_bgcolor='#0d1117', paper_bgcolor='#0d1117',
+                        font=dict(color='#e2e8f0'),
+                        xaxis=dict(title="거래일", gridcolor='#1e293b'),
+                        yaxis=dict(title="포트폴리오 가치 ($)", gridcolor='#1e293b'),
+                        margin=dict(l=0, r=120, t=10, b=0))
+                    st.plotly_chart(_fig_mc2, use_container_width=True)
+
         with qt_sub3:
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
 
@@ -4128,6 +4369,25 @@ def main():
                         f"</div>", unsafe_allow_html=True)
 
                 st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
+
+                # ── 켈리 포지션 사이징 ─────────────────────────
+                with st.expander("📐 Kelly Criterion 포지션 사이징", expanded=False):
+                    st.caption("과거 백테스트 결과 기반 수학적 최적 투입 비율 — half-Kelly 적용 (안전 마진)")
+                    _kc1, _kc2, _kc3 = st.columns(3)
+                    _k_wr  = _kc1.slider("승률 (%)", 30, 80, 55, key="k_wr") / 100
+                    _k_aw  = _kc2.number_input("평균 수익 (%)", min_value=0.1, value=8.0, step=0.5, key="k_aw")
+                    _k_al  = _kc3.number_input("평균 손실 (%)", min_value=0.1, value=4.0, step=0.5, key="k_al")
+                    _kf    = kelly_fraction(_k_wr, _k_aw, _k_al, half_kelly=True)
+                    _kf_full = kelly_fraction(_k_wr, _k_aw, _k_al, half_kelly=False)
+                    _kk1, _kk2, _kk3 = st.columns(3)
+                    _kk1.metric("Kelly 비율 (Full)", f"{_kf_full*100:.1f}%", "이론 최적")
+                    _kk2.metric("Half-Kelly (권장)", f"{_kf*100:.1f}%", "실전 사용")
+                    _kk3.metric("$10,000 기준", f"${10000*_kf:,.0f}", "종목당 투입")
+                    if _kf > 0.20:
+                        st.warning("Kelly 비율이 20% 초과 — cap 적용됨. 변동성 큰 전략입니다.")
+                    elif _kf < 0.05:
+                        st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
+                    st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
 
                 # ── 패턴 필터 ──────────────────────────────────
                 buy_tkrs = [a['ticker'] for a in actions if '매수' in a['action']]
@@ -4628,6 +4888,58 @@ def main():
                         pm3.metric("MDD",              f"{pf_mdd:.1f}%")
                         pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
 
+        # ── qt_sub6: 섹터 로테이션 ─────────────────────────────
+        with qt_sub6:
+            st.caption("12개 섹터 ETF 모멘텀 랭킹 — 상위 3~4개 섹터 집중, 하위 회피 전략")
+            _sr_c, _sr_btn = st.columns([4, 1])
+            with _sr_btn:
+                if st.button("🔄 새로고침", key="sr_refresh"):
+                    calc_sector_rotation.clear()
+            with st.spinner("섹터 데이터 로딩 중..."):
+                _sdf = calc_sector_rotation()
+            if _sdf.empty:
+                st.error("데이터 로드 실패")
+            else:
+                # 색상 강조: 상위 3 = 초록, 하위 3 = 빨강
+                _top3  = set(_sdf.head(3)['ETF'])
+                _bot3  = set(_sdf.tail(3)['ETF'])
+                st.markdown("**🟢 상위 3 (비중 확대 후보) · 🔴 하위 3 (회피/비중 축소)**")
+                _sc1, _sc2, _sc3 = st.columns(3)
+                for _i, (_, _row) in enumerate(_sdf.head(3).iterrows()):
+                    [_sc1, _sc2, _sc3][_i].metric(
+                        f"🟢 #{_row['순위']} {_row['ETF']}",
+                        f"{_row['3M%']:+.1f}% (3M)" if _row['3M%'] is not None else '--',
+                        f"모멘텀 {_row['모멘텀']:+.1f}")
+                _sb1, _sb2, _sb3 = st.columns(3)
+                for _i, (_, _row) in enumerate(_sdf.tail(3).iterrows()):
+                    [_sb1, _sb2, _sb3][_i].metric(
+                        f"🔴 #{_row['순위']} {_row['ETF']}",
+                        f"{_row['3M%']:+.1f}% (3M)" if _row['3M%'] is not None else '--',
+                        f"모멘텀 {_row['모멘텀']:+.1f}")
+
+                st.markdown("#### 📊 전체 섹터 순위")
+                def _color_sr(val):
+                    if isinstance(val, (int, float)):
+                        if val > 5:  return 'color: #26a69a; font-weight:600'
+                        if val < -5: return 'color: #ef5350; font-weight:600'
+                    return ''
+                st.dataframe(_sdf.style.applymap(_color_sr, subset=['1M%','3M%','6M%','모멘텀']),
+                             use_container_width=True, hide_index=True)
+
+                # 모멘텀 바 차트
+                _fig_sr2 = go.Figure(go.Bar(
+                    x=_sdf['모멘텀'], y=_sdf['ETF'] + ' ' + _sdf['섹터'],
+                    orientation='h',
+                    marker_color=['#26a69a' if v >= 0 else '#ef5350' for v in _sdf['모멘텀']],
+                    text=[f"{v:+.1f}" for v in _sdf['모멘텀']],
+                    textposition='outside'))
+                _fig_sr2.update_layout(
+                    height=380, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    xaxis_title="모멘텀 점수 (%)", yaxis=dict(autorange='reversed'),
+                    margin=dict(l=0, r=60, t=10, b=0), font=dict(color=TV_TEXT))
+                st.plotly_chart(_fig_sr2, use_container_width=True)
+                st.caption("모멘텀 = 1M×50% + 3M×30% + 6M×20% 가중 평균 · 1시간 캐시")
+
     # ── Tab: 실전 대시보드 ──────────────────────────────────────
     with tab_dash:
         import os as _os
@@ -4662,6 +4974,108 @@ def main():
             _c1.html(_html, height=4600, scrolling=True)
         except FileNotFoundError:
             st.error("dashboard.html 파일을 찾을 수 없습니다.")
+
+    # ── Tab: 매매 일지 ─────────────────────────────────────────
+    with tab_journal:
+        st.caption("매매 기록 추적 · 퀀트 시그널 vs 실제 결과 비교 · 세션 내 유지 + CSV 다운로드")
+
+        # 초기화
+        if 'trades' not in st.session_state:
+            st.session_state['trades'] = []
+
+        # CSV 업로드로 복원
+        with st.expander("📂 기존 일지 불러오기 (CSV 업로드)", expanded=False):
+            _up = st.file_uploader("이전 세션 CSV 업로드", type='csv', key='journal_upload')
+            if _up:
+                try:
+                    _udf = pd.read_csv(_up)
+                    st.session_state['trades'] = _udf.to_dict('records')
+                    st.success(f"{len(st.session_state['trades'])}건 복원 완료")
+                except Exception as _ue:
+                    st.error(f"업로드 오류: {_ue}")
+
+        # 새 매매 입력 폼
+        with st.expander("➕ 새 매매 기록 추가", expanded=True):
+            _j1, _j2, _j3, _j4 = st.columns(4)
+            _j_tkr   = _j1.text_input("종목 티커", key="j_tkr").upper().strip()
+            _j_act   = _j2.selectbox("구분", ["매수", "매도"], key="j_act")
+            _j_date  = _j3.date_input("날짜", key="j_date")
+            _j_price = _j4.number_input("가격 ($)", min_value=0.01, value=100.0, step=0.01, key="j_price")
+            _j5, _j6, _j7, _j8 = st.columns(4)
+            _j_shares = _j5.number_input("수량 (주)", min_value=1, value=10, key="j_shares")
+            _j_sig    = _j6.selectbox("시그널 출처", ["퀀트 시스템", "패턴 분석", "수동 판단", "대시보드"], key="j_sig")
+            _j_exit_p = _j7.number_input("청산가 (0=미청산)", min_value=0.0, value=0.0, step=0.01, key="j_exit_p")
+            _j_note   = _j8.text_input("메모", key="j_note")
+            if st.button("✅ 기록 추가", key="j_add"):
+                if _j_tkr:
+                    _pnl = (_j_exit_p - _j_price) * _j_shares if (_j_act == "매수" and _j_exit_p > 0) else \
+                           (_j_price - _j_exit_p) * _j_shares if (_j_act == "매도" and _j_exit_p > 0) else None
+                    _pnl_pct = (_j_exit_p / _j_price - 1) * 100 if (_j_act == "매수" and _j_exit_p > 0) else \
+                               (_j_price / _j_exit_p - 1) * 100 if (_j_act == "매도" and _j_exit_p > 0) else None
+                    st.session_state['trades'].append({
+                        '날짜': str(_j_date), '종목': _j_tkr, '구분': _j_act,
+                        '진입가': _j_price, '수량': _j_shares,
+                        '투자금': round(_j_price * _j_shares, 2),
+                        '청산가': _j_exit_p if _j_exit_p > 0 else None,
+                        '손익($)': round(_pnl, 2) if _pnl is not None else None,
+                        '손익(%)': round(_pnl_pct, 2) if _pnl_pct is not None else None,
+                        '시그널': _j_sig, '메모': _j_note,
+                    })
+                    st.success(f"{_j_tkr} {_j_act} 기록 추가 완료")
+                else:
+                    st.warning("종목 티커를 입력하세요.")
+
+        # 기록 테이블 + 성과 요약
+        if st.session_state['trades']:
+            _tdf = pd.DataFrame(st.session_state['trades'])
+
+            # 성과 요약
+            _closed = _tdf[_tdf['손익(%)'].notna()]
+            if not _closed.empty:
+                _wins   = _closed[_closed['손익(%)'] > 0]
+                _losses = _closed[_closed['손익(%)'] <= 0]
+                _wr     = len(_wins) / len(_closed) * 100
+                _avg_w  = float(_wins['손익(%)'].mean()) if not _wins.empty else 0
+                _avg_l  = abs(float(_losses['손익(%)'].mean())) if not _losses.empty else 0
+                _total_pnl = float(_closed['손익($)'].sum())
+                _kf_calc = kelly_fraction(_wr/100, _avg_w, _avg_l) if _avg_l > 0 else 0
+
+                _jm1, _jm2, _jm3, _jm4, _jm5 = st.columns(5)
+                _jm1.metric("승률",      f"{_wr:.1f}%",    f"{len(_closed)}건 청산")
+                _jm2.metric("평균 수익", f"+{_avg_w:.1f}%", f"{len(_wins)}승")
+                _jm3.metric("평균 손실", f"-{_avg_l:.1f}%", f"{len(_losses)}패")
+                _jm4.metric("총 손익",   f"${_total_pnl:+,.2f}")
+                _jm5.metric("권장 Kelly", f"{_kf_calc*100:.1f}%", "half-Kelly")
+
+            # 전체 기록 표
+            st.markdown("#### 📋 전체 매매 기록")
+            _edit_df = st.data_editor(_tdf, use_container_width=True, num_rows="dynamic",
+                                      key="journal_editor")
+            if st.button("💾 변경사항 저장", key="j_save"):
+                st.session_state['trades'] = _edit_df.to_dict('records')
+                st.success("저장 완료")
+
+            # CSV 다운로드
+            _csv_data = _tdf.to_csv(index=False).encode('utf-8-sig')
+            st.download_button("⬇️ CSV 다운로드 (다음 세션 복원용)", _csv_data,
+                               file_name=f"trades_{datetime.now().strftime('%Y%m%d')}.csv",
+                               mime='text/csv', key='j_download')
+
+            # 종목별 손익 차트
+            if not _closed.empty:
+                _fig_j = go.Figure(go.Bar(
+                    x=_closed['종목'], y=_closed['손익(%)'],
+                    marker_color=['#26a69a' if v > 0 else '#ef5350' for v in _closed['손익(%)']],
+                    text=[f"{v:+.1f}%" for v in _closed['손익(%)']],
+                    textposition='outside'))
+                _fig_j.update_layout(
+                    height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    yaxis_title="손익 (%)", font=dict(color=TV_TEXT),
+                    margin=dict(l=0, r=20, t=10, b=0))
+                st.plotly_chart(_fig_j, use_container_width=True)
+        else:
+            st.info("아직 매매 기록이 없습니다. 위 폼으로 첫 거래를 기록하세요.")
+            st.caption("💡 세션이 종료되면 기록이 사라집니다. CSV 다운로드로 백업하세요.")
 
 
 if __name__ == "__main__":
