@@ -45,6 +45,21 @@ try:
 except Exception:
     _ML_AVAILABLE = False
 
+try:
+    from modules.risk_management import run_backtest_sized
+    _RISK_MGMT_ENABLED = True
+except Exception:
+    _RISK_MGMT_ENABLED = False
+
+
+def _pit_snapshot(ticker, info):
+    """yf.Ticker(...).info 호출 직후 PIT 스냅샷 저장. 실패해도 앱은 계속 진행."""
+    if _PIT_AVAILABLE and info:
+        try:
+            _pit_store.snapshot(ticker, info)
+        except Exception:
+            pass
+
 st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide")
 
 st.markdown("""<style>
@@ -796,9 +811,7 @@ def calc_piotroski_fscore(ticker):
 def fundamental_score(ticker, df=None):
     try:
         info = yf.Ticker(ticker).info
-        if _PIT_AVAILABLE:
-            try: _pit_store.snapshot(ticker, info)
-            except Exception: pass
+        _pit_snapshot(ticker, info)
         det  = {}
 
         # ── 밸류에이션 (20%): PER·PBR·PEG·EV/EBITDA ──
@@ -2170,6 +2183,7 @@ def calc_dcf(ticker, treasury_yield=4.5):
     """그레이엄 변형 공식 기반 내재가치 산출 (기본/보수적 2가지)"""
     try:
         info = yf.Ticker(ticker).info
+        _pit_snapshot(ticker, info)
         eps  = info.get('trailingEps') or info.get('forwardEps')
         if not eps or eps <= 0: return None, {}
         g_raw = info.get('earningsGrowth') or info.get('revenueGrowth') or 0.07
@@ -2608,9 +2622,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             info = {}
             try:
                 info = yf.Ticker(tk).info or {}
-                if _PIT_AVAILABLE and info:
-                    try: _pit_store.snapshot(tk, info)
-                    except Exception: pass
+                _pit_snapshot(tk, info)
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
@@ -2973,9 +2985,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
                 all_prices[tk] = df['Close']
             info = yf.Ticker(tk).info
             if info:
-                if _PIT_AVAILABLE:
-                    try: _pit_store.snapshot(tk, info)
-                    except Exception: pass
+                _pit_snapshot(tk, info)
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
@@ -3437,6 +3447,7 @@ def main():
 
                     try:
                         _info = yf.Ticker(ticker).info
+                        _pit_snapshot(ticker, _info)
                         _name = _info.get('longName') or _info.get('shortName') or ticker
                     except: _info, _name = {}, ticker
 
@@ -4769,6 +4780,7 @@ def main():
             period_days = {"1년":365, "2년":730, "3년":1095, "5년":1825}
 
             if st.button("📉 백테스팅 시작", type="primary"):
+                st.session_state['bt_run_count'] = st.session_state.get('bt_run_count', 0) + 1
                 with st.spinner("백테스팅 실행 중..."):
                     end_dt2   = datetime.now()
                     start_dt2 = end_dt2 - timedelta(days=period_days[bt_period]+60)
@@ -4996,6 +5008,39 @@ def main():
                         st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
                     st.caption(f"분할 기준일: {wf_split_date}")
 
+                # ── 🛡️ 리스크 관리 사이징 비교 ──
+                if _RISK_MGMT_ENABLED:
+                    with st.expander("🛡️ 리스크 관리 사이징 적용 비교 (변동성 타겟팅 + 서킷브레이커)", expanded=False):
+                        st.caption(
+                            "기존 백테스트는 신호가 뜨면 전량 매수/매도합니다. "
+                            "여기서는 변동성 타겟팅·신호 강도 비례 사이징·드로다운 서킷브레이커를 적용해 비교합니다."
+                        )
+                        if st.button("🛡️ 사이징 적용해서 비교 실행", key="btn_risk_sized"):
+                            with st.spinner("사이징 백테스트 실행 중..."):
+                                try:
+                                    _sized_m, _sized_eq, _sized_tr = run_backtest_sized(
+                                        bt_df, bt_signals_full,
+                                        buy_th=_bt['buy_th'], sell_th=_bt['sell_th'],
+                                        initial_capital=_bt['bt_capital'],
+                                        commission=_bt['bt_commission'], slippage=_bt['bt_slippage'],
+                                        use_vol_target=True, target_vol=0.20,
+                                        use_signal_sizing=True,
+                                        use_circuit_breaker=True, dd_threshold=-15)
+                                    rc1, rc2 = st.columns(2)
+                                    with rc1:
+                                        st.markdown("**기존 (전량 매매)**")
+                                        st.write({k: metrics[k] for k in ['전략 수익률', '최대낙폭(MDD)', 'Sharpe Ratio']})
+                                    with rc2:
+                                        st.markdown("**사이징 적용**")
+                                        st.write({
+                                            '전략 수익률': f"{_sized_m['total_return']:+.1f}%",
+                                            '최대낙폭(MDD)': f"{_sized_m['mdd']:.1f}%",
+                                            'Sharpe': f"{_sized_m['sharpe']:.2f}",
+                                            '거래 수': _sized_m['n_trades'],
+                                        })
+                                except Exception as _e:
+                                    st.error(f"사이징 백테스트 오류: {_e}")
+
                 # ── 📐 통계적 유의성 검증 (DSR · 블록부트스트랩 · 순열검정) ──
                 st.divider()
                 with st.expander("🔬 통계적 유의성 검증 (과최적화 진단)", expanded=False):
@@ -5005,7 +5050,9 @@ def main():
                         st.caption("DSR(Deflated Sharpe Ratio) · 블록 부트스트랩 CI · 순열검정 — Bailey & Lopez de Prado (2014)")
                         _sv_c1, _sv_c2 = st.columns(2)
                         _sv_trials = _sv_c1.number_input(
-                            "파라미터 튜닝 시도 횟수", min_value=1, value=10, step=1, key="sv_trials",
+                            "파라미터 튜닝 시도 횟수", min_value=1,
+                            value=st.session_state.get('bt_run_count', 1),
+                            step=1, key="sv_trials",
                             help="매수/매도 임계값 조합을 몇 번 시도해봤는지. 많을수록 우연히 좋아 보일 확률↑")
                         _sv_boot_n = _sv_c2.number_input(
                             "부트스트랩 반복수", min_value=100, max_value=5000, value=1000, step=100, key="sv_boot")
