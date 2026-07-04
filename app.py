@@ -1378,7 +1378,7 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
                 results.append({'ticker': tk, 'weight': wt, 'error': '데이터 부족'})
                 continue
             pf_f_score = None
-            if w_fund > 0:
+            if w_fund > 0 or w_macro > 0:
                 try:
                     pf_f_score, _ = fundamental_score(tk, raw)
                 except Exception:
@@ -2186,7 +2186,9 @@ def calc_dcf(ticker, treasury_yield=4.5):
         _pit_snapshot(ticker, info)
         eps  = info.get('trailingEps') or info.get('forwardEps')
         if not eps or eps <= 0: return None, {}
-        g_raw = info.get('earningsGrowth') or info.get('revenueGrowth') or 0.07
+        g_raw = info.get('earningsGrowth')
+        if g_raw is None: g_raw = info.get('revenueGrowth')
+        if g_raw is None: g_raw = 0.07
         g = float(g_raw) * 100 if abs(float(g_raw)) <= 1 else float(g_raw)
         g = max(min(g, 30.0), -5.0)
         y = max(treasury_yield, 1.0)
@@ -2591,7 +2593,7 @@ def _zscore_to_score(series):
     return (z * 15 + 50).clip(20, 80).fillna(50.0)
 
 def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
-                       extra_factors=False, min_avg_volume=0):
+                       extra_factors=False, min_avg_volume=0, factor_weights=None):
     """멀티팩터 랭킹: 4팩터 + 선택적 3추가팩터(애널·공매도·EPS서프라이즈)."""
     import time
     end = datetime.now(); start = end - timedelta(days=520)
@@ -2665,10 +2667,12 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             extra_cols.append(fname)
             extra_w.append(w)
     base_w = 1 - sum(extra_w)
-    rdf['composite'] = (rdf['momentum'] * 0.30 * base_w / 1.0 +
-                        rdf['value']    * 0.25 * base_w / 1.0 +
-                        rdf['quality']  * 0.30 * base_w / 1.0 +
-                        rdf['low_vol']  * 0.15 * base_w / 1.0)
+    _fw = factor_weights or {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+    _fw_sum = sum(_fw.values()) or 1.0
+    rdf['composite'] = (rdf['momentum'] * _fw.get('momentum', 0.30) / _fw_sum * base_w +
+                        rdf['value']    * _fw.get('value',    0.25) / _fw_sum * base_w +
+                        rdf['quality']  * _fw.get('quality',  0.30) / _fw_sum * base_w +
+                        rdf['low_vol']  * _fw.get('low_vol',  0.15) / _fw_sum * base_w)
     for fname, w in zip(extra_cols, extra_w):
         rdf['composite'] += rdf[fname] * w
     rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
@@ -3091,9 +3095,9 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
     spy_df = download_stock('SPY', start=start, end=end)
     spy_ret = 0
     if not spy_df.empty:
-        spy_start = spy_df['Close'].loc[spy_df.index >= eq_df['date'].iloc[0]].iloc[0]
-        spy_end = float(spy_df['Close'].iloc[-1])
-        spy_ret = (spy_end/float(spy_start)-1)*100
+        _spy_slice = spy_df['Close'].loc[spy_df.index >= eq_df['date'].iloc[0]]
+        if not _spy_slice.empty:
+            spy_ret = (float(spy_df['Close'].iloc[-1]) / float(_spy_slice.iloc[0]) - 1) * 100
 
     metrics = {
         'total_return': round(total_ret, 1), 'cagr': round(cagr, 1),
@@ -3618,8 +3622,9 @@ def main():
                         al_r_col, al_btn_col = st.columns([4, 1])
                         al_r_col.caption(f"Alpaca IEX 피드 — 무료 플랜 15분 지연 / 유료 플랜 실시간")
                         if al_btn_col.button("🔄 새로고침", key="alpaca_refresh"):
-                            if 'alpaca_cache' in st.session_state:
-                                del st.session_state['alpaca_cache']
+                            _al_cache_key = f"alpaca_{ticker}"
+                            if _al_cache_key in st.session_state:
+                                del st.session_state[_al_cache_key]
 
                         cache_key = f"alpaca_{ticker}"
                         if cache_key not in st.session_state:
@@ -4308,7 +4313,8 @@ def main():
                 else:
                     fdf = calc_factor_scores(qt_tickers, pb, pt,
                                              extra_factors=qt_extra_factors,
-                                             min_avg_volume=int(qt_min_vol))
+                                             min_avg_volume=int(qt_min_vol),
+                                             factor_weights=qt_fw)
                 # Apply liquidity filter to sectoral path too
                 if qt_sector_neutral and qt_min_vol > 0 and not fdf.empty:
                     _end = datetime.now(); _start = _end - timedelta(days=30)
@@ -4442,7 +4448,7 @@ def main():
                                           value=10000, step=1000, key="mc_cap")
                 _mc_days = st.slider("시뮬레이션 기간 (거래일)", 63, 504, 252, 63,
                                      key="mc_days", format="%d일")
-                if st.button("🎲 몬테카를로 실행", key="mc_run"):
+                if st.button("🎲 몬테카를로 실행", key="mc_run_portfolio"):
                     _mc_tickers = list(w.keys())
                     try:
                         _mc_end = datetime.now(); _mc_start = _mc_end - timedelta(days=520)
