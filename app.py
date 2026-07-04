@@ -11,6 +11,40 @@ import json
 import warnings
 warnings.filterwarnings('ignore')
 
+# ── 퀀트 모듈 ──────────────────────────────────────────────────
+try:
+    from modules.pit_data_logger import PITStore as _PITStore
+    _pit_store = _PITStore("pit_fundamentals.db")
+    _PIT_AVAILABLE = True
+except Exception:
+    _PIT_AVAILABLE = False
+
+try:
+    from modules.stat_validation import (
+        deflated_sharpe_ratio as _dsr,
+        block_bootstrap_sharpe_ci as _bb_ci,
+        permutation_test_trades as _perm_test,
+    )
+    _STAT_AVAILABLE = True
+except Exception:
+    _STAT_AVAILABLE = False
+
+try:
+    from modules.paper_trading import (
+        get_account as _pt_get_account,
+        get_positions as _pt_get_positions,
+        sync_signals_to_orders as _pt_sync,
+    )
+    _PT_AVAILABLE = True
+except Exception:
+    _PT_AVAILABLE = False
+
+try:
+    from modules.ml_signals import train_and_validate_ml_signal as _ml_train
+    _ML_AVAILABLE = True
+except Exception:
+    _ML_AVAILABLE = False
+
 st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide")
 
 st.markdown("""<style>
@@ -762,6 +796,9 @@ def calc_piotroski_fscore(ticker):
 def fundamental_score(ticker, df=None):
     try:
         info = yf.Ticker(ticker).info
+        if _PIT_AVAILABLE:
+            try: _pit_store.snapshot(ticker, info)
+            except Exception: pass
         det  = {}
 
         # ── 밸류에이션 (20%): PER·PBR·PEG·EV/EBITDA ──
@@ -2571,6 +2608,9 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             info = {}
             try:
                 info = yf.Ticker(tk).info or {}
+                if _PIT_AVAILABLE and info:
+                    try: _pit_store.snapshot(tk, info)
+                    except Exception: pass
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
@@ -2933,6 +2973,9 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
                 all_prices[tk] = df['Close']
             info = yf.Ticker(tk).info
             if info:
+                if _PIT_AVAILABLE:
+                    try: _pit_store.snapshot(tk, info)
+                    except Exception: pass
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
@@ -4210,7 +4253,7 @@ def main():
                 qt_tickers = UNIVERSE_PRESETS[qt_preset]
                 st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
-        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션"])
+        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6, qt_sub7 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션", "🧠 ML 신호"])
 
         with qt_sub1:
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
@@ -4524,6 +4567,45 @@ def main():
                     elif _kf < 0.05:
                         st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
                     st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
+
+                # ── Alpaca 페이퍼 트레이딩 ────────────────────
+                with st.expander("📡 Alpaca 페이퍼 트레이딩 (자동주문 시뮬레이션)", expanded=False):
+                    if not _PT_AVAILABLE:
+                        st.error("modules/paper_trading.py 로드 실패")
+                    else:
+                        st.caption("⚠️ Paper Trading 전용 엔드포인트만 사용 — 실계좌 주문 절대 불가")
+                        _pt_c1, _pt_c2 = st.columns(2)
+                        _pt_key    = _pt_c1.text_input("Alpaca API Key ID", type="password", key="pt_key")
+                        _pt_secret = _pt_c2.text_input("Alpaca Secret Key", type="password", key="pt_secret")
+                        _pt_dry    = st.toggle("Dry-run 모드 (실제 주문 없이 미리보기)", value=True, key="pt_dry")
+                        _pt_cap    = st.number_input("종목당 매수 수량 (주)", min_value=1, value=1, step=1, key="pt_qty")
+
+                        if _pt_key and _pt_secret:
+                            _pt_a1, _pt_a2 = st.columns(2)
+                            if _pt_a1.button("🔍 계좌 확인", key="pt_check"):
+                                try:
+                                    _acct = _pt_get_account(_pt_key, _pt_secret)
+                                    st.success(f"계좌: {_acct.get('account_number','?')} · 현금: ${float(_acct.get('cash',0)):,.0f} · 포트폴리오: ${float(_acct.get('portfolio_value',0)):,.0f}")
+                                except Exception as _e:
+                                    st.error(f"연결 실패: {_e}")
+
+                            if _pt_a2.button("📤 시그널 → 주문 전송", key="pt_submit",
+                                             type=("secondary" if _pt_dry else "primary")):
+                                _actions_for_pt = st.session_state.get('qt_signals', {}).get('actions', [])
+                                if not _actions_for_pt:
+                                    st.warning("먼저 시스템 시그널을 생성하세요.")
+                                else:
+                                    _cap_map = {a['ticker']: _pt_cap for a in _actions_for_pt}
+                                    _pt_results = _pt_sync(
+                                        _actions_for_pt, _pt_key, _pt_secret,
+                                        capital_per_trade=_cap_map, dry_run=_pt_dry)
+                                    for _pr in _pt_results:
+                                        _status = "🔵 DRY" if _pt_dry else ("✅" if 'error' not in _pr else "❌")
+                                        st.markdown(f"{_status} **{_pr.get('ticker','?')}** {_pr.get('side','?').upper()} {_pr.get('qty','?')}주 — {_pr.get('reason','')[:60]}")
+                                        if 'error' in _pr:
+                                            st.error(_pr['error'])
+                        else:
+                            st.info("Alpaca Paper Trading API 키를 입력하세요. [alpaca.markets](https://app.alpaca.markets)에서 무료 발급")
 
                 # ── 패턴 필터 ──────────────────────────────────
                 buy_tkrs = [a['ticker'] for a in actions if '매수' in a['action']]
@@ -4914,6 +4996,88 @@ def main():
                         st.error(f"🔴 **강한 과적합** — 학습/검증 CAGR 차이 {wf_overfit:+.1f}%p — 임계값이 과거에 최적화되어 미래에는 적용 불가")
                     st.caption(f"분할 기준일: {wf_split_date}")
 
+                # ── 📐 통계적 유의성 검증 (DSR · 블록부트스트랩 · 순열검정) ──
+                st.divider()
+                with st.expander("🔬 통계적 유의성 검증 (과최적화 진단)", expanded=False):
+                    if not _STAT_AVAILABLE:
+                        st.error("modules/stat_validation.py 로드 실패")
+                    else:
+                        st.caption("DSR(Deflated Sharpe Ratio) · 블록 부트스트랩 CI · 순열검정 — Bailey & Lopez de Prado (2014)")
+                        _sv_c1, _sv_c2 = st.columns(2)
+                        _sv_trials = _sv_c1.number_input(
+                            "파라미터 튜닝 시도 횟수", min_value=1, value=10, step=1, key="sv_trials",
+                            help="매수/매도 임계값 조합을 몇 번 시도해봤는지. 많을수록 우연히 좋아 보일 확률↑")
+                        _sv_boot_n = _sv_c2.number_input(
+                            "부트스트랩 반복수", min_value=100, max_value=5000, value=1000, step=100, key="sv_boot")
+
+                        if st.button("🔬 검증 실행", key="sv_run"):
+                            _sv_bt = st.session_state.get('tab3')
+                            if _sv_bt is None:
+                                st.warning("먼저 백테스팅을 실행해주세요.")
+                            else:
+                                _sv_eq  = _sv_bt['eq_df']
+                                _sv_trd = _sv_bt['trades_df']
+                                _sv_met = _sv_bt['metrics']
+
+                                # Sharpe 추출 (metrics dict 에서)
+                                _sr_str = str(_sv_met.get('Sharpe Ratio', '0')).replace('N/A','0')
+                                try: _obs_sr = float(_sr_str)
+                                except: _obs_sr = 0.0
+
+                                # 일별 수익률 재구성
+                                _sv_ret = _sv_eq['전략'].pct_change().dropna().values
+
+                                sv1, sv2, sv3 = st.columns(3)
+
+                                # ① DSR
+                                try:
+                                    _n_obs = len(_sv_ret)
+                                    _dsr_res = _dsr(_obs_sr, int(_sv_trials), _n_obs)
+                                    _dsr_pct = _dsr_res['dsr_probability'] * 100
+                                    _dsr_sig = _dsr_res['is_significant_95pct']
+                                    sv1.metric(
+                                        "DSR (Deflated Sharpe)",
+                                        f"{_dsr_pct:.1f}%",
+                                        delta=("유의미 ✅" if _dsr_sig else "우연 수준 ⚠️"),
+                                        delta_color=("off" if _dsr_sig else "inverse"))
+                                    st.caption(f"💡 {_dsr_res['interpretation']}")
+                                except Exception as _e:
+                                    sv1.error(f"DSR 계산 오류: {_e}")
+
+                                # ② 블록 부트스트랩 CI
+                                try:
+                                    _bb_res = _bb_ci(_sv_ret, n_boot=int(_sv_boot_n))
+                                    sv2.metric(
+                                        "Sharpe 90% CI",
+                                        f"{_bb_res['point_estimate_sharpe']:.2f}",
+                                        delta=f"[{_bb_res['ci_90pct_low']:.2f}, {_bb_res['ci_90pct_high']:.2f}]",
+                                        delta_color="normal")
+                                    _prob_neg = _bb_res['prob_sharpe_below_0'] * 100
+                                    if _prob_neg > 20:
+                                        sv2.warning(f"Sharpe < 0 확률: {_prob_neg:.0f}%")
+                                    else:
+                                        sv2.success(f"Sharpe < 0 확률: {_prob_neg:.0f}%")
+                                except Exception as _e:
+                                    sv2.error(f"부트스트랩 오류: {_e}")
+
+                                # ③ 순열검정
+                                try:
+                                    if not _sv_trd.empty and '손익(원)' in _sv_trd.columns:
+                                        _pnls = _sv_trd['손익(원)'].dropna().values.astype(float)
+                                        _pnl_pcts = _pnls / float(_sv_bt['bt_capital']) * 100
+                                        _perm_res = _perm_test(_pnl_pcts, n_perm=2000)
+                                        _pv = _perm_res['p_value']
+                                        sv3.metric(
+                                            "순열검정 p-value",
+                                            f"{_pv:.3f}",
+                                            delta=("유의미 (p<0.05) ✅" if _pv < 0.05 else "우연 수준 ⚠️"),
+                                            delta_color=("off" if _pv < 0.05 else "inverse"))
+                                        st.caption(f"💡 {_perm_res['interpretation']}")
+                                    else:
+                                        sv3.info("거래 내역 없음 — 순열검정 생략")
+                                except Exception as _e:
+                                    sv3.error(f"순열검정 오류: {_e}")
+
             # ── 📦 멀티 종목 포트폴리오 백테스트 ──────────
             st.divider()
             st.subheader("📦 멀티 종목 포트폴리오 백테스트")
@@ -5086,6 +5250,127 @@ def main():
                     margin=dict(l=0, r=60, t=10, b=0), font=dict(color=TV_TEXT))
                 st.plotly_chart(_fig_sr2, use_container_width=True)
                 st.caption("모멘텀 = 1M×50% + 3M×30% + 6M×20% 가중 평균 · 1시간 캐시")
+
+        # ── qt_sub7: ML 신호 ───────────────────────────────────────
+        with qt_sub7:
+            st.subheader("🧠 ML 신호 (Purged K-Fold 검증)")
+            st.caption(
+                "9개 기술지표 feature → GradientBoosting 분류 → Purged K-Fold AUC 검증. "
+                "Lopez de Prado 방식: 검증 구간과 label 기간이 겹치는 훈련 샘플 제거(purge) + embargo.")
+
+            if not _ML_AVAILABLE:
+                st.error("modules/ml_signals.py 또는 scikit-learn 로드 실패. requirements.txt 확인.")
+            else:
+                _ml_c1, _ml_c2, _ml_c3 = st.columns(3)
+                _ml_ticker  = _ml_c1.text_input("티커", "AAPL", key="ml_ticker").strip().upper()
+                _ml_horizon = _ml_c2.slider("예측 지평(일)", 5, 60, 20, 5, key="ml_horizon",
+                                             help="N일 후 상승 여부 예측")
+                _ml_splits  = _ml_c3.slider("K-Fold 수", 3, 10, 5, 1, key="ml_splits")
+
+                _ml_period  = st.selectbox("학습 기간", ["3년","5년","10년"], index=1, key="ml_period")
+                _ml_period_days = {"3년": 1095, "5년": 1825, "10년": 3650}
+
+                if st.button("🧠 ML 신호 학습 & 검증", type="primary", key="ml_run"):
+                    with st.spinner(f"{_ml_ticker} 데이터 다운로드 및 모델 학습 중..."):
+                        _ml_end = datetime.now()
+                        _ml_start = _ml_end - timedelta(days=_ml_period_days[_ml_period] + 100)
+                        _ml_df = download_stock(_ml_ticker, start=_ml_start, end=_ml_end)
+
+                    if _ml_df.empty or len(_ml_df) < 200:
+                        st.error(f"데이터 부족: {len(_ml_df)}일 (최소 200일 필요)")
+                    else:
+                        try:
+                            with st.spinner("Purged K-Fold 교차검증 실행 중..."):
+                                _ml_res = _ml_train(_ml_df, horizon=_ml_horizon, n_splits=_ml_splits)
+                            st.session_state['ml_result'] = {'res': _ml_res, 'ticker': _ml_ticker, 'df': _ml_df}
+                        except Exception as _ml_e:
+                            st.error(f"학습 오류: {_ml_e}")
+
+                if 'ml_result' in st.session_state:
+                    _ml_r = st.session_state['ml_result']
+                    _res  = _ml_r['res']
+
+                    # AUC 지표
+                    _auc_color = "off" if _res['mean_auc'] >= 0.55 else "inverse"
+                    _auc_label = ("좋은 edge ✅" if _res['mean_auc'] >= 0.58 else
+                                  ("약한 edge 🔶" if _res['mean_auc'] >= 0.53 else "신호 없음 ❌"))
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("평균 AUC", f"{_res['mean_auc']:.4f}", delta=_auc_label, delta_color=_auc_color)
+                    m2.metric("AUC 표준편차", f"{_res['std_auc']:.4f}",
+                              delta=("안정적 ✅" if _res['std_auc'] < 0.05 else "불안정 ⚠️"),
+                              delta_color=("off" if _res['std_auc'] < 0.05 else "inverse"))
+                    m3.metric("유효 Fold 수", f"{_res['n_folds_used']}개")
+
+                    st.caption(f"💡 {_res['interpretation']}")
+
+                    # Fold별 AUC 바 차트
+                    _fold_aucs = _res['fold_aucs']
+                    _fig_auc = go.Figure()
+                    _fig_auc.add_trace(go.Bar(
+                        x=[f"Fold {i+1}" for i in range(len(_fold_aucs))],
+                        y=_fold_aucs,
+                        marker_color=['#26a69a' if a >= 0.55 else '#ef5350' for a in _fold_aucs],
+                        text=[f"{a:.3f}" for a in _fold_aucs],
+                        textposition='outside'))
+                    _fig_auc.add_hline(y=0.5, line_dash='dash', line_color='#888',
+                                       annotation_text="동전던지기 (0.5)", annotation_position="right")
+                    _fig_auc.add_hline(y=0.55, line_dash='dot', line_color='#26a69a',
+                                       annotation_text="edge 기준 (0.55)", annotation_position="right")
+                    _fig_auc.update_layout(
+                        height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT), title=dict(text="Fold별 Out-of-Fold AUC", font=dict(size=13)),
+                        yaxis=dict(range=[0.35, 1.0], gridcolor=TV_GRID, title="AUC"),
+                        xaxis=dict(gridcolor=TV_GRID),
+                        margin=dict(l=20, r=80, t=50, b=20), showlegend=False)
+                    st.plotly_chart(_fig_auc, use_container_width=True)
+
+                    # 피처 중요도
+                    with st.expander("📊 피처 중요도", expanded=True):
+                        _fi = _res['feature_importance']
+                        _fi_names = list(_fi.keys())
+                        _fi_vals  = list(_fi.values())
+                        _fig_fi = go.Figure(go.Bar(
+                            x=_fi_vals, y=_fi_names, orientation='h',
+                            marker_color='rgba(41,98,255,0.6)',
+                            text=[f"{v:.3f}" for v in _fi_vals],
+                            textposition='outside'))
+                        _fig_fi.update_layout(
+                            height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT),
+                            xaxis=dict(title="중요도", gridcolor=TV_GRID),
+                            yaxis=dict(autorange='reversed'),
+                            margin=dict(l=20, r=80, t=20, b=20), showlegend=False)
+                        st.plotly_chart(_fig_fi, use_container_width=True)
+                        _fi_label = {'ma_align':'이평 정렬', 'rsi':'RSI(14)', 'macd_hist':'MACD 히스토그램',
+                                     'bb_pos':'볼린저 위치', 'vol_ratio':'거래량 비율', 'mom_20':'모멘텀(20일)',
+                                     'mom_5':'모멘텀(5일)', 'hl_pos':'고저 위치', 'atr_ratio':'ATR 변동성'}
+                        st.caption(" · ".join([f"{_fi_label.get(k,k)}: {v:.3f}" for k, v in _fi.items()]))
+
+                    # OOF 예측 확률 시계열
+                    with st.expander("📈 Out-of-Fold 예측 확률 추이"):
+                        _oof = _res['oof_predictions'].dropna()
+                        if not _oof.empty:
+                            _fig_oof = go.Figure()
+                            _fig_oof.add_trace(go.Scatter(
+                                x=_oof.index, y=_oof.values, mode='lines',
+                                line=dict(color='#2962ff', width=1.5),
+                                name='상승 확률'))
+                            _fig_oof.add_hline(y=0.5, line_dash='dash', line_color='#888')
+                            _fig_oof.update_layout(
+                                height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                font=dict(color=TV_TEXT),
+                                yaxis=dict(range=[0,1], gridcolor=TV_GRID, title="상승 확률"),
+                                xaxis=dict(gridcolor=TV_GRID),
+                                margin=dict(l=20, r=20, t=20, b=20), showlegend=False)
+                            st.plotly_chart(_fig_oof, use_container_width=True)
+                            # 최근 신호
+                            _last_prob = float(_oof.iloc[-1])
+                            if _last_prob >= 0.60:
+                                st.success(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — ML 매수 신호")
+                            elif _last_prob <= 0.40:
+                                st.error(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — ML 매도 신호")
+                            else:
+                                st.info(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — 중립 (0.40~0.60)")
 
     # ── Tab: 실전 대시보드 ──────────────────────────────────────
     with tab_dash:
