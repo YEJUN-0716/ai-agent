@@ -839,7 +839,7 @@ def fundamental_score(ticker, df=None):
 
         # ── 성장성 (13%) ──────────────────────────────
         rg = info.get('revenueGrowth'); eg = info.get('earningsGrowth')
-        det['성장성'] = _score_growth(rg)*0.5 + _score_growth(eg)*0.5 if eg else _score_growth(rg)
+        det['성장성'] = _score_growth(rg)*0.5 + _score_growth(eg)*0.5 if eg is not None else _score_growth(rg)
         det['매출성장'] = rg; det['EPS성장'] = eg
 
         # ── FCF 품질 (12%): FCF수익률 ─────────────────
@@ -2250,11 +2250,11 @@ def calc_monte_carlo(df, days=60, n_sims=500, initial=None):
     mu = float(log_ret.mean())
     sigma = float(log_ret.std())
 
-    sims = np.zeros((n_sims, days))
+    sims = np.zeros((n_sims, days + 1))
     sims[:, 0] = initial
 
     rng = np.random.default_rng(42)
-    for t in range(1, days):
+    for t in range(1, days + 1):
         z = rng.standard_normal(n_sims)
         sims[:, t] = sims[:, t-1] * np.exp((mu - 0.5 * sigma**2) + sigma * z)
 
@@ -3117,7 +3117,8 @@ def _gs_configured():
     """Streamlit secrets에 GS 설정이 있는지 확인."""
     try:
         return ("gcp_service_account" in st.secrets and
-                "google_sheets" in st.secrets)
+                "google_sheets" in st.secrets and
+                "spreadsheet_id" in st.secrets["google_sheets"])
     except Exception:
         return False
 
@@ -3875,7 +3876,7 @@ def main():
                     st.caption(f"FCF수익률: {f'{fcf_y:.1f}%' if fcf_y is not None else 'N/A'}  |  이자보상배율: {fmt(f_det.get('이자보상배율'))}")
                     st.caption(f"매출성장: {fmt(f_det.get('매출성장'),pct=True)}  |  EPS성장: {fmt(f_det.get('EPS성장'),pct=True)}")
                     mdd_v = f_det.get('MDD값')
-                    st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v else 'N/A'}")
+                    st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v is not None else 'N/A'}")
                     fs_v = f_det.get('F-Score값')
                     st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
                     for sk, sv in f_det.get('F-Score시그널', {}).items():
@@ -5488,7 +5489,7 @@ def main():
         # ── Google Sheets 상태 표시줄 ──────────────────────────
         if _gs_ok:
             _gsc1, _gsc2, _gsc3 = st.columns([2, 1, 1])
-            sid = st.secrets["google_sheets"]["spreadsheet_id"]
+            sid = st.secrets["google_sheets"].get("spreadsheet_id", "")
             _gsc1.success(f"Google Sheets 연결됨  |  스프레드시트 ID: `{sid[:20]}…`")
             if _gsc2.button("☁️ GS에 저장", key="gs_push"):
                 with st.spinner("저장 중..."):

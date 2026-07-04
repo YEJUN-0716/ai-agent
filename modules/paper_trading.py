@@ -77,6 +77,9 @@ def sync_signals_to_orders(actions: list, key: str, secret: str,
     for act in actions:
         tk = act['ticker']
         action = act['action']
+        if '조건부' in action:
+            results.append({'ticker': tk, 'skipped': True, 'reason': '조건부 신호 — 즉시 체결 불가'})
+            continue
         if '매수' not in action and '매도' not in action:
             continue
 
