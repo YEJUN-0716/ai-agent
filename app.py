@@ -5158,11 +5158,12 @@ def main():
                     else:
                         pbt_weights = [w / wt_sum for w in pbt_weights]  # 정규화
 
-                pbt_c1, pbt_c2, pbt_c3 = st.columns(3)
+                pbt_c1, pbt_c2, pbt_c3, pbt_c4 = st.columns(4)
                 pbt_period  = pbt_c1.selectbox("기간", ["1년","2년","3년","5년"], index=1, key="pbt_period")
                 pbt_capital = pbt_c2.number_input("초기자금 (원)", value=10_000_000,
                                                    step=1_000_000, min_value=100_000, key="pbt_cap")
                 pbt_buy_th  = pbt_c3.slider("매수 임계값", 50, 80, 58, 1, key="pbt_buy")
+                pbt_sell_th = pbt_c4.slider("매도 임계값", 30, 60, 42, 1, key="pbt_sell")
 
             pbt_period_days = {"1년": 365, "2년": 730, "3년": 1095, "5년": 1825}
 
@@ -5174,7 +5175,7 @@ def main():
                         pbt_results, pbt_eq, pbt_spy = run_portfolio_backtest(
                             pbt_tickers, pbt_weights,
                             pbt_period_days[pbt_period],
-                            pbt_buy_th, sell_th,
+                            pbt_buy_th, pbt_sell_th,
                             pbt_capital, bt_commission, bt_slippage,
                             w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
 
