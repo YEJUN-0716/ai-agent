@@ -1240,7 +1240,7 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     roll_max  = eq_s.expanding().max()
     dd_series = (eq_s - roll_max) / roll_max * 100
     mdd       = float(dd_series.min())
-    daily_ret = eq_s.pct_change().dropna()
+    daily_ret = eq_s.pct_change().dropna().iloc[19:]  # 워밍업 0수익률 19개 제외
     sharpe    = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0
     calmar    = abs(cagr / mdd) if mdd < 0 else 0.0
 
@@ -4979,9 +4979,10 @@ def main():
 
                 if st.button("📐 워크-포워드 검증 실행", key="wf_btn"):
                     wf_results, wf_overfit, wf_split_date = run_walkforward(
-                        bt_df, buy_th, sell_th, bt_capital, bt_commission, bt_slippage,
+                        bt_df, _bt['buy_th'], _bt['sell_th'], _bt['bt_capital'],
+                        _bt['bt_commission'], _bt['bt_slippage'],
                         f_score=bt_f_score, m_score=bt_m_score,
-                        w_tech=w_tech, w_fund=w_fund, w_macro=w_macro)
+                        w_tech=_bt['w_tech'], w_fund=_bt['w_fund'], w_macro=_bt['w_macro'])
 
                     wf_col1, wf_col2 = st.columns(2)
                     wf_key_order = ['기간', '전략 수익률', 'CAGR', '최대낙폭(MDD)',
@@ -5066,13 +5067,12 @@ def main():
                                 _sv_trd = _sv_bt['trades_df']
                                 _sv_met = _sv_bt['metrics']
 
-                                # Sharpe 추출 (metrics dict 에서)
-                                _sr_str = str(_sv_met.get('Sharpe Ratio', '0')).replace('N/A','0')
-                                try: _obs_sr = float(_sr_str)
-                                except: _obs_sr = 0.0
+                                # 일별 수익률 재구성 (워밍업 20일 제외 — 초기 0.0이 std를 왜곡)
+                                _sv_ret = _sv_eq['전략'].pct_change().dropna().values[19:]
 
-                                # 일별 수익률 재구성
-                                _sv_ret = _sv_eq['전략'].pct_change().dropna().values
+                                # DSR은 per-period(일별) Sharpe 단위 요구 — 연율화 미적용
+                                _obs_sr = (float(np.mean(_sv_ret) / np.std(_sv_ret))
+                                           if len(_sv_ret) > 1 and np.std(_sv_ret) > 0 else 0.0)
 
                                 sv1, sv2, sv3 = st.columns(3)
 
@@ -5109,10 +5109,16 @@ def main():
 
                                 # ③ 순열검정
                                 try:
-                                    if not _sv_trd.empty and '손익(원)' in _sv_trd.columns:
-                                        _pnls = _sv_trd['손익(원)'].dropna().values.astype(float)
-                                        _pnl_pcts = _pnls / float(_sv_bt['bt_capital']) * 100
-                                        _perm_res = _perm_test(_pnl_pcts, n_perm=2000)
+                                    _sells_only = (_sv_trd[_sv_trd['구분'].str.contains('매도', na=False)]
+                                                   if not _sv_trd.empty else _sv_trd)
+                                    _pnls = []
+                                    for _v in (_sells_only['수익률'] if '수익률' in _sells_only.columns else []):
+                                        try:
+                                            _pnls.append(float(str(_v).replace('%', '').replace('+', '')))
+                                        except (ValueError, AttributeError):
+                                            pass
+                                    if len(_pnls) >= 5:
+                                        _perm_res = _perm_test(_pnls, n_perm=2000)
                                         _pv = _perm_res['p_value']
                                         sv3.metric(
                                             "순열검정 p-value",
@@ -5121,7 +5127,7 @@ def main():
                                             delta_color=("off" if _pv < 0.05 else "inverse"))
                                         st.caption(f"💡 {_perm_res['interpretation']}")
                                     else:
-                                        sv3.info("거래 내역 없음 — 순열검정 생략")
+                                        sv3.info(f"매도 거래 {len(_pnls)}건 — 순열검정은 5건 이상 필요")
                                 except Exception as _e:
                                     sv3.error(f"순열검정 오류: {_e}")
 
