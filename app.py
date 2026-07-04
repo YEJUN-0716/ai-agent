@@ -1107,6 +1107,21 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     """수수료·슬리피지 반영 백테스트.
     f_score/m_score 전달 시 펀더멘털/매크로로 임계값을 보정.
     좋은 펀더멘털 → 매수 조건 완화, 나쁜 펀더멘털 → 매수 조건 강화.
+
+    [수정: look-ahead bias 제거]
+    - 신호(sig)는 D일 종가까지의 데이터로 D일에 "확정"된다.
+    - 과거 코드는 그 신호가 확정되는 바로 그 D일 종가로 체결했는데,
+      이는 "장이 마감돼야 아는 정보로 마감 시점에 거래한다"는
+      실현 불가능한 가정이라 수익률이 실제보다 부풀려진다.
+    - 수정 후: D일에 신호가 뜨면 다음날(D+1) 시가(Open)로 체결한다.
+      (Open 컬럼이 없으면 D+1 종가로 폴백)
+
+    [주의: f_score/m_score 관련 look-ahead 위험]
+    - f_score/m_score가 "현재 시점 스냅샷"(예: yfinance의 최신 재무데이터)이면
+      과거 전체 구간에 동일한 미래 정보가 고정 적용되어 lookahead bias가 생긴다.
+    - 라이브 매매(오늘 신호 계산)에 쓰는 건 문제없지만,
+      과거 성과를 "검증"하는 목적이라면 w_fund=0, w_macro=0으로 두고
+      순수 기술적 백테스트 결과만 신뢰할 것.
     """
     sigs = bt_signals_full(df)
     if f_score is not None and m_score is not None and w_tech < 100:
@@ -1114,6 +1129,7 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
         buy_th  = buy_th - fm_offset
         sell_th = sell_th - fm_offset
     prices = df['Close'].values
+    opens  = df['Open'].values if 'Open' in df.columns else None
     dates  = df.index
     n      = len(df)
 
@@ -1123,22 +1139,25 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     entry_val = 0.0   # 매수 시점 투입 자본 (수수료·슬리피지 후)
     equity    = np.full(n, float(initial_capital))
     trades    = []
+    pending   = None   # 'buy' / 'sell' — 전날 신호로 오늘 체결 대기중인 주문
 
     for i in range(20, n):
-        px  = float(prices[i])
-        sig = float(sigs.iloc[i])
-        if not in_pos and sig > buy_th:
-            buy_px   = px * (1 + slippage)            # 슬리피지 적용 체결가
-            fee      = capital * commission             # 매수 수수료
-            shares   = (capital - fee) / buy_px
-            entry_val = capital                        # 수수료 차감 전 투입액 기준
-            capital  = 0.0
-            in_pos   = True
+        px = float(prices[i])   # 시가평가(마킹)에는 계속 종가 사용
+
+        # ── 1) 전날 확정된 신호를 "오늘" 체결 (다음날 시가 기준) ──
+        exec_px = float(opens[i]) if opens is not None and not np.isnan(opens[i]) else px
+        if pending == 'buy' and not in_pos:
+            buy_px    = exec_px * (1 + slippage)
+            fee       = capital * commission
+            shares    = (capital - fee) / buy_px
+            entry_val = capital
+            capital   = 0.0
+            in_pos    = True
             trades.append({'날짜': dates[i], '구분': '🟢 매수',
-                           '가격': round(px, 2), '체결가(수수료+슬리피지)': round(buy_px*(1+commission/(1+slippage+1e-9)), 2),
-                           '신호': round(sig, 1), '수익률': ''})
-        elif in_pos and sig < sell_th:
-            sell_px  = px * (1 - slippage)            # 슬리피지 적용 체결가
+                           '가격': round(exec_px, 2), '체결가(수수료+슬리피지)': round(buy_px*(1+commission/(1+slippage+1e-9)), 2),
+                           '신호': round(float(sigs.iloc[i-1]), 1), '수익률': ''})
+        elif pending == 'sell' and in_pos:
+            sell_px  = exec_px * (1 - slippage)
             gross    = shares * sell_px
             fee      = gross * commission
             net      = gross - fee
@@ -1147,8 +1166,17 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
             shares   = 0.0
             in_pos   = False
             trades.append({'날짜': dates[i], '구분': '🔴 매도',
-                           '가격': round(px, 2), '체결가(수수료+슬리피지)': round(sell_px*(1-commission), 2),
-                           '신호': round(sig, 1), '수익률': f"{pnl:+.2f}%"})
+                           '가격': round(exec_px, 2), '체결가(수수료+슬리피지)': round(sell_px*(1-commission), 2),
+                           '신호': round(float(sigs.iloc[i-1]), 1), '수익률': f"{pnl:+.2f}%"})
+        pending = None
+
+        # ── 2) 오늘 종가로 신호 계산 → 체결은 "내일"로 예약 ──
+        sig = float(sigs.iloc[i])
+        if not in_pos and sig > buy_th:
+            pending = 'buy'
+        elif in_pos and sig < sell_th:
+            pending = 'sell'
+
         equity[i] = capital + shares * px
 
     final_v = float(equity[-1])
@@ -2861,15 +2889,43 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
 
 
 def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
-                              factor_weights=None, commission=0.001, slippage=0.0005):
-    """팩터 전략 백테스트: 매월 팩터 Top N 매수, 리밸런싱."""
+                              factor_weights=None, commission=0.001, slippage=0.0005,
+                              pit_safe=True):
+    """팩터 전략 백테스트: 매월 팩터 Top N 매수, 리밸런싱.
+
+    [수정: look-ahead bias 제거]
+    - 기존 코드는 yfinance의 "현재 시점" PER/PBR/ROE 등으로 value/quality
+      점수를 딱 한 번 계산해서, 3년치(등) 과거 전체 리밸런싱에 동일하게 적용했다.
+      이는 "3년 전 시점에 오늘자 재무제표를 미리 알고 있었다"는 것과 같은
+      명백한 미래정보 유출(look-ahead bias)이며 백테스트 성과를 부풀린다.
+    - yfinance 무료 API는 과거 시점(point-in-time) 재무데이터를 제공하지
+      않기 때문에, 근본적인 해결책은 유료 PIT 데이터 소스를 쓰는 것뿐이다.
+    - 임시(안전) 해결책: pit_safe=True(기본값)이면 value/quality처럼
+      시점별 재계산이 불가능한 팩터는 백테스트 랭킹에서 제외하고,
+      momentum/low_vol처럼 "그 시점 가격 데이터만으로" 매 리밸런싱마다
+      다시 계산 가능한 팩터만 사용한다.
+    - pit_safe=False로 두면 기존 방식(value/quality 포함)도 쓸 수 있지만,
+      결과 해석 시 look-ahead bias가 섞여 있다는 점을 감안해야 한다.
+    """
     if factor_weights is None:
         factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+
+    pit_note = None
+    if pit_safe:
+        dropped = [f for f in ('value', 'quality') if factor_weights.get(f, 0) > 0]
+        factor_weights = {k: v for k, v in factor_weights.items() if k in ('momentum', 'low_vol')}
+        w_sum = sum(factor_weights.values()) or 1.0
+        factor_weights = {k: v / w_sum for k, v in factor_weights.items()}
+        if dropped:
+            pit_note = (f"{', '.join(dropped)} 팩터는 과거 시점(point-in-time) 재무데이터가 없어 "
+                        f"백테스트에서 제외했습니다 (look-ahead bias 방지). 현재 momentum/low_vol만 "
+                        f"{factor_weights}로 재정규화하여 사용합니다.")
+
     end = datetime.now()
     start = end - timedelta(days=years*365+60)
 
     all_prices = {}
-    ticker_info = {}
+    ticker_info = {}   # 참고용(현재 시점 스냅샷) — pit_safe=False일 때만 백테스트에 실제 사용됨
     for tk in tickers:
         try:
             df = download_stock(tk, start=start, end=end)
@@ -2992,6 +3048,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
         'avg_turnover': round(avg_turnover, 1), 'total_cost': round(total_cost_pct, 2),
         'spy_return': round(spy_ret, 1), 'alpha': round(total_ret - spy_ret, 1),
         'n_rebalances': len(trade_log),
+        'pit_note': pit_note,   # None이면 제한사항 없음(또는 pit_safe=False)
     }
     return metrics, eq_df, trade_log
 
@@ -4561,6 +4618,9 @@ def main():
             if 'qt_bt' in st.session_state:
                 qbt = st.session_state['qt_bt']
                 bt_m, bt_eq, bt_log = qbt['metrics'], qbt['eq_df'], qbt['log']
+
+                if bt_m.get('pit_note'):
+                    st.warning(f"⚠️ {bt_m['pit_note']}", icon="⚠️")
 
                 mc1, mc2, mc3, mc4 = st.columns(4)
                 alpha_c = '#26a69a' if bt_m['alpha'] >= 0 else '#ef5350'
