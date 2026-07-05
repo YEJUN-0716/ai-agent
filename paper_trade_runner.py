@@ -197,13 +197,18 @@ def _to_alpaca_sym(ticker: str):
 # ── 텔레그램 ────────────────────────────────────────────────────
 def send_tg(msg: str):
     if not TG_TOKEN or not TG_CHAT_ID:
+        print("[TG] TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 없음 — 발송 생략")
         return
     try:
-        requests.post(
+        resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
             timeout=10,
         )
+        if resp.status_code == 200:
+            print("[TG] 발송 성공 ✅")
+        else:
+            print(f"[TG 오류] HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
         print(f"[TG 오류] {e}", file=sys.stderr)
 
