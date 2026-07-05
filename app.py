@@ -76,6 +76,19 @@ except Exception:
     _OPS_SAFETY_AVAILABLE = False
 
 try:
+    from modules.paper_trade_tracker import (
+        get_account_summary as _pt_acct_summary,
+        get_open_positions as _pt_open_pos,
+        get_portfolio_history as _pt_history,
+        get_closed_orders as _pt_orders,
+        compute_live_metrics as _pt_live_metrics,
+        compare_with_benchmark as _pt_compare,
+    )
+    _PT_TRACKER_AVAILABLE = True
+except Exception:
+    _PT_TRACKER_AVAILABLE = False
+
+try:
     from modules.tax_kr import OverseasStockLedger as _TaxLedger, calc_capital_gains_tax as _calc_tax, suggest_year_end_tax_loss_harvesting as _tax_harvest
     _TAX_KR_AVAILABLE = True
 except Exception:
@@ -5788,6 +5801,151 @@ def main():
                             else:
                                 st.info("Alpaca 미설정 — 브로커 데이터 없이 의도 포지션만 표시합니다.")
                                 st.json(_intended)
+
+            # ── 페이퍼 트레이딩 성과 모니터 ──────────────────────────
+            with st.expander("📈 페이퍼 트레이딩 성과 모니터", expanded=True):
+                st.caption("Alpaca Paper Trading 계좌의 실시간 성과를 백테스트 결과와 비교합니다.")
+                if not _PT_TRACKER_AVAILABLE:
+                    st.error("modules/paper_trade_tracker.py 로드 실패.")
+                elif not _PT_AVAILABLE:
+                    st.error("modules/paper_trading.py 로드 실패.")
+                else:
+                    _ptm_key, _ptm_sec = _get_alpaca_keys()
+                    if not _ptm_key or not _ptm_sec:
+                        st.warning("Alpaca API 키가 설정되지 않았습니다. Streamlit secrets 또는 앱 설정에서 입력하세요.")
+                    else:
+                        _ptm_period = st.selectbox("조회 기간", ["1W", "1M", "3M", "6M"], index=1, key="ptm_period")
+                        if st.button("🔄 Alpaca 데이터 새로고침", key="ptm_refresh"):
+                            for _k in [k for k in st.session_state if k.startswith("ptm_cache_")]:
+                                del st.session_state[_k]
+                            st.rerun()
+
+                        # 계좌 요약
+                        try:
+                            if "ptm_cache_acct" not in st.session_state:
+                                st.session_state["ptm_cache_acct"] = _pt_acct_summary(_ptm_key, _ptm_sec)
+                            _ptm_acct = st.session_state["ptm_cache_acct"]
+                            _pmc1, _pmc2, _pmc3, _pmc4 = st.columns(4)
+                            _pmc1.metric("총 자산", f"${_ptm_acct['equity']:,.2f}")
+                            _pmc2.metric("매수여력", f"${_ptm_acct['buying_power']:,.2f}")
+                            _pmc3.metric("오늘 손익", f"${_ptm_acct['day_pl']:+,.2f}",
+                                         delta=f"{_ptm_acct['day_pl_pct']:+.2f}%",
+                                         delta_color="normal")
+                            _pmc4.metric("계좌 상태", _ptm_acct['status'],
+                                         delta="거래차단" if _ptm_acct['trading_blocked'] else "정상",
+                                         delta_color="inverse" if _ptm_acct['trading_blocked'] else "off")
+                        except Exception as _ptm_e:
+                            st.error(f"계좌 조회 오류: {_ptm_e}")
+
+                        # 보유 포지션
+                        try:
+                            if "ptm_cache_pos" not in st.session_state:
+                                st.session_state["ptm_cache_pos"] = _pt_open_pos(_ptm_key, _ptm_sec)
+                            _ptm_pos = st.session_state["ptm_cache_pos"]
+                            if not _ptm_pos.empty:
+                                st.markdown("**현재 보유 포지션**")
+                                st.dataframe(
+                                    _ptm_pos.style.format({
+                                        "수량": "{:.4f}", "평균단가($)": "{:.2f}",
+                                        "현재가($)": "{:.2f}", "미실현손익($)": "{:+,.2f}",
+                                        "수익률(%)": "{:+.2f}%", "평가금액($)": "{:,.2f}",
+                                    }),
+                                    use_container_width=True
+                                )
+                            else:
+                                st.info("현재 보유 중인 포지션 없음")
+                        except Exception as _ptm_e2:
+                            st.error(f"포지션 조회 오류: {_ptm_e2}")
+
+                        # equity 곡선
+                        try:
+                            _ptm_cache_k = f"ptm_cache_hist_{_ptm_period}"
+                            if _ptm_cache_k not in st.session_state:
+                                st.session_state[_ptm_cache_k] = _pt_history(_ptm_key, _ptm_sec, _ptm_period)
+                            _ptm_hist = st.session_state[_ptm_cache_k]
+                            if not _ptm_hist.empty:
+                                _ptm_fig = go.Figure()
+                                _ptm_fig.add_trace(go.Scatter(
+                                    x=_ptm_hist["date"].astype(str), y=_ptm_hist["equity"],
+                                    mode="lines+markers", name="페이퍼 계좌 자산",
+                                    line=dict(color="#26a69a", width=2),
+                                    fill="tozeroy", fillcolor="rgba(38,166,154,0.1)"
+                                ))
+                                _ptm_fig.update_layout(
+                                    height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                    font=dict(color=TV_TEXT),
+                                    title=dict(text="Alpaca 페이퍼 계좌 자산 추이", font=dict(size=13)),
+                                    yaxis=dict(title="자산($)", gridcolor=TV_GRID),
+                                    xaxis=dict(gridcolor=TV_GRID),
+                                    margin=dict(l=20, r=20, t=40, b=20)
+                                )
+                                st.plotly_chart(_ptm_fig, use_container_width=True)
+
+                                # 성과 지표
+                                _ptm_live = _pt_live_metrics(_ptm_hist)
+                                if "error" not in _ptm_live:
+                                    _pml1, _pml2, _pml3, _pml4 = st.columns(4)
+                                    _pml1.metric("누적 수익률", f"{_ptm_live['total_return_pct']:+.2f}%")
+                                    _pml2.metric("MDD", f"{_ptm_live['mdd_pct']:.2f}%")
+                                    _pml3.metric("Sharpe (연율)", f"{_ptm_live['sharpe']:.3f}")
+                                    _pml4.metric("연율 수익률", f"{_ptm_live['annualized_ret_pct']:+.2f}%")
+
+                                    # 백테스트 비교 (세션에 백테스트 결과 있을 때만)
+                                    _bt_ref = st.session_state.get("_bt", {})
+                                    if _bt_ref:
+                                        _bt_tr  = float(str(_bt_ref.get("전략 수익률", "0")).replace("%","").replace("+","") or 0)
+                                        _bt_sh  = float(str(_bt_ref.get("Sharpe Ratio", "0")) or 0)
+                                        _bt_mdd = float(str(_bt_ref.get("최대낙폭(MDD)", "0")).replace("%","") or 0)
+                                        if _bt_tr or _bt_sh:
+                                            _ptm_cmp = _pt_compare(_ptm_hist, _bt_tr, _bt_sh, _bt_mdd)
+                                            if "error" not in _ptm_cmp:
+                                                st.markdown("**📊 실전(페이퍼) vs 백테스트 비교**")
+                                                _cmp_df = pd.DataFrame({
+                                                    "": ["누적수익률(%)", "Sharpe", "MDD(%)"],
+                                                    "페이퍼 실전": [
+                                                        f"{_ptm_cmp['live']['total_return_pct']:+.2f}",
+                                                        f"{_ptm_cmp['live']['sharpe']:.3f}",
+                                                        f"{_ptm_cmp['live']['mdd_pct']:.2f}",
+                                                    ],
+                                                    "백테스트": [
+                                                        f"{_ptm_cmp['backtest']['total_return_pct']:+.2f}",
+                                                        f"{_ptm_cmp['backtest']['sharpe']:.3f}",
+                                                        f"{_ptm_cmp['backtest']['mdd_pct']:.2f}",
+                                                    ],
+                                                    "Gap": [
+                                                        f"{_ptm_cmp['gap']['return_pct']:+.2f}",
+                                                        f"{_ptm_cmp['gap']['sharpe']:+.3f}",
+                                                        f"{_ptm_cmp['gap']['mdd_pct']:+.2f}",
+                                                    ],
+                                                }).set_index("")
+                                                st.dataframe(_cmp_df, use_container_width=True)
+                                                if "⚠️" in _ptm_cmp["verdict"]:
+                                                    st.warning(_ptm_cmp["verdict"])
+                                                else:
+                                                    st.success(_ptm_cmp["verdict"])
+                                        else:
+                                            st.caption("💡 종목 백테스팅(qt_sub5) 탭에서 백테스트를 먼저 실행하면 비교 테이블이 여기 표시됩니다.")
+                        except Exception as _ptm_e3:
+                            st.error(f"포트폴리오 이력 조회 오류: {_ptm_e3}")
+
+                        # 체결 주문 내역
+                        with st.expander("📋 체결 주문 내역", expanded=False):
+                            try:
+                                if "ptm_cache_orders" not in st.session_state:
+                                    st.session_state["ptm_cache_orders"] = _pt_orders(_ptm_key, _ptm_sec, limit=100)
+                                _ptm_ord = st.session_state["ptm_cache_orders"]
+                                if not _ptm_ord.empty:
+                                    st.dataframe(_ptm_ord, use_container_width=True)
+                                else:
+                                    st.info("체결된 주문 내역 없음")
+                            except Exception as _ptm_e4:
+                                st.error(f"주문 내역 조회 오류: {_ptm_e4}")
+
+                        st.divider()
+                        st.caption(
+                            "⚙️ 자동 실행: GitHub Actions → `.github/workflows/paper-trade.yml` 참고. "
+                            "매일 미국 장마감 후(ET 17:30) `paper_trade_runner.py`가 시그널을 Alpaca Paper에 주문으로 전송합니다."
+                        )
 
         # ── qt_sub10: 세금 계산기 ─────────────────────────────────
         with qt_sub10:

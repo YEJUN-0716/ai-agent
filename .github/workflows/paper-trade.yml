@@ -1,0 +1,59 @@
+name: 페이퍼 트레이딩 자동 실행
+
+on:
+  schedule:
+    # 미국 장마감(ET 16:00) 후 → UTC 21:30 (EDT) / 22:30 (EST)
+    # 월~금 실행. 공휴일에는 Alpaca가 주문을 거절하므로 별도 체크 불필요
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "DRY_RUN (true=주문 없음, false=실제 페이퍼 주문)"
+        required: false
+        default: "true"
+      universe:
+        description: "유니버스 이름 (S&P 500 대형 30 / NASDAQ 기술주 20 / 반도체 15 등)"
+        required: false
+        default: "S&P 500 대형 30"
+      top_n:
+        description: "매수 상위 N개"
+        required: false
+        default: "5"
+      capital_per_trade:
+        description: "종목당 투입금 USD"
+        required: false
+        default: "1000"
+
+jobs:
+  run-paper-trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 페이퍼 트레이딩 실행
+        env:
+          ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          # schedule 실행 시: 아래 기본값 사용
+          # workflow_dispatch 실행 시: input 값 우선
+          UNIVERSE:           ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
+          TOP_N:              ${{ github.event.inputs.top_n || '5' }}
+          CAPITAL_PER_TRADE:  ${{ github.event.inputs.capital_per_trade || '1000' }}
+          MAX_POSITIONS:      "10"
+          # schedule은 항상 실제 주문, workflow_dispatch는 input 값 따름
+          DRY_RUN:            ${{ github.event.inputs.dry_run || 'false' }}
+        run: python paper_trade_runner.py
