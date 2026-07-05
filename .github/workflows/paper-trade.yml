@@ -42,6 +42,15 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
+      - name: 디버그 - 커밋 및 파일 확인
+        run: |
+          echo "=== 현재 커밋 ==="
+          git log --oneline -3
+          echo "=== paper_trade_runner.py 상위 10줄 ==="
+          head -10 paper_trade_runner.py
+          echo "=== Python 버전 ==="
+          python --version
+
       - name: 페이퍼 트레이딩 실행
         env:
           ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
