@@ -4679,6 +4679,10 @@ def main():
                     alloc_str = a.get('alloc', '')
                     qty_str = a.get('qty', '')
                     detail = f"{price_str} · {alloc_str} · {qty_str}" if price_str else ''
+                    _detail_html = (
+                        f"<div style='color:#1a1a1a;font-weight:600;font-size:13px;margin-top:4px'>{detail}</div>"
+                        if detail else ''
+                    )
                     st.markdown(
                         f"<div style='background:#ffffff;border-left:4px solid {ac};"
                         f"border-radius:6px;padding:10px 14px;margin:4px 0'>"
@@ -4686,7 +4690,7 @@ def main():
                         f"<span style='font-size:15px'><b>{a['ticker']}</b> {a['action']}{pri_badge}</span>"
                         f"<span style='color:#1a1a1a;font-size:12px'>비중 {a['weight']} · 3M {a['mom']}</span></div>"
                         f"<div style='color:#555;font-size:12px;margin-top:4px'>{a['reason']}</div>"
-                        f"{'<div style=\"color:#1a1a1a;font-weight:600;font-size:13px;margin-top:4px\">' + detail + '</div>' if detail else ''}"
+                        f"{_detail_html}"
                         f"</div>", unsafe_allow_html=True)
 
                 st.caption("⚠️ 시스템 시그널은 규칙 기반 참고용이며 최종 판단은 본인에게 있습니다.")
