@@ -51,6 +51,60 @@ try:
 except Exception:
     _RISK_MGMT_ENABLED = False
 
+try:
+    from modules.data_integrity import full_data_integrity_check as _data_integrity_check
+    _DATA_INTEGRITY_AVAILABLE = True
+except Exception:
+    _DATA_INTEGRITY_AVAILABLE = False
+
+try:
+    from modules.portfolio_allocator import (
+        inverse_vol_weights as _inv_vol_weights,
+        risk_parity_weights as _rp_weights,
+        combine_strategies as _combine_strategies,
+        diversification_report as _diversification_report,
+        compute_strategy_correlation as _strategy_corr,
+    )
+    _PORTFOLIO_ALLOCATOR_AVAILABLE = True
+except Exception:
+    _PORTFOLIO_ALLOCATOR_AVAILABLE = False
+
+try:
+    from modules.ops_safety import KillSwitch as _KillSwitch, reconcile_positions as _reconcile_pos, AlertDispatcher as _AlertDispatcher
+    _OPS_SAFETY_AVAILABLE = True
+except Exception:
+    _OPS_SAFETY_AVAILABLE = False
+
+try:
+    from modules.tax_kr import OverseasStockLedger as _TaxLedger, calc_capital_gains_tax as _calc_tax, suggest_year_end_tax_loss_harvesting as _tax_harvest
+    _TAX_KR_AVAILABLE = True
+except Exception:
+    _TAX_KR_AVAILABLE = False
+
+try:
+    from modules.alpha_decay_monitor import detect_alpha_decay as _detect_alpha_decay, rolling_performance_vs_baseline as _rolling_perf_vs_bt, cusum_change_detection as _cusum_detect
+    _ALPHA_DECAY_AVAILABLE = True
+except Exception:
+    _ALPHA_DECAY_AVAILABLE = False
+
+try:
+    from modules.stress_test import replay_historical_scenario as _replay_scenario, run_all_scenarios as _run_all_scenarios, synthetic_shock_test as _synthetic_shock, KNOWN_STRESS_PERIODS as _STRESS_PERIODS
+    _STRESS_TEST_AVAILABLE = True
+except Exception:
+    _STRESS_TEST_AVAILABLE = False
+
+try:
+    from modules.signal_decay_analysis import full_decay_analysis as _signal_decay_full, compute_signal_ic_decay as _signal_ic_decay
+    _SIGNAL_DECAY_AVAILABLE = True
+except Exception:
+    _SIGNAL_DECAY_AVAILABLE = False
+
+try:
+    from modules.factor_risk_model import regression_style_analysis as _style_analysis, rolling_market_beta as _rolling_beta, sector_concentration_report as _sector_conc
+    _FACTOR_RISK_AVAILABLE = True
+except Exception:
+    _FACTOR_RISK_AVAILABLE = False
+
 
 def _pit_snapshot(ticker, info):
     """yf.Ticker(...).info 호출 직후 PIT 스냅샷 저장. 실패해도 앱은 계속 진행."""
@@ -4270,7 +4324,11 @@ def main():
                 qt_tickers = UNIVERSE_PRESETS[qt_preset]
                 st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
-        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6, qt_sub7 = st.tabs(["📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널", "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션", "🧠 ML 신호"])
+        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6, qt_sub7, qt_sub8, qt_sub9, qt_sub10 = st.tabs([
+            "📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널",
+            "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션", "🧠 ML 신호",
+            "🧪 고급 분석", "🔒 운영 안전성", "💴 세금 계산기",
+        ])
 
         with qt_sub1:
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
@@ -4512,6 +4570,59 @@ def main():
                         yaxis=dict(title="포트폴리오 가치 ($)", gridcolor='#1e293b'),
                         margin=dict(l=0, r=120, t=10, b=0))
                     st.plotly_chart(_fig_mc2, use_container_width=True)
+
+            # ── 전략 결합 (Portfolio Allocator) ──────────────────
+            if _PORTFOLIO_ALLOCATOR_AVAILABLE:
+                with st.expander("🔗 전략 결합 & 분산화 분석 (포트폴리오 할당기)", expanded=False):
+                    st.caption("개별 자산/전략의 equity curve를 역변동성 또는 리스크패리티 비중으로 결합합니다.")
+                    _pa_tickers_raw = st.text_input("비교 티커 (쉼표 구분)", "SPY,QQQ,GLD,TLT", key="pa_tickers")
+                    _pa_method = st.radio("비중 산출 방식", ["역변동성", "리스크 패리티"], horizontal=True, key="pa_method")
+                    if st.button("🔗 전략 결합 분석 실행", key="pa_run"):
+                        _pa_tickers = [t.strip().upper() for t in _pa_tickers_raw.split(',') if t.strip()]
+                        if len(_pa_tickers) < 2:
+                            st.error("최소 2개 티커 필요")
+                        else:
+                            with st.spinner("데이터 다운로드 중..."):
+                                _pa_end = datetime.now()
+                                _pa_start = _pa_end - timedelta(days=365 * 3)
+                                _pa_closes = {}
+                                for _pat in _pa_tickers:
+                                    _pa_df = download_stock(_pat, start=_pa_start, end=_pa_end)
+                                    if not _pa_df.empty:
+                                        _pa_closes[_pat] = _pa_df['Close']
+                            if len(_pa_closes) < 2:
+                                st.error("데이터 없는 티커가 있습니다.")
+                            else:
+                                _pa_ret = pd.DataFrame({k: v.pct_change() for k, v in _pa_closes.items()}).dropna()
+                                if _pa_method == "역변동성":
+                                    _pa_w = _inv_vol_weights(_pa_ret)
+                                else:
+                                    _pa_w = _rp_weights(_pa_ret)
+                                st.markdown("**산출된 비중**")
+                                _pa_w_df = _pa_w.rename("비중(%)").apply(lambda x: f"{x*100:.1f}%")
+                                st.dataframe(_pa_w_df.to_frame(), use_container_width=True)
+                                _pa_div = _diversification_report(_pa_ret, _pa_w)
+                                _pad_c1, _pad_c2 = st.columns(2)
+                                _pad_c1.metric("분산화 비율(DR)", f"{_pa_div['diversification_ratio']:.3f}")
+                                _pad_c2.metric("포트폴리오 연율 변동성", f"{_pa_div['portfolio_annualized_vol_pct']:.2f}%")
+                                st.caption(_pa_div['note'])
+                                if _pa_div['high_correlation_pairs']:
+                                    st.warning("⚠️ 높은 상관 쌍: " +
+                                               ", ".join([f"{p['전략A']}-{p['전략B']}({p['상관']:.2f})" for p in _pa_div['high_correlation_pairs']]))
+                                _pa_eq = _combine_strategies(_pa_closes, _pa_w, initial_capital=10_000_000)
+                                _pa_fig = go.Figure()
+                                for col in _pa_closes:
+                                    _pa_norm = (_pa_closes[col] / _pa_closes[col].iloc[0] * 10_000_000)
+                                    _pa_fig.add_trace(go.Scatter(x=_pa_norm.index, y=_pa_norm.values, mode='lines',
+                                                                  name=col, line=dict(width=1, dash='dot')))
+                                _pa_fig.add_trace(go.Scatter(x=_pa_eq.index, y=_pa_eq['combined'].values, mode='lines',
+                                                              name='결합 포트폴리오', line=dict(color='#ff9800', width=2.5)))
+                                _pa_fig.update_layout(height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                                       font=dict(color=TV_TEXT), title=dict(text="결합 포트폴리오 vs 개별", font=dict(size=13)),
+                                                       yaxis=dict(title="자산가치(원)", gridcolor=TV_GRID),
+                                                       xaxis=dict(gridcolor=TV_GRID),
+                                                       margin=dict(l=20, r=20, t=40, b=20))
+                                st.plotly_chart(_pa_fig, use_container_width=True)
 
         with qt_sub3:
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
@@ -5432,6 +5543,314 @@ def main():
                                 st.error(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — ML 매도 신호")
                             else:
                                 st.info(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — 중립 (0.40~0.60)")
+
+        # ── qt_sub8: 고급 분석 ────────────────────────────────────
+        with qt_sub8:
+            st.subheader("🧪 고급 분석")
+
+            # ── 데이터 무결성 ──
+            with st.expander("🔍 데이터 무결성 검증", expanded=False):
+                _di_ticker = st.text_input("티커 (데이터 무결성 검사)", "AAPL", key="di_ticker").strip().upper()
+                if st.button("🔍 데이터 무결성 검사 실행", key="di_run"):
+                    if not _DATA_INTEGRITY_AVAILABLE:
+                        st.error("modules/data_integrity.py 로드 실패.")
+                    else:
+                        with st.spinner("데이터 다운로드 및 검증 중..."):
+                            _di_end = datetime.now()
+                            _di_start = _di_end - timedelta(days=365 * 3)
+                            _di_df = download_stock(_di_ticker, start=_di_start, end=_di_end)
+                        if _di_df.empty:
+                            st.error("데이터 없음.")
+                        else:
+                            _di_result = _data_integrity_check(_di_df, _di_ticker)
+                            if _di_result['overall_ok']:
+                                st.success(f"✅ {_di_ticker}: 데이터 무결성 이상 없음 ({len(_di_df)}행)")
+                            else:
+                                st.warning(f"⚠️ {_di_ticker}: 무결성 이슈 감지됨")
+                            _di_ohlc = _di_result['ohlc_sanity']
+                            st.markdown(f"**OHLC 검사**: {'✅ 이상 없음' if _di_ohlc['is_clean'] else '❌ ' + ' / '.join(_di_ohlc['issues'])}")
+                            _di_jmp = _di_result['suspicious_jumps']
+                            st.markdown(f"**급변 탐지**: {_di_jmp['note']}")
+                            if _di_jmp['jumps']:
+                                st.dataframe(pd.DataFrame(_di_jmp['jumps']), use_container_width=True)
+
+            # ── 스트레스 테스트 ──
+            with st.expander("💥 역사적 시나리오 스트레스 테스트", expanded=False):
+                if not _STRESS_TEST_AVAILABLE:
+                    st.error("modules/stress_test.py 로드 실패.")
+                else:
+                    _st_ticker = st.text_input("티커 (스트레스 테스트)", "SPY", key="st_ticker").strip().upper()
+                    _st_scenario = st.selectbox(
+                        "시나리오",
+                        options=list(_STRESS_PERIODS.keys()),
+                        format_func=lambda k: _STRESS_PERIODS[k]['label'],
+                        key="st_scenario"
+                    )
+                    st.caption(_STRESS_PERIODS[_st_scenario]['desc'])
+                    if st.button("💥 시나리오 실행", key="st_run"):
+                        with st.spinner("해당 기간 데이터 다운로드 및 백테스트 중..."):
+                            _st_end = datetime.now()
+                            _st_start = _st_end - timedelta(days=365 * 5)
+                            _st_full_df = download_stock(_st_ticker, start=_st_start, end=_st_end)
+                        if _st_full_df.empty:
+                            st.error("데이터 없음.")
+                        else:
+                            _st_res = _replay_scenario(
+                                run_backtest, _st_full_df, _st_scenario,
+                                buy_th=65, sell_th=45, initial_capital=10_000_000
+                            )
+                            if 'error' in _st_res:
+                                st.error(_st_res['error'])
+                            else:
+                                _st_m = _st_res['metrics']
+                                _stc1, _stc2, _stc3 = st.columns(3)
+                                _stc1.metric("전략 수익률", f"{_st_m.get('전략 수익률', 'N/A')}")
+                                _stc2.metric("MDD", f"{_st_m.get('최대낙폭(MDD)', 'N/A')}")
+                                _stc3.metric("Sharpe", f"{_st_m.get('Sharpe Ratio', 'N/A')}")
+                                st.caption(f"기간: {_st_res['period']} · {_st_res['n_rows']}거래일")
+
+            # ── 알파 디케이 ──
+            with st.expander("📉 알파 디케이 모니터", expanded=False):
+                if not _ALPHA_DECAY_AVAILABLE:
+                    st.error("modules/alpha_decay_monitor.py 또는 scipy 로드 실패.")
+                else:
+                    st.caption("백테스트 모수(일평균수익률·표준편차)와 실전(live) 수익률을 비교해 알파 소멸 여부를 감지합니다.")
+                    _ad_c1, _ad_c2 = st.columns(2)
+                    _ad_bt_mean = _ad_c1.number_input("백테스트 일평균수익률", value=0.0003, format="%.6f", key="ad_bt_mean",
+                                                       help="예: 연 7.5% → 0.075/252 ≒ 0.000298")
+                    _ad_bt_std = _ad_c2.number_input("백테스트 일별 표준편차", value=0.008, format="%.6f", key="ad_bt_std")
+                    _ad_ticker = st.text_input("실전 비교 티커", "SPY", key="ad_ticker").strip().upper()
+                    _ad_window = st.slider("롤링 윈도우(일)", 20, 120, 60, 10, key="ad_window")
+                    if st.button("📉 알파 디케이 분석 실행", key="ad_run"):
+                        with st.spinner("데이터 다운로드 중..."):
+                            _ad_end = datetime.now()
+                            _ad_start = _ad_end - timedelta(days=365 * 2)
+                            _ad_df = download_stock(_ad_ticker, start=_ad_start, end=_ad_end)
+                        if _ad_df.empty or len(_ad_df) < _ad_window + 5:
+                            st.error(f"데이터 부족 (최소 {_ad_window+5}일 필요).")
+                        else:
+                            _ad_ret = _ad_df['Close'].pct_change().dropna()
+                            _ad_result = _detect_alpha_decay(_ad_ret, _ad_bt_mean, _ad_bt_std, _ad_window)
+                            if _ad_result.get('detected'):
+                                st.error(f"🚨 알파 디케이 감지: {_ad_result['reason']}")
+                            else:
+                                st.success(f"✅ 정상: {_ad_result['reason']}")
+                            _ad_perf = _rolling_perf_vs_bt(_ad_ret, _ad_bt_mean, _ad_bt_std, _ad_window)
+                            _ad_fig = go.Figure()
+                            _ad_fig.add_trace(go.Scatter(x=_ad_perf.index, y=_ad_perf['z_score'],
+                                                          mode='lines', name='Z-Score', line=dict(color='#2962ff', width=1.5)))
+                            _ad_fig.add_hline(y=-2.0, line_dash='dash', line_color='#ef5350', annotation_text='경고선 (-2σ)')
+                            _ad_fig.update_layout(height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                                   font=dict(color=TV_TEXT), title=dict(text="롤링 Z-Score (실전 vs 백테스트)", font=dict(size=13)),
+                                                   yaxis=dict(gridcolor=TV_GRID), xaxis=dict(gridcolor=TV_GRID),
+                                                   margin=dict(l=20, r=20, t=40, b=20))
+                            st.plotly_chart(_ad_fig, use_container_width=True)
+
+            # ── 시그널 디케이 ──
+            with st.expander("⏳ 시그널 IC 감쇠 분석", expanded=False):
+                if not _SIGNAL_DECAY_AVAILABLE:
+                    st.error("modules/signal_decay_analysis.py 또는 scipy 로드 실패.")
+                else:
+                    st.caption("RSI 같은 기술 신호의 IC(정보계수)가 보유기간에 따라 어떻게 감쇠하는지 측정합니다.")
+                    _sd_ticker = st.text_input("티커 (시그널 디케이)", "AAPL", key="sd_ticker").strip().upper()
+                    if st.button("⏳ IC 감쇠 분석 실행", key="sd_run"):
+                        with st.spinner("데이터 다운로드 및 IC 계산 중..."):
+                            _sd_end = datetime.now()
+                            _sd_start = _sd_end - timedelta(days=365 * 5)
+                            _sd_df = download_stock(_sd_ticker, start=_sd_start, end=_sd_end)
+                        if _sd_df.empty or len(_sd_df) < 200:
+                            st.error("데이터 부족.")
+                        else:
+                            import pandas_ta as _pta
+                            _sd_rsi = _pta.rsi(_sd_df['Close'], length=14).dropna()
+                            _sd_close = _sd_df['Close'].loc[_sd_rsi.index]
+                            _sd_horizons = [1, 5, 10, 20, 40, 60]
+                            _sd_ic = _signal_ic_decay(_sd_rsi, _sd_close, _sd_horizons)
+                            st.dataframe(_sd_ic.style.format({'IC': '{:.4f}', 't_stat': '{:.2f}', 'p_value': '{:.4f}'}),
+                                         use_container_width=True)
+                            _sd_fig = go.Figure()
+                            _sd_fig.add_trace(go.Bar(x=_sd_ic.index.tolist(), y=_sd_ic['IC'].tolist(),
+                                                      marker_color=['#26a69a' if v > 0 else '#ef5350' for v in _sd_ic['IC']]))
+                            _sd_fig.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                                   font=dict(color=TV_TEXT), title=dict(text="RSI14 IC Decay", font=dict(size=13)),
+                                                   xaxis=dict(title="보유기간(일)", gridcolor=TV_GRID),
+                                                   yaxis=dict(title="IC", gridcolor=TV_GRID),
+                                                   margin=dict(l=20, r=20, t=40, b=20))
+                            st.plotly_chart(_sd_fig, use_container_width=True)
+
+            # ── 팩터 리스크 모델 ──
+            with st.expander("🏗️ 팩터 리스크 모델 (스타일 분석)", expanded=False):
+                if not _FACTOR_RISK_AVAILABLE:
+                    st.error("modules/factor_risk_model.py 또는 scipy 로드 실패.")
+                else:
+                    st.caption("전략 수익률을 시장·팩터로 회귀분석해 순수 알파와 베타를 분리합니다.")
+                    _fr_ticker = st.text_input("전략 티커", "AAPL", key="fr_ticker").strip().upper()
+                    if st.button("🏗️ 스타일 분석 실행", key="fr_run"):
+                        with st.spinner("데이터 다운로드 중..."):
+                            _fr_end = datetime.now()
+                            _fr_start = _fr_end - timedelta(days=365 * 3)
+                            _fr_stock = download_stock(_fr_ticker, start=_fr_start, end=_fr_end)
+                            _fr_spy = download_stock("SPY", start=_fr_start, end=_fr_end)
+                        if _fr_stock.empty or _fr_spy.empty:
+                            st.error("데이터 없음.")
+                        else:
+                            _fr_ret = _fr_stock['Close'].pct_change().dropna()
+                            _fr_mkt = _fr_spy['Close'].pct_change().dropna()
+                            _fr_aligned = pd.concat([_fr_ret.rename('stock'), _fr_mkt.rename('MKT')], axis=1).dropna()
+                            _fr_sa = _style_analysis(_fr_aligned['stock'], pd.DataFrame({'MKT': _fr_aligned['MKT']}))
+                            if 'error' in _fr_sa:
+                                st.error(_fr_sa['error'])
+                            else:
+                                _frc1, _frc2, _frc3 = st.columns(3)
+                                _frc1.metric("연율화 알파", f"{_fr_sa['alpha_annualized_pct']:.2f}%")
+                                _frc2.metric("시장 Beta", f"{_fr_sa['betas'].get('MKT', 0):.3f}")
+                                _frc3.metric("R²", f"{_fr_sa['r_squared']:.3f}")
+                                st.caption(_fr_sa['interpretation'])
+                            _fr_rb = _rolling_beta(_fr_aligned['stock'], _fr_aligned['MKT'])
+                            _fr_fig = go.Figure()
+                            _fr_fig.add_trace(go.Scatter(x=_fr_rb.index, y=_fr_rb.values,
+                                                          mode='lines', name='Rolling Beta (60일)', line=dict(color='#ff9800', width=1.5)))
+                            _fr_fig.add_hline(y=1.0, line_dash='dash', line_color='#888', annotation_text='β=1')
+                            _fr_fig.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                                   font=dict(color=TV_TEXT), title=dict(text="롤링 시장 베타(60일)", font=dict(size=13)),
+                                                   yaxis=dict(gridcolor=TV_GRID), xaxis=dict(gridcolor=TV_GRID),
+                                                   margin=dict(l=20, r=20, t=40, b=20))
+                            st.plotly_chart(_fr_fig, use_container_width=True)
+
+        # ── qt_sub9: 운영 안전성 ──────────────────────────────────
+        with qt_sub9:
+            st.subheader("🔒 운영 안전성")
+
+            if not _OPS_SAFETY_AVAILABLE:
+                st.error("modules/ops_safety.py 로드 실패.")
+            else:
+                # 킬스위치
+                with st.expander("🛑 킬스위치 (일일 손실 한도)", expanded=True):
+                    st.caption("당일 손실이 임계치를 초과하면 자동매매 거래 차단. 세션 내에서만 유지됩니다.")
+                    _ks_c1, _ks_c2 = st.columns(2)
+                    _ks_loss_limit = _ks_c1.number_input("일일 최대 손실 한도 (%)", value=3.0, min_value=0.5, max_value=20.0, step=0.5, key="ks_loss_limit")
+                    _ks_max_errors = _ks_c2.number_input("연속 오류 한도 (회)", value=5, min_value=1, max_value=20, key="ks_max_errors")
+
+                    if 'ks_instance' not in st.session_state:
+                        st.session_state['ks_instance'] = _KillSwitch(
+                            max_daily_loss_pct=_ks_loss_limit, max_errors=int(_ks_max_errors))
+
+                    _ks = st.session_state['ks_instance']
+                    _ks_status = _ks.status()
+
+                    if _ks_status['triggered']:
+                        st.error(f"🛑 킬스위치 발동됨: {_ks_status['reason']}")
+                    else:
+                        st.success("✅ 킬스위치 정상 — 거래 허용 상태")
+
+                    _ks_col1, _ks_col2, _ks_col3 = st.columns(3)
+                    _ks_cur_eq = _ks_col1.number_input("현재 자산가치 (원)", value=10_000_000, step=100_000, key="ks_cur_eq")
+                    if _ks_col2.button("📋 손실 한도 체크", key="ks_check"):
+                        _ks.set_day_start_equity(10_000_000)
+                        if _ks.check_daily_loss(_ks_cur_eq):
+                            st.error(f"🛑 손실 한도 초과 → 거래 차단")
+                        else:
+                            st.success("✅ 정상 범위")
+                    if _ks_col3.button("🔄 킬스위치 초기화", key="ks_reset"):
+                        _ks.reset()
+                        st.success("킬스위치 초기화 완료")
+                        st.rerun()
+
+                # 포지션 대사
+                with st.expander("⚖️ 포지션 대사 (의도 vs 브로커)", expanded=False):
+                    st.caption("앱이 생각하는 보유 수량과 Alpaca 실제 포지션을 비교해 불일치를 탐지합니다.")
+                    _rec_intended_raw = st.text_area(
+                        "의도 포지션 (JSON, 예: {\"AAPL\": 10, \"NVDA\": 5})",
+                        value='{"AAPL": 10, "NVDA": 5}', key="rec_intended")
+                    if st.button("⚖️ 포지션 대사 실행", key="rec_run"):
+                        try:
+                            import json as _json_rec
+                            _intended = _json_rec.loads(_rec_intended_raw)
+                        except ValueError:
+                            st.error("JSON 파싱 오류")
+                            _intended = None
+                        if _intended is not None:
+                            if _PT_AVAILABLE and 'alpaca_key' in st.secrets.get('alpaca', {}):
+                                try:
+                                    _broker_pos = _pt_get_positions(
+                                        st.secrets['alpaca']['api_key'],
+                                        st.secrets['alpaca']['secret_key'])
+                                    _rec_result = _reconcile_pos(_intended, _broker_pos)
+                                    if _rec_result['ok']:
+                                        st.success("✅ 포지션 일치")
+                                    else:
+                                        st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
+                                        st.dataframe(pd.DataFrame(_rec_result['mismatches']), use_container_width=True)
+                                    if _rec_result['extra_in_broker']:
+                                        st.warning(f"브로커에만 있는 종목: {_rec_result['extra_in_broker']}")
+                                except Exception as _rec_e:
+                                    st.error(f"Alpaca 연결 오류: {_rec_e}")
+                            else:
+                                st.info("Alpaca 미설정 — 브로커 데이터 없이 의도 포지션만 표시합니다.")
+                                st.json(_intended)
+
+        # ── qt_sub10: 세금 계산기 ─────────────────────────────────
+        with qt_sub10:
+            st.subheader("💴 해외주식 양도소득세 계산기")
+            st.caption("⚠️ 교육·참고 목적. 실제 납세 전 반드시 세무사에게 확인하세요.")
+
+            if not _TAX_KR_AVAILABLE:
+                st.error("modules/tax_kr.py 로드 실패.")
+            else:
+                if 'tax_ledger' not in st.session_state:
+                    st.session_state['tax_ledger'] = _TaxLedger()
+                _ledger = st.session_state['tax_ledger']
+
+                # 매수 기록 입력
+                with st.expander("📥 매수 기록 입력", expanded=True):
+                    _tx_c1, _tx_c2, _tx_c3, _tx_c4, _tx_c5 = st.columns(5)
+                    _tx_ticker = _tx_c1.text_input("티커", "AAPL", key="tx_ticker").strip().upper()
+                    _tx_buy_date = _tx_c2.date_input("매수일", key="tx_buy_date")
+                    _tx_qty = _tx_c3.number_input("주수", value=10.0, min_value=0.01, key="tx_qty")
+                    _tx_price_usd = _tx_c4.number_input("매수가($)", value=150.0, min_value=0.01, key="tx_price_usd")
+                    _tx_fx = _tx_c5.number_input("환율(₩/$)", value=1350.0, min_value=100.0, key="tx_fx")
+                    if st.button("📥 매수 기록 추가", key="tx_buy_add"):
+                        from datetime import date as _date
+                        _ledger.buy(_tx_ticker, _tx_buy_date, _tx_qty, _tx_price_usd, _tx_fx)
+                        st.success(f"{_tx_ticker} {_tx_qty}주 매수 기록 추가 (취득원가: {_tx_qty*_tx_price_usd*_tx_fx:,.0f}원)")
+
+                # 매도 기록 입력
+                with st.expander("📤 매도 기록 입력 (FIFO 자동 계산)", expanded=False):
+                    _ts_c1, _ts_c2, _ts_c3, _ts_c4, _ts_c5 = st.columns(5)
+                    _ts_ticker = _ts_c1.text_input("티커", "AAPL", key="ts_ticker").strip().upper()
+                    _ts_sell_date = _ts_c2.date_input("매도일", key="ts_sell_date")
+                    _ts_qty = _ts_c3.number_input("매도 주수", value=5.0, min_value=0.01, key="ts_qty")
+                    _ts_price_usd = _ts_c4.number_input("매도가($)", value=180.0, min_value=0.01, key="ts_price_usd")
+                    _ts_fx = _ts_c5.number_input("매도시 환율(₩/$)", value=1320.0, min_value=100.0, key="ts_fx")
+                    if st.button("📤 매도 기록 추가 (FIFO)", key="ts_sell_add"):
+                        try:
+                            _ledger.sell(_ts_ticker, _ts_sell_date, _ts_qty, _ts_price_usd, _ts_fx)
+                            _last = _ledger.realized[-1]
+                            _gain_color = "success" if _last.gain_krw >= 0 else "error"
+                            getattr(st, _gain_color)(f"매도 완료 — 양도차익: {_last.gain_krw:+,}원")
+                        except Exception as _tx_e:
+                            st.error(f"오류: {_tx_e}")
+
+                # 현재 보유 & 세금 계산
+                _tax_hd = _ledger.holdings()
+                if _tax_hd:
+                    st.markdown("**현재 보유 포지션**")
+                    st.dataframe(pd.DataFrame(_tax_hd).T, use_container_width=True)
+
+                if _ledger.realized:
+                    _tx_year = st.selectbox("과세 연도", options=sorted(set(t.sell_year for t in _ledger.realized), reverse=True), key="tx_year")
+                    _tx_calc = _calc_tax(_ledger.realized, _tx_year)
+                    _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+                    _tc1.metric("총 양도차익", f"{_tx_calc['gross_gain_krw']:,}원")
+                    _tc2.metric("기본공제", f"{_tx_calc['basic_deduction_krw']:,}원")
+                    _tc3.metric("과세표준", f"{_tx_calc['taxable_gain_krw']:,}원")
+                    _tc4.metric("예상 납부세액", f"{_tx_calc['estimated_tax_krw']:,}원", delta="22% 적용")
+                    st.caption(_tx_calc['note'])
+
+                if st.button("🗑️ 세금 장부 초기화", key="tx_reset"):
+                    st.session_state['tax_ledger'] = _TaxLedger()
+                    st.success("장부 초기화 완료")
+                    st.rerun()
 
     # ── Tab: 실전 대시보드 ──────────────────────────────────────
     with tab_dash:
