@@ -17,7 +17,7 @@ def check_ohlc_sanity(df: pd.DataFrame) -> dict:
     if len(bad_high) > 0:
         issues.append(f"High가 다른 가격보다 낮은 날 {len(bad_high)}건 (예: {list(bad_high.index[:3])})")
 
-    bad_low = df[(df['Low'] > df['High']) | (df['Low'] > df['Open']) | (df['Low'] > df['Close'])]
+    bad_low = df[(df['Low'] > df['Open']) | (df['Low'] > df['Close'])]
     if len(bad_low) > 0:
         issues.append(f"Low가 다른 가격보다 높은 날 {len(bad_low)}건 (예: {list(bad_low.index[:3])})")
 

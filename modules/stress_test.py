@@ -103,7 +103,7 @@ def synthetic_shock_test(equity_curve: pd.Series,
     shocked[day:] = shocked[day:] * (1 + shock_pct / 100)
 
     if circuit_breaker is not None:
-        peak = shocked[:day].max()
+        peak = shocked[:day].max() if day > 0 else shocked.iloc[0]
         for i in range(day, n):
             if shocked[i] / peak - 1 <= circuit_breaker / 100:
                 shocked[i:] = shocked[i]

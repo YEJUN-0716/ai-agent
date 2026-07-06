@@ -339,7 +339,7 @@ def download_stock(ticker, start, end, interval='1d'):
         except Exception:
             pass
 
-    df = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
+    df = yf.download(ticker, start=start, end=end, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
     return df
@@ -922,7 +922,7 @@ def fundamental_score(ticker, df=None):
         de_s  = _score_de(de/100 if de is not None else None)
         cr_s  = 50
         if cr: cr_s = 10 if cr<0.5 else (30 if cr<1.0 else (60 if cr<1.5 else (85 if cr<3.0 else 75)))
-        int_cov = abs(ebit/int_exp) if (ebit and int_exp and int_exp != 0) else None
+        int_cov = (ebit/int_exp) if (ebit and int_exp and int_exp != 0) else None
         ic_s  = _score_int_coverage(int_cov)
         det['안전성'] = de_s*0.45 + cr_s*0.30 + ic_s*0.25
         det['D/E'] = de; det['유동비율'] = cr; det['이자보상배율'] = int_cov
@@ -1307,9 +1307,9 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     roll_max  = eq_s.expanding().max()
     dd_series = (eq_s - roll_max) / roll_max * 100
     mdd       = float(dd_series.min())
-    daily_ret = eq_s.pct_change().dropna().iloc[19:]  # 워밍업 0수익률 19개 제외
+    daily_ret = eq_s.pct_change().dropna().iloc[20:]  # 워밍업 0수익률 20개 제외
     sharpe    = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0
-    calmar    = abs(cagr / mdd) if mdd < 0 else 0.0
+    calmar    = cagr / abs(mdd) if mdd < 0 else 0.0
 
     sells = [t for t in trades if '매도' in t['구분']]
     pnls  = []
@@ -2695,7 +2695,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
-                roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
+                roe_v = round(roe * 100, 2) if roe is not None else 0
                 pm = info.get('profitMargins')
                 pm_v = (pm*100 if pm else 0)
                 rg = info.get('revenueGrowth')
@@ -2858,7 +2858,7 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capi
                 actions.append(_make_action('🟢 매수', target_w,
                     f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
                     'HIGH' if oversold else 'NORMAL'))
-            elif in_buy and is_strong_factor:
+            elif in_buy and is_strong_factor and not overbought:
                 actions.append(_make_action('🟡 조건부 매수', target_w * 0.7,
                     f"팩터 {f_score_v:.0f}점 — 추세 확인 시 비중 확대 (RSI {rsi:.0f})", 'NORMAL'))
             elif in_buy:
@@ -2972,7 +2972,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
-                roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
+                roe_v = round(roe * 100, 2) if roe is not None else 0
                 pm = info.get('profitMargins')
                 pm_v = (pm*100 if pm else 0)
                 rg = info.get('revenueGrowth')
@@ -3064,7 +3064,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
                 rg = info.get('revenueGrowth')
                 ep = (1.0/per*100) if per and per > 0 else 0
                 bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
-                roe_v = (roe*100 if roe and abs(roe) <= 1 else (roe or 0))
+                roe_v = round(roe * 100, 2) if roe is not None else 0
                 pm_v = (pm*100 if pm else 0)
                 rg_v = (rg*100 if rg else 0)
                 ticker_info[tk] = {
@@ -3077,8 +3077,10 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
 
     price_df = pd.DataFrame(all_prices).dropna(how='all').ffill()
 
-    months = pd.date_range(start=price_df.index[252] if len(price_df) > 252 else price_df.index[60],
-                           end=price_df.index[-1], freq=f'{rebal_months}MS')
+    if len(price_df) < 61:
+        return {}, pd.DataFrame(), []
+    _start_idx = price_df.index[252] if len(price_df) > 252 else price_df.index[60]
+    months = pd.date_range(start=_start_idx, end=price_df.index[-1], freq=f'{rebal_months}MS')
 
     equity = 10000.0
     eq_history = []
@@ -3119,7 +3121,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
         turnover = len(old_set.symmetric_difference(new_set)) / max(len(new_set), 1)
         total_turnover += turnover
         # 왕복 비용: 수수료 + 슬리피지 각 편도, 매도·매수 양쪽 적용
-        round_trip_cost = commission + 2 * slippage
+        round_trip_cost = 2 * commission + 2 * slippage
         cost = equity * turnover * round_trip_cost
         equity -= cost
 
@@ -5895,7 +5897,7 @@ def main():
                                     _pml4.metric("연율 수익률", f"{_ptm_live['annualized_ret_pct']:+.2f}%")
 
                                     # 백테스트 비교 (세션에 백테스트 결과 있을 때만)
-                                    _bt_ref = st.session_state.get("_bt", {})
+                                    _bt_ref = st.session_state.get("tab3", {}).get("metrics", {})
                                     if _bt_ref:
                                         _bt_tr  = float(str(_bt_ref.get("전략 수익률", "0")).replace("%","").replace("+","") or 0)
                                         _bt_sh  = float(str(_bt_ref.get("Sharpe Ratio", "0")) or 0)

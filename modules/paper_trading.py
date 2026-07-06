@@ -85,7 +85,7 @@ def sync_signals_to_orders(actions: list, key: str, secret: str,
 
         side = 'buy' if '매수' in action else 'sell'
         alloc = (capital_per_trade or {}).get(tk)
-        if side == 'buy' and not alloc:
+        if not alloc:
             results.append({'ticker': tk, 'skipped': True, 'reason': 'capital_per_trade 미지정'})
             continue
 

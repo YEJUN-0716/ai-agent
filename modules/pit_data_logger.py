@@ -134,7 +134,7 @@ def backtest_ready(store: PITStore, ticker: str, backtest_start: str) -> dict:
             'reason': f"{ticker}에 대한 스냅샷이 아직 없습니다. 로깅을 시작하세요.",
         }
     first = cov[0]['first_snapshot']
-    if first > backtest_start:
+    if first[:10] > backtest_start[:10]:
         return {
             'ready': False,
             'reason': (

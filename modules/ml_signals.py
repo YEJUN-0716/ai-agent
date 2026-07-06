@@ -109,7 +109,8 @@ def make_labels(close: pd.Series, horizon: int = 20,
                 threshold_pct: float = 0.0) -> pd.Series:
     """N일 후 수익률이 threshold_pct를 넘으면 1(상승), 아니면 0."""
     fwd_ret = close.pct_change(horizon).shift(-horizon) * 100
-    return (fwd_ret > threshold_pct).astype(int)
+    # 마지막 horizon개 행은 미래 데이터 없음 → NaN 유지해 .dropna()가 제거하도록
+    return (fwd_ret > threshold_pct).astype(float).where(fwd_ret.notna())
 
 
 def train_and_validate_ml_signal(df: pd.DataFrame, horizon: int = 20,

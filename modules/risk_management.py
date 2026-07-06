@@ -53,7 +53,8 @@ def signal_strength_weight(signal: float, buy_th: float, max_signal: float = 100
 # ─────────────────────────────────────────────
 def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
                     half_kelly: bool = True, cap: float = 0.25) -> float:
-    if avg_loss_pct <= 0 or win_rate <= 0:
+    avg_loss_pct = abs(avg_loss_pct)  # 손실은 절댓값으로 처리
+    if avg_loss_pct == 0 or win_rate <= 0:
         return 0.0
     b = avg_win_pct / avg_loss_pct
     f = (win_rate * b - (1 - win_rate)) / b
