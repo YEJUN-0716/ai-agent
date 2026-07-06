@@ -64,6 +64,8 @@ def combine_strategies(strategy_equity_curves: dict,
     strategy_equity_curves: {'전략A': pd.Series(날짜별 자산), '전략B': ...}
     weights: pd.Series({'전략A': 0.6, '전략B': 0.4})
     """
+    if not strategy_equity_curves:
+        return pd.DataFrame({'combined': pd.Series(dtype=float)})
     ret_df = pd.DataFrame({k: v.pct_change() for k, v in strategy_equity_curves.items()})
     ret_df.iloc[0] = 0.0
     combined_ret = (ret_df * weights).sum(axis=1)

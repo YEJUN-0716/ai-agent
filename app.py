@@ -285,6 +285,8 @@ def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
     if avg_loss_pct <= 0 or win_rate <= 0:
         return 0.0
     b = avg_win_pct / avg_loss_pct
+    if b == 0:
+        return 0.0
     f = (win_rate * b - (1 - win_rate)) / b
     f = max(0.0, f)
     if half_kelly:
@@ -901,7 +903,7 @@ def fundamental_score(ticker, df=None):
         if pm:
             pp = pm*100
             pm_s = 10 if pp<0 else (40 if pp<5 else (60 if pp<10 else (80 if pp<20 else 90)))
-        det['수익성'] = _score_roe(roe)*0.4 + _score_roe(roa*3 if roa is not None else None)*0.3 + pm_s*0.3
+        det['수익성'] = _score_roe(roe)*0.4 + _score_roe(roa*300 if roa is not None else None)*0.3 + pm_s*0.3
         det['ROE'] = roe; det['ROA'] = roa; det['순이익률'] = pm
 
         # ── 성장성 (13%) ──────────────────────────────
@@ -1317,7 +1319,7 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
         try: pnls.append(float(t['수익률'].replace('%', '').replace('+', '')))
         except: pass
     wins     = [p for p in pnls if p > 0]
-    losses   = [p for p in pnls if p <= 0]
+    losses   = [p for p in pnls if p < 0]
     win_rate = len(wins) / len(pnls) * 100 if pnls else 0
     avg_win  = sum(wins) / len(wins) if wins else 0
     avg_loss = sum(losses) / len(losses) if losses else 0
@@ -2231,7 +2233,7 @@ def calc_momentum(df):
     p  = df['Close']
     cp = float(p.iloc[-1])
     def ret(d):
-        return (cp - float(p.iloc[-d])) / float(p.iloc[-d]) * 100 if len(p) > d else None
+        return (cp - float(p.iloc[-d])) / float(p.iloc[-d]) * 100 if len(p) >= d else None
     m1, m3, m6, m12 = ret(21), ret(63), ret(126), ret(252)
     def sc(v):
         if v is None: return 50
@@ -3611,7 +3613,7 @@ def main():
             w_tech    = _a['w_tech']; w_fund = _a['w_fund']; w_macro = _a['w_macro']
 
             fmt_p  = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
-            chg = (cp-pp)/pp*100
+            chg = (cp-pp)/pp*100 if pp else 0
 
             regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}[regime]
             regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}[regime]
@@ -3873,7 +3875,7 @@ def main():
                     {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",     '등급':score_label(f_score),     '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
                     {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",     '등급':score_label(m_score),     '비고':f'가중치 {w_macro}%'},
                     {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mtf_avg:.1f}",     '등급':score_label(mtf_avg),     '비고': mtf_summary},
-                    {'카테고리':'📊 모멘텀',          '점수':f"{mom_data['score']:.1f}", '등급':score_label(mom_data['score']), '비고': mom_summary},
+                    {'카테고리':'📊 모멘텀',          '점수':f"{mom_data.get('score', 50):.1f}", '등급':score_label(mom_data.get('score', 50)), '비고': mom_summary},
                     {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',             '등급':'-',                      '비고': dcf_summary},
                     {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",  '등급':score_label(news_score),  '비고':'참고용'},
                 ]), use_container_width=True, hide_index=True)
@@ -3911,7 +3913,7 @@ def main():
                     st.divider()
                     st.caption("**📊 모멘텀**")
                     m_cols = st.columns(4)
-                    for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data['1M']),('3M', mom_data['3M']),('6M', mom_data['6M']),('12M', mom_data['12M'])]):
+                    for col_m, (lbl, val) in zip(m_cols, [('1M', mom_data.get('1M')),('3M', mom_data.get('3M')),('6M', mom_data.get('6M')),('12M', mom_data.get('12M'))]):
                         if val is not None: col_m.metric(lbl, f"{val:+.1f}%")
                         else: col_m.metric(lbl, "N/A")
                     st.divider()
@@ -4977,34 +4979,37 @@ def main():
                 # ── 신호 분포 ─────────────────────────────
                 with st.expander("📊 신호 점수 분포 (임계값 튜닝 참고)"):
                     _sig_vals = _bt['bt_sigs'].dropna().iloc[20:]
-                    _adj_buy = _bt['buy_th']
-                    _adj_sell = _bt['sell_th']
-                    if bt_f_score is not None and bt_m_score is not None:
-                        _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
-                        _adj_buy = _bt['buy_th'] - _fm_off
-                        _adj_sell = _bt['sell_th'] - _fm_off
-                    _pct_above = float((_sig_vals > _adj_buy).sum() / len(_sig_vals) * 100)
-                    _pct_below = float((_sig_vals < _adj_sell).sum() / len(_sig_vals) * 100)
-                    sc1, sc2, sc3 = st.columns(3)
-                    sc1.metric("매수 구간 비율", f"{_pct_above:.1f}%", f"점수 > {_adj_buy:.0f}")
-                    sc2.metric("매도 구간 비율", f"{_pct_below:.1f}%", f"점수 < {_adj_sell:.0f}")
-                    sc3.metric("평균 신호 점수", f"{float(_sig_vals.mean()):.1f}")
-                    fig_dist = go.Figure()
-                    fig_dist.add_trace(go.Histogram(x=_sig_vals, nbinsx=40,
-                        marker_color='rgba(41,98,255,0.5)', name='신호 분포'))
-                    fig_dist.add_vline(x=_adj_buy, line_color=TV_UP, line_width=2,
-                        annotation_text=f"매수 {_adj_buy:.0f}", annotation_position="top",
-                        annotation_font=dict(color=TV_UP, size=11))
-                    fig_dist.add_vline(x=_adj_sell, line_color=TV_DOWN, line_width=2,
-                        annotation_text=f"매도 {_adj_sell:.0f}", annotation_position="top",
-                        annotation_font=dict(color=TV_DOWN, size=11))
-                    fig_dist.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color=TV_TEXT), showlegend=False,
-                        title=dict(text='신호 점수 분포', font=dict(size=13)),
-                        xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
-                        yaxis=dict(title='빈도', gridcolor=TV_GRID),
-                        margin=dict(l=10, r=10, t=40, b=10))
-                    st.plotly_chart(fig_dist, use_container_width=True)
+                    if len(_sig_vals) == 0:
+                        st.info("백테스트 신호 데이터가 부족합니다.")
+                    else:
+                        _adj_buy = _bt['buy_th']
+                        _adj_sell = _bt['sell_th']
+                        if bt_f_score is not None and bt_m_score is not None:
+                            _fm_off = (bt_f_score - 50) * (_bt['w_fund'] / 100) + (bt_m_score - 50) * (_bt['w_macro'] / 100)
+                            _adj_buy = _bt['buy_th'] - _fm_off
+                            _adj_sell = _bt['sell_th'] - _fm_off
+                        _pct_above = float((_sig_vals > _adj_buy).sum() / len(_sig_vals) * 100)
+                        _pct_below = float((_sig_vals < _adj_sell).sum() / len(_sig_vals) * 100)
+                        sc1, sc2, sc3 = st.columns(3)
+                        sc1.metric("매수 구간 비율", f"{_pct_above:.1f}%", f"점수 > {_adj_buy:.0f}")
+                        sc2.metric("매도 구간 비율", f"{_pct_below:.1f}%", f"점수 < {_adj_sell:.0f}")
+                        sc3.metric("평균 신호 점수", f"{float(_sig_vals.mean()):.1f}")
+                        fig_dist = go.Figure()
+                        fig_dist.add_trace(go.Histogram(x=_sig_vals, nbinsx=40,
+                            marker_color='rgba(41,98,255,0.5)', name='신호 분포'))
+                        fig_dist.add_vline(x=_adj_buy, line_color=TV_UP, line_width=2,
+                            annotation_text=f"매수 {_adj_buy:.0f}", annotation_position="top",
+                            annotation_font=dict(color=TV_UP, size=11))
+                        fig_dist.add_vline(x=_adj_sell, line_color=TV_DOWN, line_width=2,
+                            annotation_text=f"매도 {_adj_sell:.0f}", annotation_position="top",
+                            annotation_font=dict(color=TV_DOWN, size=11))
+                        fig_dist.update_layout(height=250, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT), showlegend=False,
+                            title=dict(text='신호 점수 분포', font=dict(size=13)),
+                            xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
+                            yaxis=dict(title='빈도', gridcolor=TV_GRID),
+                            margin=dict(l=10, r=10, t=40, b=10))
+                        st.plotly_chart(fig_dist, use_container_width=True)
                     st.caption("매수 구간이 5~15%, 매도 구간이 5~15% 정도면 적절합니다. 슬라이더로 조절하세요.")
 
                 # ── 자산 곡선 ─────────────────────────────
@@ -5057,7 +5062,7 @@ def main():
                 ic_cols = st.columns(3)
                 for ci, cr in enumerate(corr_results):
                     ic_val = cr['IC']
-                    ic_color = "normal" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "off")
+                    ic_color = "off" if abs(ic_val) < 0.05 else ("inverse" if ic_val < 0 else "normal")
                     ic_cols[ci].metric(
                         f"IC ({cr['horizon']}일 후 수익률)",
                         f"{ic_val:+.3f}",
