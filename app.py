@@ -5816,9 +5816,19 @@ def main():
                     st.error("modules/paper_trading.py 로드 실패.")
                 else:
                     _ptm_key, _ptm_sec = _get_alpaca_keys()
+                    # secrets/env에 키가 없으면 직접 입력 UI 제공
                     if not _ptm_key or not _ptm_sec:
-                        st.warning("Alpaca API 키가 설정되지 않았습니다. Streamlit secrets 또는 앱 설정에서 입력하세요.")
-                    else:
+                        st.info("Alpaca **페이퍼 트레이딩** API 키를 입력하세요. [alpaca.markets](https://app.alpaca.markets) → Paper Trading → API Keys")
+                        _ptm_col1, _ptm_col2 = st.columns(2)
+                        _ptm_key_in = _ptm_col1.text_input("API Key (PK...)", value=st.session_state.get("alpaca_key", ""), type="password", key="ptm_key_input")
+                        _ptm_sec_in = _ptm_col2.text_input("Secret Key", value=st.session_state.get("alpaca_secret", ""), type="password", key="ptm_sec_input")
+                        if _ptm_key_in and _ptm_sec_in:
+                            st.session_state["alpaca_key"] = _ptm_key_in
+                            st.session_state["alpaca_secret"] = _ptm_sec_in
+                            _ptm_key, _ptm_sec = _ptm_key_in, _ptm_sec_in
+                        else:
+                            st.stop()
+                    if _ptm_key and _ptm_sec:
                         _ptm_period = st.selectbox("조회 기간", ["1W", "1M", "3M", "6M"], index=1, key="ptm_period")
                         if st.button("🔄 Alpaca 데이터 새로고침", key="ptm_refresh"):
                             for _k in [k for k in st.session_state if k.startswith("ptm_cache_")]:
