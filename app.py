@@ -5680,8 +5680,7 @@ def main():
                         if _sd_df.empty or len(_sd_df) < 200:
                             st.error("데이터 부족.")
                         else:
-                            import pandas_ta as _pta
-                            _sd_rsi = _pta.rsi(_sd_df['Close'], length=14).dropna()
+                            _sd_rsi = calc_rsi(_sd_df['Close'], period=14).dropna()
                             _sd_close = _sd_df['Close'].loc[_sd_rsi.index]
                             _sd_horizons = [1, 5, 10, 20, 40, 60]
                             _sd_ic = _signal_ic_decay(_sd_rsi, _sd_close, _sd_horizons)
