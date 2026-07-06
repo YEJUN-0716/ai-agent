@@ -125,6 +125,7 @@ def factor_pure_alpha_check(strategy_returns: pd.Series,
     rb = rolling_market_beta(strategy_returns, market_returns)
     latest_beta = float(rb.dropna().iloc[-1]) if not rb.dropna().empty else None
 
+    _beta_str = f"{latest_beta:.2f}" if latest_beta is not None else "N/A"
     return {
         'style_analysis': style,
         'sector_concentration': sector,
@@ -132,7 +133,7 @@ def factor_pure_alpha_check(strategy_returns: pd.Series,
         'summary': (
             f"알파 {style.get('alpha_annualized_pct', 'N/A')}% (연율화), "
             f"R²={style.get('r_squared', 'N/A')}, "
-            f"현재 시장베타={latest_beta:.2f if latest_beta else 'N/A'}, "
+            f"현재 시장베타={_beta_str}, "
             f"섹터집중도={sector['concentration']}"
         )
     }

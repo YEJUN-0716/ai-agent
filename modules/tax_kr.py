@@ -63,6 +63,14 @@ class OverseasStockLedger:
         """FIFO로 원가를 소진하고 RealizedTrade를 기록."""
         remaining = float(qty)
         lots_queue = self._lots.get(ticker, [])
+
+        # 과매도 사전 검증 (뮤테이션 전)
+        total_held = sum(l.qty for l in lots_queue)
+        if remaining > total_held + 1e-9:
+            raise ValueError(
+                f"{ticker} 매도 수량({qty:.4f})이 보유량({total_held:.4f})을 초과합니다"
+            )
+
         used_lots = []
         total_cost_krw = 0.0
 

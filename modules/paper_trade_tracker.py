@@ -113,7 +113,7 @@ def get_closed_orders(key: str, secret: str, limit: int = 200) -> pd.DataFrame:
     rows = []
     for o in orders:
         rows.append({
-            "날짜":        o.get("filled_at", o.get("submitted_at", ""))[:10],
+            "날짜":        (o.get("filled_at") or o.get("submitted_at") or "")[:10],
             "티커":        o.get("symbol", ""),
             "방향":        o.get("side", ""),
             "수량":        o.get("filled_qty", o.get("qty", "")),

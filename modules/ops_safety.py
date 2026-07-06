@@ -39,7 +39,8 @@ class KillSwitch:
         if today != self._today:
             self._today = today
             self._errors_today = 0
-            if not self._triggered:
+            self._day_start_equity = None  # 당일 기준가 재설정 필요
+            if self._triggered:
                 self._triggered = False
                 self._trigger_reason = ""
 
@@ -72,7 +73,7 @@ class KillSwitch:
     def check_order_size(self, order_value: float, portfolio_equity: float) -> bool:
         """단일 주문이 포트폴리오 대비 max_single_order_pct 초과면 True(차단)."""
         if portfolio_equity <= 0:
-            return False
+            return True  # 자산 0 이하 → 모든 주문 차단
         order_pct = abs(order_value) / portfolio_equity * 100
         return order_pct > self.max_single_order_pct
 

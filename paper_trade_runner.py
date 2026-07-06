@@ -288,10 +288,22 @@ def main():
                 print(f"  [매도 오류] {sym}: {e}")
                 sell_results.append({"symbol": sym, "error": str(e)})
 
+    # 매도 완료 후 buying_power 갱신 (매도 대금 반영)
+    if sell_done and not DRY_RUN:
+        try:
+            _acct2 = alpaca_get("/v2/account")
+            buying_power = float(_acct2.get("buying_power", buying_power))
+            print(f"매도 후 갱신 매수여력: ${buying_power:,.2f}")
+        except Exception as _e:
+            print(f"[경고] 매도 후 buying_power 갱신 실패: {_e}")
+
     # 7. 매수
     remaining = MAX_POSITIONS - (len(held) - len(sell_done))
     buy_results = []
-    for sig in buy_sigs[:max(0, remaining)]:
+    n_bought = 0
+    for sig in buy_sigs:
+        if n_bought >= max(0, remaining):
+            break
         sym = _to_alpaca_sym(sig["ticker"])
         if not sym or sym in held:
             continue
@@ -303,6 +315,7 @@ def main():
             res = place_buy(sym, CAPITAL_USD)
             buy_results.append({"symbol": sym, "notional": CAPITAL_USD, "ok": True})
             buying_power -= CAPITAL_USD
+            n_bought += 1
         except Exception as e:
             print(f"  [매수 오류] {sym}: {e}")
             buy_results.append({"symbol": sym, "error": str(e)})

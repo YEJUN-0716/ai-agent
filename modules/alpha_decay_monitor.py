@@ -25,6 +25,8 @@ def rolling_performance_vs_baseline(live_returns: pd.Series,
     roll_mean = live_returns.rolling(window).mean()
     roll_std = live_returns.rolling(window).std()
 
+    if backtest_daily_std <= 0:
+        return pd.DataFrame(columns=['live_mean', 'live_std', 'bt_mean', 'bt_std', 'z_score', 'p_value'])
     z_scores = (roll_mean - backtest_daily_mean) / (backtest_daily_std / np.sqrt(window))
     p_values = z_scores.apply(lambda z: float(stats.norm.cdf(z)) if np.isfinite(z) else np.nan)
 
@@ -75,7 +77,13 @@ def cusum_change_detection(returns: pd.Series, target_mean: float,
     평균이 목표치 아래로 얼마나 오래 / 얼마나 크게 지속되는지 본다.
     threshold_std: 표준편차 몇 배를 초과하면 알람 (기본 8σ, 보수적 설정)
     """
-    sigma = float(returns.std()) or 1e-9
+    _std = float(returns.std())
+    if not np.isfinite(_std) or _std <= 0:
+        return {
+            'n_alarms': 0, 'alarms': [], 'final_cusum': 0.0,
+            'threshold': 0.0, 'note': '데이터 부족 또는 변동성 없음 (CUSUM 계산 불가)',
+        }
+    sigma = _std
     k = allowance_std * sigma
     S_neg = 0.0
     cusum_vals, alarms = [], []
@@ -93,7 +101,7 @@ def cusum_change_detection(returns: pd.Series, target_mean: float,
         'alarms': alarms,
         'final_cusum': round(cusum_vals[-1] if cusum_vals else 0.0, 6),
         'threshold': round(-threshold_std * sigma, 6),
-        'note': f"{'알람 {len(alarms)}회 발생 — 성과 구조 변화 가능성 높음' if alarms else 'CUSUM 이상 없음'}",
+        'note': f"알람 {len(alarms)}회 발생 — 성과 구조 변화 가능성 높음" if alarms else "CUSUM 이상 없음",
     }
 
 

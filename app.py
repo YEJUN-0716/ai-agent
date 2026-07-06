@@ -5787,7 +5787,7 @@ def main():
                             st.error("JSON 파싱 오류")
                             _intended = None
                         if _intended is not None:
-                            if _PT_AVAILABLE and 'alpaca_key' in st.secrets.get('alpaca', {}):
+                            if _PT_AVAILABLE and 'api_key' in st.secrets.get('alpaca', {}):
                                 try:
                                     _broker_pos = _pt_get_positions(
                                         st.secrets['alpaca']['api_key'],
