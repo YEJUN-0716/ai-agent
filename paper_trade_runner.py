@@ -32,11 +32,12 @@ ALPACA_KEY    = os.environ.get("ALPACA_API_KEY", "")
 ALPACA_SECRET = os.environ.get("ALPACA_SECRET_KEY", "")
 TG_TOKEN      = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
-UNIVERSE_NAME = os.environ.get("UNIVERSE", "S&P 500 대형 30")
-TOP_N         = int(os.environ.get("TOP_N", "5"))
-CAPITAL_USD   = float(os.environ.get("CAPITAL_PER_TRADE", "1000"))
-MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", "10"))
-DRY_RUN       = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
+UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
+TOP_N          = int(os.environ.get("TOP_N", "5"))
+CAPITAL_USD    = float(os.environ.get("CAPITAL_PER_TRADE", "1000"))
+MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
+DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
+STOP_LOSS_PCT  = float(os.environ.get("STOP_LOSS_PCT", "5"))   # 손절 % (0이면 스톱 없음)
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 
@@ -179,9 +180,24 @@ def alpaca_post(path, body):
     return r.json()
 
 
-def place_buy(symbol: str, notional_usd: float) -> dict:
-    body = {"symbol": symbol, "notional": str(round(notional_usd, 2)),
-            "side": "buy", "type": "market", "time_in_force": "day"}
+def place_buy(symbol: str, notional_usd: float, ref_price: float,
+              stop_pct: float = STOP_LOSS_PCT) -> dict:
+    """시장가 매수. stop_pct > 0이면 bracket order로 손절가 자동 설정."""
+    if stop_pct > 0 and ref_price > 0:
+        qty = round(notional_usd / ref_price, 6)
+        stop_price = round(ref_price * (1 - stop_pct / 100), 2)
+        body = {
+            "symbol": symbol,
+            "qty": str(qty),
+            "side": "buy",
+            "type": "market",
+            "time_in_force": "day",
+            "order_class": "bracket",
+            "stop_loss": {"stop_price": str(stop_price)},
+        }
+    else:
+        body = {"symbol": symbol, "notional": str(round(notional_usd, 2)),
+                "side": "buy", "type": "market", "time_in_force": "day"}
     return {"dry_run": True, "body": body} if DRY_RUN else alpaca_post("/v2/orders", body)
 
 
@@ -313,10 +329,14 @@ def main():
         if buying_power < CAPITAL_USD * 0.9:
             print(f"  [매수 스킵] 매수여력 부족")
             break
-        print(f"  [매수] {sym} ${CAPITAL_USD:,.0f}  (스코어 {sig['score']}, RSI {sig['rsi']})")
+        _ref_px   = sig.get("price", 0)
+        _stop_px  = round(_ref_px * (1 - STOP_LOSS_PCT / 100), 2) if STOP_LOSS_PCT > 0 and _ref_px > 0 else 0
+        _stop_str = f"  손절 ${_stop_px:.2f} ({STOP_LOSS_PCT:.0f}%)" if _stop_px else ""
+        print(f"  [매수] {sym} ${CAPITAL_USD:,.0f}  (스코어 {sig['score']}, RSI {sig['rsi']}{_stop_str})")
         try:
-            res = place_buy(sym, CAPITAL_USD)
-            buy_results.append({"symbol": sym, "notional": CAPITAL_USD, "ok": True})
+            res = place_buy(sym, CAPITAL_USD, _ref_px)
+            buy_results.append({"symbol": sym, "notional": CAPITAL_USD, "ok": True,
+                                "stop_price": _stop_px})
             buying_power -= CAPITAL_USD
             n_bought += 1
         except Exception as e:
@@ -328,12 +348,17 @@ def main():
     n_buys  = sum(1 for r in buy_results  if r.get("ok"))
     n_errs  = sum(1 for r in sell_results + buy_results if "error" in r)
 
+    _buy_detail = ", ".join(
+        f"{r['symbol']}(손절${r['stop_price']:.2f})" if r.get("stop_price") else r["symbol"]
+        for r in buy_results if r.get("ok")
+    )
     lines = [
         f"*페이퍼 트레이딩 실행* `{run_ts}`",
         f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `${equity_now:,.0f}`",
+        f"손절 설정: {STOP_LOSS_PCT:.0f}% (bracket order)",
         "",
         f"*매도* {n_sells}건: " + ", ".join(r["symbol"] for r in sell_results if r.get("ok")),
-        f"*매수* {n_buys}건: " + ", ".join(r["symbol"] for r in buy_results  if r.get("ok")),
+        f"*매수* {n_buys}건: " + _buy_detail,
     ]
     if n_errs:
         lines.append(f"오류 {n_errs}건 — Actions 로그 확인")
