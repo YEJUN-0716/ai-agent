@@ -23,14 +23,17 @@ on:
         description: "종목당 투입금 USD"
         required: false
         default: "1000"
-      stop_loss_pct:
-        description: "손절 % (bracket order, 0이면 스톱 없음)"
+      trail_stop_pct:
+        description: "트레일링 스톱 % (고점 대비, 0이면 비활성)"
         required: false
-        default: "5"
+        default: "10"
       buy_score_min:
         description: "최소 매수 점수 (10~90, 이 점수 미만 종목은 top_n 안이어도 관망)"
         required: false
         default: "60"
+
+permissions:
+  contents: write
 
 jobs:
   run-paper-trade:
@@ -71,8 +74,16 @@ jobs:
           TOP_N:              ${{ github.event.inputs.top_n || '5' }}
           CAPITAL_PER_TRADE:  ${{ github.event.inputs.capital_per_trade || '1000' }}
           MAX_POSITIONS:      "10"
-          STOP_LOSS_PCT:      ${{ github.event.inputs.stop_loss_pct || '5' }}
+          TRAIL_STOP_PCT:     ${{ github.event.inputs.trail_stop_pct || '10' }}
           BUY_SCORE_MIN:      ${{ github.event.inputs.buy_score_min || '60' }}
           # schedule은 항상 실제 주문, workflow_dispatch는 input 값 따름
           DRY_RUN:            ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner.py
+
+      - name: 고점 추적 파일 커밋
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add peak_prices.json || true
+          git diff --staged --quiet || git commit -m "chore: trailing stop peak update $(date -u +%Y-%m-%d)"
+          git push || true

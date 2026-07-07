@@ -15,6 +15,7 @@ GitHub Actions cron으로 매일 미국 장마감 후 자동 실행.
   MAX_POSITIONS         최대 동시 포지션 수 (기본: 10)
   DRY_RUN               true면 주문 안 냄 (기본: false)
 """
+import json
 import os
 import sys
 import warnings
@@ -37,8 +38,9 @@ TOP_N          = int(os.environ.get("TOP_N", "5"))
 CAPITAL_USD    = float(os.environ.get("CAPITAL_PER_TRADE", "1000"))
 MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
-STOP_LOSS_PCT  = float(os.environ.get("STOP_LOSS_PCT", "5"))   # 손절 % (0이면 스톱 없음)
+TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))  # 고점 대비 트레일링 스톱 % (0이면 비활성)
 BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))  # 최소 매수 점수 (10~90, 미달 시 관망)
+PEAK_FILE      = "peak_prices.json"                             # 고점 추적 파일 (리포에 커밋됨)
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 
@@ -195,12 +197,34 @@ def place_buy(symbol: str, notional_usd: float) -> dict:
     return {"dry_run": True, "body": body} if DRY_RUN else alpaca_post("/v2/orders", body)
 
 
-def check_and_apply_stops(positions: list, stop_pct: float = STOP_LOSS_PCT) -> list:
-    """현재가가 평단 대비 stop_pct% 이하로 떨어진 포지션을 즉시 시장가 매도.
-    Alpaca 분수 주식은 stop order 미지원 → 크론 실행마다 소프트웨어로 체크.
+def load_peak_prices() -> dict:
+    if os.path.exists(PEAK_FILE):
+        try:
+            with open(PEAK_FILE) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_peak_prices(peaks: dict) -> None:
+    with open(PEAK_FILE, "w") as f:
+        json.dump(peaks, f, indent=2, sort_keys=True)
+
+
+def check_trailing_stops(positions: list, trail_pct: float = TRAIL_STOP_PCT,
+                          peaks: dict = None) -> tuple:
+    """고점 대비 trail_pct% 이하로 떨어지면 시장가 매도 (트레일링 스톱).
+    진입 직후에는 평단이 곧 고점이므로 일반 손절과 동일하게 작동.
+    수익 구간에서는 고점이 올라가며 스톱선도 함께 올라감.
+    반환: (results, 업데이트된 peaks)
     """
-    if stop_pct <= 0 or not positions:
-        return []
+    if trail_pct <= 0 or not positions:
+        return [], peaks or {}
+
+    if peaks is None:
+        peaks = {}
+
     results = []
     for pos in positions:
         sym       = pos.get("symbol", "")
@@ -209,24 +233,34 @@ def check_and_apply_stops(positions: list, stop_pct: float = STOP_LOSS_PCT) -> l
         cur_price = float(pos.get("current_price",   0) or 0)
         if avg_price <= 0 or cur_price <= 0 or float(qty) <= 0:
             continue
-        stop_line = avg_price * (1 - stop_pct / 100)
-        if cur_price < stop_line:
-            loss_pct = (cur_price / avg_price - 1) * 100
-            print(f"  [손절 발동] {sym}  {loss_pct:+.1f}%  "
-                  f"현재 ${cur_price:.2f} < 손절선 ${stop_line:.2f}")
+
+        # 고점 = max(저장된 고점, 평단, 현재가)
+        prev_peak  = float(peaks.get(sym, avg_price))
+        new_peak   = max(prev_peak, avg_price, cur_price)
+        peaks[sym] = new_peak
+
+        trail_line = new_peak * (1 - trail_pct / 100)
+        gain_pct   = (cur_price / avg_price - 1) * 100
+
+        if cur_price < trail_line:
+            print(f"  [트레일링 스톱] {sym}  고점 ${new_peak:.2f} → 현재 ${cur_price:.2f}"
+                  f"  ({trail_pct:.0f}% 이상 하락)  손익 {gain_pct:+.1f}%")
             if DRY_RUN:
-                results.append({"symbol": sym, "dry_run": True, "loss_pct": loss_pct})
+                results.append({"symbol": sym, "dry_run": True, "gain_pct": gain_pct})
             else:
                 try:
                     place_sell(sym, qty)
-                    results.append({"symbol": sym, "ok": True, "loss_pct": loss_pct})
+                    results.append({"symbol": sym, "ok": True, "gain_pct": gain_pct})
+                    peaks.pop(sym, None)
                 except Exception as e:
-                    print(f"  [손절 매도 오류] {sym}: {e}")
+                    print(f"  [트레일링 스톱 오류] {sym}: {e}")
                     results.append({"symbol": sym, "error": str(e)})
         else:
-            room = (cur_price / stop_line - 1) * 100
-            print(f"  {sym}  현재 ${cur_price:.2f}  손절선까지 {room:.1f}% 여유")
-    return results
+            room = (cur_price / trail_line - 1) * 100
+            print(f"  {sym}  현재 ${cur_price:.2f}  고점 ${new_peak:.2f}"
+                  f"  손익 {gain_pct:+.1f}%  스톱까지 {room:.1f}% 여유")
+
+    return results, peaks
 
 
 def place_sell(symbol: str, qty: str) -> dict:
@@ -298,15 +332,16 @@ def main():
     held = {p["symbol"]: p for p in positions}
     print(f"현재 보유 {len(held)}개: {list(held.keys())}")
 
-    # 2-1. 소프트웨어 손절 체크 (분수 주식은 Alpaca stop order 미지원)
+    # 2-1. 트레일링 스톱 체크 (고점 대비, peak_prices.json에 고점 추적)
     sell_results, sell_done = [], set()
-    if positions and STOP_LOSS_PCT > 0:
-        print(f"\n손절 기준 점검 ({STOP_LOSS_PCT:.0f}%)...")
-        _stop_fired = check_and_apply_stops(positions)
+    peaks = load_peak_prices()
+    if positions and TRAIL_STOP_PCT > 0:
+        print(f"\n트레일링 스톱 점검 ({TRAIL_STOP_PCT:.0f}%)...")
+        _stop_fired, peaks = check_trailing_stops(positions, peaks=peaks)
         for r in _stop_fired:
             if r.get("ok") or r.get("dry_run"):
                 sell_results.append({"symbol": r["symbol"], "ok": True,
-                                     "reason": f"손절 {r.get('loss_pct', 0):+.1f}%"})
+                                     "reason": f"트레일링 스톱 {r.get('gain_pct', 0):+.1f}%"})
                 sell_done.add(r["symbol"])
 
     # 3. 유니버스 (';'로 여러 프리셋 합치기 가능, 중복 제거)
@@ -387,21 +422,27 @@ def main():
             buy_results.append({"symbol": sym, "error": str(e)})
 
     # 8. 요약 & 텔레그램
+    # 매도 종목 peak 제거 후 저장
+    for sym in sell_done:
+        peaks.pop(sym, None)
+    save_peak_prices(peaks)
+
     n_sells = sum(1 for r in sell_results if r.get("ok"))
     n_buys  = sum(1 for r in buy_results  if r.get("ok"))
     n_errs  = sum(1 for r in sell_results + buy_results if "error" in r)
-    _stop_sells = [r["symbol"] for r in sell_results if r.get("ok") and "손절" in r.get("reason", "")]
+    _trail_sells = [r["symbol"] for r in sell_results
+                    if r.get("ok") and "트레일링" in r.get("reason", "")]
 
     lines = [
         f"*페이퍼 트레이딩 실행* `{run_ts}`",
         f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `${equity_now:,.0f}`",
-        f"손절 기준: {STOP_LOSS_PCT:.0f}% (소프트웨어 — 매일 장마감 후 체크)",
+        f"트레일링 스톱: {TRAIL_STOP_PCT:.0f}% (고점 대비)",
         "",
         f"*매도* {n_sells}건: " + ", ".join(r["symbol"] for r in sell_results if r.get("ok")),
         f"*매수* {n_buys}건: " + ", ".join(r["symbol"] for r in buy_results if r.get("ok")),
     ]
-    if _stop_sells:
-        lines.append(f"손절 발동: {', '.join(_stop_sells)}")
+    if _trail_sells:
+        lines.append(f"트레일링 스톱 발동: {', '.join(_trail_sells)}")
     if n_errs:
         lines.append(f"오류 {n_errs}건 — Actions 로그 확인")
 
