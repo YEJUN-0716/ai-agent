@@ -74,7 +74,7 @@ def _rsi(close: pd.Series, period: int = 14) -> float:
     if rsi_series.empty:
         return 50.0
     val = rsi_series.iloc[-1]
-    return float(val) if pd.notna(val) else 100.0
+    return float(val) if pd.notna(val) else 50.0
 
 
 def _momentum(close: pd.Series) -> dict:
@@ -118,8 +118,10 @@ def calc_factor_scores(tickers: list) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    # Z-score 정규화 → 0~100 점수
-    for col, weight in [("mom_3m", 0.40), ("mom_1m", 0.30)]:
+    WEIGHTS = {"mom_3m": 0.40, "mom_1m": 0.30, "low_vol": 0.30}
+
+    # Z-score 정규화
+    for col in ("mom_3m", "mom_1m"):
         mu, sigma = df[col].mean(), df[col].std()
         df[f"z_{col}"] = (df[col] - mu) / (sigma + 1e-9)
 
@@ -128,9 +130,9 @@ def calc_factor_scores(tickers: list) -> pd.DataFrame:
     df["z_low_vol"] = -(df["vol_ann"] - mu_v) / (sigma_v + 1e-9)
 
     df["composite_z"] = (
-        df["z_mom_3m"]  * 0.40
-        + df["z_mom_1m"]  * 0.30
-        + df["z_low_vol"] * 0.30
+        df["z_mom_3m"]  * WEIGHTS["mom_3m"]
+        + df["z_mom_1m"]  * WEIGHTS["mom_1m"]
+        + df["z_low_vol"] * WEIGHTS["low_vol"]
     )
     # 0~100으로 변환
     cmin, cmax = df["composite_z"].min(), df["composite_z"].max()
@@ -186,8 +188,7 @@ def alpaca_post(path, body):
     return r.json()
 
 
-def place_buy(symbol: str, notional_usd: float, ref_price: float = 0,
-              stop_pct: float = STOP_LOSS_PCT) -> dict:
+def place_buy(symbol: str, notional_usd: float) -> dict:
     """notional 시장가 매수. 분수 주식은 stop/bracket 미지원이므로 소프트웨어 손절 사용."""
     body = {"symbol": symbol, "notional": str(round(notional_usd, 2)),
             "side": "buy", "type": "market", "time_in_force": "day"}
@@ -342,7 +343,7 @@ def main():
     # 6. 매도 (팩터 시그널)
     for sig in sell_sigs:
         sym = _to_alpaca_sym(sig["ticker"])
-        if sym and sym in held:
+        if sym and sym in held and sym not in sell_done:
             qty = held[sym].get("qty", "0")
             print(f"  [매도] {sym} {qty}주")
             try:
@@ -375,14 +376,10 @@ def main():
         if buying_power < CAPITAL_USD * 0.9:
             print(f"  [매수 스킵] 매수여력 부족")
             break
-        _ref_px   = sig.get("price", 0)
-        _stop_px  = round(_ref_px * (1 - STOP_LOSS_PCT / 100), 2) if STOP_LOSS_PCT > 0 and _ref_px > 0 else 0
-        _stop_str = f"  손절 ${_stop_px:.2f} ({STOP_LOSS_PCT:.0f}%)" if _stop_px else ""
-        print(f"  [매수] {sym} ${CAPITAL_USD:,.0f}  (스코어 {sig['score']}, RSI {sig['rsi']}{_stop_str})")
+        print(f"  [매수] {sym} ${CAPITAL_USD:,.0f}  (스코어 {sig['score']}, RSI {sig['rsi']})")
         try:
-            res = place_buy(sym, CAPITAL_USD, _ref_px)
-            buy_results.append({"symbol": sym, "notional": CAPITAL_USD, "ok": True,
-                                "stop_price": _stop_px})
+            res = place_buy(sym, CAPITAL_USD)
+            buy_results.append({"symbol": sym, "notional": CAPITAL_USD, "ok": True})
             buying_power -= CAPITAL_USD
             n_bought += 1
         except Exception as e:
