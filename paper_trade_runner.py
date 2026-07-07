@@ -69,7 +69,10 @@ def _rsi(close: pd.Series, period: int = 14) -> float:
     loss = (-delta.clip(upper=0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi_series = 100 - 100 / (1 + rs)
-    return float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
+    if rsi_series.empty:
+        return 50.0
+    val = rsi_series.iloc[-1]
+    return float(val) if pd.notna(val) else 100.0
 
 
 def _momentum(close: pd.Series) -> dict:

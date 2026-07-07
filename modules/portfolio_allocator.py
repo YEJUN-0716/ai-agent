@@ -21,8 +21,11 @@ def inverse_vol_weights(strategy_returns: pd.DataFrame, lookback: int = 60) -> p
     """
     vol = strategy_returns.tail(lookback).std()
     inv = 1.0 / vol.replace(0, np.nan)
-    weights = inv / inv.sum()
-    return weights.fillna(0.0)
+    weights = (inv / inv.sum()).fillna(0.0)
+    if weights.sum() == 0:
+        n = len(weights)
+        return pd.Series(1.0 / n if n > 0 else 0.0, index=weights.index)
+    return weights
 
 
 def risk_parity_weights(strategy_returns: pd.DataFrame,

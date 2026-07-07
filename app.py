@@ -774,8 +774,11 @@ def _score_int_coverage(v):
     else:        return 10
 
 def calc_mdd(prices):
-    roll_max = prices.expanding().max()
-    return float(((prices - roll_max) / roll_max * 100).min())
+    p = prices[prices > 0].dropna()
+    if p.empty:
+        return 0.0
+    roll_max = p.expanding().max()
+    return float(((p - roll_max) / roll_max * 100).min())
 
 def _score_mdd(m):
     return 90 if m>-10 else (75 if m>-20 else (55 if m>-30 else (35 if m>-40 else (20 if m>-50 else 10))))
@@ -820,21 +823,21 @@ def calc_piotroski_fscore(ticker):
 
         ni_c=gv(fin,'net income');    ni_p=gv(fin,'net income',col=1)
         ta_c=gv(bal,'total assets');  ta_p=gv(bal,'total assets',col=1)
-        roa_c = ni_c/ta_c if ni_c and ta_c else None
-        roa_p = ni_p/ta_p if ni_p and ta_p else None
-        if roa_c and roa_p:
+        roa_c = ni_c/ta_c if ni_c is not None and ta_c else None
+        roa_p = ni_p/ta_p if ni_p is not None and ta_p else None
+        if roa_c is not None and roa_p is not None:
             if roa_c > roa_p: score+=1; sig['F3 ROA개선']='✅'
             else:              sig['F3 ROA개선']='❌'
         else: sig['F3 ROA개선']='❓'
 
-        if ocf and ta_c and roa_c:
+        if ocf is not None and ta_c and roa_c is not None:
             if ocf/ta_c > roa_c: score+=1; sig['F4 발생주의']='✅'
             else:                  sig['F4 발생주의']='❌'
         else: sig['F4 발생주의']='❓'
 
         ltd_c=gv(bal,'long','debt');  ltd_p=gv(bal,'long','debt',col=1)
-        lev_c = ltd_c/ta_c if ltd_c and ta_c else None
-        lev_p = ltd_p/ta_p if ltd_p and ta_p else None
+        lev_c = ltd_c/ta_c if ltd_c is not None and ta_c else None
+        lev_p = ltd_p/ta_p if ltd_p is not None and ta_p else None
         if lev_c is not None and lev_p is not None:
             if lev_c < lev_p: score+=1; sig['F5 레버리지감소']='✅'
             else:              sig['F5 레버리지감소']='❌'
@@ -842,9 +845,9 @@ def calc_piotroski_fscore(ticker):
 
         ca_c=gv(bal,'current assets');  cl_c=gv(bal,'current liabilities')
         ca_p=gv(bal,'current assets',col=1); cl_p=gv(bal,'current liabilities',col=1)
-        cr_c = ca_c/cl_c if ca_c and cl_c else None
-        cr_p = ca_p/cl_p if ca_p and cl_p else None
-        if cr_c and cr_p:
+        cr_c = ca_c/cl_c if ca_c is not None and cl_c else None
+        cr_p = ca_p/cl_p if ca_p is not None and cl_p else None
+        if cr_c is not None and cr_p is not None:
             if cr_c > cr_p: score+=1; sig['F6 유동성개선']='✅'
             else:            sig['F6 유동성개선']='❌'
         else: sig['F6 유동성개선']='❓'
@@ -858,16 +861,16 @@ def calc_piotroski_fscore(ticker):
 
         rev_c=gv(fin,'total revenue'); rev_p=gv(fin,'total revenue',col=1)
         gp_c =gv(fin,'gross profit');  gp_p =gv(fin,'gross profit',col=1)
-        gm_c = gp_c/rev_c if gp_c and rev_c else None
-        gm_p = gp_p/rev_p if gp_p and rev_p else None
-        if gm_c and gm_p:
+        gm_c = gp_c/rev_c if gp_c is not None and rev_c else None
+        gm_p = gp_p/rev_p if gp_p is not None and rev_p else None
+        if gm_c is not None and gm_p is not None:
             if gm_c > gm_p: score+=1; sig['F8 매출총이익률개선']='✅'
             else:            sig['F8 매출총이익률개선']='❌'
         else: sig['F8 매출총이익률개선']='❓'
 
-        at_c = rev_c/ta_c if rev_c and ta_c else None
-        at_p = rev_p/ta_p if rev_p and ta_p else None
-        if at_c and at_p:
+        at_c = rev_c/ta_c if rev_c is not None and ta_c else None
+        at_p = rev_p/ta_p if rev_p is not None and ta_p else None
+        if at_c is not None and at_p is not None:
             if at_c > at_p: score+=1; sig['F9 자산회전율개선']='✅'
             else:            sig['F9 자산회전율개선']='❌'
         else: sig['F9 자산회전율개선']='❓'
@@ -1982,9 +1985,8 @@ def detect_chart_pattern(ticker, period='6mo'):
         uptrend   = bool(close[pk[-1]] > close[pk[-2]] and close[tr[-1]] > close[tr[-2]])
         downtrend = bool(close[pk[-1]] < close[pk[-2]] and close[tr[-1]] < close[tr[-2]])
 
-    d = c_s.diff()
-    rsi_v = float(100 - 100 / (1 + d.clip(lower=0).rolling(14).mean() /
-                                    (-d.clip(upper=0)).rolling(14).mean()).iloc[-1])
+    _rsi_val = calc_rsi(c_s).iloc[-1]
+    rsi_v = float(_rsi_val) if np.isfinite(_rsi_val) else 50.0
 
     up_vol = np.mean([vol[i] for i in range(-5, 0) if close[i] > close[i-1]] or [0])
     vol_ok = bool(up_vol > np.mean(vol[-20:]) * 1.1)
@@ -2359,7 +2361,9 @@ def calc_trade_levels(df, total_score):
     RSI/MACD/스토캐스틱/거래량 조건 통합, VWAP, 3분할 매수, 시간손절 포함."""
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     cp  = float(p.iloc[-1])
-    atr = float((h - l).rolling(14).mean().iloc[-1])
+    _prev_c = p.shift(1)
+    _tr = pd.concat([(h-l), (h-_prev_c).abs(), (l-_prev_c).abs()], axis=1).max(axis=1)
+    atr = float(_tr.rolling(14).mean().iloc[-1])
 
     ma5   = float(p.rolling(5).mean().iloc[-1])
     ma10  = float(p.rolling(10).mean().iloc[-1])
@@ -3080,7 +3084,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
 
     if len(price_df) < 61:
         return {}, pd.DataFrame(), []
-    _start_idx = price_df.index[252] if len(price_df) > 252 else price_df.index[60]
+    _start_idx = price_df.index[252] if len(price_df) >= 252 else price_df.index[60]
     months = pd.date_range(start=_start_idx, end=price_df.index[-1], freq=f'{rebal_months}MS')
 
     equity = 10000.0
@@ -3159,7 +3163,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
     daily_r = eq_s.pct_change().dropna()
     sharpe = float(daily_r.mean()/daily_r.std()*np.sqrt(252)) if daily_r.std() > 0 else 0
     avg_turnover = total_turnover / max(len(trade_log), 1) * 100
-    round_trip_cost = commission + 2 * slippage
+    round_trip_cost = 2 * commission + 2 * slippage
     total_cost_pct = total_turnover * round_trip_cost * 100
 
     spy_df = download_stock('SPY', start=start, end=end)
@@ -3859,9 +3863,9 @@ def main():
 
                 st.subheader("📋 분석 요약")
                 mtf_d = mtf_scores.get('일봉'); mtf_w = mtf_scores.get('주봉'); mtf_m = mtf_scores.get('월봉')
-                mtf_list = [x['score'] for x in [mtf_d, mtf_w, mtf_m] if x is not None]
+                mtf_list = [x['score'] for x in [mtf_d, mtf_w, mtf_m] if x is not None and 'score' in x]
                 mtf_avg  = sum(mtf_list) / len(mtf_list) if mtf_list else 50.0
-                mtf_summary = (f"일봉 {mtf_d['score']:.0f} / 주봉 {mtf_w['score']:.0f} / 월봉 {mtf_m['score']:.0f}"
+                mtf_summary = (f"일봉 {mtf_d.get('score',50):.0f} / 주봉 {mtf_w.get('score',50):.0f} / 월봉 {mtf_m.get('score',50):.0f}"
                                if mtf_d and mtf_w and mtf_m else "N/A")
                 mom_3 = mom_data.get('3M'); mom_12 = mom_data.get('12M')
                 mom_summary = (f"3M {mom_3:+.1f}% / 12M {mom_12:+.1f}%"
@@ -3902,7 +3906,7 @@ def main():
                     SKIP = {'RSI값', 'ADX값', 'Stoch값'}
                     HINT = {
                         'RSI':      f"RSI {t_det.get('RSI값','N/A')}",
-                        'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if float(t_det.get('ADX값',0)) > 25 else '횡보'})",
+                        'ADX추세강도': f"ADX {t_det.get('ADX값','N/A')} ({'추세' if isinstance(t_det.get('ADX값'), (int,float)) and t_det.get('ADX값') > 25 else '횡보'})",
                         '스토캐스틱': f"%K {t_det.get('Stoch값','N/A')}",
                     }
                     for k, v in t_det.items():
@@ -3938,7 +3942,9 @@ def main():
                 with st.expander("💰 재무+퀀트 세부"):
                     for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
                         v = f_det.get(k, 50)
-                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
+                        if not isinstance(v, (int, float)) or not np.isfinite(v): continue
+                        _n = int(min(100, max(0, v)) / 10)
+                        st.markdown(f"**{k}** {'█'*_n}{'░'*(10-_n)} `{v:.0f}점`")
                     st.divider()
                     sec_nm = f_det.get('업종','N/A'); sec_per = f_det.get('업종평균PER', 20)
                     st.caption(f"업종: {sec_nm}  (업종평균 PER: {sec_per})")
@@ -3965,7 +3971,9 @@ def main():
                 with st.expander("🌍 매크로+금리 세부"):
                     for k in ['금리환경','장단기금리차','VIX','달러지수','신용스프레드','원자재/인플레']:
                         v = m_det.get(k, 50)
-                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`")
+                        if not isinstance(v, (int, float)) or not np.isfinite(v): continue
+                        _n = int(min(100, max(0, v)) / 10)
+                        st.markdown(f"**{k}** {'█'*_n}{'░'*(10-_n)} `{v:.0f}점`")
                     st.divider()
                     if '10Y금리' in m_data:
                         st.caption(f"10Y 금리: {m_data['10Y금리']:.2f}%  |  3M변화: {m_data.get('3M금리변화',0):+.2f}%p")
@@ -5230,7 +5238,7 @@ def main():
                                         "DSR (Deflated Sharpe)",
                                         f"{_dsr_pct:.1f}%",
                                         delta=("유의미 ✅" if _dsr_sig else "우연 수준 ⚠️"),
-                                        delta_color=("off" if _dsr_sig else "inverse"))
+                                        delta_color=("normal" if _dsr_sig else "inverse"))
                                     st.caption(f"💡 {_dsr_res['interpretation']}")
                                 except Exception as _e:
                                     sv1.error(f"DSR 계산 오류: {_e}")
@@ -5489,7 +5497,7 @@ def main():
                     _res  = _ml_r['res']
 
                     # AUC 지표
-                    _auc_color = "off" if _res['mean_auc'] >= 0.55 else "inverse"
+                    _auc_color = "normal" if _res['mean_auc'] >= 0.55 else "inverse"
                     _auc_label = ("좋은 edge ✅" if _res['mean_auc'] >= 0.58 else
                                   ("약한 edge 🔶" if _res['mean_auc'] >= 0.53 else "신호 없음 ❌"))
                     m1, m2, m3 = st.columns(3)

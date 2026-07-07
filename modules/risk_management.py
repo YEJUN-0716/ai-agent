@@ -138,7 +138,7 @@ def run_backtest_sized(df: pd.DataFrame, bt_signals_full_fn, buy_th: float = 65,
             buy_px = exec_px * (1 + slippage)
             fee = invest_amt * commission
             shares = (invest_amt - fee) / buy_px
-            entry_val = invest_amt
+            entry_val = invest_amt - fee
             capital -= invest_amt
             in_pos = True
             trades.append({'날짜': dates[i], '구분': '🟢 매수', '비중': f"{target_frac*100:.0f}%", '수익률': ''})
