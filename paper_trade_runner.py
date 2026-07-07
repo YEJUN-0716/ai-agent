@@ -302,12 +302,21 @@ def main():
                                      "reason": f"손절 {r.get('loss_pct', 0):+.1f}%"})
                 sell_done.add(r["symbol"])
 
-    # 3. 유니버스
-    raw_tickers = UNIVERSE_PRESETS.get(UNIVERSE_NAME)
-    if not raw_tickers:
-        raw_tickers = [t.strip().upper() for t in UNIVERSE_NAME.split(",") if t.strip()]
-    tickers = [t for t in raw_tickers if not t.endswith(".KS") and not t.endswith(".KQ")]
-    print(f"\n유니버스: {UNIVERSE_NAME} ({len(tickers)}개)")
+    # 3. 유니버스 (';'로 여러 프리셋 합치기 가능, 중복 제거)
+    raw_tickers: list[str] = []
+    for _name in UNIVERSE_NAME.split(";"):
+        _name = _name.strip()
+        _preset = UNIVERSE_PRESETS.get(_name)
+        if _preset:
+            raw_tickers.extend(_preset)
+        else:
+            raw_tickers.extend(t.strip().upper() for t in _name.split(",") if t.strip())
+    # 순서 유지하며 중복 제거
+    seen: set[str] = set()
+    tickers = [t for t in raw_tickers
+               if not t.endswith(".KS") and not t.endswith(".KQ")
+               and t not in seen and not seen.add(t)]  # type: ignore[func-returns-value]
+    print(f"\n유니버스: {UNIVERSE_NAME} → {len(tickers)}개 (중복 제거 후)")
 
     # 4. 팩터 스코어
     print("팩터 스코어 계산 중... (1~3분)")

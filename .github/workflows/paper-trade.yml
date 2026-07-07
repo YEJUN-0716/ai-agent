@@ -12,9 +12,9 @@ on:
         required: false
         default: "true"
       universe:
-        description: "유니버스 이름 (S&P 500 대형 30 / NASDAQ 기술주 20 / 반도체 15 등)"
+        description: "유니버스 이름 (';'로 복수 지정 가능, 예: S&P 500 대형 30;반도체 15)"
         required: false
-        default: "S&P 500 대형 30"
+        default: "S&P 500 대형 30;NASDAQ 기술주 20;반도체 15;배당 귀족 15"
       top_n:
         description: "매수 상위 N개"
         required: false
@@ -63,7 +63,7 @@ jobs:
           TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
           # schedule 실행 시: 아래 기본값 사용
           # workflow_dispatch 실행 시: input 값 우선
-          UNIVERSE:           ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
+          UNIVERSE:           ${{ github.event.inputs.universe || 'S&P 500 대형 30;NASDAQ 기술주 20;반도체 15;배당 귀족 15' }}
           TOP_N:              ${{ github.event.inputs.top_n || '5' }}
           CAPITAL_PER_TRADE:  ${{ github.event.inputs.capital_per_trade || '1000' }}
           MAX_POSITIONS:      "10"
