@@ -38,6 +38,7 @@ CAPITAL_USD    = float(os.environ.get("CAPITAL_PER_TRADE", "1000"))
 MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 STOP_LOSS_PCT  = float(os.environ.get("STOP_LOSS_PCT", "5"))   # 손절 % (0이면 스톱 없음)
+BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))  # 최소 매수 점수 (10~90, 미달 시 관망)
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 
@@ -137,8 +138,13 @@ def calc_factor_scores(tickers: list) -> pd.DataFrame:
     return df.sort_values("composite", ascending=False).reset_index(drop=True)
 
 
-def generate_signals(factor_df: pd.DataFrame, top_n: int = 5) -> list:
-    """팩터 스코어 기반 매수/매도 시그널 생성."""
+def generate_signals(factor_df: pd.DataFrame, top_n: int = 5,
+                     min_score: float = BUY_SCORE_MIN) -> list:
+    """팩터 스코어 기반 매수/매도 시그널 생성.
+
+    top_n: 매수 후보 상한 (점수 상위 N개 안에서만 고려)
+    min_score: 이 점수 미만이면 top_n 안이어도 관망 처리 (10~90 척도)
+    """
     if factor_df.empty:
         return []
     buy_set  = set(factor_df.head(top_n)["ticker"])
@@ -149,7 +155,7 @@ def generate_signals(factor_df: pd.DataFrame, top_n: int = 5) -> list:
         score = float(row["composite"])
         rsi   = float(row["rsi"])
         price = float(row["price"])
-        if tk in buy_set and rsi < 75:
+        if tk in buy_set and rsi < 75 and score >= min_score:
             action = "매수"
         elif tk in sell_set or rsi > 80:
             action = "매도"

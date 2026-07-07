@@ -27,6 +27,10 @@ on:
         description: "손절 % (bracket order, 0이면 스톱 없음)"
         required: false
         default: "5"
+      buy_score_min:
+        description: "최소 매수 점수 (10~90, 이 점수 미만 종목은 top_n 안이어도 관망)"
+        required: false
+        default: "60"
 
 jobs:
   run-paper-trade:
@@ -68,6 +72,7 @@ jobs:
           CAPITAL_PER_TRADE:  ${{ github.event.inputs.capital_per_trade || '1000' }}
           MAX_POSITIONS:      "10"
           STOP_LOSS_PCT:      ${{ github.event.inputs.stop_loss_pct || '5' }}
+          BUY_SCORE_MIN:      ${{ github.event.inputs.buy_score_min || '60' }}
           # schedule은 항상 실제 주문, workflow_dispatch는 input 값 따름
           DRY_RUN:            ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner.py
