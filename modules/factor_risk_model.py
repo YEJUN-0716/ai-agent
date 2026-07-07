@@ -67,7 +67,7 @@ def regression_style_analysis(strategy_returns: pd.Series,
         'r_squared': round(r_squared, 4),
         'interpretation': (
             f"연율화 알파 {alpha_annualized:.2f}%, "
-            f"{'통계적으로 유의 (p={p_alpha:.3f})' if p_alpha < 0.05 else '통계적으로 유의하지 않음 (p={p_alpha:.3f})'}. "
+            f"{'통계적으로 유의' if p_alpha < 0.05 else '통계적으로 유의하지 않음'} (p={p_alpha:.3f}). "
             f"R²={r_squared:.2f} — {'팩터로 전략 수익률의 대부분이 설명됨' if r_squared > 0.7 else '독자적 알파 성분 큼'}"
         )
     }

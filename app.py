@@ -259,11 +259,10 @@ def calc_sector_rotation():
             r3  = (cur / float(c.iloc[-63])  - 1) * 100 if len(c) >= 63  else None
             r6  = (cur / float(c.iloc[-126]) - 1) * 100 if len(c) >= 126 else None
             ma50 = float(c.rolling(50).mean().iloc[-1]) if len(c) >= 50 else None
-            mom = sum(x * w for x, w in zip(
-                      [x for x in [r1, r3, r6] if x is not None],
-                      [0.5, 0.3, 0.2]) ) / sum(
-                      [w for x, w in zip([r1, r3, r6], [0.5, 0.3, 0.2]) if x is not None]
-                  ) if any(x is not None for x in [r1, r3, r6]) else 0
+            _pairs = [(r1,0.5),(r3,0.3),(r6,0.2)]
+            mom = (sum(x*w for x,w in _pairs if x is not None) /
+                   sum(w   for x,w in _pairs if x is not None)) \
+                  if any(x is not None for x,_ in _pairs) else 0
             rows.append({
                 'ETF': sym, '섹터': name, '현재가': f"${cur:.2f}",
                 '1M%': round(r1, 1) if r1 is not None else None,
@@ -924,7 +923,7 @@ def fundamental_score(ticker, df=None):
         de_s  = _score_de(de/100 if de is not None else None)
         cr_s  = 50
         if cr: cr_s = 10 if cr<0.5 else (30 if cr<1.0 else (60 if cr<1.5 else (85 if cr<3.0 else 75)))
-        int_cov = (ebit/int_exp) if (ebit and int_exp and int_exp != 0) else None
+        int_cov = (ebit/abs(int_exp)) if (ebit and int_exp and int_exp != 0) else None
         ic_s  = _score_int_coverage(int_cov)
         det['안전성'] = de_s*0.45 + cr_s*0.30 + ic_s*0.25
         det['D/E'] = de; det['유동비율'] = cr; det['이자보상배율'] = int_cov
@@ -1245,8 +1244,8 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     sigs = bt_signals_full(df)
     if f_score is not None and m_score is not None and w_tech < 100:
         fm_offset = (f_score - 50) * (w_fund / 100) + (m_score - 50) * (w_macro / 100)
-        buy_th  = buy_th - fm_offset
-        sell_th = sell_th - fm_offset
+        buy_th  = buy_th  - fm_offset  # 재무 좋으면 진입 조건 완화
+        sell_th = sell_th + fm_offset  # 재무 좋으면 청산 조건 강화
     prices = df['Close'].values
     opens  = df['Open'].values if 'Open' in df.columns else None
     dates  = df.index
@@ -1309,7 +1308,7 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     roll_max  = eq_s.expanding().max()
     dd_series = (eq_s - roll_max) / roll_max * 100
     mdd       = float(dd_series.min())
-    daily_ret = eq_s.pct_change().dropna().iloc[20:]  # 워밍업 0수익률 20개 제외
+    daily_ret = eq_s.pct_change().dropna().iloc[19:]  # 워밍업 0수익률 19개 제외
     sharpe    = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0
     calmar    = cagr / abs(mdd) if mdd < 0 else 0.0
 
@@ -3615,8 +3614,8 @@ def main():
             fmt_p  = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
             chg = (cp-pp)/pp*100 if pp else 0
 
-            regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}[regime]
-            regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}[regime]
+            regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}.get(regime, '➡️ 중립장')
+            regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}.get(regime, '#b2b5be')
 
             st.header(f"{name}  `{ticker}`")
             _updated = end_dt.strftime('%Y-%m-%d %H:%M')
@@ -3908,8 +3907,10 @@ def main():
                     }
                     for k, v in t_det.items():
                         if k in SKIP: continue
+                        if not isinstance(v, (int, float)) or not np.isfinite(v): continue
                         hint = f" *({HINT[k]})*" if k in HINT else ''
-                        st.markdown(f"**{k}** {'█'*int(v/10)}{'░'*(10-int(v/10))} `{v:.0f}점`{hint}")
+                        _n = int(min(100, max(0, v)) / 10)
+                        st.markdown(f"**{k}** {'█'*_n}{'░'*(10-_n)} `{v:.0f}점`{hint}")
                     st.divider()
                     st.caption("**📊 모멘텀**")
                     m_cols = st.columns(4)
@@ -4437,8 +4438,9 @@ def main():
                         cols.append('sector'); col_names.append('섹터')
                     cols += ['composite','momentum','value','quality','low_vol','vol','per','pbr','roe']
                     col_names += ['종합','모멘텀','밸류','퀄리티','저변동','변동성%','PER','PBR','ROE%']
-                    disp = fdf[[c for c in cols if c in fdf.columns]].copy()
-                    disp.columns = col_names[:len(disp.columns)]
+                    col_pairs = [(c, n) for c, n in zip(cols, col_names) if c in fdf.columns]
+                    disp = fdf[[c for c, _ in col_pairs]].copy()
+                    disp.columns = [n for _, n in col_pairs]
                     for c in ['종합','모멘텀','밸류','퀄리티','저변동']:
                         disp[c] = disp[c].round(0).astype(int)
                     st.dataframe(disp, use_container_width=True, hide_index=True, height=400)
@@ -4924,9 +4926,9 @@ def main():
                     end_dt2   = datetime.now()
                     start_dt2 = end_dt2 - timedelta(days=period_days[bt_period]+60)
                     _bt_df = download_stock(bt_ticker, start=start_dt2, end=end_dt2)
-                    _bt_df = _bt_df.dropna(subset=['Close'])
+                    _bt_df = _bt_df.dropna(subset=['Close']) if _bt_df is not None else pd.DataFrame()
 
-                if _bt_df.empty or len(_bt_df) < 60:
+                if _bt_df is None or _bt_df.empty or len(_bt_df) < 60:
                     st.error("데이터가 부족합니다.")
                 else:
                     _bt_f, _bt_m = None, None
@@ -5073,8 +5075,8 @@ def main():
                 st.divider()
 
                 # 20일 기준 점수 구간별 평균 수익률 막대차트
-                cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1])
-                bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)'])
+                cr20 = next((r for r in corr_results if r['horizon'] == 20), corr_results[-1] if corr_results else None)
+                bs   = cr20['bucket_stats'].dropna(subset=['평균수익률(%)']) if cr20 else pd.DataFrame()
                 if not bs.empty:
                     bar_colors = [TV_UP if v >= 0 else TV_DOWN for v in bs['평균수익률(%)'].tolist()]
                     fig_bar = go.Figure()

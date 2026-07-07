@@ -89,6 +89,9 @@ def cusum_change_detection(returns: pd.Series, target_mean: float,
     cusum_vals, alarms = [], []
 
     for i, r in enumerate(returns):
+        if not np.isfinite(r):
+            cusum_vals.append(S_neg)
+            continue
         S_neg = min(0.0, S_neg + r - target_mean + k)
         cusum_vals.append(S_neg)
         if S_neg <= -threshold_std * sigma:

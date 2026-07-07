@@ -123,7 +123,7 @@ def reconcile_positions(intended: dict, broker: list,
                 'symbol': symbol, 'intended': intended_qty,
                 'broker': broker_qty, 'diff': round(diff, 4),
             })
-        if symbol not in broker_map and intended_qty > tolerance_shares:
+        elif symbol not in broker_map and intended_qty > tolerance_shares:
             missing_in_broker.append(symbol)
 
     for symbol in broker_map:

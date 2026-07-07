@@ -170,7 +170,7 @@ def run_backtest_sized(df: pd.DataFrame, bt_signals_full_fn, buy_th: float = 65,
     eq_s = pd.Series(equity).replace(0, np.nan).ffill()
     roll_max = eq_s.expanding().max()
     mdd = float(((eq_s - roll_max) / roll_max * 100).min())
-    daily_ret = eq_s.pct_change().dropna().iloc[20:]  # 워밍업 0수익률 20개 제외
+    daily_ret = eq_s.pct_change().dropna().iloc[19:]  # 워밍업 0수익률 19개 제외
     sharpe = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0.0
 
     metrics = {

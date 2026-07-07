@@ -120,6 +120,9 @@ def compare_assumed_vs_actual_slippage(signal_price: float, filled_avg_price: fl
     백테스트 가정 슬리피지 vs 실제 Alpaca 체결 슬리피지 비교.
     양수 = 불리(비용 발생), 음수 = 유리 (매수/매도 방향 무관하게 통일).
     """
+    if not signal_price:
+        return {'signal_price': signal_price, 'actual_slippage_pct': 0.0,
+                'assumed_slippage_pct': assumed_slippage_pct, 'difference_pct': 0.0}
     raw_slip_pct = (filled_avg_price / signal_price - 1) * 100
     if side == 'sell':
         raw_slip_pct = -raw_slip_pct
