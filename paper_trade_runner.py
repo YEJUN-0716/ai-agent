@@ -180,71 +180,45 @@ def alpaca_post(path, body):
     return r.json()
 
 
-def place_buy(symbol: str, notional_usd: float, ref_price: float,
+def place_buy(symbol: str, notional_usd: float, ref_price: float = 0,
               stop_pct: float = STOP_LOSS_PCT) -> dict:
-    """시장가 매수. stop_pct > 0이면 bracket order로 손절가 자동 설정."""
-    if stop_pct > 0 and ref_price > 0:
-        qty = round(notional_usd / ref_price, 6)
-        stop_price = round(ref_price * (1 - stop_pct / 100), 2)
-        body = {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": "buy",
-            "type": "market",
-            "time_in_force": "day",
-            "order_class": "bracket",
-            "stop_loss": {"stop_price": str(stop_price)},
-        }
-    else:
-        body = {"symbol": symbol, "notional": str(round(notional_usd, 2)),
-                "side": "buy", "type": "market", "time_in_force": "day"}
+    """notional 시장가 매수. 분수 주식은 stop/bracket 미지원이므로 소프트웨어 손절 사용."""
+    body = {"symbol": symbol, "notional": str(round(notional_usd, 2)),
+            "side": "buy", "type": "market", "time_in_force": "day"}
     return {"dry_run": True, "body": body} if DRY_RUN else alpaca_post("/v2/orders", body)
 
 
-def add_missing_stops(positions: list, stop_pct: float = STOP_LOSS_PCT) -> list:
-    """기존 포지션 중 stop order가 없는 것에 GTC stop-market 매도 주문 추가."""
+def check_and_apply_stops(positions: list, stop_pct: float = STOP_LOSS_PCT) -> list:
+    """현재가가 평단 대비 stop_pct% 이하로 떨어진 포지션을 즉시 시장가 매도.
+    Alpaca 분수 주식은 stop order 미지원 → 크론 실행마다 소프트웨어로 체크.
+    """
     if stop_pct <= 0 or not positions:
         return []
-    try:
-        open_orders = alpaca_get("/v2/orders", params={"status": "open", "limit": "500"})
-    except Exception as e:
-        print(f"[경고] 오픈 주문 조회 실패: {e}")
-        return []
-
-    # 이미 stop/stop_limit 주문이 걸린 종목
-    has_stop = {o["symbol"] for o in open_orders
-                if o.get("type") in ("stop", "stop_limit")
-                or o.get("order_class") in ("bracket", "oco")}
-
     results = []
     for pos in positions:
-        sym = pos.get("symbol", "")
-        if sym in has_stop:
+        sym       = pos.get("symbol", "")
+        qty       = pos.get("qty", "0")
+        avg_price = float(pos.get("avg_entry_price", 0) or 0)
+        cur_price = float(pos.get("current_price",   0) or 0)
+        if avg_price <= 0 or cur_price <= 0 or float(qty) <= 0:
             continue
-        qty        = pos.get("qty", "0")
-        avg_price  = float(pos.get("avg_entry_price", 0) or 0)
-        cur_price  = float(pos.get("current_price",   0) or 0)
-        if avg_price <= 0 or float(qty) <= 0:
-            continue
-        # 이미 손절선 아래로 빠진 경우 현재가 기준으로 stop 설정
-        ref = avg_price if cur_price >= avg_price * (1 - stop_pct / 100) else cur_price
-        stop_price = round(ref * (1 - stop_pct / 100), 2)
-        body = {
-            "symbol": sym, "qty": qty,
-            "side": "sell", "type": "stop",
-            "stop_price": str(stop_price),
-            "time_in_force": "gtc",
-        }
-        print(f"  [손절 추가] {sym}  평단 ${avg_price:.2f} → stop ${stop_price:.2f} ({stop_pct:.0f}%)")
-        if DRY_RUN:
-            results.append({"symbol": sym, "stop_price": stop_price, "dry_run": True})
+        stop_line = avg_price * (1 - stop_pct / 100)
+        if cur_price < stop_line:
+            loss_pct = (cur_price / avg_price - 1) * 100
+            print(f"  [손절 발동] {sym}  {loss_pct:+.1f}%  "
+                  f"현재 ${cur_price:.2f} < 손절선 ${stop_line:.2f}")
+            if DRY_RUN:
+                results.append({"symbol": sym, "dry_run": True, "loss_pct": loss_pct})
+            else:
+                try:
+                    place_sell(sym, qty)
+                    results.append({"symbol": sym, "ok": True, "loss_pct": loss_pct})
+                except Exception as e:
+                    print(f"  [손절 매도 오류] {sym}: {e}")
+                    results.append({"symbol": sym, "error": str(e)})
         else:
-            try:
-                alpaca_post("/v2/orders", body)
-                results.append({"symbol": sym, "stop_price": stop_price, "ok": True})
-            except Exception as e:
-                print(f"  [손절 추가 오류] {sym}: {e}")
-                results.append({"symbol": sym, "error": str(e)})
+            room = (cur_price / stop_line - 1) * 100
+            print(f"  {sym}  현재 ${cur_price:.2f}  손절선까지 {room:.1f}% 여유")
     return results
 
 
@@ -317,15 +291,16 @@ def main():
     held = {p["symbol"]: p for p in positions}
     print(f"현재 보유 {len(held)}개: {list(held.keys())}")
 
-    # 2-1. 손절 주문 누락 보완 (bracket 없이 매수된 기존 포지션 패치)
-    if positions:
-        print("\n손절 주문 누락 점검...")
-        _stop_res = add_missing_stops(positions)
-        if _stop_res:
-            _patched = [r["symbol"] for r in _stop_res if r.get("ok") or r.get("dry_run")]
-            print(f"  stop order 추가: {_patched}")
-        else:
-            print("  모든 포지션에 손절 주문 있음 (패치 불필요)")
+    # 2-1. 소프트웨어 손절 체크 (분수 주식은 Alpaca stop order 미지원)
+    sell_results, sell_done = [], set()
+    if positions and STOP_LOSS_PCT > 0:
+        print(f"\n손절 기준 점검 ({STOP_LOSS_PCT:.0f}%)...")
+        _stop_fired = check_and_apply_stops(positions)
+        for r in _stop_fired:
+            if r.get("ok") or r.get("dry_run"):
+                sell_results.append({"symbol": r["symbol"], "ok": True,
+                                     "reason": f"손절 {r.get('loss_pct', 0):+.1f}%"})
+                sell_done.add(r["symbol"])
 
     # 3. 유니버스
     raw_tickers = UNIVERSE_PRESETS.get(UNIVERSE_NAME)
@@ -349,8 +324,7 @@ def main():
     sell_sigs = [s for s in signals if s["action"] == "매도"]
     print(f"시그널: 매수 {len(buy_sigs)}건, 매도 {len(sell_sigs)}건")
 
-    # 6. 매도
-    sell_results, sell_done = [], set()
+    # 6. 매도 (팩터 시그널)
     for sig in sell_sigs:
         sym = _to_alpaca_sym(sig["ticker"])
         if sym and sym in held:
@@ -401,25 +375,21 @@ def main():
             buy_results.append({"symbol": sym, "error": str(e)})
 
     # 8. 요약 & 텔레그램
-    n_sells   = sum(1 for r in sell_results if r.get("ok"))
-    n_buys    = sum(1 for r in buy_results  if r.get("ok"))
-    n_errs    = sum(1 for r in sell_results + buy_results if "error" in r)
-    n_patched = sum(1 for r in _stop_res    if r.get("ok") or r.get("dry_run")) if '_stop_res' in dir() else 0
+    n_sells = sum(1 for r in sell_results if r.get("ok"))
+    n_buys  = sum(1 for r in buy_results  if r.get("ok"))
+    n_errs  = sum(1 for r in sell_results + buy_results if "error" in r)
+    _stop_sells = [r["symbol"] for r in sell_results if r.get("ok") and "손절" in r.get("reason", "")]
 
-    _buy_detail = ", ".join(
-        f"{r['symbol']}(손절${r['stop_price']:.2f})" if r.get("stop_price") else r["symbol"]
-        for r in buy_results if r.get("ok")
-    )
     lines = [
         f"*페이퍼 트레이딩 실행* `{run_ts}`",
         f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `${equity_now:,.0f}`",
-        f"손절 설정: {STOP_LOSS_PCT:.0f}% (bracket order)",
+        f"손절 기준: {STOP_LOSS_PCT:.0f}% (소프트웨어 — 매일 장마감 후 체크)",
         "",
         f"*매도* {n_sells}건: " + ", ".join(r["symbol"] for r in sell_results if r.get("ok")),
-        f"*매수* {n_buys}건: " + _buy_detail,
+        f"*매수* {n_buys}건: " + ", ".join(r["symbol"] for r in buy_results if r.get("ok")),
     ]
-    if n_patched:
-        lines.append(f"기존 포지션 손절 보완: {n_patched}건")
+    if _stop_sells:
+        lines.append(f"손절 발동: {', '.join(_stop_sells)}")
     if n_errs:
         lines.append(f"오류 {n_errs}건 — Actions 로그 확인")
 
