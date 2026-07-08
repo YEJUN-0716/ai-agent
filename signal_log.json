@@ -1,0 +1,16 @@
+{
+  "signals": [
+    {
+      "id": "AMAT-2026-07-08",
+      "symbol": "AMAT",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-07-08",
+      "entry_price": 570.5,
+      "score": 68.7,
+      "rsi": 50.2,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    }
+  ]
+}
