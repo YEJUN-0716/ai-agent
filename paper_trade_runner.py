@@ -26,6 +26,13 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+try:
+    import pandas_ta as _pta
+    _PTA_AVAILABLE = True
+except ImportError:
+    _pta = None
+    _PTA_AVAILABLE = False
+
 warnings.filterwarnings("ignore")
 
 # ── 설정 ────────────────────────────────────────────────────────
@@ -40,7 +47,9 @@ MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))  # 고점 대비 트레일링 스톱 % (0이면 비활성)
 BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))  # 최소 매수 점수 (10~90, 미달 시 관망)
-PEAK_FILE      = "peak_prices.json"                             # 고점 추적 파일 (리포에 커밋됨)
+PEAK_FILE        = "peak_prices.json"   # 고점 추적 파일 (리포에 커밋됨)
+SIGNAL_LOG_FILE  = "signal_log.json"   # 시그널 적중률 추적 파일 (리포에 커밋됨)
+SIGNAL_HOLD_DAYS = 21                  # 결과 판정까지 대기 캘린더 일수
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 
@@ -68,6 +77,15 @@ UNIVERSE_PRESETS = {
 
 # ── 팩터 스코어 (순수 pandas/numpy) ──────────────────────────────
 def _rsi(close: pd.Series, period: int = 14) -> float:
+    if _PTA_AVAILABLE:
+        try:
+            result = _pta.rsi(close, length=period)
+            if result is not None and not result.empty:
+                val = result.iloc[-1]
+                return float(val) if pd.notna(val) else 50.0
+        except Exception:
+            pass
+    # fallback
     delta = close.diff().dropna()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
@@ -210,6 +228,102 @@ def load_peak_prices() -> dict:
 def save_peak_prices(peaks: dict) -> None:
     with open(PEAK_FILE, "w") as f:
         json.dump(peaks, f, indent=2, sort_keys=True)
+
+
+# ── 시그널 추적 로그 ─────────────────────────────────────────────
+def load_signal_log() -> list:
+    if os.path.exists(SIGNAL_LOG_FILE):
+        try:
+            with open(SIGNAL_LOG_FILE) as f:
+                return json.load(f).get("signals", [])
+        except Exception:
+            return []
+    return []
+
+
+def save_signal_log(signals: list) -> None:
+    with open(SIGNAL_LOG_FILE, "w") as f:
+        json.dump({"signals": signals[-300:]}, f, indent=2)
+
+
+def append_signals_to_log(new_signals: list, existing_log: list) -> list:
+    """매수 시그널을 로그에 추가 (같은 날 중복 제외)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    existing_ids = {s["id"] for s in existing_log}
+    for sig in new_signals:
+        if sig.get("action") != "매수":
+            continue
+        sig_id = f"{sig['symbol']}-{today}"
+        if sig_id in existing_ids:
+            continue
+        existing_log.append({
+            "id":           sig_id,
+            "symbol":       sig["symbol"],
+            "action":       sig["action"],
+            "entry_date":   today,
+            "entry_price":  sig.get("price", 0.0),
+            "score":        sig.get("score", 0.0),
+            "rsi":          sig.get("rsi", 50.0),
+            "outcome_date":  None,
+            "outcome_price": None,
+            "return_pct":    None,
+        })
+    return existing_log
+
+
+def resolve_signal_outcomes(signal_log: list, prices_cache: dict) -> list:
+    """
+    entry_date + SIGNAL_HOLD_DAYS 이상 경과한 미결 시그널의 결과를 기입.
+    prices_cache: {symbol: float(현재가)} — 이미 수집된 가격 활용.
+    """
+    today = datetime.now(timezone.utc).date()
+    updated = []
+    for sig in signal_log:
+        if sig.get("return_pct") is not None:
+            updated.append(sig)
+            continue
+        try:
+            entry_date = datetime.strptime(sig["entry_date"], "%Y-%m-%d").date()
+        except Exception:
+            updated.append(sig)
+            continue
+        if (today - entry_date).days < SIGNAL_HOLD_DAYS:
+            updated.append(sig)
+            continue
+        sym = sig["symbol"]
+        cur = prices_cache.get(sym)
+        if cur is None:
+            try:
+                raw = yf.download(sym, period="5d", progress=False, auto_adjust=True)
+                if not raw.empty:
+                    cur = float(raw["Close"].iloc[-1])
+                    prices_cache[sym] = cur
+            except Exception:
+                pass
+        if cur and float(sig.get("entry_price", 0)) > 0:
+            ret = (cur / float(sig["entry_price"]) - 1) * 100
+            sig["outcome_price"] = round(cur, 2)
+            sig["outcome_date"]  = str(today)
+            sig["return_pct"]    = round(ret, 2)
+        updated.append(sig)
+    return updated
+
+
+def signal_log_summary(signal_log: list) -> dict:
+    """완료된 시그널의 적중률·평균 수익률 요약."""
+    done = [s for s in signal_log if s.get("return_pct") is not None]
+    if not done:
+        return {"n": 0, "win_rate": 0.0, "avg_return": 0.0, "avg_win": 0.0, "avg_loss": 0.0}
+    returns = [s["return_pct"] for s in done]
+    wins  = [r for r in returns if r > 0]
+    losses = [r for r in returns if r <= 0]
+    return {
+        "n":          len(done),
+        "win_rate":   round(len(wins) / len(done) * 100, 1),
+        "avg_return": round(float(np.mean(returns)), 2),
+        "avg_win":    round(float(np.mean(wins)),    2) if wins   else 0.0,
+        "avg_loss":   round(float(np.mean(losses)),  2) if losses else 0.0,
+    }
 
 
 def check_trailing_stops(positions: list, trail_pct: float = TRAIL_STOP_PCT,
@@ -427,6 +541,22 @@ def main():
         peaks.pop(sym, None)
     save_peak_prices(peaks)
 
+    # 시그널 로그: 결과 판정 → 신규 매수 로깅
+    sig_log = load_signal_log()
+    prices_cache = {
+        _to_alpaca_sym(s["ticker"]): float(s.get("price", 0))
+        for s in signals if s.get("price")
+    }
+    sig_log = resolve_signal_outcomes(sig_log, prices_cache)
+    sig_log = append_signals_to_log(
+        [{"symbol": _to_alpaca_sym(s["ticker"]), "action": s["action"],
+          "price": s.get("price", 0), "score": s.get("score", 0),
+          "rsi": s.get("rsi", 50)} for s in buy_sigs],
+        sig_log
+    )
+    save_signal_log(sig_log)
+    sl_summary = signal_log_summary(sig_log)
+
     n_sells = sum(1 for r in sell_results if r.get("ok"))
     n_buys  = sum(1 for r in buy_results  if r.get("ok"))
     n_errs  = sum(1 for r in sell_results + buy_results if "error" in r)
@@ -450,6 +580,15 @@ def main():
     lines.append("\n*팩터 상위 5개*")
     for r in top5:
         lines.append(f"  {r['ticker']}: 스코어 {r['composite']:.0f}, RSI {r['rsi']:.0f}")
+
+    if sl_summary["n"] >= 5:
+        lines.append(
+            f"\n*시그널 적중률* ({sl_summary['n']}건)\n"
+            f"  승률 {sl_summary['win_rate']:.0f}%  "
+            f"평균수익 {sl_summary['avg_return']:+.1f}%  "
+            f"평균수익거래 {sl_summary['avg_win']:+.1f}%  "
+            f"평균손실거래 {sl_summary['avg_loss']:+.1f}%"
+        )
 
     msg = "\n".join(lines)
     print("\n" + "─"*45)

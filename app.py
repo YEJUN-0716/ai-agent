@@ -384,32 +384,67 @@ REGIME_TECH_WEIGHTS = {
 # TECHNICAL ANALYSIS
 # ─────────────────────────────────────────────
 
+try:
+    import pandas_ta as _pta
+    _PTA_AVAILABLE = True
+except ImportError:
+    _pta = None
+    _PTA_AVAILABLE = False
+
+
 def calc_rsi(prices, period=14):
+    if _PTA_AVAILABLE:
+        result = _pta.rsi(prices, length=period)
+        if result is not None:
+            return result
     delta = prices.diff()
     gain  = delta.where(delta > 0, 0).rolling(period).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss.replace(0, 1e-10)
-    return 100 - (100 / (1 + rs))
+    return 100 - (100 / (1 + gain / loss.replace(0, 1e-10)))
+
 
 def calc_macd(prices, fast=12, slow=26, signal=9):
+    if _PTA_AVAILABLE:
+        result = _pta.macd(prices, fast=fast, slow=slow, signal=signal)
+        if result is not None:
+            mc = result[f'MACD_{fast}_{slow}_{signal}']
+            sg = result[f'MACDs_{fast}_{slow}_{signal}']
+            ht = result[f'MACDh_{fast}_{slow}_{signal}']
+            return mc, sg, ht
     ema_f = prices.ewm(span=fast,   adjust=False).mean()
     ema_s = prices.ewm(span=slow,   adjust=False).mean()
     macd  = ema_f - ema_s
     sig   = macd.ewm(span=signal, adjust=False).mean()
     return macd, sig, macd - sig
 
+
 def calc_bb(prices, period=20, k=2):
+    if _PTA_AVAILABLE:
+        result = _pta.bbands(prices, length=period, std=float(k))
+        if result is not None:
+            kf = float(k)
+            return result[f'BBU_{period}_{kf}'], result[f'BBM_{period}_{kf}'], result[f'BBL_{period}_{kf}']
     sma = prices.rolling(period).mean()
     std = prices.rolling(period).std()
     return sma + k*std, sma, sma - k*std
 
+
 def calc_stochastic(high, low, close, k=14, d=3):
+    if _PTA_AVAILABLE:
+        result = _pta.stoch(high, low, close, k=k, d=d)
+        if result is not None:
+            return result[f'STOCHk_{k}_{d}_{d}'], result[f'STOCHd_{k}_{d}_{d}']
     lo = low.rolling(k).min()
     hi = high.rolling(k).max()
     pct_k = (close - lo) / (hi - lo + 1e-9) * 100
     return pct_k, pct_k.rolling(d).mean()
 
+
 def calc_adx(high, low, close, period=14):
+    if _PTA_AVAILABLE:
+        result = _pta.adx(high, low, close, length=period)
+        if result is not None:
+            return result[f'ADX_{period}'], result[f'DMP_{period}'], result[f'DMN_{period}']
     pc  = close.shift(1)
     tr  = pd.concat([(high-low), (high-pc).abs(), (low-pc).abs()], axis=1).max(axis=1)
     up  = high.diff(); dn = -low.diff()
@@ -421,7 +456,12 @@ def calc_adx(high, low, close, period=14):
     dx  = (pdi - ndi).abs() / (pdi + ndi + 1e-9) * 100
     return dx.rolling(period).mean(), pdi, ndi
 
+
 def calc_obv(close, volume):
+    if _PTA_AVAILABLE:
+        result = _pta.obv(close, volume)
+        if result is not None:
+            return result
     sign = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
     return (volume * sign).cumsum()
 
@@ -4929,6 +4969,56 @@ def main():
                                     else:
                                         st.info(_msg)
 
+            # ── 시그널 적중률 추적 (signal_log.json) ─────────────
+            st.divider()
+            st.subheader("📊 과거 시그널 적중률")
+            st.caption("GitHub Actions 페이퍼 트레이딩이 발생시킨 매수 시그널의 21일 후 실제 수익률 통계.")
+            import json as _json
+            _sl_path = os.path.join(os.path.dirname(__file__), "signal_log.json")
+            if os.path.exists(_sl_path):
+                try:
+                    with open(_sl_path) as _slf:
+                        _sl_data = _json.load(_slf).get("signals", [])
+                    _sl_done = [s for s in _sl_data if s.get("return_pct") is not None]
+                    _sl_pend = [s for s in _sl_data if s.get("return_pct") is None]
+                    if _sl_done:
+                        _rets = [s["return_pct"] for s in _sl_done]
+                        _wins = [r for r in _rets if r > 0]
+                        _sl_c1, _sl_c2, _sl_c3, _sl_c4 = st.columns(4)
+                        _sl_c1.metric("완료 시그널", f"{len(_sl_done)}건")
+                        _sl_c2.metric("승률", f"{len(_wins)/len(_sl_done)*100:.0f}%",
+                                      help="21일 후 수익 > 0인 비율")
+                        _sl_c3.metric("평균 수익률", f"{float(np.mean(_rets)):+.1f}%")
+                        _sl_c4.metric("대기 중", f"{len(_sl_pend)}건",
+                                      help="아직 21일이 지나지 않은 시그널")
+                        # 수익률 분포 바차트
+                        _sl_df = pd.DataFrame(_sl_done).sort_values("entry_date")
+                        _fig_sl = go.Figure()
+                        _fig_sl.add_bar(
+                            x=_sl_df["symbol"] + "<br>" + _sl_df["entry_date"],
+                            y=_sl_df["return_pct"],
+                            marker_color=[("#26a69a" if r > 0 else "#ef5350")
+                                          for r in _sl_df["return_pct"]],
+                            text=[f"{r:+.1f}%" for r in _sl_df["return_pct"]],
+                            textposition="outside",
+                        )
+                        _fig_sl.add_hline(y=0, line_color="#555", line_width=1)
+                        _fig_sl.update_layout(
+                            title="시그널별 21일 수익률",
+                            height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                            font=dict(color=TV_TEXT),
+                            xaxis=dict(gridcolor=TV_GRID, tickangle=-45),
+                            yaxis=dict(gridcolor=TV_GRID, ticksuffix="%"),
+                            margin=dict(l=0, r=0, t=40, b=60), showlegend=False,
+                        )
+                        st.plotly_chart(_fig_sl, use_container_width=True)
+                    else:
+                        st.info("아직 판정된 시그널이 없습니다. 페이퍼 트레이딩이 21일 이상 실행되면 결과가 쌓입니다.")
+                except Exception as _e:
+                    st.warning(f"시그널 로그 로드 오류: {_e}")
+            else:
+                st.info("signal_log.json 없음 — 페이퍼 트레이딩 첫 실행 후 생성됩니다.")
+
         with qt_sub4:
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
 
@@ -4999,6 +5089,132 @@ def main():
                         st.dataframe(pd.DataFrame(bt_log), use_container_width=True, hide_index=True, height=300)
 
                 st.caption("⚠️ 과거 성과는 미래 수익을 보장하지 않습니다. 거래비용·슬리피지 반영.")
+
+            st.divider()
+            st.subheader("🔬 팩터 IC 검증 (예측력 통계 검증)")
+            st.caption(
+                "팩터 점수가 실제 미래 수익률을 얼마나 잘 예측하는지 수치로 검증합니다.  \n"
+                "IC(Information Coefficient) = 팩터 점수 vs 실제 수익률의 스피어만 상관계수.  \n"
+                "**IC > 0.05 → 유효한 팩터 / ICIR > 0.5 → 신뢰 가능 / 퀸타일 Q5 > Q1 → 팩터가 수익을 예측**")
+
+            _ic_col1, _ic_col2 = st.columns(2)
+            _ic_years   = _ic_col1.selectbox("검증 기간", [1, 2, 3], index=1,
+                                              format_func=lambda x: f"{x}년", key="ic_years")
+            _ic_fwd     = _ic_col2.selectbox("예측 기간 (Forward)", [10, 21, 42],
+                                              format_func=lambda x: f"{x}거래일",
+                                              index=1, key="ic_fwd")
+
+            if st.button("🔬 팩터 IC 분석 실행", type="primary", key="ic_run"):
+                _ic_prog = st.progress(0, text="데이터 수집 중...")
+                try:
+                    from modules.factor_validator import run_ic_analysis as _run_ic
+                    _ic_df, _ic_quinile, _ic_summary, _ic_ls = _run_ic(
+                        qt_tickers,
+                        lookback_years=_ic_years,
+                        forward_days=_ic_fwd,
+                        progress_cb=lambda p: _ic_prog.progress(p, text=f"분석 중 {p*100:.0f}%…"),
+                    )
+                    _ic_prog.empty()
+                    if _ic_df.empty:
+                        st.error("데이터 부족 — 종목을 늘리거나 기간을 줄여보세요.")
+                    else:
+                        st.session_state["ic_result"] = {
+                            "df": _ic_df, "quintile": _ic_quinile,
+                            "summary": _ic_summary, "ls": _ic_ls,
+                        }
+                except Exception as _e:
+                    _ic_prog.empty()
+                    st.error(f"IC 분석 오류: {_e}")
+
+            if "ic_result" in st.session_state:
+                _icr = st.session_state["ic_result"]
+                _ics = _icr["summary"]
+                _ic_df = _icr["df"]
+
+                # 지표 카드
+                _ic_color = "#26a69a" if _ics["mean_ic"] > 0 else "#ef5350"
+                _ic_c1, _ic_c2, _ic_c3, _ic_c4, _ic_c5 = st.columns(5)
+                _ic_c1.metric("평균 IC", f"{_ics['mean_ic']:+.4f}",
+                              help="0.05 이상이면 유효한 팩터")
+                _ic_c2.metric("ICIR", f"{_ics['icir']:+.3f}",
+                              help="IC 평균/표준편차. 0.5 이상이면 안정적")
+                _ic_c3.metric("t-통계량", f"{_ics['t_stat']:+.2f}",
+                              help="|t| > 2.0이면 통계적으로 유의미")
+                _ic_c4.metric("IC 양수 비율", f"{_ics['pct_positive']:.0f}%",
+                              help="60% 이상이면 팩터가 일관성 있음")
+                _ic_c5.metric("분석 기간 수", f"{_ics['n_periods']}회")
+
+                # 평가 메시지
+                _verdict_parts = []
+                if abs(_ics["icir"]) >= 0.5:
+                    _verdict_parts.append("✅ ICIR 0.5 이상 — 팩터 일관성 **우수**")
+                elif abs(_ics["icir"]) >= 0.3:
+                    _verdict_parts.append("🟡 ICIR 0.3~0.5 — 팩터 일관성 **보통**")
+                else:
+                    _verdict_parts.append("🔴 ICIR 0.3 미만 — 팩터 일관성 **낮음**")
+                if abs(_ics["t_stat"]) >= 2.0:
+                    _verdict_parts.append("✅ t통계량 유의미 (95% 신뢰)")
+                else:
+                    _verdict_parts.append("🟡 t통계량 미미 — 기간 확대 필요")
+                if _ics["pct_positive"] >= 60:
+                    _verdict_parts.append("✅ IC 양수 비율 높음 — 방향성 일관")
+                st.info("  |  ".join(_verdict_parts))
+
+                # IC 시계열 차트
+                _fig_ic = go.Figure()
+                _fig_ic.add_bar(
+                    x=_ic_df["date"], y=_ic_df["ic"],
+                    marker_color=[("#26a69a" if v >= 0 else "#ef5350")
+                                  for v in _ic_df["ic"]],
+                    name="IC",
+                )
+                _fig_ic.add_hline(y=0, line_color="#555", line_width=1)
+                _fig_ic.add_hline(y=float(_ics["mean_ic"]), line_dash="dash",
+                                  line_color="#ff9800", line_width=1.5,
+                                  annotation_text=f"평균 IC {_ics['mean_ic']:+.4f}",
+                                  annotation_font=dict(color="#ff9800"))
+                _fig_ic.update_layout(
+                    title="IC 시계열 (기간별 팩터 예측력)",
+                    height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                    font=dict(color=TV_TEXT),
+                    xaxis=dict(gridcolor=TV_GRID),
+                    yaxis=dict(gridcolor=TV_GRID, zeroline=False),
+                    margin=dict(l=0, r=0, t=40, b=0), showlegend=False,
+                )
+                st.plotly_chart(_fig_ic, use_container_width=True)
+
+                # 퀸타일 누적 수익률 차트
+                if _icr["quintile"]:
+                    _fig_q = go.Figure()
+                    _q_colors = {"Q1": "#ef5350", "Q2": "#ff7043", "Q3": "#ffa726",
+                                 "Q4": "#66bb6a", "Q5": "#26a69a"}
+                    for _qn, _qseries in sorted(_icr["quintile"].items()):
+                        _fig_q.add_trace(go.Scatter(
+                            x=_qseries.index, y=_qseries.values,
+                            name=f"{_qn} ({'상위' if _qn=='Q5' else '하위' if _qn=='Q1' else _qn})",
+                            line=dict(color=_q_colors.get(_qn, "#aaa"),
+                                      width=2.5 if _qn in ("Q1","Q5") else 1.2,
+                                      dash="solid" if _qn in ("Q1","Q5") else "dot"),
+                        ))
+                    if not _icr["ls"].empty:
+                        _fig_q.add_trace(go.Scatter(
+                            x=_icr["ls"].index, y=_icr["ls"].values,
+                            name="롱쇼트(Q5-Q1)", fill="tozeroy",
+                            fillcolor="rgba(41,98,255,0.08)",
+                            line=dict(color="#2962ff", width=2, dash="dash"),
+                        ))
+                    _fig_q.add_hline(y=0, line_color="#555", line_width=1)
+                    _fig_q.update_layout(
+                        title="퀸타일별 누적 수익률 (Q5=고점수, Q1=저점수)",
+                        height=320, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        xaxis=dict(gridcolor=TV_GRID),
+                        yaxis=dict(gridcolor=TV_GRID, ticksuffix="%"),
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        legend=dict(bgcolor="rgba(0,0,0,0)"),
+                    )
+                    st.plotly_chart(_fig_q, use_container_width=True)
+                    st.caption("Q5(상위 20%)가 Q1(하위 20%)보다 일관되게 높으면 팩터가 수익을 예측합니다.")
 
 
 

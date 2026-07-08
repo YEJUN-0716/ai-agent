@@ -80,10 +80,10 @@ jobs:
           DRY_RUN:            ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner.py
 
-      - name: 고점 추적 파일 커밋
+      - name: 추적 파일 커밋 (고점·시그널 로그)
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add peak_prices.json || true
-          git diff --staged --quiet || git commit -m "chore: trailing stop peak update $(date -u +%Y-%m-%d)"
+          git add peak_prices.json signal_log.json || true
+          git diff --staged --quiet || git commit -m "chore: peak & signal log update $(date -u +%Y-%m-%d)"
           git push || true
