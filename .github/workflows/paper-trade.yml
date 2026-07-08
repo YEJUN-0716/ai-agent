@@ -2,9 +2,10 @@ name: 페이퍼 트레이딩 자동 실행
 
 on:
   schedule:
-    # 미국 장마감(ET 16:00) 후 → UTC 21:30 (EDT) / 22:30 (EST)
-    # 월~금 실행. 공휴일에는 Alpaca가 주문을 거절하므로 별도 체크 불필요
-    - cron: "30 21 * * 1-5"
+    # 미국 장마감(ET 16:00) 후
+    # EDT(UTC-4): 마감 20:00 UTC → 22:00 UTC 실행 (2시간 여유)
+    # EST(UTC-5): 마감 21:00 UTC → 22:00 UTC 실행 (1시간 여유, yfinance 데이터 충분)
+    - cron: "0 22 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -31,6 +32,11 @@ on:
         description: "최소 매수 점수 (10~90, 이 점수 미만 종목은 top_n 안이어도 관망)"
         required: false
         default: "60"
+
+# 동시에 두 번 실행 방지 — 동시 실행 시 peak_prices.json/signal_log.json 충돌 위험
+concurrency:
+  group: paper-trade
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -86,4 +92,5 @@ jobs:
           git config user.name "GitHub Actions"
           git add peak_prices.json signal_log.json || true
           git diff --staged --quiet || git commit -m "chore: peak & signal log update $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main || true
           git push || true

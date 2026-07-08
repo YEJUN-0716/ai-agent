@@ -37,7 +37,8 @@ def get_market_regime() -> tuple:
     - neutral : 그 사이
     Returns (regime: str, details: dict)
     """
-    spy_ratio, vix_cur = 1.0, 20.0
+    # 기본값: neutral 레짐이 되도록 설정 (네트워크 실패 시 안전한 폴백)
+    spy_ratio, vix_cur = 0.99, 25.0
     try:
         spy = yf.download("SPY", period="1y", progress=False, auto_adjust=True)
         if isinstance(spy.columns, pd.MultiIndex):
@@ -92,7 +93,7 @@ def _momentum(close: pd.Series) -> dict:
     ret = {}
     for label, days in [("1M", 21), ("3M", 63), ("6M", 126)]:
         if len(close) >= days + 1:
-            ret[label] = float((close.iloc[-1] / close.iloc[-days] - 1) * 100)
+            ret[label] = float((close.iloc[-1] / close.iloc[-(days + 1)] - 1) * 100)
         else:
             ret[label] = 0.0
     return ret

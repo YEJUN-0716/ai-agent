@@ -444,8 +444,10 @@ def main():
             buy_results.append({"symbol": sym, "error": str(e)})
 
     # 8. 요약 & 텔레그램
-    for sym in sell_done:
-        peaks.pop(sym, None)
+    # DRY_RUN에서는 실제 매도가 없으므로 고점 기록을 지우지 않음
+    if not DRY_RUN:
+        for sym in sell_done:
+            peaks.pop(sym, None)
     save_peak_prices(peaks)
 
     sig_log = load_signal_log()
