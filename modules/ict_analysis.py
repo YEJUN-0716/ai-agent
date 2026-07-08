@@ -32,6 +32,7 @@ def find_fvg(df: pd.DataFrame, lookback: int = 100, min_gap_pct: float = 0.05) -
     Bearish FVG: candle[i-2].low  > candle[i].high
     """
     sub = df.tail(lookback).reset_index()
+    date_col = sub.columns[0]   # reset_index 후 원래 인덱스 컬럼명 (Date/Datetime/index)
     cur = float(sub["Close"].iloc[-1])
     fvgs = []
     for i in range(2, len(sub)):
@@ -43,7 +44,7 @@ def find_fvg(df: pd.DataFrame, lookback: int = 100, min_gap_pct: float = 0.05) -
             if gap_pct >= min_gap_pct:
                 filled = float(sub["Low"].iloc[i:].min()) <= h2
                 fvgs.append({"type": "bull", "top": li, "bottom": h2,
-                              "date": sub["index"].iloc[i - 1],
+                              "date": sub[date_col].iloc[i - 1],
                               "filled": filled, "gap_pct": round(gap_pct, 2)})
 
         elif l2 > hi:                            # Bearish FVG
@@ -51,7 +52,7 @@ def find_fvg(df: pd.DataFrame, lookback: int = 100, min_gap_pct: float = 0.05) -
             if gap_pct >= min_gap_pct:
                 filled = float(sub["High"].iloc[i:].max()) >= l2
                 fvgs.append({"type": "bear", "top": l2, "bottom": hi,
-                              "date": sub["index"].iloc[i - 1],
+                              "date": sub[date_col].iloc[i - 1],
                               "filled": filled, "gap_pct": round(gap_pct, 2)})
     return fvgs
 
@@ -64,6 +65,7 @@ def find_order_blocks(df: pd.DataFrame, lookback: int = 100, min_move_pct: float
     Bearish OB: 하락 임펄스 직전 마지막 상승 캔들
     """
     sub = df.tail(lookback).reset_index()
+    date_col = sub.columns[0]   # reset_index 후 원래 인덱스 컬럼명 (Date/Datetime/index)
     obs = []
     for i in range(1, len(sub) - 1):
         move = (float(sub["Close"].iloc[i + 1]) / float(sub["Close"].iloc[i]) - 1) * 100
@@ -74,12 +76,12 @@ def find_order_blocks(df: pd.DataFrame, lookback: int = 100, min_move_pct: float
             mitigated = float(sub["Low"].iloc[i + 1:].min()) <= float(sub["Low"].iloc[i])
             obs.append({"type": "bull",
                         "top": float(sub["High"].iloc[i]), "bottom": float(sub["Low"].iloc[i]),
-                        "date": sub["index"].iloc[i], "mitigated": mitigated})
+                        "date": sub[date_col].iloc[i], "mitigated": mitigated})
         elif is_bull_candle and move <= -min_move_pct:       # Bearish OB
             mitigated = float(sub["High"].iloc[i + 1:].max()) >= float(sub["High"].iloc[i])
             obs.append({"type": "bear",
                         "top": float(sub["High"].iloc[i]), "bottom": float(sub["Low"].iloc[i]),
-                        "date": sub["index"].iloc[i], "mitigated": mitigated})
+                        "date": sub[date_col].iloc[i], "mitigated": mitigated})
     return obs
 
 
