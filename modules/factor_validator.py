@@ -27,9 +27,11 @@ def _fetch_fundamentals_once(tickers: list) -> dict:
     for tk in tickers:
         try:
             info = yf.Ticker(tk).info
-            pe_raw     = info.get("trailingPE") or info.get("forwardPE")
+            pe_raw     = info.get("trailingPE")
+            if pe_raw is None:
+                pe_raw = info.get("forwardPE")
             margin_raw = info.get("operatingMargins")
-            pe     = min(float(pe_raw), 200.0) if pe_raw and pe_raw > 0 else np.nan
+            pe     = min(float(pe_raw), 200.0) if pe_raw is not None and pe_raw > 0 else np.nan
             margin = float(margin_raw) * 100   if margin_raw is not None else np.nan
             result[tk] = {"pe": pe, "margin": margin}
         except Exception:

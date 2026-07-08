@@ -95,7 +95,7 @@ def get_market_regime() -> tuple:
     """
     spy_ratio, vix_cur = 1.0, 20.0
     try:
-        spy = yf.download("SPY", period="220d", progress=False, auto_adjust=True)
+        spy = yf.download("SPY", period="1y", progress=False, auto_adjust=True)
         if isinstance(spy.columns, pd.MultiIndex):
             spy.columns = spy.columns.droplevel(1)
         c = spy["Close"].dropna()
@@ -162,9 +162,11 @@ def _fetch_fundamentals(tickers: list) -> dict:
     for tk in tickers:
         try:
             info = yf.Ticker(tk).info
-            pe_raw     = info.get("trailingPE") or info.get("forwardPE")
+            pe_raw     = info.get("trailingPE")
+            if pe_raw is None:
+                pe_raw = info.get("forwardPE")
             margin_raw = info.get("operatingMargins")
-            pe     = min(float(pe_raw), 200.0) if pe_raw and pe_raw > 0 else np.nan
+            pe     = min(float(pe_raw), 200.0) if pe_raw is not None and pe_raw > 0 else np.nan
             margin = float(margin_raw) * 100   if margin_raw is not None else np.nan
             result[tk] = {"pe": pe, "margin": margin}
         except Exception:
@@ -641,8 +643,8 @@ def main():
         else:
             _size = CAPITAL_USD
         if buying_power < _size * 0.9:
-            print(f"  [매수 스킵] 매수여력 부족")
-            break
+            print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 ${_size:,.0f}, 가용 ${buying_power:,.0f})")
+            continue
         print(f"  [매수] {sym} ${_size:,.0f}  "
               f"(스코어 {sig['score']}, RSI {sig['rsi']}, 변동성 {sig.get('vol_ann', 0):.1f}%)")
         try:
