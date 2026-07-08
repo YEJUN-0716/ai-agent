@@ -394,9 +394,12 @@ def resolve_signal_outcomes(signal_log: list, prices_cache: dict) -> list:
         cur = prices_cache.get(sym)
         if cur is None:
             try:
-                raw = yf.download(sym, period="5d", progress=False, auto_adjust=True)
+                yahoo_sym = sym.replace(".", "-")   # BRK.B → BRK-B
+                raw = yf.download(yahoo_sym, period="5d", progress=False, auto_adjust=True)
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw.columns = raw.columns.droplevel(1)
                 if not raw.empty:
-                    cur = float(raw["Close"].iloc[-1])
+                    cur = float(raw["Close"].dropna().iloc[-1])
                     prices_cache[sym] = cur
             except Exception:
                 pass
@@ -649,7 +652,12 @@ def main():
               f"(스코어 {sig['score']}, RSI {sig['rsi']}, 변동성 {sig.get('vol_ann', 0):.1f}%)")
         try:
             res = place_buy(sym, _size)
-            buy_results.append({"symbol": sym, "notional": _size, "ok": True})
+            buy_results.append({
+                "symbol": sym, "notional": _size, "ok": True,
+                "price": sig.get("price", 0),
+                "score": sig.get("score", 0),
+                "rsi":   sig.get("rsi", 50),
+            })
             buying_power -= _size
             n_bought += 1
         except Exception as e:
@@ -670,9 +678,9 @@ def main():
     }
     sig_log = resolve_signal_outcomes(sig_log, prices_cache)
     sig_log = append_signals_to_log(
-        [{"symbol": _to_alpaca_sym(s["ticker"]), "action": s["action"],
-          "price": s.get("price", 0), "score": s.get("score", 0),
-          "rsi": s.get("rsi", 50)} for s in buy_sigs],
+        [{"symbol": r["symbol"], "action": "매수",
+          "price": r.get("price", 0), "score": r.get("score", 0),
+          "rsi":   r.get("rsi", 50)} for r in buy_results if r.get("ok")],
         sig_log
     )
     save_signal_log(sig_log)
