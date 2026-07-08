@@ -277,3 +277,143 @@ def plot_ict_chart(df: pd.DataFrame, n_candles: int = 80, ticker: str = "") -> g
         margin=dict(l=0, r=160, t=40, b=0),
     )
     return fig
+
+
+# ── 빗각채널 (Pitched / Diagonal Channel) ───────────────────────
+def find_trend_channel(df: pd.DataFrame, lookback: int = 80, swing_lookback: int = 5) -> dict | None:
+    """
+    스윙 고·저점 기반 자동 평행채널 감지.
+    고점/저점 각각 회귀선 → 평균 기울기로 평행 강제.
+    반환: upper/lower/mid 라인 좌표 + direction/width_pct/position_pct/zone
+    """
+    if len(df) < max(lookback // 2, swing_lookback * 3):
+        return None
+
+    sub = df.tail(lookback)
+    swings = find_swing_points(sub, lookback=swing_lookback)
+
+    if swings.empty:
+        return None
+
+    highs = swings[swings["type"] == "H"]
+    lows  = swings[swings["type"] == "L"]
+
+    if len(highs) < 2 or len(lows) < 2:
+        return None
+
+    h_slope, _ = np.polyfit(highs["idx"].values, highs["price"].values, 1)
+    l_slope, _ = np.polyfit(lows["idx"].values,  lows["price"].values,  1)
+    slope = (h_slope + l_slope) / 2
+
+    # 평행 채널: 기울기 고정 후 스윙 포인트를 감싸도록 상하 shift
+    x_all  = np.arange(len(sub))
+    h_off  = float(np.max(highs["price"].values - slope * highs["idx"].values))
+    l_off  = float(np.min(lows["price"].values  - slope * lows["idx"].values))
+
+    upper_y = slope * x_all + h_off
+    lower_y = slope * x_all + l_off
+    mid_y   = (upper_y + lower_y) / 2
+
+    dates  = list(sub.index)
+    cur    = float(sub["Close"].iloc[-1])
+    width  = upper_y[-1] - lower_y[-1]
+    pos    = (cur - lower_y[-1]) / width * 100 if width > 0 else 50.0
+    slope_norm = slope / (float(sub["Close"].mean()) + 1e-9) * 100  # 일별 % 기울기
+
+    return {
+        "slope":        float(slope),
+        "direction":    "bullish" if slope_norm > 0.05 else "bearish" if slope_norm < -0.05 else "sideways",
+        "width_pct":    round(width / lower_y[-1] * 100, 2) if lower_y[-1] > 0 else 0.0,
+        "position_pct": round(pos, 1),
+        "zone":         "상단" if pos > 66 else "하단" if pos < 33 else "중간",
+        "upper":        {"x": dates, "y": upper_y.tolist()},
+        "lower":        {"x": dates, "y": lower_y.tolist()},
+        "mid":          {"x": dates, "y": mid_y.tolist()},
+    }
+
+
+def plot_channel_chart(df: pd.DataFrame, n_candles: int = 80,
+                       swing_lookback: int = 5, ticker: str = "") -> go.Figure:
+    """빗각채널 오버레이 캔들스틱 차트 반환."""
+    sub = df.tail(n_candles).copy()
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(
+        x=sub.index,
+        open=sub["Open"], high=sub["High"],
+        low=sub["Low"],   close=sub["Close"],
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+        name="Price",
+    ))
+
+    ch = find_trend_channel(df, lookback=n_candles, swing_lookback=swing_lookback)
+    if ch:
+        dir_ko  = {"bullish": "상승", "bearish": "하락", "sideways": "횡보"}[ch["direction"]]
+        dir_col = {"bullish": "#26a69a", "bearish": "#ef5350", "sideways": "#ff9800"}[ch["direction"]]
+        fill_rgba = (
+            "rgba(38,166,154,0.06)"  if ch["direction"] == "bullish" else
+            "rgba(239,83,80,0.06)"   if ch["direction"] == "bearish" else
+            "rgba(255,152,0,0.06)"
+        )
+
+        # 하단선 (투명 기준)
+        fig.add_trace(go.Scatter(
+            x=ch["lower"]["x"], y=ch["lower"]["y"],
+            mode="lines", line=dict(color=dir_col, width=1.5, dash="dash"),
+            name=f"채널 하단", showlegend=True,
+        ))
+        # 상단선 (fill to lower)
+        fig.add_trace(go.Scatter(
+            x=ch["upper"]["x"], y=ch["upper"]["y"],
+            mode="lines", line=dict(color=dir_col, width=1.5, dash="dash"),
+            fill="tonexty", fillcolor=fill_rgba,
+            name=f"채널 상단 ({dir_ko})", showlegend=True,
+        ))
+        # 중간선
+        fig.add_trace(go.Scatter(
+            x=ch["mid"]["x"], y=ch["mid"]["y"],
+            mode="lines", line=dict(color=dir_col, width=1, dash="dot"),
+            name="채널 중간선", showlegend=False,
+        ))
+
+        # 스윙 마커
+        swings = find_swing_points(sub, lookback=swing_lookback)
+        if not swings.empty:
+            for sw_type, sym, col, pos in [
+                ("H", "triangle-down", "#ef5350", "top center"),
+                ("L", "triangle-up",   "#26a69a", "bottom center"),
+            ]:
+                sw = swings[swings["type"] == sw_type]
+                if not sw.empty:
+                    fig.add_trace(go.Scatter(
+                        x=sw["date"], y=sw["price"],
+                        mode="markers",
+                        marker=dict(symbol=sym, size=8, color=col),
+                        name="SH" if sw_type == "H" else "SL",
+                        showlegend=False,
+                    ))
+
+        # 현재 위치 어노테이션
+        last_x = ch["upper"]["x"][-1]
+        fig.add_annotation(
+            x=last_x, y=ch["upper"]["y"][-1],
+            text=f"상단", showarrow=False,
+            font=dict(size=9, color=dir_col), xanchor="left", xshift=5,
+        )
+        fig.add_annotation(
+            x=last_x, y=ch["lower"]["y"][-1],
+            text=f"하단", showarrow=False,
+            font=dict(size=9, color=dir_col), xanchor="left", xshift=5,
+        )
+
+    fig.update_layout(
+        title=dict(text=f"{ticker}  빗각채널", font=dict(size=13, color=_TV_TEXT)),
+        height=480,
+        plot_bgcolor=_TV_BG, paper_bgcolor=_TV_PAPER,
+        xaxis_rangeslider_visible=False,
+        xaxis=dict(gridcolor=_TV_GRID, showgrid=True, color=_TV_TEXT),
+        yaxis=dict(gridcolor=_TV_GRID, showgrid=True, color=_TV_TEXT),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=_TV_TEXT)),
+        margin=dict(l=0, r=80, t=40, b=0),
+    )
+    return fig

@@ -3901,6 +3901,45 @@ def main():
                     except Exception as _e:
                         st.warning(f"ICT 분석 오류: {_e}")
 
+                with st.expander("📐 빗각채널 분석", expanded=False):
+                    try:
+                        from modules.ict_analysis import find_trend_channel, plot_channel_chart
+                        _ch_col1, _ch_col2 = st.columns([2, 1])
+                        with _ch_col1:
+                            _n_ch = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ch_candles")
+                        with _ch_col2:
+                            _sw_lb = st.slider("스윙 민감도", 3, 10, 5, 1, key="ch_swing",
+                                               help="숫자가 클수록 큰 스윙만 감지")
+                        st.plotly_chart(plot_channel_chart(df, n_candles=_n_ch,
+                                                           swing_lookback=_sw_lb, ticker=ticker),
+                                        use_container_width=True)
+                        _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
+                        if _ch:
+                            _dir_map  = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
+                            _zone_col = {"상단": "#ef5350", "중간": "#ff9800", "하단": "#26a69a"}
+                            _c1, _c2, _c3 = st.columns(3)
+                            _c1.metric("채널 방향", _dir_map[_ch["direction"]])
+                            _c2.metric("채널 폭 (%)", f"{_ch['width_pct']:.1f}%")
+                            _c3.metric("현재 위치",
+                                       f"{_ch['zone']} ({_ch['position_pct']:.0f}%)")
+                            _pos = _ch["position_pct"]
+                            _bar_col = _zone_col[_ch["zone"]]
+                            st.markdown(
+                                f"<div style='background:#1e2530;border-radius:6px;padding:6px 10px;margin-top:6px'>"
+                                f"<div style='display:flex;justify-content:space-between;"
+                                f"font-size:11px;color:#9598a1;margin-bottom:4px'>"
+                                f"<span>하단 (매수권)</span><span>중간선</span><span>상단 (매도권)</span></div>"
+                                f"<div style='background:#2a2e39;border-radius:4px;height:10px;position:relative'>"
+                                f"<div style='background:{_bar_col};border-radius:4px;height:10px;"
+                                f"width:{min(max(_pos,2),98):.0f}%'></div></div></div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.info("스윙 포인트가 부족해 채널을 감지하지 못했습니다. "
+                                    "캔들 수를 늘리거나 스윙 민감도를 낮춰보세요.")
+                    except Exception as _e:
+                        st.warning(f"채널 분석 오류: {_e}")
+
             with sub1:
                 # ── 매매 시그널 ──────────────────────────────
                 trade_signals = detect_trading_signals(df, t_det)
