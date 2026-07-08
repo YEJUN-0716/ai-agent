@@ -118,13 +118,13 @@ def reconcile_positions(intended: dict, broker: list,
         diff = abs(intended_qty - broker_qty)
         if diff <= tolerance_shares:
             matched.append({'symbol': symbol, 'qty': intended_qty})
+        elif symbol not in broker_map and intended_qty > tolerance_shares:
+            missing_in_broker.append(symbol)
         else:
             mismatches.append({
                 'symbol': symbol, 'intended': intended_qty,
                 'broker': broker_qty, 'diff': round(diff, 4),
             })
-        elif symbol not in broker_map and intended_qty > tolerance_shares:
-            missing_in_broker.append(symbol)
 
     for symbol in broker_map:
         if symbol not in intended:
