@@ -2721,6 +2721,11 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             }
             if extra_factors:
                 row.update(_fetch_extra_factors(tk, info))
+                try:
+                    from modules.ict_analysis import ict_factor_score as _ict_fn
+                    row["ict_raw"] = _ict_fn(df)
+                except Exception:
+                    row["ict_raw"] = 50.0
             results.append(row)
             if i < len(tickers) - 1:
                 time.sleep(0.3)
@@ -2732,7 +2737,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
         rdf[col.replace('_raw', '')] = _zscore_to_score(rdf[col])
     # 추가 팩터 정규화
     extra_cols, extra_w = [], []
-    for col, w in [('analyst_raw', 0.10), ('short_raw', 0.05), ('eps_surprise_raw', 0.10)]:
+    for col, w in [('analyst_raw', 0.10), ('short_raw', 0.05), ('eps_surprise_raw', 0.10), ('ict_raw', 0.10)]:
         if col in rdf.columns:
             fname = col.replace('_raw', '')
             rdf[fname] = _zscore_to_score(rdf[col])
@@ -3841,6 +3846,60 @@ def main():
                             st.markdown("**🔴 저항선**")
                             for s in _res[:3]:
                                 st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
+
+                with st.expander("🎯 ICT 분석 (Smart Money 개념)", expanded=False):
+                    try:
+                        from modules.ict_analysis import (
+                            plot_ict_chart, find_fvg, find_order_blocks,
+                            find_swing_points, find_bos_choch, premium_discount,
+                            ict_factor_score,
+                        )
+                        _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_candles")
+                        st.plotly_chart(plot_ict_chart(df, n_candles=_n_c, ticker=ticker),
+                                        use_container_width=True)
+
+                        # 수치 요약
+                        _ict_cur = float(df["Close"].iloc[-1])
+                        _ict_fvgs = find_fvg(df, lookback=_n_c + 20)
+                        _ict_obs  = find_order_blocks(df, lookback=_n_c + 20)
+                        _ict_pd   = premium_discount(df)
+                        _ict_swings = find_swing_points(df.tail(_n_c + 10), lookback=5)
+                        _ict_evs  = find_bos_choch(df.tail(_n_c + 10), _ict_swings)
+                        _ict_score = ict_factor_score(df)
+
+                        _ic1, _ic2, _ic3, _ic4 = st.columns(4)
+                        _bull_fvg = sum(1 for f in _ict_fvgs if f["type"] == "bull" and not f["filled"] and f["top"] < _ict_cur)
+                        _bear_fvg = sum(1 for f in _ict_fvgs if f["type"] == "bear" and not f["filled"] and f["bottom"] > _ict_cur)
+                        _bull_ob  = sum(1 for o in _ict_obs if o["type"] == "bull" and not o["mitigated"])
+                        _last_ev  = _ict_evs[-1]["type"].replace("_", " ").upper() if _ict_evs else "없음"
+                        _ic1.metric("미충족 강세 FVG", f"{_bull_fvg}개", "현재가 아래 (지지)")
+                        _ic2.metric("미충족 약세 FVG", f"{_bear_fvg}개", "현재가 위 (저항)")
+                        _ic3.metric("강세 OB", f"{_bull_ob}개", "미충족")
+                        _ic4.metric("마지막 구조 이탈", _last_ev)
+
+                        _ip1, _ip2 = st.columns(2)
+                        _ip1.metric("구간", _ict_pd["zone"].upper(),
+                                    f"고저 범위 내 {_ict_pd['position_pct']:.0f}% 위치")
+                        _ip2.metric("ICT 팩터 점수", f"{_ict_score:.1f} / 100",
+                                    "스마트 머니 구조 종합")
+
+                        with st.expander("📖 ICT 용어 설명"):
+                            st.markdown("""
+| 용어 | 설명 |
+|---|---|
+| **FVG (Fair Value Gap)** | 3캔들 사이 가격 공백 — 가격이 메우러 돌아오는 경향 |
+| **Bull FVG** | 강세 불균형 — 현재가 아래 있으면 지지 역할 |
+| **Bear FVG** | 약세 불균형 — 현재가 위에 있으면 저항 역할 |
+| **OB (Order Block)** | 기관이 대량 주문 낸 캔들 — 이후 가격이 돌아오는 구간 |
+| **BOS (Break of Structure)** | 기존 추세 방향으로 이전 스윙 돌파 |
+| **CHoCH (Change of Character)** | 추세 반전 신호 — 반대 방향으로 스윙 돌파 |
+| **SH / SL** | 스윙 고점 / 스윙 저점 |
+| **EQ (Equilibrium)** | 최근 고저 범위의 50% 중간선 |
+| **Premium** | EQ 위 = 비싼 구간 (매도 선호) |
+| **Discount** | EQ 아래 = 싼 구간 (매수 선호) |
+""")
+                    except Exception as _e:
+                        st.warning(f"ICT 분석 오류: {_e}")
 
             with sub1:
                 # ── 매매 시그널 ──────────────────────────────
