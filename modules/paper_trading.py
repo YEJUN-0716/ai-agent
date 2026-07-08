@@ -113,6 +113,44 @@ def sync_signals_to_orders(actions: list, key: str, secret: str,
     return results
 
 
+def place_notional_buy(symbol: str, notional_usd: float, key: str, secret: str,
+                        dry_run: bool = False) -> dict:
+    """notional 시장가 매수 (분수 주식, Alpaca Paper).
+    submit_paper_order의 qty 방식과 달리 달러 금액 기준으로 주문.
+    """
+    payload = {
+        "symbol": symbol,
+        "notional": str(round(notional_usd, 2)),
+        "side": "buy",
+        "type": "market",
+        "time_in_force": "day",
+    }
+    if dry_run:
+        return {"dry_run": True, "would_submit": payload}
+    r = requests.post(f"{PAPER_BASE_URL}/v2/orders", headers=_headers(key, secret),
+                       json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def place_market_sell(symbol: str, qty: str, key: str, secret: str,
+                       dry_run: bool = False) -> dict:
+    """시장가 매도."""
+    payload = {
+        "symbol": symbol,
+        "qty": qty,
+        "side": "sell",
+        "type": "market",
+        "time_in_force": "day",
+    }
+    if dry_run:
+        return {"dry_run": True, "would_submit": payload}
+    r = requests.post(f"{PAPER_BASE_URL}/v2/orders", headers=_headers(key, secret),
+                       json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
 def compare_assumed_vs_actual_slippage(signal_price: float, filled_avg_price: float,
                                         side: str,
                                         assumed_slippage_pct: float = 0.03) -> dict:

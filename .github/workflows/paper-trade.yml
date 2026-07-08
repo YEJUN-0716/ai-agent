@@ -4,7 +4,7 @@ on:
   schedule:
     # 미국 장마감(ET 16:00) 후 → UTC 21:30 (EDT) / 22:30 (EST)
     # 월~금 실행. 공휴일에는 Alpaca가 주문을 거절하므로 별도 체크 불필요
-    - cron: "30 21 * * 1-4"
+    - cron: "30 21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:

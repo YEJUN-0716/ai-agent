@@ -15,28 +15,10 @@ from datetime import datetime, timedelta
 from scipy.stats import spearmanr
 import yfinance as yf
 
+from modules.factor_engine import fetch_fundamentals as _fetch_fundamentals_once
+
 # 5-팩터 고정 가중치 (IC 검증용, 레짐 미분류)
 _IC_WEIGHTS = {"mom_3m": 0.30, "mom_1m": 0.20, "low_vol": 0.20, "value": 0.15, "quality": 0.15}
-
-
-def _fetch_fundamentals_once(tickers: list) -> dict:
-    """현재 P/E·영업이익률 수집 (walk-forward 전체에 상수로 사용).
-    반환: {ticker: {"pe": float, "margin": float}}
-    """
-    result = {}
-    for tk in tickers:
-        try:
-            info = yf.Ticker(tk).info
-            pe_raw     = info.get("trailingPE")
-            if pe_raw is None:
-                pe_raw = info.get("forwardPE")
-            margin_raw = info.get("operatingMargins")
-            pe     = min(float(pe_raw), 200.0) if pe_raw is not None and pe_raw > 0 else np.nan
-            margin = float(margin_raw) * 100   if margin_raw is not None else np.nan
-            result[tk] = {"pe": pe, "margin": margin}
-        except Exception:
-            result[tk] = {"pe": np.nan, "margin": np.nan}
-    return result
 
 
 def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,

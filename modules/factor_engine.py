@@ -1,0 +1,227 @@
+"""
+팩터 엔진 — 5-팩터 모델 (모멘텀·저변동·가치·퀄리티) + 시장 레짐 감지
+=========================================================
+paper_trade_runner.py 와 factor_validator.py 가 공유하는 순수 pandas/numpy 구현.
+Streamlit 의존성 없음.
+"""
+import warnings
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+import yfinance as yf
+
+try:
+    import pandas_ta as _pta
+    _PTA_AVAILABLE = True
+except ImportError:
+    _pta = None
+    _PTA_AVAILABLE = False
+
+warnings.filterwarnings("ignore")
+
+# ── 레짐별 팩터 가중치 ──────────────────────────────────────────────
+REGIME_WEIGHTS = {
+    "bull":    {"mom_3m": 0.35, "mom_1m": 0.25, "low_vol": 0.15, "value": 0.15, "quality": 0.10},
+    "neutral": {"mom_3m": 0.25, "mom_1m": 0.20, "low_vol": 0.20, "value": 0.20, "quality": 0.15},
+    "bear":    {"mom_3m": 0.10, "mom_1m": 0.05, "low_vol": 0.40, "value": 0.25, "quality": 0.20},
+}
+TARGET_VOL_PCT = 0.15   # 변동성 기반 사이징: 목표 연율화 변동성
+
+
+def get_market_regime() -> tuple:
+    """
+    SPY 200일 이동평균 + VIX로 시장 레짐 감지.
+    - bull    : SPY ≥ 200MA AND VIX < 25
+    - bear    : SPY < 97% of 200MA OR VIX > 30
+    - neutral : 그 사이
+    Returns (regime: str, details: dict)
+    """
+    spy_ratio, vix_cur = 1.0, 20.0
+    try:
+        spy = yf.download("SPY", period="1y", progress=False, auto_adjust=True)
+        if isinstance(spy.columns, pd.MultiIndex):
+            spy.columns = spy.columns.droplevel(1)
+        c = spy["Close"].dropna()
+        if len(c) >= 200:
+            spy_ratio = float(c.iloc[-1]) / float(c.rolling(200).mean().iloc[-1])
+    except Exception as e:
+        print(f"  [레짐] SPY 오류: {e}")
+
+    try:
+        vix = yf.download("^VIX", period="5d", progress=False, auto_adjust=True)
+        if isinstance(vix.columns, pd.MultiIndex):
+            vix.columns = vix.columns.droplevel(1)
+        vc = vix["Close"].dropna()
+        if not vc.empty:
+            vix_cur = float(vc.iloc[-1])
+    except Exception as e:
+        print(f"  [레짐] VIX 오류: {e}")
+
+    if spy_ratio >= 1.0 and vix_cur < 25:
+        regime = "bull"
+    elif spy_ratio < 0.97 or vix_cur > 30:
+        regime = "bear"
+    else:
+        regime = "neutral"
+
+    return regime, {"spy_ratio": round(spy_ratio, 3), "vix": round(vix_cur, 1)}
+
+
+def _rsi(close: pd.Series, period: int = 14) -> float:
+    if _PTA_AVAILABLE:
+        try:
+            result = _pta.rsi(close, length=period)
+            if result is not None and not result.empty:
+                val = result.iloc[-1]
+                return float(val) if pd.notna(val) else 50.0
+        except Exception:
+            pass
+    delta = close.diff().dropna()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi_series = 100 - 100 / (1 + rs)
+    if rsi_series.empty:
+        return 50.0
+    val = rsi_series.iloc[-1]
+    return float(val) if pd.notna(val) else 50.0
+
+
+def _momentum(close: pd.Series) -> dict:
+    ret = {}
+    for label, days in [("1M", 21), ("3M", 63), ("6M", 126)]:
+        if len(close) >= days + 1:
+            ret[label] = float((close.iloc[-1] / close.iloc[-days] - 1) * 100)
+        else:
+            ret[label] = 0.0
+    return ret
+
+
+def fetch_fundamentals(tickers: list) -> dict:
+    """P/E·영업이익률 수집. 반환: {ticker: {"pe": float, "margin": float}}"""
+    result = {}
+    for tk in tickers:
+        try:
+            info = yf.Ticker(tk).info
+            pe_raw = info.get("trailingPE")
+            if pe_raw is None:
+                pe_raw = info.get("forwardPE")
+            margin_raw = info.get("operatingMargins")
+            pe     = min(float(pe_raw), 200.0) if pe_raw is not None and pe_raw > 0 else np.nan
+            margin = float(margin_raw) * 100   if margin_raw is not None else np.nan
+            result[tk] = {"pe": pe, "margin": margin}
+        except Exception:
+            result[tk] = {"pe": np.nan, "margin": np.nan}
+    return result
+
+
+def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
+    """
+    각 티커의 5-팩터 점수(10~90) 계산.
+    팩터: 모멘텀(3M/1M) + 저변동성 + 가치(저PER) + 퀄리티(영업이익률)
+    가중치는 레짐(bull/neutral/bear)에 따라 동적 조정.
+    """
+    W = REGIME_WEIGHTS.get(regime, REGIME_WEIGHTS["neutral"])
+    end   = datetime.now()
+    start = end - timedelta(days=200)
+    rows  = []
+    for tk in tickers:
+        try:
+            raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.droplevel(1)
+            if raw.empty or len(raw) < 60:
+                continue
+            close = raw["Close"].dropna()
+            mom   = _momentum(close)
+            rsi   = _rsi(close)
+            vol   = float(close.pct_change().tail(20).std() * np.sqrt(252) * 100)
+            rows.append({
+                "ticker":  tk,
+                "mom_1m":  mom.get("1M", 0),
+                "mom_3m":  mom.get("3M", 0),
+                "rsi":     rsi,
+                "vol_ann": vol,
+                "price":   float(close.iloc[-1]),
+            })
+        except Exception as e:
+            print(f"  [{tk}] 데이터 오류: {e}")
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
+    print("  기초체력 데이터 수집 중...")
+    fund = fetch_fundamentals([r["ticker"] for r in rows])
+    df["pe"]     = df["ticker"].map(lambda t: fund.get(t, {}).get("pe", np.nan))
+    df["margin"] = df["ticker"].map(lambda t: fund.get(t, {}).get("margin", np.nan))
+
+    for col in ("mom_3m", "mom_1m"):
+        mu, sigma = df[col].mean(), df[col].std()
+        df[f"z_{col}"] = (df[col] - mu) / (sigma + 1e-9)
+
+    mu_v, sigma_v = df["vol_ann"].mean(), df["vol_ann"].std()
+    df["z_low_vol"] = -(df["vol_ann"] - mu_v) / (sigma_v + 1e-9)
+
+    pe_valid = df["pe"].dropna()
+    if len(pe_valid) >= 3:
+        mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
+        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(0.0)
+    else:
+        df["z_value"] = 0.0
+
+    m_valid = df["margin"].dropna()
+    if len(m_valid) >= 3:
+        mu_m, sigma_m = m_valid.mean(), m_valid.std()
+        df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
+    else:
+        df["z_quality"] = 0.0
+
+    df["composite_z"] = (
+        df["z_mom_3m"]  * W["mom_3m"]
+        + df["z_mom_1m"]  * W["mom_1m"]
+        + df["z_low_vol"] * W["low_vol"]
+        + df["z_value"]   * W["value"]
+        + df["z_quality"] * W["quality"]
+    )
+    cmin, cmax = df["composite_z"].min(), df["composite_z"].max()
+    df["composite"] = (df["composite_z"] - cmin) / (cmax - cmin + 1e-9) * 80 + 10
+    return df.sort_values("composite", ascending=False).reset_index(drop=True)
+
+
+def generate_signals(factor_df: pd.DataFrame, top_n: int = 5,
+                     min_score: float = 60.0,
+                     regime: str = "neutral") -> list:
+    """
+    팩터 스코어 기반 매수/매도 시그널 생성.
+
+    top_n    : 매수 후보 상한 (점수 상위 N개 안에서만 고려)
+    min_score: 이 점수 미만이면 top_n 안이어도 관망 처리
+    regime   : bear이면 매수 시그널 전면 억제
+    """
+    if factor_df.empty:
+        return []
+    buy_set  = set(factor_df.head(top_n)["ticker"])
+    sell_set = set(factor_df.tail(max(len(factor_df) // 4, 1))["ticker"])
+    signals  = []
+    for _, row in factor_df.iterrows():
+        tk      = row["ticker"]
+        score   = float(row["composite"])
+        rsi     = float(row["rsi"])
+        price   = float(row["price"])
+        vol_ann = float(row.get("vol_ann", 20.0))
+        can_buy = tk in buy_set and rsi < 75 and score >= min_score and regime != "bear"
+        if can_buy:
+            action = "매수"
+        elif tk in sell_set or rsi > 80:
+            action = "매도"
+        else:
+            action = "관망"
+        signals.append({
+            "ticker":  tk, "action": action,
+            "score":   round(score, 1), "rsi": round(rsi, 1),
+            "price":   price, "vol_ann": round(vol_ann, 1),
+        })
+    return signals
