@@ -15,11 +15,34 @@ from datetime import datetime, timedelta
 from scipy.stats import spearmanr
 import yfinance as yf
 
+# 5-팩터 고정 가중치 (IC 검증용, 레짐 미분류)
+_IC_WEIGHTS = {"mom_3m": 0.30, "mom_1m": 0.20, "low_vol": 0.20, "value": 0.15, "quality": 0.15}
 
-def _calc_momentum_vol_scores(prices_dict: dict, as_of_date) -> dict:
+
+def _fetch_fundamentals_once(tickers: list) -> dict:
+    """현재 P/E·영업이익률 수집 (walk-forward 전체에 상수로 사용).
+    반환: {ticker: {"pe": float, "margin": float}}
     """
-    as_of_date 기준으로 각 티커의 모멘텀+저변동성 팩터 점수 계산.
-    look-ahead bias 없음 (그 날짜 이전 데이터만 사용).
+    result = {}
+    for tk in tickers:
+        try:
+            info = yf.Ticker(tk).info
+            pe_raw     = info.get("trailingPE") or info.get("forwardPE")
+            margin_raw = info.get("operatingMargins")
+            pe     = min(float(pe_raw), 200.0) if pe_raw and pe_raw > 0 else np.nan
+            margin = float(margin_raw) * 100   if margin_raw is not None else np.nan
+            result[tk] = {"pe": pe, "margin": margin}
+        except Exception:
+            result[tk] = {"pe": np.nan, "margin": np.nan}
+    return result
+
+
+def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
+                               fundamentals: dict = None) -> dict:
+    """
+    as_of_date 기준으로 각 티커의 5-팩터 점수 계산.
+    look-ahead bias 없음 (가격 데이터는 as_of_date 이전만 사용).
+    fundamentals: {ticker: {"pe": float, "margin": float}} — 현재 기준 상수값 허용
     반환: {ticker: composite_score}
     """
     rows = []
@@ -30,22 +53,52 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date) -> dict:
         mom_3m = float((sub.iloc[-1] / sub.iloc[-63] - 1) * 100)
         mom_1m = float((sub.iloc[-1] / sub.iloc[-21] - 1) * 100) if len(sub) >= 22 else 0.0
         vol_21 = float(sub.pct_change().iloc[-21:].std() * np.sqrt(252) * 100) if len(sub) >= 22 else 100.0
-        rows.append({"ticker": tk, "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21})
+        fund   = (fundamentals or {}).get(tk, {})
+        rows.append({
+            "ticker": tk,
+            "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21,
+            "pe":     fund.get("pe", np.nan),
+            "margin": fund.get("margin", np.nan),
+        })
 
     if len(rows) < 4:
         return {}
 
     df = pd.DataFrame(rows).set_index("ticker")
+
+    # 모멘텀·변동성 Z-score
     for col in ("mom_3m", "mom_1m"):
         mu, sigma = df[col].mean(), df[col].std()
         df[f"z_{col}"] = (df[col] - mu) / (sigma + 1e-9)
     mu, sigma = df["vol"].mean(), df["vol"].std()
-    df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)   # 낮을수록 좋으니 부호 반전
+    df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)
 
-    df["composite_z"] = 0.40 * df["z_mom_3m"] + 0.30 * df["z_mom_1m"] + 0.30 * df["z_low_vol"]
+    # 가치 (저 P/E → 고점수)
+    pe_valid = df["pe"].dropna()
+    if len(pe_valid) >= 3:
+        mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
+        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(0.0)
+    else:
+        df["z_value"] = 0.0
+
+    # 퀄리티 (높은 영업이익률 → 고점수)
+    m_valid = df["margin"].dropna()
+    if len(m_valid) >= 3:
+        mu_m, sigma_m = m_valid.mean(), m_valid.std()
+        df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
+    else:
+        df["z_quality"] = 0.0
+
+    W = _IC_WEIGHTS
+    df["composite_z"] = (
+        W["mom_3m"]  * df["z_mom_3m"]
+        + W["mom_1m"]  * df["z_mom_1m"]
+        + W["low_vol"] * df["z_low_vol"]
+        + W["value"]   * df["z_value"]
+        + W["quality"] * df["z_quality"]
+    )
     mn, mx = df["composite_z"].min(), df["composite_z"].max()
     df["score"] = 20 + (df["composite_z"] - mn) / (mx - mn + 1e-9) * 60
-
     return df["score"].to_dict()
 
 
@@ -81,7 +134,7 @@ def run_ic_analysis(
     prices_dict = {}
     for i, tk in enumerate(tickers):
         if progress_cb:
-            progress_cb(i / len(tickers) * 0.5)
+            progress_cb(i / len(tickers) * 0.45)
         try:
             raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
             if isinstance(raw.columns, pd.MultiIndex):
@@ -94,6 +147,11 @@ def run_ic_analysis(
 
     if len(prices_dict) < 5:
         return pd.DataFrame(), {}, {}, pd.Series(dtype=float)
+
+    # ── 기초체력 데이터 수집 (1회, walk-forward 전체에 상수) ────────
+    if progress_cb:
+        progress_cb(0.5)
+    fundamentals = _fetch_fundamentals_once(list(prices_dict.keys()))
 
     # ── 공통 거래일 인덱스 ───────────────────────────────────────
     all_closes = pd.DataFrame(prices_dict).dropna(how="all")
@@ -110,10 +168,10 @@ def run_ic_analysis(
 
     for step_i, idx in enumerate(rebal_indices):
         if progress_cb:
-            progress_cb(0.5 + step_i / len(rebal_indices) * 0.5)
+            progress_cb(0.55 + step_i / len(rebal_indices) * 0.45)
 
         as_of = dates[idx]
-        scores = _calc_momentum_vol_scores(prices_dict, as_of)
+        scores = _calc_momentum_vol_scores(prices_dict, as_of, fundamentals=fundamentals)
         if len(scores) < 5:
             continue
 
