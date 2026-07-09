@@ -266,10 +266,9 @@ def reconcile_positions(peaks: dict, actual_positions: list,
         for sym in ghost:
             msgs.append(f"  `{sym}` 시스템O → Alpaca X (peak 삭제)")
             peaks.pop(sym, None)
-        alert_fn("\n".join(msgs))
-    else:
-        for sym in ghost:
-            peaks.pop(sym, None)
+        msg = "\n".join(msgs)
+        print(msg)
+        alert_fn(msg)
 
     # Orphan: Alpaca엔 있는데 시스템 기록엔 없음 → peak 초기화 (알림 생략)
     # 첫 실행 또는 수동 매수 시 모든 포지션이 orphan으로 잡혀 TG 스팸 방지
@@ -651,9 +650,11 @@ def main():
                     print(f"    ⚠️ 미체결: {fill_status}")
 
             buy_results.append(buy_rec)
-            buying_power -= _size
-            n_bought += 1
-            bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
+            # cancelled/rejected = 실제 체결 없음 → 슬롯/자금 차감 불필요
+            if buy_rec.get("fill_status") not in {"cancelled", "rejected"}:
+                buying_power -= _size
+                n_bought += 1
+                bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
         except Exception as e:
             print(f"  [매수 오류] {sym}: {e}")
             buy_results.append({"symbol": sym, "error": str(e)})
