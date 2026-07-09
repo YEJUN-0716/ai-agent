@@ -258,22 +258,28 @@ def reconcile_positions(peaks: dict, actual_positions: list,
     if not ghost and not orphan:
         return peaks
 
-    msgs = ["⚠️ *포지션 불일치 자동 수정*"]
-    for sym in ghost:
-        msgs.append(f"  제거: `{sym}` (시스템 기록O → Alpaca 포지션X, 외부 매도로 간주)")
-        peaks.pop(sym, None)
-
     pos_map = {p["symbol"]: p for p in actual_positions}
+
+    # Ghost: 시스템엔 있는데 Alpaca 계좌엔 없음 → 외부 매도 가능성 → TG 알림
+    if ghost:
+        msgs = ["⚠️ *포지션 불일치* (외부 매도 의심)"]
+        for sym in ghost:
+            msgs.append(f"  `{sym}` 시스템O → Alpaca X (peak 삭제)")
+            peaks.pop(sym, None)
+        alert_fn("\n".join(msgs))
+    else:
+        for sym in ghost:
+            peaks.pop(sym, None)
+
+    # Orphan: Alpaca엔 있는데 시스템 기록엔 없음 → peak 초기화 (알림 생략)
+    # 첫 실행 또는 수동 매수 시 모든 포지션이 orphan으로 잡혀 TG 스팸 방지
     for sym in orphan:
         cur_price = float(pos_map[sym].get("current_price") or
                           pos_map[sym].get("avg_entry_price") or 0)
         if cur_price > 0:
             peaks[sym] = cur_price
-            msgs.append(f"  추가: `{sym}` @ ${cur_price:.2f} (Alpaca 포지션O → 시스템 기록X, 외부 매수)")
+            print(f"  [peak 초기화] {sym} @ ${cur_price:.2f}")
 
-    msg = "\n".join(msgs)
-    print(msg)
-    alert_fn(msg)
     return peaks
 
 
@@ -574,6 +580,13 @@ def main():
     n_bought    = 0
     skipped_sector = []
 
+    # C4: cold cache 시 첫 반복에서 len(held) 건의 yfinance 호출이 몰리는 문제 방지
+    for _s in held:
+        _get_sector(_s)
+
+    # C1: 이번 실행에서 이미 매수한 섹터 카운트 (snapshot인 held와 별개로 추적)
+    bought_sectors: dict[str, int] = {}
+
     for sig in buy_sigs:
         if n_bought >= max(0, remaining):
             break
@@ -587,8 +600,9 @@ def main():
 
         # ② 섹터 집중도 제한
         sym_sector = _get_sector(sym)
-        held_in_sector = sum(
-            1 for s in held if s not in sell_done and _get_sector(s) == sym_sector
+        held_in_sector = (
+            sum(1 for s in held if s not in sell_done and _get_sector(s) == sym_sector)
+            + bought_sectors.get(sym_sector, 0)  # C1: 이번 실행 내 이미 매수한 동일 섹터 수
         )
         if held_in_sector >= MAX_SECTOR_POSITIONS:
             print(f"  [섹터 제한] {sym} ({sym_sector}) 이미 {held_in_sector}개 — 스킵")
@@ -639,6 +653,7 @@ def main():
             buy_results.append(buy_rec)
             buying_power -= _size
             n_bought += 1
+            bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
         except Exception as e:
             print(f"  [매수 오류] {sym}: {e}")
             buy_results.append({"symbol": sym, "error": str(e)})

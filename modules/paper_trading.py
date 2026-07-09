@@ -93,6 +93,13 @@ def wait_for_fill(order_id: str, key: str, secret: str,
         except Exception:
             pass
         time.sleep(interval)
+    # 마지막 sleep 도중 체결됐을 수 있으므로 한 번 더 조회
+    try:
+        order = get_order_fill(order_id, key, secret)
+        if order.get("status") in TERMINAL:
+            return order
+    except Exception:
+        pass
     return {"status": "timeout", "order_id": order_id}
 
 

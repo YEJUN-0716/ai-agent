@@ -82,10 +82,14 @@ def calc_perf(records: list) -> dict:
     spy_valid = [p for p in spy_prices if p]
     spy_ret   = (spy_valid[-1] / spy_valid[0] - 1) * 100 if len(spy_valid) >= 2 else 0.0
 
-    today_ret = (equities[-1] / equities[-2] - 1) * 100 if len(equities) >= 2 else 0.0
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if records[-1].get("date") == today_str and len(equities) >= 2:
+        today_ret: float | None = (equities[-1] / equities[-2] - 1) * 100
+    else:
+        today_ret = None  # paper-trade가 오늘 실행 안 됐으면 당일 P&L 표시 안 함
 
     return {
-        "today_ret":    round(today_ret, 2),
+        "today_ret":    round(today_ret, 2) if today_ret is not None else None,
         "total_return": round(total_ret, 2),
         "spy_return":   round(spy_ret, 2),
         "alpha":        round(total_ret - spy_ret, 2),
@@ -126,9 +130,11 @@ def main():
     ]
 
     # 당일 수익률
-    if perf:
+    if perf and perf.get("today_ret") is not None:
         emoji = "📈" if perf["today_ret"] >= 0 else "📉"
         lines.append(f"{emoji} 당일 *{perf['today_ret']:+.2f}%*")
+    elif perf:
+        lines.append("⚠️ 오늘 페이퍼트레이드 미실행 — 당일 수익률 없음")
 
     # 포지션별 손익 (수익률 내림차순)
     if positions:
