@@ -318,9 +318,10 @@ def detect_crt_setup(df: pd.DataFrame, period: int = 3) -> dict:
     today = df.iloc[-1]
     t_low, t_high, t_close = float(today["Low"]), float(today["High"]), float(today["Close"])
 
-    if t_low < crt_low and t_close > crt_low:
+    crt_mid = result["crt_mid"]
+    if t_low < crt_low and t_close > crt_mid:
         result.update({"setup": "bullish", "swept_erl": crt_low, "phase": 2})
-    elif t_high > crt_high and t_close < crt_high:
+    elif t_high > crt_high and t_close < crt_mid:
         result.update({"setup": "bearish", "swept_erl": crt_high, "phase": 2})
 
     return result
@@ -348,7 +349,7 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
 
     반환: {"adjustment": int, "signals": list[str], "crt": dict}
     """
-    if df.empty or len(df) < 20:
+    if df.empty or len(df) < 60:
         return {"adjustment": 0, "signals": [], "crt": {}}
 
     try:
@@ -382,18 +383,23 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
                 signals.append(f"Bearish FVG 저항 (${f['bottom']:.2f}~${f['top']:.2f})")
                 break
 
-        # 3. Order Block — 미충족 OB와 현재가 위치
+        # 3. Order Block — 미충족 OB와 현재가 위치 (유형별 첫 번째 OB만 반영)
         obs = find_order_blocks(df, lookback=60, min_move_pct=1.0)
-        for ob in [o for o in obs if not o["mitigated"]]:
+        unmitigated = [o for o in obs if not o["mitigated"]]
+        for ob in unmitigated:
             zone_l = ob["bottom"] * 0.98
             zone_h = ob["top"]    * 1.02
-            if zone_l <= cur <= zone_h:
-                if ob["type"] == "bull":
-                    adj += 10
-                    signals.append(f"Bullish OB 지지 (${ob['bottom']:.2f}~${ob['top']:.2f})")
-                else:
-                    adj -= 10
-                    signals.append(f"Bearish OB 저항 (${ob['bottom']:.2f}~${ob['top']:.2f})")
+            if ob["type"] == "bull" and zone_l <= cur <= zone_h:
+                adj += 10
+                signals.append(f"Bullish OB 지지 (${ob['bottom']:.2f}~${ob['top']:.2f})")
+                break
+        for ob in unmitigated:
+            zone_l = ob["bottom"] * 0.98
+            zone_h = ob["top"]    * 1.02
+            if ob["type"] == "bear" and zone_l <= cur <= zone_h:
+                adj -= 10
+                signals.append(f"Bearish OB 저항 (${ob['bottom']:.2f}~${ob['top']:.2f})")
+                break
 
         # 4. BOS / CHoCH 최근 방향
         swings = find_swing_points(df.tail(80), lookback=5)

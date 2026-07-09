@@ -476,7 +476,7 @@ def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
             try:
                 _, res = fut.result()
                 results[tk] = res
-            except Exception:
+            except BaseException:
                 results[tk] = {"adjustment": 0, "signals": [], "crt": {}}
     return results
 
@@ -593,16 +593,21 @@ def main():
     # 4-1. ICT/CRT 진입 품질 보정 (상위 후보에 한해 병렬 분석)
     ict_top_n = min(max(TOP_N * 3, 15), len(factor_df))
     print(f"ICT/CRT 분석 중 (상위 {ict_top_n}개)...")
-    ict_data = _calc_ict_batch(factor_df.head(ict_top_n)["ticker"].tolist())
+    ict_data: dict[str, dict] = {}
+    try:
+        ict_data = _calc_ict_batch(factor_df.head(ict_top_n)["ticker"].tolist())
+    except Exception as _ict_err:
+        print(f"[경고] ICT 배치 분석 실패 — 조정 없이 계속: {_ict_err}")
 
-    # composite에 ICT 조정 점수 가산 후 재정렬
+    # composite에 ICT 조정 점수 가산 후 전역 재정렬
     top_df = factor_df.head(ict_top_n).copy()
     top_df["ict_adj"] = top_df["ticker"].map(
         lambda t: ict_data.get(t, {}).get("adjustment", 0)
     )
-    top_df["composite"] = (top_df["composite"] + top_df["ict_adj"]).clip(lower=0)
+    top_df["composite"] = top_df["composite"] + top_df["ict_adj"]
     top_df = top_df.sort_values("composite", ascending=False).reset_index(drop=True)
     factor_df = pd.concat([top_df, factor_df.iloc[ict_top_n:]], ignore_index=True)
+    factor_df = factor_df.sort_values("composite", ascending=False).reset_index(drop=True)
 
     # ICT 시그널 로그
     for _tk, _res in ict_data.items():
@@ -705,7 +710,7 @@ def main():
         try:
             result = place_buy(sym, _size)
             buy_rec = {
-                "symbol":  sym, "notional": _size, "ok": True,
+                "symbol":  sym, "ticker": sig["ticker"], "notional": _size, "ok": True,
                 "price":   sig.get("price", 0),
                 "score":   sig.get("score", 0),
                 "rsi":     sig.get("rsi", 50),
@@ -800,7 +805,7 @@ def main():
     for r in buy_results:
         if not r.get("ok"):
             continue
-        tk  = r.get("symbol", "")
+        tk  = r.get("ticker", r.get("symbol", ""))
         res = ict_data.get(tk, {})
         if res.get("signals"):
             ict_highlights.append(f"  `{tk}` {res['signals'][0]}")
