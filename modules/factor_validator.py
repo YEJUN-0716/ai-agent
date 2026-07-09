@@ -230,3 +230,163 @@ def run_ic_analysis(
         ls_cum = (1 + ls / 100).cumprod() * 100 - 100
 
     return ic_df, quintile_cum, summary, ls_cum
+
+
+# ── 팩터별 IC 분석 (가중치 자동 조정용) ───────────────────────────
+
+def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
+                              fundamentals: dict = None) -> dict:
+    """
+    as_of_date 기준 각 티커의 팩터별 z-score.
+    반환: {ticker: {"mom_3m": z, "mom_1m": z, "low_vol": z, "value": z, "quality": z}}
+    """
+    rows = []
+    for tk, close in prices_dict.items():
+        sub = close[close.index <= as_of_date]
+        if len(sub) < 65:
+            continue
+        mom_3m = float((sub.iloc[-1] / sub.iloc[-64] - 1) * 100)   # -(days+1)
+        mom_1m = float((sub.iloc[-1] / sub.iloc[-22] - 1) * 100) if len(sub) >= 22 else 0.0
+        vol_21 = float(sub.pct_change().iloc[-21:].std() * np.sqrt(252) * 100)
+        fund   = (fundamentals or {}).get(tk, {})
+        rows.append({
+            "ticker": tk,
+            "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21,
+            "pe":     fund.get("pe", np.nan),
+            "margin": fund.get("margin", np.nan),
+        })
+
+    if len(rows) < 5:
+        return {}
+
+    df = pd.DataFrame(rows).set_index("ticker")
+
+    for col in ("mom_3m", "mom_1m"):
+        mu, sigma = df[col].mean(), df[col].std()
+        df[f"z_{col}"] = (df[col] - mu) / (sigma + 1e-9)
+
+    mu, sigma = df["vol"].mean(), df["vol"].std()
+    df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)
+
+    pe_valid = df["pe"].dropna()
+    if len(pe_valid) >= 3:
+        mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
+        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(0.0)
+    else:
+        df["z_value"] = 0.0
+
+    m_valid = df["margin"].dropna()
+    if len(m_valid) >= 3:
+        mu_m, sigma_m = m_valid.mean(), m_valid.std()
+        df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
+    else:
+        df["z_quality"] = 0.0
+
+    result = {}
+    for tk in df.index:
+        result[tk] = {
+            "mom_3m":  float(df.loc[tk, "z_mom_3m"]),
+            "mom_1m":  float(df.loc[tk, "z_mom_1m"]),
+            "low_vol": float(df.loc[tk, "z_low_vol"]),
+            "value":   float(df.loc[tk, "z_value"]),
+            "quality": float(df.loc[tk, "z_quality"]),
+        }
+    return result
+
+
+def run_per_factor_ic_analysis(
+    tickers: list,
+    lookback_years: int = 2,
+    rebal_days: int = 21,
+    forward_days: int = 21,
+    progress_cb=None,
+) -> dict:
+    """
+    팩터별 walk-forward IC 분석.
+    ic_weight_updater.py 가 호출하여 ic_weights.json을 생성할 때 사용.
+
+    Returns
+    -------
+    {factor: {"mean_ic": float, "std_ic": float, "icir": float,
+              "pct_positive": float, "n": int}}
+    """
+    end   = datetime.now()
+    start = end - timedelta(days=lookback_years * 365 + 90)
+
+    prices_dict = {}
+    for i, tk in enumerate(tickers):
+        if progress_cb:
+            progress_cb(i / len(tickers) * 0.45)
+        try:
+            raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw = raw.xs(tk, axis=1, level=1) if tk in raw.columns.get_level_values(1) else raw
+                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+            if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
+                prices_dict[tk] = raw["Close"].dropna()
+        except Exception:
+            pass
+
+    if len(prices_dict) < 5:
+        return {}
+
+    if progress_cb:
+        progress_cb(0.5)
+    fundamentals = _fetch_fundamentals_once(list(prices_dict.keys()))
+
+    all_closes = pd.DataFrame(prices_dict).dropna(how="all")
+    dates      = all_closes.index
+    min_start  = 65 + forward_days
+    rebal_indices = list(range(min_start, len(dates) - forward_days, rebal_days))
+    if not rebal_indices:
+        return {}
+
+    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality"]
+    factor_ics = {f: [] for f in FACTORS}
+
+    for step_i, idx in enumerate(rebal_indices):
+        if progress_cb:
+            progress_cb(0.55 + step_i / len(rebal_indices) * 0.45)
+
+        as_of        = dates[idx]
+        factor_scores = _calc_per_factor_zscores(prices_dict, as_of, fundamentals=fundamentals)
+        if len(factor_scores) < 5:
+            continue
+
+        fwd_date = dates[min(idx + forward_days, len(dates) - 1)]
+        returns  = {}
+        for tk in factor_scores:
+            cur_vals = prices_dict[tk][prices_dict[tk].index <= as_of]
+            fwd_vals = prices_dict[tk][prices_dict[tk].index <= fwd_date]
+            if len(cur_vals) > 0 and len(fwd_vals) > 0:
+                cp, fp = float(cur_vals.iloc[-1]), float(fwd_vals.iloc[-1])
+                returns[tk] = (fp / cp - 1) * 100 if cp > 0 else np.nan
+
+        common = [t for t in factor_scores if t in returns and not np.isnan(returns[t])]
+        if len(common) < 5:
+            continue
+
+        y = np.array([returns[t] for t in common])
+        for factor in FACTORS:
+            x   = np.array([factor_scores[t][factor] for t in common])
+            ic, _ = spearmanr(x, y)
+            if not np.isnan(ic):
+                factor_ics[factor].append(float(ic))
+
+    result = {}
+    for factor, ics in factor_ics.items():
+        if not ics:
+            result[factor] = {"mean_ic": 0.0, "std_ic": 0.0, "icir": 0.0,
+                               "pct_positive": 0.0, "n": 0}
+            continue
+        arr     = np.array(ics)
+        mean_ic = float(arr.mean())
+        std_ic  = float(arr.std())
+        result[factor] = {
+            "mean_ic":      round(mean_ic, 4),
+            "std_ic":       round(std_ic, 4),
+            "icir":         round(mean_ic / (std_ic + 1e-9), 3),
+            "pct_positive": round(float((arr > 0).mean() * 100), 1),
+            "n":            len(ics),
+        }
+    return result

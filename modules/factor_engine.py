@@ -4,6 +4,8 @@
 paper_trade_runner.py 와 factor_validator.py 가 공유하는 순수 pandas/numpy 구현.
 Streamlit 의존성 없음.
 """
+import json
+import os
 import warnings
 from datetime import datetime, timedelta
 
@@ -117,13 +119,33 @@ def fetch_fundamentals(tickers: list) -> dict:
     return result
 
 
+_IC_WEIGHT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ic_weights.json")
+
+
+def _load_regime_weights() -> dict:
+    """
+    ic_weights.json이 있으면 IC 기반 조정 가중치를 사용, 없으면 기본 REGIME_WEIGHTS.
+    ic_weight_updater.py가 매주 생성하는 파일.
+    """
+    try:
+        if os.path.exists(_IC_WEIGHT_FILE):
+            with open(_IC_WEIGHT_FILE) as f:
+                data = json.load(f)
+            rw = data.get("regime_weights", {})
+            if all(r in rw for r in REGIME_WEIGHTS):
+                return rw
+    except Exception:
+        pass
+    return REGIME_WEIGHTS
+
+
 def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     """
     각 티커의 5-팩터 점수(10~90) 계산.
     팩터: 모멘텀(3M/1M) + 저변동성 + 가치(저PER) + 퀄리티(영업이익률)
-    가중치는 레짐(bull/neutral/bear)에 따라 동적 조정.
+    가중치는 레짐(bull/neutral/bear) + ic_weights.json(있으면)에 따라 동적 조정.
     """
-    W = REGIME_WEIGHTS.get(regime, REGIME_WEIGHTS["neutral"])
+    W = _load_regime_weights().get(regime, REGIME_WEIGHTS["neutral"])
     end   = datetime.now()
     start = end - timedelta(days=200)
     rows  = []

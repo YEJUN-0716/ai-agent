@@ -6,15 +6,20 @@ GitHub Actions cron으로 매일 미국 장마감 후 자동 실행.
 Alpaca 주문 함수는 modules/paper_trading.py 참조.
 
 환경변수:
-  ALPACA_API_KEY        Alpaca Paper API Key  (필수)
-  ALPACA_SECRET_KEY     Alpaca Paper Secret   (필수)
-  TELEGRAM_TOKEN        텔레그램 봇 토큰      (선택)
-  TELEGRAM_CHAT_ID      텔레그램 채팅 ID      (선택)
-  UNIVERSE              유니버스 이름 (기본: 'S&P 500 대형 30')
-  TOP_N                 매수 상위 N개 (기본: 5)
-  CAPITAL_PER_TRADE     종목당 투입금 USD (기본: 1000)
-  MAX_POSITIONS         최대 동시 포지션 수 (기본: 10)
-  DRY_RUN               true면 주문 안 냄 (기본: false)
+  ALPACA_API_KEY        Alpaca API Key                (필수)
+  ALPACA_SECRET_KEY     Alpaca Secret                 (필수)
+  ALPACA_MODE           paper(기본) 또는 live ⚠️      (선택)
+  TELEGRAM_TOKEN        텔레그램 봇 토큰              (선택)
+  TELEGRAM_CHAT_ID      텔레그램 채팅 ID              (선택)
+  UNIVERSE              유니버스 이름                  (기본: 'S&P 500 대형 30')
+  TOP_N                 매수 상위 N개                  (기본: 5)
+  CAPITAL_PER_TRADE     종목당 투입금 USD              (기본: 1000)
+  MAX_POSITIONS         최대 동시 포지션 수            (기본: 10)
+  DRY_RUN               true면 주문 안 냄              (기본: false)
+  TRAIL_STOP_PCT        트레일링 스톱 %                (기본: 10)
+  BUY_SCORE_MIN         최소 매수 점수                 (기본: 60)
+  PORTFOLIO_DD_STOP_PCT 포트폴리오 드로다운 한도 %    (기본: 15, 0이면 비활성)
+  MAX_SECTOR_POSITIONS  동일 섹터 최대 보유 종목 수    (기본: 2)
 """
 import json
 import os
@@ -34,6 +39,7 @@ from modules.factor_engine import (
 from modules.paper_trading import (
     place_notional_buy as _pm_notional_buy,
     place_market_sell  as _pm_market_sell,
+    wait_for_fill      as _pm_wait_fill,
 )
 
 warnings.filterwarnings("ignore")
@@ -50,12 +56,17 @@ MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))
 BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))
+PORTFOLIO_DD_STOP_PCT = float(os.environ.get("PORTFOLIO_DD_STOP_PCT", "15"))
+MAX_SECTOR_POSITIONS  = int(os.environ.get("MAX_SECTOR_POSITIONS", "2"))
+
+_ALPACA_MODE = os.environ.get("ALPACA_MODE", "paper").strip().lower()
+_ALPACA_BASE = ("https://api.alpaca.markets" if _ALPACA_MODE == "live"
+                else "https://paper-api.alpaca.markets")
 
 PEAK_FILE        = "peak_prices.json"
 SIGNAL_LOG_FILE  = "signal_log.json"
+EQUITY_LOG_FILE  = "equity_log.json"
 SIGNAL_HOLD_DAYS = 21
-
-PAPER_BASE = "https://paper-api.alpaca.markets"
 
 # ── 유니버스 ────────────────────────────────────────────────────
 UNIVERSE_PRESETS = {
@@ -85,13 +96,13 @@ def _h():
 
 
 def alpaca_get(path, params=None):
-    r = requests.get(f"{PAPER_BASE}{path}", headers=_h(), params=params, timeout=15)
+    r = requests.get(f"{_ALPACA_BASE}{path}", headers=_h(), params=params, timeout=15)
     r.raise_for_status()
     return r.json()
 
 
 def alpaca_post(path, body):
-    r = requests.post(f"{PAPER_BASE}{path}", headers=_h(), json=body, timeout=15)
+    r = requests.post(f"{_ALPACA_BASE}{path}", headers=_h(), json=body, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -135,6 +146,138 @@ def save_signal_log(signals: list) -> None:
         json.dump({"signals": signals[-300:]}, f, indent=2)
 
 
+# ── 자산 로그 (P&L 추적) ─────────────────────────────────────────
+def load_equity_log() -> list:
+    if os.path.exists(EQUITY_LOG_FILE):
+        try:
+            with open(EQUITY_LOG_FILE) as f:
+                return json.load(f).get("records", [])
+        except Exception:
+            return []
+    return []
+
+
+def save_equity_log(records: list) -> None:
+    with open(EQUITY_LOG_FILE, "w") as f:
+        json.dump({"records": records[-504:]}, f, indent=2)  # 최대 2년(504 거래일)
+
+
+def append_equity_log(records: list, equity: float, spy_price: float | None,
+                       positions: list) -> list:
+    """오늘 날짜 항목이 없으면 추가, 이미 있으면 업데이트."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    unrealized = sum(float(p.get("unrealized_pl", 0) or 0) for p in positions)
+    entry = {
+        "date":           today,
+        "equity":         round(equity, 2),
+        "spy_price":      round(spy_price, 2) if spy_price else None,
+        "unrealized_pnl": round(unrealized, 2),
+        "n_positions":    len(positions),
+    }
+    if records and records[-1]["date"] == today:
+        records[-1] = entry
+    else:
+        records.append(entry)
+    return records
+
+
+def calc_performance_metrics(records: list) -> dict:
+    """샤프 비율, 최대 드로다운, 총 수익률, SPY 대비 알파 계산."""
+    if len(records) < 5:
+        return {}
+    equities   = [r["equity"]    for r in records]
+    spy_prices = [r.get("spy_price") for r in records]
+
+    # 일별 수익률
+    port_rets = [(equities[i] / equities[i-1] - 1) for i in range(1, len(equities))]
+    mean_r, std_r = float(np.mean(port_rets)), float(np.std(port_rets))
+    sharpe = (mean_r / (std_r + 1e-9)) * np.sqrt(252) if std_r > 0 else 0.0
+
+    # 최대 드로다운
+    peak_e, max_dd = equities[0], 0.0
+    for e in equities:
+        peak_e = max(peak_e, e)
+        max_dd = min(max_dd, (e / peak_e - 1) * 100)
+
+    # 총 수익률
+    total_ret = (equities[-1] / equities[0] - 1) * 100
+
+    # SPY 수익률 (유효 데이터만)
+    spy_valid = [p for p in spy_prices if p]
+    spy_ret   = (spy_valid[-1] / spy_valid[0] - 1) * 100 if len(spy_valid) >= 2 else 0.0
+
+    return {
+        "total_return": round(total_ret, 2),
+        "spy_return":   round(spy_ret, 2),
+        "alpha":        round(total_ret - spy_ret, 2),
+        "sharpe":       round(sharpe, 2),
+        "max_dd":       round(max_dd, 2),
+        "n_days":       len(records),
+    }
+
+
+def check_portfolio_drawdown(equity_now: float, records: list) -> tuple[bool, float]:
+    """계좌 고점 대비 드로다운이 PORTFOLIO_DD_STOP_PCT 초과하면 (True, dd%) 반환."""
+    if PORTFOLIO_DD_STOP_PCT <= 0 or not records:
+        return False, 0.0
+    peak = max(r["equity"] for r in records)
+    dd   = (equity_now / peak - 1) * 100
+    return dd < -PORTFOLIO_DD_STOP_PCT, round(dd, 2)
+
+
+# ── 섹터 조회 ────────────────────────────────────────────────────
+_sector_cache: dict[str, str] = {}
+
+
+def _get_sector(ticker: str) -> str:
+    """yfinance로 섹터 조회 (결과 캐싱). 실패하면 'Unknown'."""
+    if ticker in _sector_cache:
+        return _sector_cache[ticker]
+    try:
+        info   = yf.Ticker(ticker).info
+        sector = info.get("sector") or "Unknown"
+    except Exception:
+        sector = "Unknown"
+    _sector_cache[ticker] = sector
+    return sector
+
+
+# ── 포지션 reconciliation ─────────────────────────────────────────
+def reconcile_positions(peaks: dict, actual_positions: list,
+                         alert_fn) -> dict:
+    """
+    peak_prices.json(시스템 기록) vs 실제 Alpaca 포지션 불일치 감지 및 자동 수정.
+    - 시스템O/계좌X: 외부 매도 → peak 항목 삭제
+    - 시스템X/계좌O: 외부 매수 → 현재가로 peak 초기화
+    """
+    actual_syms   = {p["symbol"] for p in actual_positions}
+    peak_syms     = set(peaks.keys())
+    ghost         = peak_syms - actual_syms   # 시스템엔 있는데 계좌엔 없음
+    orphan        = actual_syms - peak_syms   # 계좌엔 있는데 시스템엔 없음
+
+    if not ghost and not orphan:
+        return peaks
+
+    msgs = ["⚠️ *포지션 불일치 자동 수정*"]
+    for sym in ghost:
+        msgs.append(f"  제거: `{sym}` (시스템 기록O → Alpaca 포지션X, 외부 매도로 간주)")
+        peaks.pop(sym, None)
+
+    pos_map = {p["symbol"]: p for p in actual_positions}
+    for sym in orphan:
+        cur_price = float(pos_map[sym].get("current_price") or
+                          pos_map[sym].get("avg_entry_price") or 0)
+        if cur_price > 0:
+            peaks[sym] = cur_price
+            msgs.append(f"  추가: `{sym}` @ ${cur_price:.2f} (Alpaca 포지션O → 시스템 기록X, 외부 매수)")
+
+    msg = "\n".join(msgs)
+    print(msg)
+    alert_fn(msg)
+    return peaks
+
+
+# ── 시그널 로그 ──────────────────────────────────────────────────
 def append_signals_to_log(new_signals: list, existing_log: list) -> list:
     """매수 시그널을 로그에 추가 (같은 날 중복 제외)."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -161,11 +304,8 @@ def append_signals_to_log(new_signals: list, existing_log: list) -> list:
 
 
 def resolve_signal_outcomes(signal_log: list, prices_cache: dict) -> list:
-    """
-    entry_date + SIGNAL_HOLD_DAYS 이상 경과한 미결 시그널의 결과를 기입.
-    prices_cache: {symbol: float(현재가)} — 이미 수집된 가격 활용.
-    """
-    today = datetime.now(timezone.utc).date()
+    """entry_date + SIGNAL_HOLD_DAYS 이상 경과한 미결 시그널의 결과를 기입."""
+    today   = datetime.now(timezone.utc).date()
     updated = []
     for sig in signal_log:
         if sig.get("return_pct") is not None:
@@ -183,7 +323,7 @@ def resolve_signal_outcomes(signal_log: list, prices_cache: dict) -> list:
         cur = prices_cache.get(sym)
         if cur is None:
             try:
-                yahoo_sym = sym.replace(".", "-")   # BRK.B → BRK-B
+                yahoo_sym = sym.replace(".", "-")
                 raw = yf.download(yahoo_sym, period="5d", progress=False, auto_adjust=True)
                 if isinstance(raw.columns, pd.MultiIndex):
                     raw.columns = raw.columns.droplevel(1)
@@ -293,12 +433,14 @@ def send_tg(msg: str):
 
 # ── 메인 ─────────────────────────────────────────────────────────
 def main():
-    run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"\n{'='*55}")
-    print(f"  페이퍼 트레이딩 실행  {run_ts}")
+    run_ts   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    mode_tag = f"[{_ALPACA_MODE.upper()}]"
+    print(f"\n{'='*60}")
+    print(f"  페이퍼 트레이딩 실행  {run_ts}  {mode_tag}")
     print(f"  DRY_RUN={DRY_RUN}  UNIVERSE={UNIVERSE_NAME}  TOP_N={TOP_N}")
     print(f"  CAPITAL_PER_TRADE=${CAPITAL_USD}  MAX_POS={MAX_POSITIONS}")
-    print(f"{'='*55}\n")
+    print(f"  DD_STOP={PORTFOLIO_DD_STOP_PCT}%  MAX_SECTOR={MAX_SECTOR_POSITIONS}")
+    print(f"{'='*60}\n")
 
     if not ALPACA_KEY or not ALPACA_SECRET:
         print("[오류] ALPACA_API_KEY / ALPACA_SECRET_KEY 환경변수가 없습니다.")
@@ -328,6 +470,25 @@ def main():
         msg = "계정이 잠겨 있습니다 — 실행 중단."
         print(msg); send_tg(msg); sys.exit(0)
 
+    # 1-1. 자산 로그 로드 & 포트폴리오 드로다운 체크 ①
+    equity_log   = load_equity_log()
+    dd_blocked, dd_pct = check_portfolio_drawdown(equity_now, equity_log)
+    if dd_blocked:
+        warn = (f"⚠️ 포트폴리오 드로다운 *{dd_pct:.1f}%* "
+                f"(한도: -{PORTFOLIO_DD_STOP_PCT:.0f}%) — 신규 매수 중단")
+        print(warn); send_tg(warn)
+
+    # 1-2. SPY 현재가 수집 (성과 추적용) ④
+    spy_price = None
+    try:
+        _spy = yf.download("SPY", period="5d", progress=False, auto_adjust=True)
+        if isinstance(_spy.columns, pd.MultiIndex):
+            _spy.columns = _spy.columns.droplevel(1)
+        if not _spy.empty:
+            spy_price = float(_spy["Close"].dropna().iloc[-1])
+    except Exception:
+        pass
+
     # 2. 현재 보유 포지션
     try:
         positions = alpaca_get("/v2/positions")
@@ -338,9 +499,13 @@ def main():
     held = {p["symbol"]: p for p in positions}
     print(f"현재 보유 {len(held)}개: {list(held.keys())}")
 
-    # 2-1. 트레일링 스톱 체크
-    sell_results, sell_done = [], set()
+    # 2-1. peak_prices 로드 & 포지션 reconciliation ⑦
     peaks = load_peak_prices()
+    if positions:
+        peaks = reconcile_positions(peaks, positions, send_tg)
+
+    # 2-2. 트레일링 스톱 체크
+    sell_results, sell_done = [], set()
     if positions and TRAIL_STOP_PCT > 0:
         print(f"\n트레일링 스톱 점검 ({TRAIL_STOP_PCT:.0f}%)...")
         _stop_fired, peaks = check_trailing_stops(positions, peaks=peaks)
@@ -403,19 +568,37 @@ def main():
         except Exception as _e:
             print(f"[경고] 매도 후 buying_power 갱신 실패: {_e}")
 
-    # 7. 매수
-    remaining = MAX_POSITIONS - (len(held) - len(sell_done))
+    # 7. 매수 (드로다운 스톱 ① / 섹터 제한 ② / 체결 확인 ③)
+    remaining  = MAX_POSITIONS - (len(held) - len(sell_done))
     buy_results = []
-    n_bought = 0
+    n_bought    = 0
+    skipped_sector = []
+
     for sig in buy_sigs:
         if n_bought >= max(0, remaining):
             break
+        if dd_blocked:
+            print(f"  [드로다운 스톱] 신규 매수 전면 중단 (dd={dd_pct:.1f}%)")
+            break
+
         sym = _to_alpaca_sym(sig["ticker"])
         if not sym or sym in held:
             continue
+
+        # ② 섹터 집중도 제한
+        sym_sector = _get_sector(sym)
+        held_in_sector = sum(
+            1 for s in held if s not in sell_done and _get_sector(s) == sym_sector
+        )
+        if held_in_sector >= MAX_SECTOR_POSITIONS:
+            print(f"  [섹터 제한] {sym} ({sym_sector}) 이미 {held_in_sector}개 — 스킵")
+            skipped_sector.append(f"{sym}({sym_sector})")
+            continue
+
         if buying_power < CAPITAL_USD * 0.5:
             print(f"  [매수 스킵] 매수여력 부족")
             break
+
         # 변동성 기반 포지션 사이징
         asset_vol = sig.get("vol_ann", 20.0) / 100
         if asset_vol > 0:
@@ -424,26 +607,43 @@ def main():
             _size = round(_size, 2)
         else:
             _size = CAPITAL_USD
+
         if buying_power < _size * 0.9:
             print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 ${_size:,.0f}, 가용 ${buying_power:,.0f})")
             continue
+
         print(f"  [매수] {sym} ${_size:,.0f}  "
-              f"(스코어 {sig['score']}, RSI {sig['rsi']}, 변동성 {sig.get('vol_ann', 0):.1f}%)")
+              f"(스코어 {sig['score']}, RSI {sig['rsi']}, 변동성 {sig.get('vol_ann', 0):.1f}%,"
+              f" 섹터 {sym_sector})")
         try:
-            place_buy(sym, _size)
-            buy_results.append({
-                "symbol": sym, "notional": _size, "ok": True,
-                "price": sig.get("price", 0),
-                "score": sig.get("score", 0),
-                "rsi":   sig.get("rsi", 50),
-            })
+            result = place_buy(sym, _size)
+            buy_rec = {
+                "symbol":  sym, "notional": _size, "ok": True,
+                "price":   sig.get("price", 0),
+                "score":   sig.get("score", 0),
+                "rsi":     sig.get("rsi", 50),
+                "sector":  sym_sector,
+            }
+
+            # ③ 체결 확인 (실거래 모드에서만)
+            if not DRY_RUN and isinstance(result, dict) and result.get("id"):
+                fill = _pm_wait_fill(result["id"], ALPACA_KEY, ALPACA_SECRET)
+                fill_status = fill.get("status", "unknown")
+                buy_rec["fill_status"] = fill_status
+                if fill_status == "filled":
+                    buy_rec["fill_price"] = float(fill.get("filled_avg_price") or sig.get("price", 0))
+                    print(f"    체결 확인 ✅  ${buy_rec['fill_price']:.2f}")
+                else:
+                    print(f"    ⚠️ 미체결: {fill_status}")
+
+            buy_results.append(buy_rec)
             buying_power -= _size
             n_bought += 1
         except Exception as e:
             print(f"  [매수 오류] {sym}: {e}")
             buy_results.append({"symbol": sym, "error": str(e)})
 
-    # 8. 요약 & 텔레그램
+    # 8. 사후 처리
     # DRY_RUN에서는 실제 매도가 없으므로 고점 기록을 지우지 않음
     if not DRY_RUN:
         for sym in sell_done:
@@ -458,13 +658,20 @@ def main():
     sig_log = resolve_signal_outcomes(sig_log, prices_cache)
     sig_log = append_signals_to_log(
         [{"symbol": r["symbol"], "action": "매수",
-          "price": r.get("price", 0), "score": r.get("score", 0),
+          "price": r.get("fill_price", r.get("price", 0)),
+          "score": r.get("score", 0),
           "rsi":   r.get("rsi", 50)} for r in buy_results if r.get("ok")],
         sig_log
     )
     save_signal_log(sig_log)
     sl_summary = signal_log_summary(sig_log)
 
+    # ④ 자산 로그 업데이트
+    equity_log = append_equity_log(equity_log, equity_now, spy_price, positions)
+    save_equity_log(equity_log)
+    perf = calc_performance_metrics(equity_log)
+
+    # 9. 요약 & 텔레그램
     n_sells = sum(1 for r in sell_results if r.get("ok"))
     n_buys  = sum(1 for r in buy_results  if r.get("ok"))
     n_errs  = sum(1 for r in sell_results + buy_results if "error" in r)
@@ -472,16 +679,19 @@ def main():
                     if r.get("ok") and "트레일링" in r.get("reason", "")]
 
     lines = [
-        f"*페이퍼 트레이딩 실행* `{run_ts}`",
+        f"*페이퍼 트레이딩* `{run_ts}` {mode_tag}",
         f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `${equity_now:,.0f}`",
         f"{regime_emoji} 레짐: *{regime.upper()}*  SPY/MA={regime_info['spy_ratio']:.3f}  VIX={regime_info['vix']:.1f}",
-        f"트레일링 스톱: {TRAIL_STOP_PCT:.0f}% (고점 대비)",
         "",
-        f"*매도* {n_sells}건: " + ", ".join(r["symbol"] for r in sell_results if r.get("ok")),
-        f"*매수* {n_buys}건: " + ", ".join(r["symbol"] for r in buy_results if r.get("ok")),
+        f"*매도* {n_sells}건: " + (", ".join(r["symbol"] for r in sell_results if r.get("ok")) or "없음"),
+        f"*매수* {n_buys}건: " + (", ".join(r["symbol"] for r in buy_results  if r.get("ok")) or "없음"),
     ]
     if _trail_sells:
         lines.append(f"트레일링 스톱 발동: {', '.join(_trail_sells)}")
+    if skipped_sector:
+        lines.append(f"섹터 제한 스킵: {', '.join(skipped_sector)}")
+    if dd_blocked:
+        lines.append(f"⛔ 드로다운 *{dd_pct:.1f}%* → 신규 매수 중단")
     if n_errs:
         lines.append(f"오류 {n_errs}건 — Actions 로그 확인")
 
@@ -489,6 +699,15 @@ def main():
     lines.append("\n*팩터 상위 5개*")
     for r in top5:
         lines.append(f"  {r['ticker']}: 스코어 {r['composite']:.0f}, RSI {r['rsi']:.0f}")
+
+    # ⑤ 성과 지표
+    if perf:
+        lines.append(
+            f"\n*성과 ({perf['n_days']}일)*\n"
+            f"  수익률 {perf['total_return']:+.1f}%  SPY {perf['spy_return']:+.1f}%  "
+            f"알파 {perf['alpha']:+.1f}%\n"
+            f"  샤프 {perf['sharpe']:.2f}  최대낙폭 {perf['max_dd']:.1f}%"
+        )
 
     if sl_summary["n"] >= 5:
         lines.append(
@@ -500,9 +719,9 @@ def main():
         )
 
     msg = "\n".join(lines)
-    print("\n" + "─"*45)
+    print("\n" + "─"*50)
     print(msg)
-    print("─"*45)
+    print("─"*50)
     send_tg(msg)
     print(f"\n완료. 매도 {n_sells}건 / 매수 {n_buys}건 / 오류 {n_errs}건")
 

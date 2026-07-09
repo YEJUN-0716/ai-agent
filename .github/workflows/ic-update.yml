@@ -1,0 +1,45 @@
+name: IC 팩터 가중치 주간 업데이트
+
+on:
+  schedule:
+    # 일요일 14:00 UTC (주말 시장 휴장 중, 데이터 정적 상태에서 계산)
+    - cron: "0 14 * * 0"
+  workflow_dispatch:
+
+# IC 업데이트와 paper-trade 동시 실행 방지
+concurrency:
+  group: ic-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-ic-weights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60   # IC 계산은 10~30분 소요
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 3.12 설정
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: IC 가중치 계산 및 저장
+        run: python ic_weight_updater.py
+
+      - name: ic_weights.json 커밋
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add ic_weights.json || true
+          git diff --staged --quiet || git commit -m "chore: IC 팩터 가중치 업데이트 $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main || true
+          git push || true

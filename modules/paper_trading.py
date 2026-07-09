@@ -1,21 +1,33 @@
 """
 ③ 실전 자동매매(페이퍼 트레이딩) 연동
 =================================================================
-generate_system_signals()가 만든 매수/매도 액션을 Alpaca 페이퍼 계좌에
+generate_system_signals()가 만든 매수/매도 액션을 Alpaca 계좌에
 주문으로 전송하고, 체결 결과를 로컬 로그(JSON Lines)에 저장.
 
-⚠️ 반드시 Paper Trading 엔드포인트만 사용:
-    PAPER_BASE_URL = "https://paper-api.alpaca.markets"
-    (실거래 api.alpaca.markets 로 절대 바꾸지 말 것)
+⚠️  ALPACA_MODE 환경변수:
+    paper (기본값) → https://paper-api.alpaca.markets  (페이퍼 트레이딩)
+    live           → https://api.alpaca.markets         (실거래 ⚠️ 진짜 돈!)
+
 모든 주문 함수는 기본값 dry_run=True — 명시적으로 False를 넘겨야 실제
-페이퍼 계좌에 주문이 나감 (설계상 안전장치).
+계좌에 주문이 나감 (설계상 안전장치).
 """
 import json
+import os
+import time
 from datetime import datetime, timezone
 
 import requests
 
-PAPER_BASE_URL = "https://paper-api.alpaca.markets"
+_PAPER_URL = "https://paper-api.alpaca.markets"
+_LIVE_URL  = "https://api.alpaca.markets"
+
+
+def _base_url() -> str:
+    """ALPACA_MODE 환경변수로 엔드포인트 결정. 기본=paper."""
+    mode = os.environ.get("ALPACA_MODE", "paper").strip().lower()
+    if mode == "live":
+        return _LIVE_URL
+    return _PAPER_URL
 
 
 def _headers(key: str, secret: str) -> dict:
@@ -23,13 +35,13 @@ def _headers(key: str, secret: str) -> dict:
 
 
 def get_account(key: str, secret: str) -> dict:
-    r = requests.get(f"{PAPER_BASE_URL}/v2/account", headers=_headers(key, secret), timeout=10)
+    r = requests.get(f"{_base_url()}/v2/account", headers=_headers(key, secret), timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def get_positions(key: str, secret: str) -> list:
-    r = requests.get(f"{PAPER_BASE_URL}/v2/positions", headers=_headers(key, secret), timeout=10)
+    r = requests.get(f"{_base_url()}/v2/positions", headers=_headers(key, secret), timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -51,17 +63,37 @@ def submit_paper_order(symbol: str, qty: float, side: str, key: str, secret: str
     if dry_run:
         return {"dry_run": True, "would_submit": payload}
 
-    r = requests.post(f"{PAPER_BASE_URL}/v2/orders", headers=_headers(key, secret),
+    r = requests.post(f"{_base_url()}/v2/orders", headers=_headers(key, secret),
                        json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def get_order_fill(order_id: str, key: str, secret: str) -> dict:
-    r = requests.get(f"{PAPER_BASE_URL}/v2/orders/{order_id}",
+    r = requests.get(f"{_base_url()}/v2/orders/{order_id}",
                      headers=_headers(key, secret), timeout=10)
     r.raise_for_status()
     return r.json()
+
+
+def wait_for_fill(order_id: str, key: str, secret: str,
+                   max_wait: int = 60, interval: int = 5) -> dict:
+    """
+    주문 체결 대기 (polling).
+    filled / cancelled / rejected / expired 중 하나가 될 때까지 기다림.
+    max_wait 초 내에 체결 완료 안 되면 {"status": "timeout"} 반환.
+    """
+    TERMINAL = {"filled", "cancelled", "rejected", "expired"}
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            order = get_order_fill(order_id, key, secret)
+            if order.get("status") in TERMINAL:
+                return order
+        except Exception:
+            pass
+        time.sleep(interval)
+    return {"status": "timeout", "order_id": order_id}
 
 
 def sync_signals_to_orders(actions: list, key: str, secret: str,
@@ -115,7 +147,7 @@ def sync_signals_to_orders(actions: list, key: str, secret: str,
 
 def place_notional_buy(symbol: str, notional_usd: float, key: str, secret: str,
                         dry_run: bool = True) -> dict:
-    """notional 시장가 매수 (분수 주식, Alpaca Paper).
+    """notional 시장가 매수 (분수 주식 지원).
     submit_paper_order의 qty 방식과 달리 달러 금액 기준으로 주문.
     """
     payload = {
@@ -127,7 +159,7 @@ def place_notional_buy(symbol: str, notional_usd: float, key: str, secret: str,
     }
     if dry_run:
         return {"dry_run": True, "would_submit": payload}
-    r = requests.post(f"{PAPER_BASE_URL}/v2/orders", headers=_headers(key, secret),
+    r = requests.post(f"{_base_url()}/v2/orders", headers=_headers(key, secret),
                        json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
@@ -145,7 +177,7 @@ def place_market_sell(symbol: str, qty: str, key: str, secret: str,
     }
     if dry_run:
         return {"dry_run": True, "would_submit": payload}
-    r = requests.post(f"{PAPER_BASE_URL}/v2/orders", headers=_headers(key, secret),
+    r = requests.post(f"{_base_url()}/v2/orders", headers=_headers(key, secret),
                        json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
@@ -156,7 +188,7 @@ def compare_assumed_vs_actual_slippage(signal_price: float, filled_avg_price: fl
                                         assumed_slippage_pct: float = 0.03) -> dict:
     """
     백테스트 가정 슬리피지 vs 실제 Alpaca 체결 슬리피지 비교.
-    양수 = 불리(비용 발생), 음수 = 유리 (매수/매도 방향 무관하게 통일).
+    양수 = 비용 발생 방향.
     """
     if not signal_price:
         return {'signal_price': signal_price, 'actual_slippage_pct': 0.0,
