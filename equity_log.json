@@ -2,10 +2,10 @@
   "records": [
     {
       "date": "2026-07-09",
-      "equity": 99602.89,
-      "spy_price": 745.4,
-      "unrealized_pnl": -96.2,
-      "n_positions": 9
+      "equity": 99725.47,
+      "spy_price": 751.71,
+      "unrealized_pnl": 26.38,
+      "n_positions": 10
     }
   ]
 }
