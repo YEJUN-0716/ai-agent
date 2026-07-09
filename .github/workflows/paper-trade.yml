@@ -40,6 +40,14 @@ on:
         description: "동일 섹터 최대 보유 종목 수 (0이면 제한 없음)"
         required: false
         default: "2"
+      neutral_max_positions:
+        description: "neutral 레짐 최대 포지션 수 (기본: MAX_POSITIONS*0.7)"
+        required: false
+        default: "7"
+      bear_max_positions:
+        description: "bear 레짐 최대 포지션 수 (기본: MAX_POSITIONS*0.4)"
+        required: false
+        default: "4"
       alpaca_mode:
         description: "Alpaca 모드: paper(기본) 또는 live(실거래 ⚠️)"
         required: false
@@ -95,8 +103,10 @@ jobs:
           TRAIL_STOP_PCT:     ${{ github.event.inputs.trail_stop_pct || '10' }}
           BUY_SCORE_MIN:          ${{ github.event.inputs.buy_score_min || '60' }}
           PORTFOLIO_DD_STOP_PCT:  ${{ github.event.inputs.portfolio_dd_stop_pct || '15' }}
-          MAX_SECTOR_POSITIONS:   ${{ github.event.inputs.max_sector_positions || '2' }}
-          ALPACA_MODE:            ${{ github.event.inputs.alpaca_mode || 'paper' }}
+          MAX_SECTOR_POSITIONS:    ${{ github.event.inputs.max_sector_positions || '2' }}
+          NEUTRAL_MAX_POSITIONS:   ${{ github.event.inputs.neutral_max_positions || '7' }}
+          BEAR_MAX_POSITIONS:      ${{ github.event.inputs.bear_max_positions || '4' }}
+          ALPACA_MODE:             ${{ github.event.inputs.alpaca_mode || 'paper' }}
           # schedule은 항상 실제 주문, workflow_dispatch는 input 값 따름
           DRY_RUN:                ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner.py

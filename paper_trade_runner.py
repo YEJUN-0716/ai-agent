@@ -14,7 +14,9 @@ Alpaca 주문 함수는 modules/paper_trading.py 참조.
   UNIVERSE              유니버스 이름                  (기본: 'S&P 500 대형 30')
   TOP_N                 매수 상위 N개                  (기본: 5)
   CAPITAL_PER_TRADE     종목당 투입금 USD              (기본: 1000)
-  MAX_POSITIONS         최대 동시 포지션 수            (기본: 10)
+  MAX_POSITIONS         최대 동시 포지션 수 (bull 기준) (기본: 10)
+  NEUTRAL_MAX_POSITIONS neutral 레짐 최대 포지션 수    (기본: MAX_POSITIONS*0.7)
+  BEAR_MAX_POSITIONS    bear 레짐 최대 포지션 수       (기본: MAX_POSITIONS*0.4)
   DRY_RUN               true면 주문 안 냄              (기본: false)
   TRAIL_STOP_PCT        트레일링 스톱 %                (기본: 10)
   BUY_SCORE_MIN         최소 매수 점수                 (기본: 60)
@@ -53,6 +55,14 @@ UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
 TOP_N          = int(os.environ.get("TOP_N", "5"))
 CAPITAL_USD    = float(os.environ.get("CAPITAL_PER_TRADE", "1000"))
 MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
+# 레짐별 최대 포지션 수 — bear에서 노출을 자동 축소해 하락 충격 완충
+_REGIME_MAX_POS: dict[str, int] = {
+    "bull":    MAX_POSITIONS,
+    "neutral": int(os.environ.get("NEUTRAL_MAX_POSITIONS",
+                                  str(max(1, round(MAX_POSITIONS * 0.7))))),
+    "bear":    int(os.environ.get("BEAR_MAX_POSITIONS",
+                                  str(max(1, round(MAX_POSITIONS * 0.4))))),
+}
 DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))
 BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))
@@ -457,8 +467,9 @@ def main():
     regime_emoji = {"bull": "🐂", "neutral": "😐", "bear": "🐻"}.get(regime, "😐")
     print(f"  레짐: {regime_emoji} {regime.upper()}  "
           f"SPY/200MA={regime_info['spy_ratio']:.3f}  VIX={regime_info['vix']:.1f}")
-    if regime == "bear":
-        print("  ⚠️  Bear 레짐 — 신규 매수 억제 모드")
+    effective_max_pos = _REGIME_MAX_POS.get(regime, MAX_POSITIONS)
+    if effective_max_pos < MAX_POSITIONS:
+        print(f"  ⚠️  {regime.upper()} 레짐 — MAX_POSITIONS {MAX_POSITIONS} → {effective_max_pos} (노출 축소)")
 
     # 1. Alpaca 계정 확인
     try:
@@ -574,7 +585,7 @@ def main():
             print(f"[경고] 매도 후 buying_power 갱신 실패: {_e}")
 
     # 7. 매수 (드로다운 스톱 ① / 섹터 제한 ② / 체결 확인 ③)
-    remaining  = MAX_POSITIONS - (len(held) - len(sell_done))
+    remaining  = effective_max_pos - (len(held) - len(sell_done))
     buy_results = []
     n_bought    = 0
     skipped_sector = []
@@ -697,7 +708,8 @@ def main():
     lines = [
         f"*페이퍼 트레이딩* `{run_ts}` {mode_tag}",
         f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `${equity_now:,.0f}`",
-        f"{regime_emoji} 레짐: *{regime.upper()}*  SPY/MA={regime_info['spy_ratio']:.3f}  VIX={regime_info['vix']:.1f}",
+        f"{regime_emoji} 레짐: *{regime.upper()}*  SPY/MA={regime_info['spy_ratio']:.3f}  VIX={regime_info['vix']:.1f}"
+        + (f"  (MAX_POS→{effective_max_pos})" if effective_max_pos < MAX_POSITIONS else ""),
         "",
         f"*매도* {n_sells}건: " + (", ".join(r["symbol"] for r in sell_results if r.get("ok")) or "없음"),
         f"*매수* {n_buys}건: " + (", ".join(r["symbol"] for r in buy_results  if r.get("ok")) or "없음"),
