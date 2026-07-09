@@ -462,7 +462,7 @@ def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.droplevel(1)
             raw = raw.dropna(subset=["Open", "High", "Low", "Close"])
-            if len(raw) < 20:
+            if len(raw) < 60:
                 return tk, {"adjustment": 0, "signals": [], "crt": {}}
             return tk, calc_ict_adjustment(raw)
         except Exception as e:
@@ -476,7 +476,7 @@ def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
             try:
                 _, res = fut.result()
                 results[tk] = res
-            except BaseException:
+            except Exception:
                 results[tk] = {"adjustment": 0, "signals": [], "crt": {}}
     return results
 
@@ -600,13 +600,11 @@ def main():
         print(f"[경고] ICT 배치 분석 실패 — 조정 없이 계속: {_ict_err}")
 
     # composite에 ICT 조정 점수 가산 후 전역 재정렬
-    top_df = factor_df.head(ict_top_n).copy()
-    top_df["ict_adj"] = top_df["ticker"].map(
+    # 분석 대상(ict_top_n) 외 종목은 adj=0 처리 → 동일 기준으로 정렬
+    factor_df["ict_adj"] = factor_df["ticker"].map(
         lambda t: ict_data.get(t, {}).get("adjustment", 0)
     )
-    top_df["composite"] = top_df["composite"] + top_df["ict_adj"]
-    top_df = top_df.sort_values("composite", ascending=False).reset_index(drop=True)
-    factor_df = pd.concat([top_df, factor_df.iloc[ict_top_n:]], ignore_index=True)
+    factor_df["composite"] = factor_df["composite"] + factor_df["ict_adj"]
     factor_df = factor_df.sort_values("composite", ascending=False).reset_index(drop=True)
 
     # ICT 시그널 로그
@@ -727,6 +725,7 @@ def main():
                     print(f"    체결 확인 ✅  ${buy_rec['fill_price']:.2f}")
                 else:
                     print(f"    ⚠️ 미체결: {fill_status}")
+                    buy_rec["ok"] = False
 
             buy_results.append(buy_rec)
             # cancelled/rejected/expired = 실제 체결 없음 → 슬롯/자금 차감 불필요

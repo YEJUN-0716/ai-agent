@@ -319,9 +319,9 @@ def detect_crt_setup(df: pd.DataFrame, period: int = 3) -> dict:
     t_low, t_high, t_close = float(today["Low"]), float(today["High"]), float(today["Close"])
 
     crt_mid = result["crt_mid"]
-    if t_low < crt_low and t_close > crt_mid:
+    if t_low < crt_low and crt_mid < t_close < crt_high:
         result.update({"setup": "bullish", "swept_erl": crt_low, "phase": 2})
-    elif t_high > crt_high and t_close < crt_mid:
+    elif t_high > crt_high and crt_low < t_close < crt_mid:
         result.update({"setup": "bearish", "swept_erl": crt_high, "phase": 2})
 
     return result
