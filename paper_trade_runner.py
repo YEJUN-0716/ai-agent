@@ -650,8 +650,8 @@ def main():
                     print(f"    ⚠️ 미체결: {fill_status}")
 
             buy_results.append(buy_rec)
-            # cancelled/rejected = 실제 체결 없음 → 슬롯/자금 차감 불필요
-            if buy_rec.get("fill_status") not in {"cancelled", "rejected"}:
+            # cancelled/rejected/expired = 실제 체결 없음 → 슬롯/자금 차감 불필요
+            if buy_rec.get("fill_status") not in {"cancelled", "rejected", "expired"}:
                 buying_power -= _size
                 n_bought += 1
                 bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
