@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
@@ -446,6 +447,40 @@ def send_tg(msg: str):
         print(f"[TG 오류] {e}", file=sys.stderr)
 
 
+# ── ICT/CRT 병렬 분석 ────────────────────────────────────────────
+def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
+    """
+    상위 후보 티커의 ICT/CRT 조정 점수를 병렬로 계산.
+    반환: {ticker: {"adjustment": int, "signals": list, "crt": dict}}
+    """
+    from modules.ict_analysis import calc_ict_adjustment
+
+    def _analyze(tk: str) -> tuple[str, dict]:
+        try:
+            yahoo_sym = tk.replace(".", "-")
+            raw = yf.download(yahoo_sym, period="3mo", progress=False, auto_adjust=True)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.droplevel(1)
+            raw = raw.dropna(subset=["Open", "High", "Low", "Close"])
+            if len(raw) < 20:
+                return tk, {"adjustment": 0, "signals": [], "crt": {}}
+            return tk, calc_ict_adjustment(raw)
+        except Exception as e:
+            return tk, {"adjustment": 0, "signals": [f"오류: {e}"], "crt": {}}
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {ex.submit(_analyze, t): t for t in tickers}
+        for fut in as_completed(futs):
+            tk = futs[fut]
+            try:
+                _, res = fut.result()
+                results[tk] = res
+            except Exception:
+                results[tk] = {"adjustment": 0, "signals": [], "crt": {}}
+    return results
+
+
 # ── 메인 ─────────────────────────────────────────────────────────
 def main():
     run_ts   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -553,7 +588,30 @@ def main():
         print("[경고] 팩터 스코어 계산 실패 — 오늘 실행 건너뜀")
         send_tg("페이퍼 트레이딩: 팩터 스코어 계산 실패, 오늘 실행 건너뜀")
         sys.exit(0)
-    print(f"  상위 5개: {factor_df.head(5)['ticker'].tolist()}")
+    print(f"  팩터 상위 5개: {factor_df.head(5)['ticker'].tolist()}")
+
+    # 4-1. ICT/CRT 진입 품질 보정 (상위 후보에 한해 병렬 분석)
+    ict_top_n = min(max(TOP_N * 3, 15), len(factor_df))
+    print(f"ICT/CRT 분석 중 (상위 {ict_top_n}개)...")
+    ict_data = _calc_ict_batch(factor_df.head(ict_top_n)["ticker"].tolist())
+
+    # composite에 ICT 조정 점수 가산 후 재정렬
+    top_df = factor_df.head(ict_top_n).copy()
+    top_df["ict_adj"] = top_df["ticker"].map(
+        lambda t: ict_data.get(t, {}).get("adjustment", 0)
+    )
+    top_df["composite"] = (top_df["composite"] + top_df["ict_adj"]).clip(lower=0)
+    top_df = top_df.sort_values("composite", ascending=False).reset_index(drop=True)
+    factor_df = pd.concat([top_df, factor_df.iloc[ict_top_n:]], ignore_index=True)
+
+    # ICT 시그널 로그
+    for _tk, _res in ict_data.items():
+        _adj = _res.get("adjustment", 0)
+        _sigs = _res.get("signals", [])
+        if _adj != 0:
+            _sig_str = " / ".join(_sigs[:2]) if _sigs else ""
+            print(f"  ICT [{_tk}] {_adj:+d}  {_sig_str}")
+    print(f"  ICT 보정 후 상위 5개: {factor_df.head(5)['ticker'].tolist()}")
 
     # 5. 시그널 생성
     signals = generate_signals(factor_df, TOP_N, min_score=BUY_SCORE_MIN, regime=regime)
@@ -636,9 +694,14 @@ def main():
             print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 ${_size:,.0f}, 가용 ${buying_power:,.0f})")
             continue
 
+        _ict     = ict_data.get(sig["ticker"], {})
+        _ict_adj = _ict.get("adjustment", 0)
+        _ict_sig = " / ".join(_ict.get("signals", [])[:2])
         print(f"  [매수] {sym} ${_size:,.0f}  "
-              f"(스코어 {sig['score']}, RSI {sig['rsi']}, 변동성 {sig.get('vol_ann', 0):.1f}%,"
-              f" 섹터 {sym_sector})")
+              f"(스코어 {sig['score']}, ICT {_ict_adj:+d}, RSI {sig['rsi']},"
+              f" 변동성 {sig.get('vol_ann', 0):.1f}%, 섹터 {sym_sector})")
+        if _ict_sig:
+            print(f"    ▶ ICT: {_ict_sig}")
         try:
             result = place_buy(sym, _size)
             buy_rec = {
@@ -724,9 +787,26 @@ def main():
         lines.append(f"오류 {n_errs}건 — Actions 로그 확인")
 
     top5 = factor_df.head(5)[["ticker", "composite", "rsi"]].to_dict("records")
-    lines.append("\n*팩터 상위 5개*")
+    lines.append("\n*팩터 상위 5개 (ICT 보정 후)*")
     for r in top5:
-        lines.append(f"  {r['ticker']}: 스코어 {r['composite']:.0f}, RSI {r['rsi']:.0f}")
+        tk       = r["ticker"]
+        ict_info = ict_data.get(tk, {})
+        ict_adj  = ict_info.get("adjustment", 0)
+        ict_tag  = f" ICT{ict_adj:+d}" if ict_adj != 0 else ""
+        lines.append(f"  {tk}: 스코어 {r['composite']:.0f}{ict_tag}, RSI {r['rsi']:.0f}")
+
+    # 매수 종목 ICT 시그널 하이라이트
+    ict_highlights = []
+    for r in buy_results:
+        if not r.get("ok"):
+            continue
+        tk  = r.get("symbol", "")
+        res = ict_data.get(tk, {})
+        if res.get("signals"):
+            ict_highlights.append(f"  `{tk}` {res['signals'][0]}")
+    if ict_highlights:
+        lines.append("\n*ICT 시그널*")
+        lines.extend(ict_highlights[:4])
 
     # ⑤ 성과 지표
     if perf:

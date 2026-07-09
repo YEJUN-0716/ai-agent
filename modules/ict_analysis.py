@@ -281,6 +281,151 @@ def plot_ict_chart(df: pd.DataFrame, n_candles: int = 80, ticker: str = "") -> g
     return fig
 
 
+# ── CRT (Candle Range Theory) ───────────────────────────────────
+def detect_crt_setup(df: pd.DataFrame, period: int = 3) -> dict:
+    """
+    CRT Phase 2 감지 (매수·매도 진입 단계).
+    최근 period 캔들을 HTF CRT Range(ERL High / ERL Low)로 설정,
+    오늘(마감 후 마지막) 캔들이 ERL을 스윕 후 Range 안으로 되돌아왔는지 확인.
+
+    Phase 2 Bullish: 오늘 캔들 저가 < CRT Low AND 종가 > CRT Low
+                     → 내일 IRL(Range 내부)로 복귀 후 반대 ERL(High) 전달 예상
+    Phase 2 Bearish: 오늘 캔들 고가 > CRT High AND 종가 < CRT High
+                     → 내일 IRL로 복귀 후 반대 ERL(Low) 전달 예상
+
+    반환:
+      setup       "bullish" | "bearish" | None
+      crt_high    float — CRT Range 고가(ERL High)
+      crt_low     float — CRT Range 저가(ERL Low)
+      crt_mid     float — Range 중간(IRL 기준)
+      swept_erl   float | None — 스윕된 ERL 가격
+      phase       2 | None
+    """
+    result = {"setup": None, "crt_high": 0.0, "crt_low": 0.0,
+              "crt_mid": 0.0, "swept_erl": None, "phase": None}
+
+    if len(df) < period + 2:
+        return result
+
+    # 기준 Range: 오늘 제외 직전 period 캔들
+    ref      = df.iloc[-(period + 1):-1]
+    crt_high = float(ref["High"].max())
+    crt_low  = float(ref["Low"].min())
+    result["crt_high"] = crt_high
+    result["crt_low"]  = crt_low
+    result["crt_mid"]  = (crt_high + crt_low) / 2
+
+    today = df.iloc[-1]
+    t_low, t_high, t_close = float(today["Low"]), float(today["High"]), float(today["Close"])
+
+    if t_low < crt_low and t_close > crt_low:
+        result.update({"setup": "bullish", "swept_erl": crt_low, "phase": 2})
+    elif t_high > crt_high and t_close < crt_high:
+        result.update({"setup": "bearish", "swept_erl": crt_high, "phase": 2})
+
+    return result
+
+
+# ── 자동매매용 ICT 진입 품질 조정 점수 ──────────────────────────────
+def calc_ict_adjustment(df: pd.DataFrame) -> dict:
+    """
+    팩터 composite 점수에 가산·감산할 ICT/CRT 기반 조정값 반환.
+    범위: -30 ~ +30
+
+    가산 (불리시 신호):
+      +20  CRT Phase2 Bullish  — ERL Low 스윕 후 반전 (내일 상승 전달 예상)
+      +15  Bullish FVG 내 현재가 — 기관 미체결 지지 구간
+      +10  Bullish OB 근처     — 기관 매수 포지션 구간
+      +10  최근 BOS/CHoCH Bullish — 시장 구조 전환
+      +5   Discount 구간 하단  — 저평가 진입가
+
+    감산 (베어리시 신호):
+      -20  CRT Phase2 Bearish  — ERL High 스윕 후 반전 (내일 하락 전달 예상)
+      -15  Bearish FVG 내 현재가 — 기관 미체결 저항 구간
+      -10  Bearish OB 근처     — 기관 매도 포지션 구간
+      -10  최근 BOS/CHoCH Bearish — 시장 구조 하락 전환
+      -8   Premium 구간 상단   — 과도 연장, 추격 위험
+
+    반환: {"adjustment": int, "signals": list[str], "crt": dict}
+    """
+    if df.empty or len(df) < 20:
+        return {"adjustment": 0, "signals": [], "crt": {}}
+
+    try:
+        cur     = float(df["Close"].iloc[-1])
+        adj     = 0
+        signals = []
+
+        # 1. CRT Phase 2
+        crt = detect_crt_setup(df)
+        if crt["setup"] == "bullish":
+            adj += 20
+            signals.append(f"CRT Bullish Phase2 (${crt['swept_erl']:.2f} ERL 스윕→반전)")
+        elif crt["setup"] == "bearish":
+            adj -= 20
+            signals.append(f"CRT Bearish Phase2 (${crt['swept_erl']:.2f} ERL 스윕→반전)")
+
+        # 2. FVG — 미충족 갭과 현재가 위치
+        fvgs = find_fvg(df, lookback=60, min_gap_pct=0.03)
+        for f in fvgs:
+            if f["filled"]:
+                continue
+            if f["type"] == "bull" and f["bottom"] <= cur <= f["top"]:
+                adj += 15
+                signals.append(f"Bullish FVG 지지 (${f['bottom']:.2f}~${f['top']:.2f})")
+                break
+        for f in fvgs:
+            if f["filled"]:
+                continue
+            if f["type"] == "bear" and f["bottom"] <= cur <= f["top"]:
+                adj -= 15
+                signals.append(f"Bearish FVG 저항 (${f['bottom']:.2f}~${f['top']:.2f})")
+                break
+
+        # 3. Order Block — 미충족 OB와 현재가 위치
+        obs = find_order_blocks(df, lookback=60, min_move_pct=1.0)
+        for ob in [o for o in obs if not o["mitigated"]]:
+            zone_l = ob["bottom"] * 0.98
+            zone_h = ob["top"]    * 1.02
+            if zone_l <= cur <= zone_h:
+                if ob["type"] == "bull":
+                    adj += 10
+                    signals.append(f"Bullish OB 지지 (${ob['bottom']:.2f}~${ob['top']:.2f})")
+                else:
+                    adj -= 10
+                    signals.append(f"Bearish OB 저항 (${ob['bottom']:.2f}~${ob['top']:.2f})")
+
+        # 4. BOS / CHoCH 최근 방향
+        swings = find_swing_points(df.tail(80), lookback=5)
+        events = find_bos_choch(df.tail(80), swings)
+        if events:
+            last = events[-1]["type"]
+            if "bull" in last:
+                adj += 10
+                signals.append(f"최근 {last.upper()} (불리시 구조 전환)")
+            elif "bear" in last:
+                adj -= 10
+                signals.append(f"최근 {last.upper()} (베어리시 구조 전환)")
+
+        # 5. Premium / Discount
+        pd_info = premium_discount(df, lookback=60)
+        if pd_info["zone"] == "discount" and pd_info["position_pct"] < 30:
+            adj += 5
+            signals.append(f"Discount 하단 ({pd_info['position_pct']:.0f}%) — 저평가 진입")
+        elif pd_info["zone"] == "premium" and pd_info["position_pct"] > 80:
+            adj -= 8
+            signals.append(f"Premium 상단 ({pd_info['position_pct']:.0f}%) — 추격 위험")
+
+        return {
+            "adjustment": max(-30, min(30, adj)),
+            "signals":    signals,
+            "crt":        crt,
+        }
+
+    except Exception as e:
+        return {"adjustment": 0, "signals": [f"ICT 오류: {e}"], "crt": {}}
+
+
 # ── 빗각채널 (Pitched / Diagonal Channel) ───────────────────────
 def find_trend_channel(df: pd.DataFrame, lookback: int = 80, swing_lookback: int = 5) -> dict | None:
     """
