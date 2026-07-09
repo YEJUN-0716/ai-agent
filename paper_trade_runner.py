@@ -476,7 +476,7 @@ def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
             try:
                 _, res = fut.result()
                 results[tk] = res
-            except Exception:
+            except (Exception, SystemExit):
                 results[tk] = {"adjustment": 0, "signals": [], "crt": {}}
     return results
 
@@ -601,10 +601,9 @@ def main():
 
     # composite에 ICT 조정 점수 가산 후 전역 재정렬
     # 분석 대상(ict_top_n) 외 종목은 adj=0 처리 → 동일 기준으로 정렬
-    factor_df["ict_adj"] = factor_df["ticker"].map(
+    factor_df["composite"] = factor_df["composite"] + factor_df["ticker"].map(
         lambda t: ict_data.get(t, {}).get("adjustment", 0)
     )
-    factor_df["composite"] = factor_df["composite"] + factor_df["ict_adj"]
     factor_df = factor_df.sort_values("composite", ascending=False).reset_index(drop=True)
 
     # ICT 시그널 로그
@@ -766,9 +765,11 @@ def main():
     perf = calc_performance_metrics(equity_log)
 
     # 9. 요약 & 텔레그램
-    n_sells = sum(1 for r in sell_results if r.get("ok"))
-    n_buys  = sum(1 for r in buy_results  if r.get("ok"))
-    n_errs  = sum(1 for r in sell_results + buy_results if "error" in r)
+    n_sells   = sum(1 for r in sell_results if r.get("ok"))
+    n_buys    = sum(1 for r in buy_results  if r.get("ok"))
+    n_errs    = sum(1 for r in sell_results + buy_results if "error" in r)
+    n_pending = sum(1 for r in buy_results
+                    if not r.get("ok") and r.get("fill_status") in {"timeout", "unknown"})
     _trail_sells = [r["symbol"] for r in sell_results
                     if r.get("ok") and "트레일링" in r.get("reason", "")]
 
@@ -789,6 +790,8 @@ def main():
         lines.append(f"⛔ 드로다운 *{dd_pct:.1f}%* → 신규 매수 중단")
     if n_errs:
         lines.append(f"오류 {n_errs}건 — Actions 로그 확인")
+    if n_pending:
+        lines.append(f"⏳ 미확인 주문 {n_pending}건 (timeout/미체결) — Alpaca에서 직접 확인 필요")
 
     top5 = factor_df.head(5)[["ticker", "composite", "rsi"]].to_dict("records")
     lines.append("\n*팩터 상위 5개 (ICT 보정 후)*")
