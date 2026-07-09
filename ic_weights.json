@@ -1,0 +1,64 @@
+{
+  "updated": "2026-07-09T05:09:24.328469+00:00",
+  "universe_size": 37,
+  "per_factor_ic": {
+    "mom_3m": {
+      "mean_ic": 0.0419,
+      "std_ic": 0.2501,
+      "icir": 0.167,
+      "pct_positive": 68.2,
+      "n": 22
+    },
+    "mom_1m": {
+      "mean_ic": 0.0144,
+      "std_ic": 0.226,
+      "icir": 0.064,
+      "pct_positive": 59.1,
+      "n": 22
+    },
+    "low_vol": {
+      "mean_ic": -0.1497,
+      "std_ic": 0.2705,
+      "icir": -0.553,
+      "pct_positive": 27.3,
+      "n": 22
+    },
+    "value": {
+      "mean_ic": -0.1267,
+      "std_ic": 0.1904,
+      "icir": -0.665,
+      "pct_positive": 27.3,
+      "n": 22
+    },
+    "quality": {
+      "mean_ic": 0.0378,
+      "std_ic": 0.1468,
+      "icir": 0.257,
+      "pct_positive": 54.5,
+      "n": 22
+    }
+  },
+  "regime_weights": {
+    "bull": {
+      "mom_3m": 0.6228,
+      "mom_1m": 0.1529,
+      "low_vol": 0.0319,
+      "value": 0.0319,
+      "quality": 0.1605
+    },
+    "neutral": {
+      "mom_3m": 0.4982,
+      "mom_1m": 0.137,
+      "low_vol": 0.0476,
+      "value": 0.0476,
+      "quality": 0.2697
+    },
+    "bear": {
+      "mom_3m": 0.2665,
+      "mom_1m": 0.0458,
+      "low_vol": 0.1272,
+      "value": 0.0795,
+      "quality": 0.4809
+    }
+  }
+}
