@@ -20,13 +20,23 @@ except ImportError:
     _pta = None
     _PTA_AVAILABLE = False
 
+try:
+    from modules.ict_analysis import ict_factor_score as _ict_factor_score
+    _ICT_AVAILABLE = True
+except Exception:
+    _ict_factor_score = None
+    _ICT_AVAILABLE = False
+
 warnings.filterwarnings("ignore")
 
 # ── 레짐별 팩터 가중치 ──────────────────────────────────────────────
+# ICT에 10% 배분(기존 5개 팩터는 0.9배로 축소해 합=1.0 유지).
+# 이 10%는 IC가 검증되기 전까지의 '약한 prior'일 뿐 — ic_weight_updater.py가
+# 매주 ICT의 실측 mean_IC로 이 가중치를 다시 조정한다 (IC가 낮으면 자동으로 축소됨).
 REGIME_WEIGHTS = {
-    "bull":    {"mom_3m": 0.35, "mom_1m": 0.25, "low_vol": 0.15, "value": 0.15, "quality": 0.10},
-    "neutral": {"mom_3m": 0.25, "mom_1m": 0.20, "low_vol": 0.20, "value": 0.20, "quality": 0.15},
-    "bear":    {"mom_3m": 0.10, "mom_1m": 0.05, "low_vol": 0.40, "value": 0.25, "quality": 0.20},
+    "bull":    {"mom_3m": 0.315, "mom_1m": 0.225, "low_vol": 0.135, "value": 0.135, "quality": 0.09, "ict": 0.10},
+    "neutral": {"mom_3m": 0.225, "mom_1m": 0.180, "low_vol": 0.180, "value": 0.180, "quality": 0.135, "ict": 0.10},
+    "bear":    {"mom_3m": 0.090, "mom_1m": 0.045, "low_vol": 0.360, "value": 0.225, "quality": 0.18, "ict": 0.10},
 }
 TARGET_VOL_PCT = 0.15   # 변동성 기반 사이징: 목표 연율화 변동성
 
@@ -126,6 +136,11 @@ def _load_regime_weights() -> dict:
     """
     ic_weights.json이 있으면 IC 기반 조정 가중치를 사용, 없으면 기본 REGIME_WEIGHTS.
     ic_weight_updater.py가 매주 생성하는 파일.
+
+    레짐 이름(bull/neutral/bear)뿐 아니라 각 레짐 안의 팩터 키 구성까지 검증한다.
+    팩터가 추가/제거되어 스키마가 바뀐 경우(예: ict 팩터 신규 추가) 저장된 파일은
+    구버전 스키마이므로 무시하고 새 기본 REGIME_WEIGHTS로 폴백 →
+    그래야만 ict 팩터가 ic_weight_updater.py 재실행 전까지 0으로 묻히지 않는다.
     """
     try:
         if os.path.exists(_IC_WEIGHT_FILE):
@@ -133,7 +148,12 @@ def _load_regime_weights() -> dict:
                 data = json.load(f)
             rw = data.get("regime_weights", {})
             if all(r in rw for r in REGIME_WEIGHTS):
-                return rw
+                schema_ok = all(
+                    set(rw[r].keys()) == set(REGIME_WEIGHTS[r].keys())
+                    for r in REGIME_WEIGHTS
+                )
+                if schema_ok:
+                    return rw
     except Exception:
         pass
     return REGIME_WEIGHTS
@@ -160,12 +180,19 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
             mom   = _momentum(close)
             rsi   = _rsi(close)
             vol   = float(close.pct_change().tail(20).std() * np.sqrt(252) * 100)
+            ict_raw = 50.0
+            if _ICT_AVAILABLE:
+                try:
+                    ict_raw = float(_ict_factor_score(raw))
+                except Exception:
+                    ict_raw = 50.0
             rows.append({
                 "ticker":  tk,
                 "mom_1m":  mom.get("1M", 0),
                 "mom_3m":  mom.get("3M", 0),
                 "rsi":     rsi,
                 "vol_ann": vol,
+                "ict_raw": ict_raw,
                 "price":   float(close.iloc[-1]),
             })
         except Exception as e:
@@ -188,6 +215,9 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     mu_v, sigma_v = df["vol_ann"].mean(), df["vol_ann"].std()
     df["z_low_vol"] = -(df["vol_ann"] - mu_v) / (sigma_v + 1e-9)
 
+    mu_i, sigma_i = df["ict_raw"].mean(), df["ict_raw"].std()
+    df["z_ict"] = (df["ict_raw"] - mu_i) / (sigma_i + 1e-9)
+
     pe_valid = df["pe"].dropna()
     if len(pe_valid) >= 3:
         mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
@@ -208,6 +238,7 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
         + df["z_low_vol"] * W["low_vol"]
         + df["z_value"]   * W["value"]
         + df["z_quality"] * W["quality"]
+        + df["z_ict"]     * W.get("ict", 0.0)
     )
     cmin, cmax = df["composite_z"].min(), df["composite_z"].max()
     df["composite"] = (df["composite_z"] - cmin) / (cmax - cmin + 1e-9) * 80 + 10
