@@ -1825,80 +1825,6 @@ def _get_anthropic_key():
     if k: return k
     return st.session_state.get('anthropic_key', '')
 
-@st.cache_data(ttl=300)
-def _fetch_dashboard_data():
-    """실전 대시보드용 시장 데이터 수집 (yfinance + CNN F&G). 5분 캐시."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from datetime import datetime
-
-    MACRO_MAP = {
-        'btcPrice': 'BTC-USD',
-        'dxy':      'DX-Y.NYB',
-        'oil':      'CL=F',
-        'nq':       'NQ=F',
-        'vix':      '^VIX',
-        'jpy':      'JPY=X',
-    }
-    CHG_KEY = {
-        'BTC-USD':   'btcChgPct',
-        'DX-Y.NYB':  'dxyChgPct',
-        'CL=F':      'oilChgPct',
-        'NQ=F':      'nqChgPct',
-        '^VIX':      'vixChgPct',
-        'JPY=X':     'jpyChgPct',
-    }
-    STOCKS = ['SNDK', 'MRVL', 'ARM', 'PLTR', 'META', 'MSFT', 'AMZN', 'DDOG', 'AMAT']
-
-    def _get(sym):
-        try:
-            fi = yf.Ticker(sym).fast_info
-            p  = fi.last_price
-            p0 = fi.previous_close
-            chg = float((p - p0) / p0 * 100) if p and p0 else None
-            return sym, float(p) if p else None, chg
-        except Exception:
-            return sym, None, None
-
-    all_syms = list(MACRO_MAP.values()) + STOCKS
-    raw = {}
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        for sym, price, chg in ex.map(_get, all_syms):
-            raw[sym] = (price, chg)
-
-    result = {}
-    for key, sym in MACRO_MAP.items():
-        p, chg = raw.get(sym, (None, None))
-        result[key] = p
-        ck = CHG_KEY.get(sym)
-        if ck:
-            result[ck] = chg
-
-    stocks_out = {}
-    for sym in STOCKS:
-        p, chg = raw.get(sym, (None, None))
-        if p is not None:
-            stocks_out[sym] = {
-                'price':       round(p, 2),
-                'chgPct':      round(chg, 2) if chg is not None else None,
-                'isAfterHours': False,
-            }
-    result['stocks'] = stocks_out
-
-    try:
-        r = requests.get(
-            'https://production.dataviz.cnn.io/index/fearandgreed/graphdata',
-            headers={'User-Agent': 'Mozilla/5.0'},
-            timeout=5
-        )
-        result['fgi'] = round(r.json()['fear_and_greed']['score'])
-    except Exception:
-        result['fgi'] = None
-
-    result['etfFlow'] = 'unknown'
-    result['etfNote'] = '수동 확인 필요 — farside.co.uk/bitcoin-etf-flow-data 참고'
-    result['fetchedAt'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-    return result
-
 
 def find_sr_levels(close_s, high_s, low_s):
     """피벗 포인트 클러스터링으로 주요 지지/저항 레벨 반환."""
@@ -3464,7 +3390,7 @@ def main():
         min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
                            help="1차 목표가 기준 최소 보상/위험 비율입니다.")
 
-    tab1, tab6, tab_dash, tab_journal = st.tabs(["📊 종목 분석", "🧬 퀀트", "📡 실전 대시보드", "📓 매매 일지"])
+    tab1, tab6, tab_journal = st.tabs(["📊 종목 분석", "🧬 퀀트", "📓 매매 일지"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -6353,41 +6279,6 @@ def main():
                     st.session_state['tax_ledger'] = _TaxLedger()
                     st.success("장부 초기화 완료")
                     st.rerun()
-
-    # ── Tab: 실전 대시보드 ──────────────────────────────────────
-    with tab_dash:
-        import os as _os
-        import json as _json
-        import streamlit.components.v1 as _c1
-
-        _col_info, _col_btn = st.columns([4, 1])
-        with _col_btn:
-            if st.button("🔄 새로고침", use_container_width=True, key="dash_refresh"):
-                st.cache_data.clear()
-                st.rerun()
-
-        with st.spinner("시장 데이터 수집 중 (yfinance)..."):
-            _dash_data = _fetch_dashboard_data()
-
-        with _col_info:
-            st.caption(
-                f"마지막 업데이트: {_dash_data.get('fetchedAt', '--')} · "
-                "5분 캐시 · API 비용 없음 (yfinance + CNN)"
-            )
-
-        _dash_path = _os.path.join(
-            _os.path.dirname(_os.path.abspath(__file__)), "dashboard.html"
-        )
-        try:
-            with open(_dash_path, encoding="utf-8") as _f:
-                _html = _f.read()
-            _html = _html.replace(
-                "%%MARKET_DATA_JSON%%",
-                _json.dumps(_dash_data, ensure_ascii=False)
-            )
-            _c1.html(_html, height=4600, scrolling=True)
-        except FileNotFoundError:
-            st.error("dashboard.html 파일을 찾을 수 없습니다.")
 
     # ── Tab: 매매 일지 ─────────────────────────────────────────
     with tab_journal:
