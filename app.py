@@ -3626,7 +3626,7 @@ def main():
             st.divider()
 
             cg, cv = st.columns(2)
-            with cg: st.plotly_chart(gauge(total,"종합 점수"), width='stretch')
+            with cg: st.plotly_chart(gauge(total,"종합 점수"), use_container_width=True)
             with cv:
                 st.markdown(f"""
                 <div style='text-align:center;padding:20px 0'>
@@ -3717,7 +3717,7 @@ def main():
                                            nticks=12),
                                 yaxis=dict(gridcolor=TV_GRID, side='right'),
                                 margin=dict(l=0, r=60, t=35, b=0))
-                            st.plotly_chart(fig_in, width='stretch')
+                            st.plotly_chart(fig_in, use_container_width=True)
                         else:
                             st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
 
@@ -3799,7 +3799,7 @@ def main():
                             margin=dict(l=0, r=140, t=10, b=0),
                             xaxis=dict(gridcolor=TV_GRID, showgrid=True),
                             yaxis=dict(gridcolor=TV_GRID, showgrid=True))
-                        st.plotly_chart(_fig_sr, width='stretch')
+                        st.plotly_chart(_fig_sr, use_container_width=True)
 
                         _sup = [s for s in _sr if not s['above']]
                         _res = [s for s in _sr if s['above']]
@@ -3822,7 +3822,7 @@ def main():
                         )
                         _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_candles")
                         st.plotly_chart(plot_ict_chart(df, n_candles=_n_c, ticker=ticker),
-                                        width='stretch')
+                                        use_container_width=True)
 
                         # 수치 요약
                         _ict_cur = float(df["Close"].iloc[-1])
@@ -3878,7 +3878,7 @@ def main():
                                                help="숫자가 클수록 큰 스윙만 감지")
                         st.plotly_chart(plot_channel_chart(df, n_candles=_n_ch,
                                                            swing_lookback=_sw_lb, ticker=ticker),
-                                        width='stretch')
+                                        use_container_width=True)
                         _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
                         if _ch:
                             _dir_map  = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
@@ -3945,7 +3945,7 @@ def main():
                     {'카테고리':'📊 모멘텀',          '점수':f"{mom_data.get('score', 50):.1f}", '등급':score_label(mom_data.get('score', 50)), '비고': mom_summary},
                     {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',             '등급':'-',                      '비고': dcf_summary},
                     {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",  '등급':score_label(news_score),  '비고':'참고용'},
-                ]), width='stretch', hide_index=True)
+                ]), use_container_width=True, hide_index=True)
                 st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
 
             with sub3:
@@ -3988,7 +3988,7 @@ def main():
                     st.divider()
                     st.caption("**🕯️ 캔들 패턴 (최근 3일)**")
                     if candle_pats:
-                        st.dataframe(pd.DataFrame(candle_pats), width='stretch', hide_index=True)
+                        st.dataframe(pd.DataFrame(candle_pats), use_container_width=True, hide_index=True)
                     else:
                         st.caption("  특이 패턴 없음")
 
@@ -4001,7 +4001,7 @@ def main():
                         w_rows.append({'지표': k, 'IC': f"{ic_v:+.3f}", '예측력': grade,
                                        'IC 권장(%)': f"{suggested_w.get(k,0)*100:.1f}",
                                        '현재(%)': f"{default_w.get(k,0)*100:.1f}"})
-                    st.dataframe(pd.DataFrame(w_rows), width='stretch', hide_index=True)
+                    st.dataframe(pd.DataFrame(w_rows), use_container_width=True, hide_index=True)
 
                 with st.expander("💰 재무+퀀트 세부"):
                     for k in ['밸류에이션','수익성','성장성','FCF품질','안전성','MDD','F-Score','52주위치']:
@@ -4136,7 +4136,7 @@ def main():
                                     yaxis=dict(gridcolor=TV_GRID, zeroline=False),
                                     xaxis=dict(gridcolor=TV_GRID),
                                     margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                                st.plotly_chart(fig_sr, width='stretch')
+                                st.plotly_chart(fig_sr, use_container_width=True)
                         else:
                             st.info("섹터 데이터를 가져올 수 없습니다.")
 
@@ -4185,7 +4185,7 @@ def main():
                                      '근거':tr.get('basis_t3','확장 목표')})
                     rows.append({'구분':'🔴 손절가','가격':fmt_p(tr['stop']),
                                  '대비':f"-{tr['risk_pct']:.1f}%",'근거':tr['basis_stop']})
-                    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
                     st.caption(f"📏 트레일링: {tr.get('trailing','')}  |  ⏰ 시간손절: {tr.get('time_stop','')}")
                     if lv.get('vwap'):
@@ -4268,7 +4268,7 @@ def main():
                         f"</div>", unsafe_allow_html=True)
                 with ns_col2:
                     if news_articles:
-                        st.dataframe(pd.DataFrame(news_articles), width='stretch', hide_index=True)
+                        st.dataframe(pd.DataFrame(news_articles), use_container_width=True, hide_index=True)
                     else:
                         st.info("뉴스 데이터를 가져올 수 없습니다.")
 
@@ -4368,7 +4368,7 @@ def main():
                         yaxis=dict(gridcolor=TV_GRID, side='right', tickformat=',.0f', title='예상 가격'),
                         legend=dict(orientation='h', y=1.02, bgcolor='rgba(0,0,0,0)'),
                         margin=dict(l=0, r=60, t=40, b=0))
-                    st.plotly_chart(fig_mc, width='stretch')
+                    st.plotly_chart(fig_mc, use_container_width=True)
 
                     # 최종 가격 분포 히스토그램
                     final_returns = (mc_paths[:, -1] - cp) / cp * 100
@@ -4392,7 +4392,7 @@ def main():
                         xaxis=dict(title='예상 수익률 (%)', gridcolor=TV_GRID),
                         yaxis=dict(title='빈도', gridcolor=TV_GRID),
                         margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                    st.plotly_chart(fig_hist, width='stretch')
+                    st.plotly_chart(fig_hist, use_container_width=True)
 
                     st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
 
@@ -4515,7 +4515,7 @@ def main():
                     disp.columns = [n for _, n in col_pairs]
                     for c in ['종합','모멘텀','밸류','퀄리티','저변동']:
                         disp[c] = disp[c].round(0).astype(int)
-                    st.dataframe(disp, width='stretch', hide_index=True, height=400)
+                    st.dataframe(disp, use_container_width=True, hide_index=True, height=400)
 
                 fig_radar = go.Figure()
                 for _, r in top5.iterrows():
@@ -4529,7 +4529,7 @@ def main():
                     plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                     font=dict(color=TV_TEXT), margin=dict(l=40, r=40, t=30, b=30),
                     legend=dict(orientation='h', y=-0.1))
-                st.plotly_chart(fig_radar, width='stretch')
+                st.plotly_chart(fig_radar, use_container_width=True)
 
         with qt_sub2:
             st.caption("선택한 종목들의 최적 비중을 계산합니다.")
@@ -4582,7 +4582,7 @@ def main():
                     fig_corr.update_layout(
                         height=max(300, len(corr)*35), plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                         font=dict(color=TV_TEXT), margin=dict(l=10, r=10, t=10, b=10))
-                    st.plotly_chart(fig_corr, width='stretch')
+                    st.plotly_chart(fig_corr, use_container_width=True)
 
                     # ── 집중도 경고 ─────────────────────────
                     high_corr = [(corr.columns[i], corr.columns[j], corr.values[i,j])
@@ -4660,7 +4660,7 @@ def main():
                         xaxis=dict(title="거래일", gridcolor='#1e293b'),
                         yaxis=dict(title="포트폴리오 가치 ($)", gridcolor='#1e293b'),
                         margin=dict(l=0, r=120, t=10, b=0))
-                    st.plotly_chart(_fig_mc2, width='stretch')
+                    st.plotly_chart(_fig_mc2, use_container_width=True)
 
             # ── 전략 결합 (Portfolio Allocator) ──────────────────
             if _PORTFOLIO_ALLOCATOR_AVAILABLE:
@@ -4691,7 +4691,7 @@ def main():
                                     _pa_w = _rp_weights(_pa_ret)
                                 st.markdown("**산출된 비중**")
                                 _pa_w_df = _pa_w.rename("비중(%)").apply(lambda x: f"{x*100:.1f}%")
-                                st.dataframe(_pa_w_df.to_frame(), width='stretch')
+                                st.dataframe(_pa_w_df.to_frame(), use_container_width=True)
                                 _pa_div = _diversification_report(_pa_ret, _pa_w)
                                 _pad_c1, _pad_c2 = st.columns(2)
                                 _pad_c1.metric("분산화 비율(DR)", f"{_pa_div['diversification_ratio']:.3f}")
@@ -4713,7 +4713,7 @@ def main():
                                                        yaxis=dict(title="자산가치(원)", gridcolor=TV_GRID),
                                                        xaxis=dict(gridcolor=TV_GRID),
                                                        margin=dict(l=20, r=20, t=40, b=20))
-                                st.plotly_chart(_pa_fig, width='stretch')
+                                st.plotly_chart(_pa_fig, use_container_width=True)
 
         with qt_sub3:
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
@@ -4877,7 +4877,7 @@ def main():
                                         '섹터 RS':    (f"{'↑' if _rs['outperform'] else '↓'} {_rs['rs']:+.1f}% vs {_rs['etf']}" if _rs else '--'),
                                         '권장':       _rec.get(r['signal'],'➖'),
                                     })
-                                st.dataframe(pd.DataFrame(_pf_rows), width='stretch', hide_index=True)
+                                st.dataframe(pd.DataFrame(_pf_rows), use_container_width=True, hide_index=True)
 
                                 st.markdown("---")
                                 for r in _prs:
@@ -4937,7 +4937,7 @@ def main():
                             yaxis=dict(gridcolor=TV_GRID, ticksuffix="%"),
                             margin=dict(l=0, r=0, t=40, b=60), showlegend=False,
                         )
-                        st.plotly_chart(_fig_sl, width='stretch')
+                        st.plotly_chart(_fig_sl, use_container_width=True)
                     else:
                         st.info("아직 판정된 시그널이 없습니다. 페이퍼 트레이딩이 21일 이상 실행되면 결과가 쌓입니다.")
                 except Exception as _e:
@@ -5008,11 +5008,11 @@ def main():
                         yaxis=dict(title='자산', gridcolor=TV_GRID, tickformat=',.0f', side='right'),
                         xaxis=dict(gridcolor=TV_GRID),
                         margin=dict(l=0, r=60, t=50, b=0), showlegend=False)
-                    st.plotly_chart(fig_bt, width='stretch')
+                    st.plotly_chart(fig_bt, use_container_width=True)
 
                 if bt_log:
                     with st.expander("📋 리밸런싱 내역"):
-                        st.dataframe(pd.DataFrame(bt_log), width='stretch', hide_index=True, height=300)
+                        st.dataframe(pd.DataFrame(bt_log), use_container_width=True, hide_index=True, height=300)
 
                 st.caption("⚠️ 과거 성과는 미래 수익을 보장하지 않습니다. 거래비용·슬리피지 반영.")
 
@@ -5107,7 +5107,7 @@ def main():
                     yaxis=dict(gridcolor=TV_GRID, zeroline=False),
                     margin=dict(l=0, r=0, t=40, b=0), showlegend=False,
                 )
-                st.plotly_chart(_fig_ic, width='stretch')
+                st.plotly_chart(_fig_ic, use_container_width=True)
 
                 # 퀸타일 누적 수익률 차트
                 if _icr["quintile"]:
@@ -5139,7 +5139,7 @@ def main():
                         margin=dict(l=0, r=0, t=40, b=0),
                         legend=dict(bgcolor="rgba(0,0,0,0)"),
                     )
-                    st.plotly_chart(_fig_q, width='stretch')
+                    st.plotly_chart(_fig_q, use_container_width=True)
                     st.caption("Q5(상위 20%)가 Q1(하위 20%)보다 일관되게 높으면 팩터가 수익을 예측합니다.")
 
 
@@ -5259,7 +5259,7 @@ def main():
                             xaxis=dict(title='신호 점수', gridcolor=TV_GRID),
                             yaxis=dict(title='빈도', gridcolor=TV_GRID),
                             margin=dict(l=10, r=10, t=40, b=10))
-                        st.plotly_chart(fig_dist, width='stretch')
+                        st.plotly_chart(fig_dist, use_container_width=True)
                     st.caption("매수 구간이 5~15%, 매도 구간이 5~15% 정도면 적절합니다. 슬라이더로 조절하세요.")
 
                 # ── 자산 곡선 ─────────────────────────────
@@ -5293,11 +5293,11 @@ def main():
                     xaxis=dict(gridcolor=TV_GRID),
                     legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)'),
                     margin=dict(l=0, r=60, t=50, b=0))
-                st.plotly_chart(fig_eq, width='stretch')
+                st.plotly_chart(fig_eq, use_container_width=True)
 
                 if not trades_df.empty:
                     st.subheader(f"매매 내역 ({len(trades_df)}건)")
-                    st.dataframe(trades_df, width='stretch', hide_index=True)
+                    st.dataframe(trades_df, use_container_width=True, hide_index=True)
 
                 # ── 📊 점수-수익률 상관관계 검증 ─────────────
                 st.divider()
@@ -5343,14 +5343,14 @@ def main():
                         xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
                         yaxis=dict(title='평균 수익률 (%)', gridcolor=TV_GRID, zeroline=False),
                         margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-                    st.plotly_chart(fig_bar, width='stretch')
+                    st.plotly_chart(fig_bar, use_container_width=True)
 
                     # 구간별 상세 통계 테이블
                     with st.expander("📋 구간별 상세 통계"):
                         display_bs = bs.copy()
                         display_bs['평균수익률(%)'] = display_bs['평균수익률(%)'].map(lambda x: f"{x:+.2f}%")
                         display_bs['표준편차']       = display_bs['표준편차'].map(lambda x: f"{x:.2f}%")
-                        st.dataframe(display_bs, width='stretch', hide_index=True)
+                        st.dataframe(display_bs, use_container_width=True, hide_index=True)
 
                         # 5일, 10일 IC 도 표로
                         ic_summary = pd.DataFrame([
@@ -5360,7 +5360,7 @@ def main():
                                         ('약함 🔸' if abs(cr['IC']) >= 0.05 else '없음 ❌')))}
                             for cr in corr_results
                         ])
-                        st.dataframe(ic_summary, width='stretch', hide_index=True)
+                        st.dataframe(ic_summary, use_container_width=True, hide_index=True)
 
                 # ── 📐 워크-포워드 검증 ──────────────────────
                 st.divider()
@@ -5592,7 +5592,7 @@ def main():
                                 'Sharpe':    m.get('Sharpe Ratio', '-'),
                                 '승률':      m.get('승률', '-'),
                             })
-                        st.dataframe(pd.DataFrame(sum_rows), width='stretch', hide_index=True)
+                        st.dataframe(pd.DataFrame(sum_rows), use_container_width=True, hide_index=True)
 
                     # ── 포트폴리오 통합 자산 곡선 ─────────────
                     if pbt_eq is not None and not pbt_eq.empty:
@@ -5627,7 +5627,7 @@ def main():
                             legend=dict(orientation='h', bgcolor='rgba(0,0,0,0)',
                                         yanchor='bottom', y=1.02),
                             margin=dict(l=0, r=60, t=40, b=0))
-                        st.plotly_chart(fig_pbt, width='stretch')
+                        st.plotly_chart(fig_pbt, use_container_width=True)
 
                         # 포트폴리오 요약 지표
                         pf_final  = float(pbt_eq.iloc[-1])
@@ -5681,7 +5681,7 @@ def main():
                         if val < -5: return 'color: #ef5350; font-weight:600'
                     return ''
                 st.dataframe(_sdf.style.map(_color_sr, subset=['1M%','3M%','6M%','모멘텀']),
-                             width='stretch', hide_index=True)
+                             use_container_width=True, hide_index=True)
 
                 # 모멘텀 바 차트
                 _fig_sr2 = go.Figure(go.Bar(
@@ -5694,7 +5694,7 @@ def main():
                     height=380, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                     xaxis_title="모멘텀 점수 (%)", yaxis=dict(autorange='reversed'),
                     margin=dict(l=0, r=60, t=10, b=0), font=dict(color=TV_TEXT))
-                st.plotly_chart(_fig_sr2, width='stretch')
+                st.plotly_chart(_fig_sr2, use_container_width=True)
                 st.caption("모멘텀 = 1M×50% + 3M×30% + 6M×20% 가중 평균 · 1시간 캐시")
 
         # ── qt_sub7: ML 신호 ───────────────────────────────────────
@@ -5768,7 +5768,7 @@ def main():
                         yaxis=dict(range=[0.35, 1.0], gridcolor=TV_GRID, title="AUC"),
                         xaxis=dict(gridcolor=TV_GRID),
                         margin=dict(l=20, r=80, t=50, b=20), showlegend=False)
-                    st.plotly_chart(_fig_auc, width='stretch')
+                    st.plotly_chart(_fig_auc, use_container_width=True)
 
                     # 피처 중요도
                     with st.expander("📊 피처 중요도", expanded=True):
@@ -5786,7 +5786,7 @@ def main():
                             xaxis=dict(title="중요도", gridcolor=TV_GRID),
                             yaxis=dict(autorange='reversed'),
                             margin=dict(l=20, r=80, t=20, b=20), showlegend=False)
-                        st.plotly_chart(_fig_fi, width='stretch')
+                        st.plotly_chart(_fig_fi, use_container_width=True)
                         _fi_label = {'ma_align':'이평 정렬', 'rsi':'RSI(14)', 'macd_hist':'MACD 히스토그램',
                                      'bb_pos':'볼린저 위치', 'vol_ratio':'거래량 비율', 'mom_20':'모멘텀(20일)',
                                      'mom_5':'모멘텀(5일)', 'hl_pos':'고저 위치', 'atr_ratio':'ATR 변동성'}
@@ -5808,7 +5808,7 @@ def main():
                                 yaxis=dict(range=[0,1], gridcolor=TV_GRID, title="상승 확률"),
                                 xaxis=dict(gridcolor=TV_GRID),
                                 margin=dict(l=20, r=20, t=20, b=20), showlegend=False)
-                            st.plotly_chart(_fig_oof, width='stretch')
+                            st.plotly_chart(_fig_oof, use_container_width=True)
                             # 최근 신호
                             _last_prob = float(_oof.iloc[-1])
                             if _last_prob >= 0.60:
@@ -5846,7 +5846,7 @@ def main():
                             _di_jmp = _di_result['suspicious_jumps']
                             st.markdown(f"**급변 탐지**: {_di_jmp['note']}")
                             if _di_jmp['jumps']:
-                                st.dataframe(pd.DataFrame(_di_jmp['jumps']), width='stretch')
+                                st.dataframe(pd.DataFrame(_di_jmp['jumps']), use_container_width=True)
 
             # ── 스트레스 테스트 ──
             with st.expander("💥 역사적 시나리오 스트레스 테스트", expanded=False):
@@ -5918,7 +5918,7 @@ def main():
                                                    font=dict(color=TV_TEXT), title=dict(text="롤링 Z-Score (실전 vs 백테스트)", font=dict(size=13)),
                                                    yaxis=dict(gridcolor=TV_GRID), xaxis=dict(gridcolor=TV_GRID),
                                                    margin=dict(l=20, r=20, t=40, b=20))
-                            st.plotly_chart(_ad_fig, width='stretch')
+                            st.plotly_chart(_ad_fig, use_container_width=True)
 
             # ── 시그널 디케이 ──
             with st.expander("⏳ 시그널 IC 감쇠 분석", expanded=False):
@@ -5940,7 +5940,7 @@ def main():
                             _sd_horizons = [1, 5, 10, 20, 40, 60]
                             _sd_ic = _signal_ic_decay(_sd_rsi, _sd_close, _sd_horizons)
                             st.dataframe(_sd_ic.style.format({'IC': '{:.4f}', 't_stat': '{:.2f}', 'p_value': '{:.4f}'}),
-                                         width='stretch')
+                                         use_container_width=True)
                             _sd_fig = go.Figure()
                             _sd_fig.add_trace(go.Bar(x=_sd_ic.index.tolist(), y=_sd_ic['IC'].tolist(),
                                                       marker_color=['#26a69a' if v > 0 else '#ef5350' for v in _sd_ic['IC']]))
@@ -5949,7 +5949,7 @@ def main():
                                                    xaxis=dict(title="보유기간(일)", gridcolor=TV_GRID),
                                                    yaxis=dict(title="IC", gridcolor=TV_GRID),
                                                    margin=dict(l=20, r=20, t=40, b=20))
-                            st.plotly_chart(_sd_fig, width='stretch')
+                            st.plotly_chart(_sd_fig, use_container_width=True)
 
             # ── 팩터 리스크 모델 ──
             with st.expander("🏗️ 팩터 리스크 모델 (스타일 분석)", expanded=False):
@@ -5988,7 +5988,7 @@ def main():
                                                    font=dict(color=TV_TEXT), title=dict(text="롤링 시장 베타(60일)", font=dict(size=13)),
                                                    yaxis=dict(gridcolor=TV_GRID), xaxis=dict(gridcolor=TV_GRID),
                                                    margin=dict(l=20, r=20, t=40, b=20))
-                            st.plotly_chart(_fr_fig, width='stretch')
+                            st.plotly_chart(_fr_fig, use_container_width=True)
 
         # ── qt_sub9: 운영 안전성 ──────────────────────────────────
         with qt_sub9:
@@ -6053,7 +6053,7 @@ def main():
                                         st.success("✅ 포지션 일치")
                                     else:
                                         st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
-                                        st.dataframe(pd.DataFrame(_rec_result['mismatches']), width='stretch')
+                                        st.dataframe(pd.DataFrame(_rec_result['mismatches']), use_container_width=True)
                                     if _rec_result['extra_in_broker']:
                                         st.warning(f"브로커에만 있는 종목: {_rec_result['extra_in_broker']}")
                                 except Exception as _rec_e:
@@ -6120,7 +6120,7 @@ def main():
                                         "현재가($)": "{:.2f}", "미실현손익($)": "{:+,.2f}",
                                         "수익률(%)": "{:+.2f}%", "평가금액($)": "{:,.2f}",
                                     }),
-                                    width='stretch'
+                                    use_container_width=True
                                 )
                             else:
                                 st.info("현재 보유 중인 포지션 없음")
@@ -6149,7 +6149,7 @@ def main():
                                     xaxis=dict(gridcolor=TV_GRID),
                                     margin=dict(l=20, r=20, t=40, b=20)
                                 )
-                                st.plotly_chart(_ptm_fig, width='stretch')
+                                st.plotly_chart(_ptm_fig, use_container_width=True)
 
                                 # 성과 지표
                                 _ptm_live = _pt_live_metrics(_ptm_hist)
@@ -6188,7 +6188,7 @@ def main():
                                                         f"{_ptm_cmp['gap']['mdd_pct']:+.2f}",
                                                     ],
                                                 }).set_index("")
-                                                st.dataframe(_cmp_df, width='stretch')
+                                                st.dataframe(_cmp_df, use_container_width=True)
                                                 if "⚠️" in _ptm_cmp["verdict"]:
                                                     st.warning(_ptm_cmp["verdict"])
                                                 else:
@@ -6205,7 +6205,7 @@ def main():
                                     st.session_state["ptm_cache_orders"] = _pt_orders(_ptm_key, _ptm_sec, limit=100)
                                 _ptm_ord = st.session_state["ptm_cache_orders"]
                                 if not _ptm_ord.empty:
-                                    st.dataframe(_ptm_ord, width='stretch')
+                                    st.dataframe(_ptm_ord, use_container_width=True)
                                 else:
                                     st.info("체결된 주문 내역 없음")
                             except Exception as _ptm_e4:
@@ -6263,7 +6263,7 @@ def main():
                 _tax_hd = _ledger.holdings()
                 if _tax_hd:
                     st.markdown("**현재 보유 포지션**")
-                    st.dataframe(pd.DataFrame(_tax_hd).T, width='stretch')
+                    st.dataframe(pd.DataFrame(_tax_hd).T, use_container_width=True)
 
                 if _ledger.realized:
                     _tx_year = st.selectbox("과세 연도", options=sorted(set(t.sell_year for t in _ledger.realized), reverse=True), key="tx_year")
@@ -6423,7 +6423,7 @@ worksheet_name = "trades"
 
             # 전체 기록 표
             st.markdown("#### 📋 전체 매매 기록")
-            _edit_df = st.data_editor(_tdf, width='stretch', num_rows="dynamic",
+            _edit_df = st.data_editor(_tdf, use_container_width=True, num_rows="dynamic",
                                       key="journal_editor")
             _sv1, _sv2 = st.columns(2)
             if _sv1.button("💾 변경사항 저장", key="j_save"):
@@ -6478,7 +6478,7 @@ worksheet_name = "trades"
                     _sig_df.style
                         .map(_color_wr, subset=['승률(%)'])
                         .map(_color_ev, subset=['기대값(%)', '총손익($)']),
-                    width='stretch', hide_index=True)
+                    use_container_width=True, hide_index=True)
 
                 # 시그널별 승률 바 차트
                 _fig_sig = go.Figure()
@@ -6501,7 +6501,7 @@ worksheet_name = "trades"
                                 showgrid=False),
                     legend=dict(orientation='h', y=1.1),
                     margin=dict(l=0, r=60, t=30, b=0))
-                st.plotly_chart(_fig_sig, width='stretch')
+                st.plotly_chart(_fig_sig, use_container_width=True)
 
             # ── 누적 손익 곡선 ──────────────────────────────────
             if not _closed.empty and '날짜' in _closed.columns:
@@ -6522,7 +6522,7 @@ worksheet_name = "trades"
                         yaxis=dict(title='누적 손익 ($)', gridcolor=TV_GRID),
                         xaxis=dict(gridcolor=TV_GRID),
                         margin=dict(l=0, r=20, t=10, b=0), showlegend=False)
-                    st.plotly_chart(_fig_cum, width='stretch')
+                    st.plotly_chart(_fig_cum, use_container_width=True)
                 except Exception:
                     pass
 
@@ -6538,7 +6538,7 @@ worksheet_name = "trades"
                     height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                     yaxis_title="손익 (%)", font=dict(color=TV_TEXT),
                     margin=dict(l=0, r=20, t=10, b=0))
-                st.plotly_chart(_fig_j, width='stretch')
+                st.plotly_chart(_fig_j, use_container_width=True)
         else:
             st.info("아직 매매 기록이 없습니다. 위 폼으로 첫 거래를 기록하세요.")
             if not _gs_ok:
