@@ -3759,80 +3759,10 @@ def main():
                         yaxis=dict(gridcolor=TV_GRID, showgrid=True))
                     return _fig
 
-                # 다이얼로그 정의 (Streamlit 1.31+)
-                @st.dialog("📈 TradingView 펼쳐보기", width="large")
-                def _dlg_tv():
-                    components.html(_tv_widget_html(680), height=700)
+                # 2×2 그리드 (미니 프리뷰 + 전체화면 세션 상태 토글)
+                if "chart_zoom" not in st.session_state:
+                    st.session_state.chart_zoom = None
 
-                @st.dialog("📊 지지/저항 펼쳐보기", width="large")
-                def _dlg_sr():
-                    st.plotly_chart(_build_sr_fig(520, 120), use_container_width=True)
-                    _sr2 = find_sr_levels(df['Close'], df['High'], df['Low'])
-                    if _sr2:
-                        _sc1, _sc2 = st.columns(2)
-                        with _sc1:
-                            st.markdown("**🟢 지지선**")
-                            for s in [x for x in _sr2 if not x['above']][:4]:
-                                st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
-                        with _sc2:
-                            st.markdown("**🔴 저항선**")
-                            for s in [x for x in _sr2 if x['above']][:4]:
-                                st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
-
-                @st.dialog("🎯 ICT 분석 펼쳐보기", width="large")
-                def _dlg_ict():
-                    try:
-                        from modules.ict_analysis import (
-                            plot_ict_chart, find_fvg, find_order_blocks,
-                            find_swing_points, find_bos_choch, premium_discount,
-                            ict_factor_score,
-                        )
-                        _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_dlg_c")
-                        st.plotly_chart(plot_ict_chart(df, n_candles=_n_c, ticker=ticker),
-                                        use_container_width=True)
-                        _ict_cur = float(df["Close"].iloc[-1])
-                        _fvgs    = find_fvg(df, lookback=_n_c + 20)
-                        _obs     = find_order_blocks(df, lookback=_n_c + 20)
-                        _pd_info = premium_discount(df)
-                        _swings  = find_swing_points(df.tail(_n_c + 10), lookback=5)
-                        _evs     = find_bos_choch(df.tail(_n_c + 10), _swings)
-                        _score   = ict_factor_score(df)
-                        _dc1, _dc2, _dc3, _dc4 = st.columns(4)
-                        _dc1.metric("강세 FVG", f"{sum(1 for f in _fvgs if f['type']=='bull' and not f['filled'] and f['top']<_ict_cur)}개")
-                        _dc2.metric("약세 FVG", f"{sum(1 for f in _fvgs if f['type']=='bear' and not f['filled'] and f['bottom']>_ict_cur)}개")
-                        _dc3.metric("강세 OB", f"{sum(1 for o in _obs if o['type']=='bull' and not o['mitigated'])}개")
-                        _dc4.metric("ICT 점수", f"{_score:.1f}/100")
-                        _dp1, _dp2 = st.columns(2)
-                        _dp1.metric("구간", _pd_info["zone"].upper(),
-                                    f"범위 내 {_pd_info['position_pct']:.0f}%")
-                        _dp2.metric("마지막 구조 이탈",
-                                    _evs[-1]["type"].replace("_"," ").upper() if _evs else "없음")
-                    except Exception as _e:
-                        st.warning(f"ICT 분석 오류: {_e}")
-
-                @st.dialog("📐 빗각채널 펼쳐보기", width="large")
-                def _dlg_ch():
-                    try:
-                        from modules.ict_analysis import find_trend_channel, plot_channel_chart
-                        _cdc1, _cdc2 = st.columns([2, 1])
-                        _n_ch  = _cdc1.slider("표시 캔들 수", 40, 200, 80, 10, key="ch_dlg_c")
-                        _sw_lb = _cdc2.slider("스윙 민감도", 3, 10, 5, 1, key="ch_dlg_s")
-                        st.plotly_chart(
-                            plot_channel_chart(df, n_candles=_n_ch, swing_lookback=_sw_lb, ticker=ticker),
-                            use_container_width=True)
-                        _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
-                        if _ch:
-                            _dir_map = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
-                            _cc1, _cc2, _cc3 = st.columns(3)
-                            _cc1.metric("채널 방향", _dir_map.get(_ch["direction"], _ch["direction"]))
-                            _cc2.metric("채널 폭 (%)", f"{_ch['width_pct']:.1f}%")
-                            _cc3.metric("현재 위치", f"{_ch['zone']} ({_ch['position_pct']:.0f}%)")
-                        else:
-                            st.info("채널 감지 실패 — 캔들 수를 늘리거나 스윙 민감도를 낮춰보세요.")
-                    except Exception as _e:
-                        st.warning(f"채널 분석 오류: {_e}")
-
-                # 2×2 그리드 (미니 프리뷰 + 팝업 버튼)
                 grid_r1c1, grid_r1c2 = st.columns(2)
                 grid_r2c1, grid_r2c2 = st.columns(2)
 
@@ -3840,13 +3770,15 @@ def main():
                     st.caption("📈 TradingView 차트")
                     components.html(_tv_widget_html(260), height=275)
                     if st.button("🔍 전체 화면", key="btn_tv"):
-                        _dlg_tv()
+                        st.session_state.chart_zoom = "tv"
+                        st.rerun()
 
                 with grid_r1c2:
                     st.caption("📊 지지/저항")
                     st.plotly_chart(_build_sr_fig(200, 60), use_container_width=True)
                     if st.button("🔍 전체 화면", key="btn_sr"):
-                        _dlg_sr()
+                        st.session_state.chart_zoom = "sr"
+                        st.rerun()
 
                 _ict_mini_ok = False
                 with grid_r2c1:
@@ -3860,7 +3792,8 @@ def main():
                     except Exception:
                         st.info("ICT 분석 모듈 로드 중...")
                     if st.button("🔍 전체 화면", key="btn_ict"):
-                        _dlg_ict()
+                        st.session_state.chart_zoom = "ict"
+                        st.rerun()
 
                 with grid_r2c2:
                     st.caption("📐 빗각채널")
@@ -3872,7 +3805,84 @@ def main():
                     except Exception:
                         st.info("채널 분석 모듈 로드 중...")
                     if st.button("🔍 전체 화면", key="btn_ch"):
-                        _dlg_ch()
+                        st.session_state.chart_zoom = "ch"
+                        st.rerun()
+
+                # 전체화면 뷰 (세션 상태 기반)
+                if st.session_state.chart_zoom:
+                    st.divider()
+                    _zoom_titles = {"tv": "📈 TradingView", "sr": "📊 지지/저항", "ict": "🎯 ICT 분석", "ch": "📐 빗각채널"}
+                    _zcol1, _zcol2 = st.columns([1, 7])
+                    with _zcol1:
+                        if st.button("✕ 닫기", key="close_zoom"):
+                            st.session_state.chart_zoom = None
+                            st.rerun()
+                    _zcol2.markdown(f"**{_zoom_titles.get(st.session_state.chart_zoom, '')}**")
+                    _zoom = st.session_state.chart_zoom
+                    if _zoom == "tv":
+                        components.html(_tv_widget_html(680), height=700)
+                    elif _zoom == "sr":
+                        st.plotly_chart(_build_sr_fig(520, 120), use_container_width=True)
+                        _sr2 = find_sr_levels(df['Close'], df['High'], df['Low'])
+                        if _sr2:
+                            _sc1, _sc2 = st.columns(2)
+                            with _sc1:
+                                st.markdown("**🟢 지지선**")
+                                for s in [x for x in _sr2 if not x['above']][:4]:
+                                    st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
+                            with _sc2:
+                                st.markdown("**🔴 저항선**")
+                                for s in [x for x in _sr2 if x['above']][:4]:
+                                    st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
+                    elif _zoom == "ict":
+                        try:
+                            from modules.ict_analysis import (
+                                plot_ict_chart, find_fvg, find_order_blocks,
+                                find_swing_points, find_bos_choch, premium_discount,
+                                ict_factor_score,
+                            )
+                            _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_zoom_c")
+                            st.plotly_chart(plot_ict_chart(df, n_candles=_n_c, ticker=ticker),
+                                            use_container_width=True)
+                            _ict_cur = float(df["Close"].iloc[-1])
+                            _fvgs    = find_fvg(df, lookback=_n_c + 20)
+                            _obs     = find_order_blocks(df, lookback=_n_c + 20)
+                            _pd_info = premium_discount(df)
+                            _swings  = find_swing_points(df.tail(_n_c + 10), lookback=5)
+                            _evs     = find_bos_choch(df.tail(_n_c + 10), _swings)
+                            _score   = ict_factor_score(df)
+                            _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+                            _dc1.metric("강세 FVG", f"{sum(1 for f in _fvgs if f['type']=='bull' and not f['filled'] and f['top']<_ict_cur)}개")
+                            _dc2.metric("약세 FVG", f"{sum(1 for f in _fvgs if f['type']=='bear' and not f['filled'] and f['bottom']>_ict_cur)}개")
+                            _dc3.metric("강세 OB", f"{sum(1 for o in _obs if o['type']=='bull' and not o['mitigated'])}개")
+                            _dc4.metric("ICT 점수", f"{_score:.1f}/100")
+                            _dp1, _dp2 = st.columns(2)
+                            _dp1.metric("구간", _pd_info["zone"].upper(),
+                                        f"범위 내 {_pd_info['position_pct']:.0f}%")
+                            _dp2.metric("마지막 구조 이탈",
+                                        _evs[-1]["type"].replace("_"," ").upper() if _evs else "없음")
+                        except Exception as _e:
+                            st.warning(f"ICT 분석 오류: {_e}")
+                    elif _zoom == "ch":
+                        try:
+                            from modules.ict_analysis import find_trend_channel, plot_channel_chart
+                            _cdc1, _cdc2 = st.columns([2, 1])
+                            _n_ch  = _cdc1.slider("표시 캔들 수", 40, 200, 80, 10, key="ch_zoom_c")
+                            _sw_lb = _cdc2.slider("스윙 민감도", 3, 10, 5, 1, key="ch_zoom_s")
+                            st.plotly_chart(
+                                plot_channel_chart(df, n_candles=_n_ch, swing_lookback=_sw_lb, ticker=ticker),
+                                use_container_width=True)
+                            _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
+                            if _ch:
+                                _dir_map = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
+                                _cc1, _cc2, _cc3 = st.columns(3)
+                                _cc1.metric("채널 방향", _dir_map.get(_ch["direction"], _ch["direction"]))
+                                _cc2.metric("채널 폭 (%)", f"{_ch['width_pct']:.1f}%")
+                                _cc3.metric("현재 위치", f"{_ch['zone']} ({_ch['position_pct']:.0f}%)")
+                            else:
+                                st.info("채널 감지 실패 — 캔들 수를 늘리거나 스윙 민감도를 낮춰보세요.")
+                        except Exception as _e:
+                            st.warning(f"채널 분석 오류: {_e}")
 
                 # 4-차트 컨센서스 요약
                 st.divider()
