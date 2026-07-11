@@ -112,7 +112,13 @@ def _momentum(close: pd.Series) -> dict:
 
 
 def fetch_fundamentals(tickers: list) -> dict:
-    """P/E·영업이익률 수집. 반환: {ticker: {"pe": float, "margin": float}}"""
+    """
+    P/E·영업이익률 수집. 반환: {ticker: {"pe": float, "margin": float}}
+
+    주의: 이 함수는 항상 *현재* 기준 재무 데이터를 반환합니다.
+    walk-forward IC 분석에서 look-ahead bias를 방지하려면
+    point_in_time_fundamentals()를 사용하세요.
+    """
     result = {}
     for tk in tickers:
         try:
@@ -127,6 +133,115 @@ def fetch_fundamentals(tickers: list) -> dict:
         except Exception:
             result[tk] = {"pe": np.nan, "margin": np.nan}
     return result
+
+
+def fetch_quarterly_fundamentals_history(tickers: list,
+                                          reporting_lag_days: int = 45) -> dict:
+    """
+    분기 재무제표 이력 수집 (look-ahead bias 제거용).
+    실제 발표 추정일 = 회계 분기말 + reporting_lag_days (기본 45일).
+
+    반환: {ticker: pd.DataFrame(index=발표추정일, columns=[revenue, operating_income, net_income])}
+    인덱스가 이미 발표 추정일로 조정되어 있어
+    `<= as_of_date` 필터만으로 미래 데이터를 차단할 수 있습니다.
+    """
+    result = {}
+    for tk in tickers:
+        try:
+            fin = yf.Ticker(tk).quarterly_financials
+            if fin is None or fin.empty:
+                result[tk] = pd.DataFrame()
+                continue
+            fin = fin.T.copy()
+            fin.index = pd.to_datetime(fin.index)
+            fin.sort_index(inplace=True)
+            fin.index = fin.index + pd.Timedelta(days=reporting_lag_days)
+            df = pd.DataFrame(index=fin.index)
+            for col_name, alternatives in [
+                ("revenue",          ["Total Revenue"]),
+                ("operating_income", ["Operating Income", "EBIT"]),
+                ("net_income",       ["Net Income", "Net Income Common Stockholders"]),
+            ]:
+                for alt in alternatives:
+                    if alt in fin.columns:
+                        df[col_name] = pd.to_numeric(fin[alt], errors="coerce")
+                        break
+                else:
+                    df[col_name] = np.nan
+            result[tk] = df.dropna(how="all")
+        except Exception:
+            result[tk] = pd.DataFrame()
+    return result
+
+
+def fetch_shares_history(tickers: list, start: str = "2015-01-01") -> dict:
+    """
+    발행주식수 이력 수집 (EPS 계산용).
+    반환: {ticker: pd.Series(index=날짜, values=주식수)}
+    """
+    result = {}
+    for tk in tickers:
+        try:
+            shares = yf.Ticker(tk).get_shares_full(start=start)
+            if shares is not None and len(shares) > 0:
+                result[tk] = shares.astype(float)
+            else:
+                info = yf.Ticker(tk).info
+                n = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+                result[tk] = (pd.Series(dtype=float) if n is None
+                              else pd.Series([float(n)],
+                                             index=[pd.Timestamp.now().normalize()]))
+        except Exception:
+            result[tk] = pd.Series(dtype=float)
+    return result
+
+
+def point_in_time_fundamentals(tk: str, as_of_date, price: float,
+                                 fin_hist: dict, shares_hist: dict) -> dict:
+    """
+    as_of_date 기준 look-ahead-free 재무 지표 계산.
+    fin_hist[tk] 인덱스는 이미 발표 추정일(분기말 + lag)이므로
+    `<= as_of_date` 필터만으로 미래 데이터를 차단합니다.
+
+    반환: {"pe": float, "margin": float}
+    """
+    pe, margin = np.nan, np.nan
+    try:
+        df = fin_hist.get(tk, pd.DataFrame())
+        if df.empty:
+            return {"pe": pe, "margin": margin}
+        past = df[df.index <= pd.Timestamp(as_of_date)]
+        if past.empty:
+            return {"pe": pe, "margin": margin}
+
+        recent_q = past.tail(4)
+        net_ttm  = (float(recent_q["net_income"].sum())
+                    if "net_income" in recent_q.columns
+                    and recent_q["net_income"].notna().any() else np.nan)
+        rev_ttm  = (float(recent_q["revenue"].sum())
+                    if "revenue" in recent_q.columns
+                    and recent_q["revenue"].notna().any() else np.nan)
+        op_ttm   = (float(recent_q["operating_income"].sum())
+                    if "operating_income" in recent_q.columns
+                    and recent_q["operating_income"].notna().any() else np.nan)
+
+        sh = shares_hist.get(tk, pd.Series(dtype=float))
+        if not sh.empty:
+            sh_past  = sh[sh.index <= pd.Timestamp(as_of_date)]
+            n_shares = float(sh_past.iloc[-1]) if not sh_past.empty else float(sh.iloc[-1])
+        else:
+            n_shares = np.nan
+
+        if pd.notna(n_shares) and n_shares > 0 and pd.notna(net_ttm) and price > 0:
+            eps = net_ttm / n_shares
+            if eps > 0:
+                pe = min(price / eps, 200.0)
+
+        if pd.notna(rev_ttm) and rev_ttm > 0 and pd.notna(op_ttm):
+            margin = (op_ttm / rev_ttm) * 100
+    except Exception:
+        pass
+    return {"pe": pe, "margin": margin}
 
 
 _IC_WEIGHT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ic_weights.json")
@@ -243,6 +358,32 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     cmin, cmax = df["composite_z"].min(), df["composite_z"].max()
     df["composite"] = (df["composite_z"] - cmin) / (cmax - cmin + 1e-9) * 80 + 10
     return df.sort_values("composite", ascending=False).reset_index(drop=True)
+
+
+def fetch_returns_matrix(tickers: list, lookback_days: int = 60) -> pd.DataFrame:
+    """
+    상관관계 기반 포지션 사이징용 일별 수익률 행렬.
+    매수 후보 종목에만 적용 (전체 유니버스가 아닌 실제 후보군에 한해 사용).
+
+    반환: pd.DataFrame (index=날짜, columns=티커, values=일별 수익률)
+    """
+    end   = datetime.now()
+    start = end - timedelta(days=lookback_days + 10)
+    ret_dict = {}
+    for tk in tickers:
+        try:
+            yahoo_sym = tk.replace(".", "-")
+            raw = yf.download(yahoo_sym, start=start, end=end,
+                              progress=False, auto_adjust=True)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.droplevel(1)
+            if not raw.empty and "Close" in raw.columns and len(raw) >= 10:
+                ret_dict[tk] = raw["Close"].dropna().pct_change().dropna()
+        except Exception:
+            pass
+    if not ret_dict:
+        return pd.DataFrame()
+    return pd.DataFrame(ret_dict).dropna(how="all").tail(lookback_days)
 
 
 def generate_signals(factor_df: pd.DataFrame, top_n: int = 5,

@@ -38,6 +38,12 @@ import yfinance as yf
 from modules.factor_engine import (
     REGIME_WEIGHTS, TARGET_VOL_PCT,
     get_market_regime, calc_factor_scores, generate_signals,
+    fetch_returns_matrix,
+)
+from modules.portfolio_allocator import (
+    correlation_penalty_scale,
+    risk_parity_position_scale,
+    portfolio_correlation_report,
 )
 from modules.paper_trading import (
     place_notional_buy as _pm_notional_buy,
@@ -69,6 +75,8 @@ TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))
 BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))
 PORTFOLIO_DD_STOP_PCT = float(os.environ.get("PORTFOLIO_DD_STOP_PCT", "15"))
 MAX_SECTOR_POSITIONS  = int(os.environ.get("MAX_SECTOR_POSITIONS", "2"))
+# 상관관계 기반 포지션 사이징 방식: "vol_corr"(기본) 또는 "risk_parity"
+SIZING_METHOD = os.environ.get("SIZING_METHOD", "vol_corr")
 
 _ALPACA_MODE = os.environ.get("ALPACA_MODE", "paper").strip().lower()
 _ALPACA_BASE = ("https://api.alpaca.markets" if _ALPACA_MODE == "live"
@@ -599,21 +607,13 @@ def main():
     except Exception as _ict_err:
         print(f"[경고] ICT 배치 분석 실패 — 조정 없이 계속: {_ict_err}")
 
-    # composite에 ICT 조정 점수 가산 후 전역 재정렬
-    # 분석 대상(ict_top_n) 외 종목은 adj=0 처리 → 동일 기준으로 정렬
-    factor_df["composite"] = factor_df["composite"] + factor_df["ticker"].map(
-        lambda t: ict_data.get(t, {}).get("adjustment", 0)
-    )
-    factor_df = factor_df.sort_values("composite", ascending=False).reset_index(drop=True)
-
-    # ICT 시그널 로그
+    # ICT 시그널 참고용 로그 (composite 점수에는 반영 안 함 — factor_engine에서 이미 처리)
     for _tk, _res in ict_data.items():
-        _adj = _res.get("adjustment", 0)
         _sigs = _res.get("signals", [])
-        if _adj != 0:
-            _sig_str = " / ".join(_sigs[:2]) if _sigs else ""
-            print(f"  ICT [{_tk}] {_adj:+d}  {_sig_str}")
-    print(f"  ICT 보정 후 상위 5개: {factor_df.head(5)['ticker'].tolist()}")
+        if _sigs:
+            _sig_str = " / ".join(_sigs[:2])
+            print(f"  ICT 참고 [{_tk}] {_sig_str}")
+    print(f"  팩터 상위 5개: {factor_df.head(5)['ticker'].tolist()}")
 
     # 5. 시그널 생성
     signals = generate_signals(factor_df, TOP_N, min_score=BUY_SCORE_MIN, regime=regime)
@@ -643,6 +643,25 @@ def main():
             print(f"매도 후 갱신 매수여력: ${buying_power:,.2f}")
         except Exception as _e:
             print(f"[경고] 매도 후 buying_power 갱신 실패: {_e}")
+
+    # 4-2. 상관관계 기반 포지션 사이징 계산
+    corr_scale = pd.Series(dtype=float)
+    try:
+        _corr_universe = sorted(set([s["ticker"] for s in buy_sigs]) | set(held))
+        if len(_corr_universe) >= 2:
+            _returns_mat = fetch_returns_matrix(_corr_universe, lookback_days=60)
+            if not _returns_mat.empty:
+                if SIZING_METHOD == "risk_parity":
+                    corr_scale = risk_parity_position_scale(_returns_mat)
+                else:
+                    corr_scale = correlation_penalty_scale(_returns_mat)
+                _corr_report = portfolio_correlation_report(_returns_mat, corr_threshold=0.7)
+                if _corr_report["high_corr_pairs"]:
+                    for _pair in _corr_report["high_corr_pairs"][:3]:
+                        print(f"  [상관 경고] {_pair['ticker_a']}↔{_pair['ticker_b']}: "
+                              f"{_pair['correlation']:.2f}")
+    except Exception as _corr_err:
+        print(f"  [경고] 상관관계 계산 실패 (사이징 축소 없이 진행): {_corr_err}")
 
     # 7. 매수 (드로다운 스톱 ① / 섹터 제한 ② / 체결 확인 ③)
     remaining  = effective_max_pos - (len(held) - len(sell_done))
@@ -688,9 +707,12 @@ def main():
         if asset_vol > 0:
             _size = CAPITAL_USD * TARGET_VOL_PCT / asset_vol
             _size = max(CAPITAL_USD * 0.5, min(CAPITAL_USD * 2.0, _size))
-            _size = round(_size, 2)
         else:
             _size = CAPITAL_USD
+
+        # 상관관계 페널티 스케일 적용
+        _scale = float(corr_scale.get(sig["ticker"], 1.0))
+        _size  = round(_size * _scale, 2)
 
         if buying_power < _size * 0.9:
             print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 ${_size:,.0f}, 가용 ${buying_power:,.0f})")
@@ -794,12 +816,11 @@ def main():
         lines.append(f"⏳ 미확인 주문 {n_pending}건 (timeout/미체결) — Alpaca에서 직접 확인 필요")
 
     top5 = factor_df.head(5)[["ticker", "composite", "rsi"]].to_dict("records")
-    lines.append("\n*팩터 상위 5개 (ICT 보정 후)*")
+    lines.append("\n*팩터 상위 5개*")
     for r in top5:
         tk       = r["ticker"]
-        ict_info = ict_data.get(tk, {})
-        ict_adj  = ict_info.get("adjustment", 0)
-        ict_tag  = f" ICT{ict_adj:+d}" if ict_adj != 0 else ""
+        ict_sigs = ict_data.get(tk, {}).get("signals", [])
+        ict_tag  = f" (ICT: {ict_sigs[0][:20]})" if ict_sigs else ""
         lines.append(f"  {tk}: 스코어 {r['composite']:.0f}{ict_tag}, RSI {r['rsi']:.0f}")
 
     # 매수 종목 ICT 시그널 하이라이트

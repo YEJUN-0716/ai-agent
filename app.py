@@ -127,7 +127,8 @@ def _pit_snapshot(ticker, info):
         except Exception:
             pass
 
-st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide")
+st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
 /* 모바일 반응형 */
@@ -149,6 +150,9 @@ st.markdown("""<style>
 /* 카드 그림자 */
 div[style*="border-left"] { box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
 div[style*="border-radius:10px"] { box-shadow: 0 1px 4px rgba(0,0,0,0.10); }
+/* 사이드바 완전 숨김 */
+[data-testid="stSidebar"] { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
 </style>""", unsafe_allow_html=True)
 
 TV_BG = TV_PAPER = '#ffffff'
@@ -3370,25 +3374,13 @@ def main():
     st.title("📊 종합 주식 분석 시스템")
     st.caption("차트+파동 · 재무제표+퀀트 · 매크로+금리 종합 점수")
 
-    with st.sidebar:
-        st.header("⚙️ 글로벌 설정")
-        st.subheader("가중치")
-        w_tech  = st.slider("📈 차트+파동 (%)",    0, 100, 35, 5)
-        w_fund  = st.slider("💰 재무제표+퀀트 (%)", 0, 100, 40, 5)
-        w_macro = st.slider("🌍 매크로+금리 (%)",   0, 100, 25, 5)
-        total_w = w_tech + w_fund + w_macro
-        if total_w == 100: st.success(f"가중치 합계: {total_w}% ✅")
-        else:              st.error(f"가중치 합계: {total_w}% (100% 필요)")
-        st.divider()
-        st.subheader("🛡️ 실전 리스크 설정")
-        acct_capital = st.number_input("계좌 기준 금액", min_value=100, value=10_000_000,
-                                       step=100_000, help="포지션 사이징 계산 기준 금액입니다.")
-        risk_per_trade = st.slider("1회 거래 허용 손실 (%)", 0.1, 5.0, 1.0, 0.1,
-                                   help="손절 시 계좌에서 감수할 최대 손실 비율입니다.")
-        max_position_pct = st.slider("종목당 최대 비중 (%)", 1, 100, 20, 1,
-                                     help="한 종목에 투입할 수 있는 최대 계좌 비중입니다.")
-        min_rr = st.slider("최소 손익비 (R)", 0.5, 5.0, 1.5, 0.1,
-                           help="1차 목표가 기준 최소 보상/위험 비율입니다.")
+    # 사이드바 제거 — 값 하드코딩
+    w_tech, w_fund, w_macro = 35, 40, 25
+    total_w          = 100
+    acct_capital     = 10_000_000
+    risk_per_trade   = 1.0
+    max_position_pct = 20
+    min_rr           = 1.5
 
     tab1, tab6, tab_journal = st.tabs(["📊 종목 분석", "🧬 퀀트", "📓 매매 일지"])
 
@@ -3409,7 +3401,7 @@ def main():
                 ticker = st.text_input("ETF 티커", placeholder="SPY").strip().upper()
 
         btn_c1, btn_c2 = st.columns([1, 1])
-        run = btn_c1.button("📊 분석 시작", type="primary", disabled=(total_w!=100 or not ticker))
+        run = btn_c1.button("📊 분석 시작", type="primary", disabled=(not ticker))
         refresh = btn_c2.button("🔄 새로고침", disabled=('tab1' not in st.session_state))
         if refresh:
             if 'tab1' in st.session_state:
@@ -3721,136 +3713,219 @@ def main():
                         else:
                             st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
 
-                # ── 차트 ──────────────────────────────────────
-                st.subheader("📈 실시간 차트")
+                # ── 2×2 차트 그리드 ──────────────────────────────
+                st.subheader("📈 차트 분석")
+                import streamlit.components.v1 as components
+
                 if is_krw:
                     _tv_sym = f"KRX:{ticker.split('.')[0]}"
                 else:
                     _tv_sym = ticker
-                import streamlit.components.v1 as components
-                _tv_html = f"""
-                <div id="tv_chart" style="height:700px;width:100%"></div>
-                <script src="https://s3.tradingview.com/tv.js"></script>
-                <script>
-                new TradingView.widget({{
-                    "autosize": true,
-                    "symbol": "{_tv_sym}",
-                    "interval": "D",
-                    "timezone": "Asia/Seoul",
-                    "theme": "dark",
-                    "style": "1",
-                    "locale": "kr",
-                    "toolbar_bg": "#131722",
-                    "enable_publishing": false,
-                    "hide_side_toolbar": false,
-                    "allow_symbol_change": true,
-                    "studies": ["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],
-                    "container_id": "tv_chart",
-                    "width": "100%",
-                    "height": 700
-                }});
-                </script>
-                """
-                components.html(_tv_html, height=720)
 
-                with st.expander("📊 자체 기술적 분석 수치"):
-                    _rsi_v = float(calc_rsi(df['Close']).iloc[-1])
-                    _macd_l, _sig_l, _hist_l = calc_macd(df['Close'])
-                    _sk_s, _sd_s = calc_stochastic(df['High'], df['Low'], df['Close'])
-                    _bb_u, _bb_m, _bb_l = calc_bb(df['Close'])
-                    _adx_s, _pdi_s, _ndi_s = calc_adx(df['High'], df['Low'], df['Close'])
+                def _tv_widget_html(height: int = 400) -> str:
+                    return f"""
+                    <div id="tv_chart_g" style="height:{height}px;width:100%"></div>
+                    <script src="https://s3.tradingview.com/tv.js"></script>
+                    <script>
+                    new TradingView.widget({{
+                        "autosize": true, "symbol": "{_tv_sym}", "interval": "D",
+                        "timezone": "Asia/Seoul", "theme": "dark", "style": "1",
+                        "locale": "kr", "toolbar_bg": "#131722",
+                        "enable_publishing": false, "hide_side_toolbar": false,
+                        "allow_symbol_change": false,
+                        "studies": ["MASimple@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies"],
+                        "container_id": "tv_chart_g", "width": "100%", "height": {height}
+                    }});
+                    </script>"""
 
-                    ic1, ic2, ic3, ic4 = st.columns(4)
-                    ic1.metric("RSI", f"{_rsi_v:.1f}", "과매수" if _rsi_v > 70 else ("과매도" if _rsi_v < 30 else "보통"))
-                    ic2.metric("MACD", f"{float(_macd_l.iloc[-1]):.2f}",
-                              f"Signal {float(_sig_l.iloc[-1]):.2f}")
-                    ic3.metric("스토캐스틱 %K", f"{float(_sk_s.iloc[-1]):.1f}",
-                              f"%D {float(_sd_s.iloc[-1]):.1f}")
-                    _adx_v = float(_adx_s.iloc[-1]) if not np.isnan(float(_adx_s.iloc[-1])) else 0
-                    ic4.metric("ADX", f"{_adx_v:.1f}",
-                              "강한 추세" if _adx_v > 25 else "횡보")
+                def _build_sr_fig(height: int = 200, n_candles: int = 90) -> go.Figure:
+                    _sr   = find_sr_levels(df['Close'], df['High'], df['Low'])
+                    _n    = min(n_candles, len(df))
+                    _fig  = go.Figure()
+                    _fig.add_trace(go.Scatter(
+                        x=df.index[-_n:], y=df['Close'].values[-_n:],
+                        line=dict(color='#2962ff', width=1.5), showlegend=False))
+                    for _sl in (_sr or []):
+                        _sc = '#ef5350' if _sl['above'] else '#26a69a'
+                        _fig.add_hline(
+                            y=_sl['level'], line_dash='dash', line_color=_sc, line_width=1,
+                            annotation_text=f"{'저항' if _sl['above'] else '지지'} {fmt_p(_sl['level'])}",
+                            annotation_font=dict(color=_sc, size=9),
+                            annotation_position='right')
+                    _fig.update_layout(
+                        height=height, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        margin=dict(l=0, r=110, t=10, b=0),
+                        xaxis=dict(gridcolor=TV_GRID, showgrid=True),
+                        yaxis=dict(gridcolor=TV_GRID, showgrid=True))
+                    return _fig
 
-                    ic5, ic6, ic7, ic8 = st.columns(4)
-                    ic5.metric("MA20", fmt_p(float(df['Close'].rolling(20).mean().iloc[-1])))
-                    ic6.metric("MA60", fmt_p(float(df['Close'].rolling(60).mean().iloc[-1])))
-                    ic7.metric("BB 상단", fmt_p(float(_bb_u.iloc[-1])))
-                    ic8.metric("BB 하단", fmt_p(float(_bb_l.iloc[-1])))
+                # 다이얼로그 정의 (Streamlit 1.31+)
+                @st.dialog("📈 TradingView 펼쳐보기", width="large")
+                def _dlg_tv():
+                    components.html(_tv_widget_html(680), height=700)
 
-                    # ── 지지/저항 자동 계산 ──────────────────
-                    st.markdown("##### 📍 지지/저항 레벨 (자동)")
-                    _sr = find_sr_levels(df['Close'], df['High'], df['Low'])
-                    if _sr:
-                        _cur_p = float(df['Close'].iloc[-1])
-                        _n     = min(90, len(df))
-                        _fig_sr = go.Figure()
-                        _fig_sr.add_trace(go.Scatter(
-                            x=df.index[-_n:], y=df['Close'].values[-_n:],
-                            name='종가', line=dict(color='#2962ff', width=1.8), showlegend=False))
-                        for _sl in _sr:
-                            _sc = '#ef5350' if _sl['above'] else '#26a69a'
-                            _fig_sr.add_hline(
-                                y=_sl['level'], line_dash='dash',
-                                line_color=_sc, line_width=1,
-                                annotation_text=f"{'저항' if _sl['above'] else '지지'} {fmt_p(_sl['level'])} ({_sl['dist_pct']:+.1f}%)",
-                                annotation_font=dict(color=_sc, size=10),
-                                annotation_position='right')
-                        _fig_sr.update_layout(
-                            height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                            margin=dict(l=0, r=140, t=10, b=0),
-                            xaxis=dict(gridcolor=TV_GRID, showgrid=True),
-                            yaxis=dict(gridcolor=TV_GRID, showgrid=True))
-                        st.plotly_chart(_fig_sr, use_container_width=True)
-
-                        _sup = [s for s in _sr if not s['above']]
-                        _res = [s for s in _sr if s['above']]
-                        _sr_c1, _sr_c2 = st.columns(2)
-                        with _sr_c1:
+                @st.dialog("📊 지지/저항 펼쳐보기", width="large")
+                def _dlg_sr():
+                    st.plotly_chart(_build_sr_fig(520, 120), use_container_width=True)
+                    _sr2 = find_sr_levels(df['Close'], df['High'], df['Low'])
+                    if _sr2:
+                        _sc1, _sc2 = st.columns(2)
+                        with _sc1:
                             st.markdown("**🟢 지지선**")
-                            for s in _sup[:3]:
+                            for s in [x for x in _sr2 if not x['above']][:4]:
                                 st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
-                        with _sr_c2:
+                        with _sc2:
                             st.markdown("**🔴 저항선**")
-                            for s in _res[:3]:
+                            for s in [x for x in _sr2 if x['above']][:4]:
                                 st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
 
-                with st.expander("🎯 ICT 분석 (Smart Money 개념)", expanded=False):
+                @st.dialog("🎯 ICT 분석 펼쳐보기", width="large")
+                def _dlg_ict():
                     try:
                         from modules.ict_analysis import (
                             plot_ict_chart, find_fvg, find_order_blocks,
                             find_swing_points, find_bos_choch, premium_discount,
                             ict_factor_score,
                         )
-                        _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_candles")
+                        _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_dlg_c")
                         st.plotly_chart(plot_ict_chart(df, n_candles=_n_c, ticker=ticker),
                                         use_container_width=True)
-
-                        # 수치 요약
                         _ict_cur = float(df["Close"].iloc[-1])
-                        _ict_fvgs = find_fvg(df, lookback=_n_c + 20)
-                        _ict_obs  = find_order_blocks(df, lookback=_n_c + 20)
-                        _ict_pd   = premium_discount(df)
-                        _ict_swings = find_swing_points(df.tail(_n_c + 10), lookback=5)
-                        _ict_evs  = find_bos_choch(df.tail(_n_c + 10), _ict_swings)
-                        _ict_score = ict_factor_score(df)
+                        _fvgs    = find_fvg(df, lookback=_n_c + 20)
+                        _obs     = find_order_blocks(df, lookback=_n_c + 20)
+                        _pd_info = premium_discount(df)
+                        _swings  = find_swing_points(df.tail(_n_c + 10), lookback=5)
+                        _evs     = find_bos_choch(df.tail(_n_c + 10), _swings)
+                        _score   = ict_factor_score(df)
+                        _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+                        _dc1.metric("강세 FVG", f"{sum(1 for f in _fvgs if f['type']=='bull' and not f['filled'] and f['top']<_ict_cur)}개")
+                        _dc2.metric("약세 FVG", f"{sum(1 for f in _fvgs if f['type']=='bear' and not f['filled'] and f['bottom']>_ict_cur)}개")
+                        _dc3.metric("강세 OB", f"{sum(1 for o in _obs if o['type']=='bull' and not o['mitigated'])}개")
+                        _dc4.metric("ICT 점수", f"{_score:.1f}/100")
+                        _dp1, _dp2 = st.columns(2)
+                        _dp1.metric("구간", _pd_info["zone"].upper(),
+                                    f"범위 내 {_pd_info['position_pct']:.0f}%")
+                        _dp2.metric("마지막 구조 이탈",
+                                    _evs[-1]["type"].replace("_"," ").upper() if _evs else "없음")
+                    except Exception as _e:
+                        st.warning(f"ICT 분석 오류: {_e}")
 
-                        _ic1, _ic2, _ic3, _ic4 = st.columns(4)
-                        _bull_fvg = sum(1 for f in _ict_fvgs if f["type"] == "bull" and not f["filled"] and f["top"] < _ict_cur)
-                        _bear_fvg = sum(1 for f in _ict_fvgs if f["type"] == "bear" and not f["filled"] and f["bottom"] > _ict_cur)
-                        _bull_ob  = sum(1 for o in _ict_obs if o["type"] == "bull" and not o["mitigated"])
-                        _last_ev  = _ict_evs[-1]["type"].replace("_", " ").upper() if _ict_evs else "없음"
-                        _ic1.metric("미충족 강세 FVG", f"{_bull_fvg}개", "현재가 아래 (지지)")
-                        _ic2.metric("미충족 약세 FVG", f"{_bear_fvg}개", "현재가 위 (저항)")
-                        _ic3.metric("강세 OB", f"{_bull_ob}개", "미충족")
-                        _ic4.metric("마지막 구조 이탈", _last_ev)
+                @st.dialog("📐 빗각채널 펼쳐보기", width="large")
+                def _dlg_ch():
+                    try:
+                        from modules.ict_analysis import find_trend_channel, plot_channel_chart
+                        _cdc1, _cdc2 = st.columns([2, 1])
+                        _n_ch  = _cdc1.slider("표시 캔들 수", 40, 200, 80, 10, key="ch_dlg_c")
+                        _sw_lb = _cdc2.slider("스윙 민감도", 3, 10, 5, 1, key="ch_dlg_s")
+                        st.plotly_chart(
+                            plot_channel_chart(df, n_candles=_n_ch, swing_lookback=_sw_lb, ticker=ticker),
+                            use_container_width=True)
+                        _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
+                        if _ch:
+                            _dir_map = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
+                            _cc1, _cc2, _cc3 = st.columns(3)
+                            _cc1.metric("채널 방향", _dir_map.get(_ch["direction"], _ch["direction"]))
+                            _cc2.metric("채널 폭 (%)", f"{_ch['width_pct']:.1f}%")
+                            _cc3.metric("현재 위치", f"{_ch['zone']} ({_ch['position_pct']:.0f}%)")
+                        else:
+                            st.info("채널 감지 실패 — 캔들 수를 늘리거나 스윙 민감도를 낮춰보세요.")
+                    except Exception as _e:
+                        st.warning(f"채널 분석 오류: {_e}")
 
-                        _ip1, _ip2 = st.columns(2)
-                        _ip1.metric("구간", _ict_pd["zone"].upper(),
-                                    f"고저 범위 내 {_ict_pd['position_pct']:.0f}% 위치")
-                        _ip2.metric("ICT 팩터 점수", f"{_ict_score:.1f} / 100",
-                                    "스마트 머니 구조 종합")
+                # 2×2 그리드 (미니 프리뷰 + 팝업 버튼)
+                grid_r1c1, grid_r1c2 = st.columns(2)
+                grid_r2c1, grid_r2c2 = st.columns(2)
 
-                        with st.expander("📖 ICT 용어 설명"):
-                            st.markdown("""
+                with grid_r1c1:
+                    st.caption("📈 TradingView 차트")
+                    components.html(_tv_widget_html(260), height=275)
+                    if st.button("🔍 전체 화면", key="btn_tv"):
+                        _dlg_tv()
+
+                with grid_r1c2:
+                    st.caption("📊 지지/저항")
+                    st.plotly_chart(_build_sr_fig(200, 60), use_container_width=True)
+                    if st.button("🔍 전체 화면", key="btn_sr"):
+                        _dlg_sr()
+
+                _ict_mini_ok = False
+                with grid_r2c1:
+                    st.caption("🎯 ICT / Smart Money")
+                    try:
+                        from modules.ict_analysis import plot_ict_chart
+                        _ict_mini_fig = plot_ict_chart(df, n_candles=60, ticker=ticker)
+                        _ict_mini_fig.update_layout(height=200, margin=dict(l=0, r=0, t=20, b=0))
+                        st.plotly_chart(_ict_mini_fig, use_container_width=True)
+                        _ict_mini_ok = True
+                    except Exception:
+                        st.info("ICT 분석 모듈 로드 중...")
+                    if st.button("🔍 전체 화면", key="btn_ict"):
+                        _dlg_ict()
+
+                with grid_r2c2:
+                    st.caption("📐 빗각채널")
+                    try:
+                        from modules.ict_analysis import plot_channel_chart
+                        _ch_mini_fig = plot_channel_chart(df, n_candles=60, swing_lookback=5, ticker=ticker)
+                        _ch_mini_fig.update_layout(height=200, margin=dict(l=0, r=0, t=20, b=0))
+                        st.plotly_chart(_ch_mini_fig, use_container_width=True)
+                    except Exception:
+                        st.info("채널 분석 모듈 로드 중...")
+                    if st.button("🔍 전체 화면", key="btn_ch"):
+                        _dlg_ch()
+
+                # 4-차트 컨센서스 요약
+                st.divider()
+                st.markdown("##### 🔍 4-차트 컨센서스 분석")
+                _cons_cols = st.columns(4)
+                _rsi_v = float(calc_rsi(df['Close']).iloc[-1])
+                _macd_l, _sig_l, _ = calc_macd(df['Close'])
+                _bb_u, _bb_m, _bb_l = calc_bb(df['Close'])
+                _adx_s, _, _ = calc_adx(df['High'], df['Low'], df['Close'])
+                _adx_v = float(_adx_s.iloc[-1]) if not np.isnan(float(_adx_s.iloc[-1])) else 0
+                _cur_p = float(df['Close'].iloc[-1])
+                _sr_lvls = find_sr_levels(df['Close'], df['High'], df['Low'])
+                _nearest_sup = max([s['level'] for s in (_sr_lvls or []) if not s['above']], default=None)
+                _nearest_res = min([s['level'] for s in (_sr_lvls or []) if s['above']], default=None)
+
+                _c1_signal = "강세" if _rsi_v < 65 and float(_macd_l.iloc[-1]) > float(_sig_l.iloc[-1]) else ("약세" if _rsi_v > 75 else "중립")
+                _c2_signal = ("지지 근접" if _nearest_sup and (_cur_p - _nearest_sup) / _cur_p < 0.03
+                              else "저항 근접" if _nearest_res and (_nearest_res - _cur_p) / _cur_p < 0.03 else "중립")
+                _c3_signal = "강세" if _ict_mini_ok else "중립"
+                _c4_signal = "강한 추세" if _adx_v > 25 else "횡보"
+
+                _sig_color = {"강세": "#26a69a", "약세": "#ef5350", "중립": "#9598a1",
+                              "강한 추세": "#26a69a", "횡보": "#9598a1",
+                              "지지 근접": "#26a69a", "저항 근접": "#ef5350"}
+                for _col, _label, _val in zip(
+                    _cons_cols,
+                    ["기술 지표", "지지/저항", "ICT", "추세 강도"],
+                    [_c1_signal, _c2_signal, _c3_signal, _c4_signal],
+                ):
+                    _col.markdown(
+                        f"<div style='text-align:center;padding:8px;border-radius:6px;"
+                        f"background:{_sig_color.get(_val,'#9598a1')}22'>"
+                        f"<div style='font-size:11px;color:#9598a1'>{_label}</div>"
+                        f"<div style='font-size:15px;font-weight:600;color:{_sig_color.get(_val,\"#9598a1\")}'>"
+                        f"{_val}</div></div>",
+                        unsafe_allow_html=True)
+
+                # 기술적 분석 수치 (확장 패널)
+                with st.expander("📊 기술적 지표 수치"):
+                    ic1, ic2, ic3, ic4 = st.columns(4)
+                    ic1.metric("RSI", f"{_rsi_v:.1f}", "과매수" if _rsi_v > 70 else ("과매도" if _rsi_v < 30 else "보통"))
+                    ic2.metric("MACD", f"{float(_macd_l.iloc[-1]):.2f}", f"Signal {float(_sig_l.iloc[-1]):.2f}")
+                    _sk_s, _sd_s = calc_stochastic(df['High'], df['Low'], df['Close'])
+                    ic3.metric("스토캐스틱 %K", f"{float(_sk_s.iloc[-1]):.1f}", f"%D {float(_sd_s.iloc[-1]):.1f}")
+                    ic4.metric("ADX", f"{_adx_v:.1f}", "강한 추세" if _adx_v > 25 else "횡보")
+                    ic5, ic6, ic7, ic8 = st.columns(4)
+                    ic5.metric("MA20", fmt_p(float(df['Close'].rolling(20).mean().iloc[-1])))
+                    ic6.metric("MA60", fmt_p(float(df['Close'].rolling(60).mean().iloc[-1])))
+                    ic7.metric("BB 상단", fmt_p(float(_bb_u.iloc[-1])))
+                    ic8.metric("BB 하단", fmt_p(float(_bb_l.iloc[-1])))
+
+                with st.expander("📖 ICT 용어 설명"):
+                    st.markdown("""
 | 용어 | 설명 |
 |---|---|
 | **FVG (Fair Value Gap)** | 3캔들 사이 가격 공백 — 가격이 메우러 돌아오는 경향 |
@@ -3859,52 +3934,8 @@ def main():
 | **OB (Order Block)** | 기관이 대량 주문 낸 캔들 — 이후 가격이 돌아오는 구간 |
 | **BOS (Break of Structure)** | 기존 추세 방향으로 이전 스윙 돌파 |
 | **CHoCH (Change of Character)** | 추세 반전 신호 — 반대 방향으로 스윙 돌파 |
-| **SH / SL** | 스윙 고점 / 스윙 저점 |
-| **EQ (Equilibrium)** | 최근 고저 범위의 50% 중간선 |
-| **Premium** | EQ 위 = 비싼 구간 (매도 선호) |
-| **Discount** | EQ 아래 = 싼 구간 (매수 선호) |
+| **Premium / Discount** | EQ(50%) 위 = 비싼 구간, 아래 = 싼 구간 |
 """)
-                    except Exception as _e:
-                        st.warning(f"ICT 분석 오류: {_e}")
-
-                with st.expander("📐 빗각채널 분석", expanded=False):
-                    try:
-                        from modules.ict_analysis import find_trend_channel, plot_channel_chart
-                        _ch_col1, _ch_col2 = st.columns([2, 1])
-                        with _ch_col1:
-                            _n_ch = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ch_candles")
-                        with _ch_col2:
-                            _sw_lb = st.slider("스윙 민감도", 3, 10, 5, 1, key="ch_swing",
-                                               help="숫자가 클수록 큰 스윙만 감지")
-                        st.plotly_chart(plot_channel_chart(df, n_candles=_n_ch,
-                                                           swing_lookback=_sw_lb, ticker=ticker),
-                                        use_container_width=True)
-                        _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
-                        if _ch:
-                            _dir_map  = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
-                            _zone_col = {"상단": "#ef5350", "중간": "#ff9800", "하단": "#26a69a"}
-                            _c1, _c2, _c3 = st.columns(3)
-                            _c1.metric("채널 방향", _dir_map[_ch["direction"]])
-                            _c2.metric("채널 폭 (%)", f"{_ch['width_pct']:.1f}%")
-                            _c3.metric("현재 위치",
-                                       f"{_ch['zone']} ({_ch['position_pct']:.0f}%)")
-                            _pos = _ch["position_pct"]
-                            _bar_col = _zone_col[_ch["zone"]]
-                            st.markdown(
-                                f"<div style='background:#1e2530;border-radius:6px;padding:6px 10px;margin-top:6px'>"
-                                f"<div style='display:flex;justify-content:space-between;"
-                                f"font-size:11px;color:#9598a1;margin-bottom:4px'>"
-                                f"<span>하단 (매수권)</span><span>중간선</span><span>상단 (매도권)</span></div>"
-                                f"<div style='background:#2a2e39;border-radius:4px;height:10px;position:relative'>"
-                                f"<div style='background:{_bar_col};border-radius:4px;height:10px;"
-                                f"width:{min(max(_pos,2),98):.0f}%'></div></div></div>",
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.info("스윙 포인트가 부족해 채널을 감지하지 못했습니다. "
-                                    "캔들 수를 늘리거나 스윙 민감도를 낮춰보세요.")
-                    except Exception as _e:
-                        st.warning(f"채널 분석 오류: {_e}")
 
             with sub1:
                 # ── 매매 시그널 ──────────────────────────────

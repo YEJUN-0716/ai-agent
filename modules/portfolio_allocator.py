@@ -79,6 +79,96 @@ def combine_strategies(strategy_equity_curves: dict,
     })
 
 
+def correlation_penalty_scale(returns_df: pd.DataFrame,
+                               min_scale: float = 0.5,
+                               max_scale: float = 1.0,
+                               corr_threshold: float = 0.3) -> pd.Series:
+    """
+    개별 종목이 다른 종목들과 얼마나 상관되는지에 따라 포지션 사이즈를 조정.
+    핵심: 평균이 아닌 최대 쌍별 상관관계를 사용 — 집중 베타를 놓치지 않기 위함.
+
+    반환: pd.Series {ticker: scale} — 1.0=축소 없음, min_scale=최대 축소
+    """
+    if returns_df.empty or len(returns_df.columns) < 2:
+        return pd.Series(1.0, index=returns_df.columns)
+
+    corr    = returns_df.corr()
+    tickers = list(corr.columns)
+    scales  = {}
+    for tk in tickers:
+        other_corrs = [abs(corr.loc[tk, other]) for other in tickers if other != tk]
+        max_corr    = max(other_corrs) if other_corrs else 0.0
+        if max_corr <= corr_threshold:
+            scales[tk] = max_scale
+        else:
+            t = (max_corr - corr_threshold) / (1.0 - corr_threshold + 1e-9)
+            scales[tk] = max_scale - t * (max_scale - min_scale)
+    return pd.Series(scales)
+
+
+def portfolio_correlation_report(returns_df: pd.DataFrame,
+                                  corr_threshold: float = 0.7) -> dict:
+    """
+    진단용: 상관관계 임계치를 초과하는 페어 목록 및 평균 상관관계 반환.
+    """
+    if returns_df.empty or len(returns_df.columns) < 2:
+        return {"high_corr_pairs": [], "avg_pairwise_corr": 0.0}
+
+    corr      = returns_df.corr()
+    tickers   = list(corr.columns)
+    pairs     = []
+    corr_vals = []
+    for i in range(len(tickers)):
+        for j in range(i + 1, len(tickers)):
+            c = float(corr.iloc[i, j])
+            corr_vals.append(abs(c))
+            if abs(c) >= corr_threshold:
+                pairs.append({
+                    "ticker_a":    tickers[i],
+                    "ticker_b":    tickers[j],
+                    "correlation": round(c, 3),
+                })
+    return {
+        "high_corr_pairs":    sorted(pairs, key=lambda x: abs(x["correlation"]), reverse=True),
+        "avg_pairwise_corr":  round(float(np.mean(corr_vals)), 3) if corr_vals else 0.0,
+    }
+
+
+def risk_parity_position_scale(returns_df: pd.DataFrame,
+                                min_scale: float = 0.3,
+                                max_scale: float = 2.0) -> pd.Series:
+    """
+    공분산 기반 리스크 패리티로 개별 종목 포지션 사이즈를 결정.
+    반환: 균등 비중 대비 상대적 스케일 (1.0 = 균등 비중)
+    """
+    if returns_df.empty or len(returns_df.columns) < 2:
+        return pd.Series(1.0, index=returns_df.columns)
+
+    cov = returns_df.cov().values
+    n   = cov.shape[0]
+    w   = np.ones(n) / n
+
+    for _ in range(300):
+        port_var = w @ cov @ w
+        if port_var <= 0:
+            break
+        risk_contrib = w * (cov @ w) / port_var
+        target       = np.ones(n) / n
+        grad         = 2 * (risk_contrib - target)
+        w            = w - 0.01 * grad
+        w            = np.maximum(w, 1e-8)
+        w            = w / w.sum()
+        if np.max(np.abs(grad)) < 1e-9:
+            break
+
+    if not np.isfinite(w).all():
+        w = np.ones(n) / n
+
+    eq_weight = 1.0 / n
+    scales    = np.clip(w / eq_weight, min_scale, max_scale)
+    return pd.Series(scales, index=returns_df.columns)
+
+
 def diversification_report(strategy_returns: pd.DataFrame, weights: pd.Series) -> dict:
     """
     포트폴리오 분산화 효과 정량화.

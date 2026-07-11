@@ -2,7 +2,7 @@
 IC 기반 팩터 가중치 자동 업데이트
 =====================================
 매주 일요일 GitHub Actions (ic-update.yml)이 실행.
-최근 2년 walk-forward IC를 계산하여 ic_weights.json에 저장.
+최근 5년 walk-forward IC를 계산하여 ic_weights.json에 저장.
 factor_engine.py의 calc_factor_scores()가 이 파일을 읽어 가중치에 반영.
 
 수동 실행:
@@ -10,10 +10,11 @@ factor_engine.py의 calc_factor_scores()가 이 파일을 읽어 가중치에 �
 """
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from modules.factor_engine import REGIME_WEIGHTS
-from modules.factor_validator import run_per_factor_ic_analysis
+from modules.factor_validator import run_per_factor_ic_analysis, run_out_of_sample_validation
+from modules.survivorship_check import survivorship_bias_warning, known_failures_in_period
 
 # 대표 유니버스 (다양한 섹터 포함)
 TICKERS = [
@@ -25,6 +26,7 @@ TICKERS = [
 
 IC_WEIGHT_FILE = "ic_weights.json"
 IC_FLOOR       = 0.005   # 팩터 IC가 음수/0일 때 최소 스케일 (완전 배제 방지)
+LOOKBACK_YEARS = 5        # 2년 → 5년으로 확장 (더 강건한 IC 추정)
 
 
 def derive_ic_regime_weights(per_factor_ic: dict, base_weights: dict) -> dict:
@@ -51,15 +53,19 @@ def progress_cb(pct: float):
 
 
 def main():
-    print(f"IC 가중치 업데이트 시작  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
-    print(f"유니버스: {len(TICKERS)}개 티커  |  lookback=2년  rebal=21일  forward=21일")
-    print("데이터 수집 및 IC 계산 중 (10~30분 소요)...")
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    print(f"IC 가중치 업데이트 시작  {now_str}")
+    print(f"유니버스: {len(TICKERS)}개 티커  |  lookback={LOOKBACK_YEARS}년  rebal=21일  forward=21일")
+    print("데이터 수집 및 IC 계산 중 (30~60분 소요)...")
 
     per_factor = run_per_factor_ic_analysis(
-        TICKERS, lookback_years=2, rebal_days=21, forward_days=21,
+        TICKERS,
+        lookback_years=LOOKBACK_YEARS,
+        rebal_days=21,
+        forward_days=21,
         progress_cb=progress_cb,
     )
-    print()  # newline after progress bar
+    print()  # progress bar 개행
 
     if not per_factor:
         print("[오류] IC 분석 실패 — ic_weights.json 업데이트 없음", file=sys.stderr)
@@ -81,17 +87,57 @@ def main():
         print(f"  [{regime}]")
         for factor in old_w:
             delta = new_w[factor] - old_w[factor]
-            arrow = f"{delta:+.4f}"
-            print(f"    {factor:<12}: {old_w[factor]:.4f} → {new_w[factor]:.4f}  ({arrow})")
+            print(f"    {factor:<12}: {old_w[factor]:.4f} → {new_w[factor]:.4f}  ({delta:+.4f})")
+
+    # OOS 검증
+    print(f"\n📊 OOS 검증 실행 중 (lookback={LOOKBACK_YEARS}년, test_fraction=0.25)...")
+    oos = {}
+    try:
+        oos = run_out_of_sample_validation(
+            TICKERS,
+            lookback_years=LOOKBACK_YEARS,
+            test_fraction=0.25,
+            rebal_days=21,
+            forward_days=21,
+            progress_cb=progress_cb,
+        )
+        print()
+        if oos:
+            print(f"  학습 기간: {oos['train_period']['start']} ~ {oos['train_period']['end']}")
+            print(f"  검증 기간: {oos['test_period']['start']}  ~ {oos['test_period']['end']}")
+            print(f"  학습 composite IC: {oos['train_composite_ic']:+.4f}")
+            print(f"  검증 composite IC: {oos['test_composite_ic']:+.4f}")
+            if oos.get("overfitting_flag"):
+                print("  ⚠️  과적합 의심: 검증 IC가 학습 IC의 50% 미만")
+            else:
+                print("  ✅ OOS 검증 통과 (과적합 없음)")
+    except Exception as _e:
+        print(f"\n  [경고] OOS 검증 실패: {_e}")
+
+    # 생존자 편향 경고
+    lookback_start = (datetime.now() - timedelta(days=LOOKBACK_YEARS * 365 + 90)).strftime("%Y-%m-%d")
+    lookback_end   = datetime.now().strftime("%Y-%m-%d")
+    warning  = survivorship_bias_warning(universe_size=len(TICKERS))
+    failures = known_failures_in_period(lookback_start, lookback_end)
+    if failures:
+        print(f"\n⚠️  룩백 기간 내 알려진 실패 사례 {len(failures)}건:")
+        for fail in failures:
+            print(f"  [{fail['date']}] {fail['ticker']} — {fail['event']}")
 
     output = {
-        "updated":        datetime.now(timezone.utc).isoformat(),
-        "universe_size":  len(TICKERS),
-        "per_factor_ic":  per_factor,
-        "regime_weights": ic_rw,
+        "updated":               datetime.now(timezone.utc).isoformat(),
+        "universe_size":         len(TICKERS),
+        "lookback_years":        LOOKBACK_YEARS,
+        "per_factor_ic":         per_factor,
+        "regime_weights":        ic_rw,
+        "out_of_sample_validation": oos,
+        "caveats": {
+            "survivorship_bias_warning":      warning,
+            "known_failures_in_lookback":     failures,
+        },
     }
     with open(IC_WEIGHT_FILE, "w") as f:
-        json.dump(output, f, indent=2)
+        json.dump(output, f, indent=2, ensure_ascii=False)
     print(f"\n✅ {IC_WEIGHT_FILE} 저장 완료.")
 
 

@@ -7,6 +7,13 @@ IC (Information Coefficient) / ICIR / 퀸타일 분석
 - IC  : 스피어만 상관계수(팩터 점수 vs 실제 수익률), −1~+1
 - ICIR: IC 평균 / IC 표준편차 — 팩터 일관성 (0.5 이상이면 신뢰 가능)
 - 퀸타일: 상위 20%(Q5) vs 하위 20%(Q1) 누적 수익률 비교
+
+PIT(Point-in-Time) 재무 데이터:
+  walk-forward IC 분석에서 look-ahead bias 방지를 위해
+  as_of_date 기준으로 알 수 있는 재무 데이터만 사용.
+  fetch_quarterly_fundamentals_history()의 인덱스는 이미
+  분기말 + 45일 (발표 추정일)로 조정되어 있어 <= as_of_date
+  필터만으로 미래 데이터를 차단할 수 있다.
 """
 
 import numpy as np
@@ -15,18 +22,52 @@ from datetime import datetime, timedelta
 from scipy.stats import spearmanr
 import yfinance as yf
 
-from modules.factor_engine import fetch_fundamentals as _fetch_fundamentals_once
+from modules.factor_engine import (
+    fetch_quarterly_fundamentals_history as _fetch_fin_hist,
+    fetch_shares_history                 as _fetch_shares_hist,
+    point_in_time_fundamentals           as _pit_fundamentals,
+)
 
-# 5-팩터 고정 가중치 (IC 검증용, 레짐 미분류)
-_IC_WEIGHTS = {"mom_3m": 0.30, "mom_1m": 0.20, "low_vol": 0.20, "value": 0.15, "quality": 0.15}
+try:
+    from modules.ict_analysis import ict_factor_score as _ict_factor_score
+    _ICT_AVAILABLE = True
+except Exception:
+    _ict_factor_score = None
+    _ICT_AVAILABLE = False
+
+# 6-팩터 고정 가중치 (IC 검증용, 레짐 미분류)
+_IC_WEIGHTS = {
+    "mom_3m":  0.27,
+    "mom_1m":  0.18,
+    "low_vol": 0.18,
+    "value":   0.135,
+    "quality": 0.135,
+    "ict":     0.10,
+}
+
+
+def _ict_raw_score(ohlcv_dict: dict, tk: str, as_of_date) -> float:
+    """ICT 팩터 점수 — look-ahead 없이 as_of_date 이전 OHLCV만 사용."""
+    if not _ICT_AVAILABLE or tk not in ohlcv_dict:
+        return 50.0
+    try:
+        sub = ohlcv_dict[tk]
+        sub = sub[sub.index <= pd.Timestamp(as_of_date)]
+        if len(sub) < 60:
+            return 50.0
+        return float(_ict_factor_score(sub))
+    except Exception:
+        return 50.0
 
 
 def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
-                               fundamentals: dict = None) -> dict:
+                               ohlcv_dict: dict = None,
+                               fin_hist: dict = None,
+                               shares_hist: dict = None) -> dict:
     """
-    as_of_date 기준으로 각 티커의 5-팩터 점수 계산.
-    look-ahead bias 없음 (가격 데이터는 as_of_date 이전만 사용).
-    fundamentals: {ticker: {"pe": float, "margin": float}} — 현재 기준 상수값 허용
+    as_of_date 기준으로 각 티커의 6-팩터 점수 계산.
+    look-ahead bias 없음 (가격·재무 데이터는 as_of_date 이전만 사용).
+
     반환: {ticker: composite_score}
     """
     rows = []
@@ -34,15 +75,25 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
         sub = close[close.index <= as_of_date]
         if len(sub) < 64:
             continue
+        cur_price = float(sub.iloc[-1])
         mom_3m = float((sub.iloc[-1] / sub.iloc[-63] - 1) * 100)
         mom_1m = float((sub.iloc[-1] / sub.iloc[-21] - 1) * 100) if len(sub) >= 22 else 0.0
         vol_21 = float(sub.pct_change().iloc[-21:].std() * np.sqrt(252) * 100) if len(sub) >= 22 else 100.0
-        fund   = (fundamentals or {}).get(tk, {})
+
+        if fin_hist is not None:
+            fund = _pit_fundamentals(tk, as_of_date, cur_price,
+                                     fin_hist, shares_hist or {})
+        else:
+            fund = {}
+
+        ict_score = _ict_raw_score(ohlcv_dict or {}, tk, as_of_date)
+
         rows.append({
             "ticker": tk,
             "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21,
             "pe":     fund.get("pe", np.nan),
             "margin": fund.get("margin", np.nan),
+            "ict":    ict_score,
         })
 
     if len(rows) < 4:
@@ -50,14 +101,12 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
 
     df = pd.DataFrame(rows).set_index("ticker")
 
-    # 모멘텀·변동성 Z-score
     for col in ("mom_3m", "mom_1m"):
         mu, sigma = df[col].mean(), df[col].std()
         df[f"z_{col}"] = (df[col] - mu) / (sigma + 1e-9)
     mu, sigma = df["vol"].mean(), df["vol"].std()
     df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)
 
-    # 가치 (저 P/E → 고점수)
     pe_valid = df["pe"].dropna()
     if len(pe_valid) >= 3:
         mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
@@ -65,13 +114,15 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
     else:
         df["z_value"] = 0.0
 
-    # 퀄리티 (높은 영업이익률 → 고점수)
     m_valid = df["margin"].dropna()
     if len(m_valid) >= 3:
         mu_m, sigma_m = m_valid.mean(), m_valid.std()
         df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
     else:
         df["z_quality"] = 0.0
+
+    mu_i, sigma_i = df["ict"].mean(), df["ict"].std()
+    df["z_ict"] = (df["ict"] - mu_i) / (sigma_i + 1e-9)
 
     W = _IC_WEIGHTS
     df["composite_z"] = (
@@ -80,6 +131,7 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
         + W["low_vol"] * df["z_low_vol"]
         + W["value"]   * df["z_value"]
         + W["quality"] * df["z_quality"]
+        + W.get("ict", 0.0) * df["z_ict"]
     )
     mn, mx = df["composite_z"].min(), df["composite_z"].max()
     df["score"] = 20 + (df["composite_z"] - mn) / (mx - mn + 1e-9) * 60
@@ -114,11 +166,11 @@ def run_ic_analysis(
     end   = datetime.now()
     start = end - timedelta(days=lookback_years * 365 + 90)
 
-    # ── 가격 데이터 수집 ─────────────────────────────────────────
     prices_dict = {}
+    ohlcv_dict  = {}
     for i, tk in enumerate(tickers):
         if progress_cb:
-            progress_cb(i / len(tickers) * 0.45)
+            progress_cb(i / len(tickers) * 0.40)
         try:
             raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
             if isinstance(raw.columns, pd.MultiIndex):
@@ -126,36 +178,39 @@ def run_ic_analysis(
                 raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
             if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
                 prices_dict[tk] = raw["Close"].dropna()
+                ohlcv_dict[tk]  = raw.dropna(subset=["Close"])
         except Exception:
             pass
 
     if len(prices_dict) < 5:
         return pd.DataFrame(), {}, {}, pd.Series(dtype=float)
 
-    # ── 기초체력 데이터 수집 (1회, walk-forward 전체에 상수) ────────
     if progress_cb:
-        progress_cb(0.5)
-    fundamentals = _fetch_fundamentals_once(list(prices_dict.keys()))
+        progress_cb(0.45)
+    fin_hist    = _fetch_fin_hist(list(prices_dict.keys()))
+    shares_hist = _fetch_shares_hist(list(prices_dict.keys()))
 
-    # ── 공통 거래일 인덱스 ───────────────────────────────────────
-    all_closes = pd.DataFrame(prices_dict).dropna(how="all")
-    dates      = all_closes.index
-    min_start  = 65 + forward_days
-
+    all_closes    = pd.DataFrame(prices_dict).dropna(how="all")
+    dates         = all_closes.index
+    min_start     = 65 + forward_days
     rebal_indices = list(range(min_start, len(dates) - forward_days, rebal_days))
     if not rebal_indices:
         return pd.DataFrame(), {}, {}, pd.Series(dtype=float)
 
-    # ── Walk-forward ─────────────────────────────────────────────
     ic_records = []
     q_returns  = {f"Q{i}": [] for i in range(1, 6)}
 
     for step_i, idx in enumerate(rebal_indices):
         if progress_cb:
-            progress_cb(0.55 + step_i / len(rebal_indices) * 0.45)
+            progress_cb(0.50 + step_i / len(rebal_indices) * 0.50)
 
-        as_of = dates[idx]
-        scores = _calc_momentum_vol_scores(prices_dict, as_of, fundamentals=fundamentals)
+        as_of  = dates[idx]
+        scores = _calc_momentum_vol_scores(
+            prices_dict, as_of,
+            ohlcv_dict=ohlcv_dict,
+            fin_hist=fin_hist,
+            shares_hist=shares_hist,
+        )
         if len(scores) < 5:
             continue
 
@@ -178,7 +233,6 @@ def run_ic_analysis(
         ic, _ = spearmanr(x, y)
         ic_records.append({"date": as_of, "ic": ic, "n_tickers": len(common)})
 
-        # 퀸타일 (Q1=저점수, Q5=고점수)
         sorted_t  = sorted(common, key=lambda t: scores[t])
         n         = len(sorted_t)
         q_size    = max(1, n // 5)
@@ -196,7 +250,6 @@ def run_ic_analysis(
     if not ic_records:
         return pd.DataFrame(), {}, {}, pd.Series(dtype=float)
 
-    # ── IC 집계 ──────────────────────────────────────────────────
     ic_df   = pd.DataFrame(ic_records)
     ic_vals = ic_df["ic"].dropna()
 
@@ -206,15 +259,14 @@ def run_ic_analysis(
     t_stat  = icir * float(np.sqrt(len(ic_vals)))
 
     summary = {
-        "mean_ic":     round(mean_ic, 4),
-        "std_ic":      round(std_ic, 4),
-        "icir":        round(icir, 3),
-        "t_stat":      round(t_stat, 2),
+        "mean_ic":      round(mean_ic, 4),
+        "std_ic":       round(std_ic, 4),
+        "icir":         round(icir, 3),
+        "t_stat":       round(t_stat, 2),
         "pct_positive": round(float((ic_vals > 0).mean() * 100), 1),
-        "n_periods":   int(len(ic_vals)),
+        "n_periods":    int(len(ic_vals)),
     }
 
-    # ── 퀸타일 누적 수익률 ────────────────────────────────────────
     quintile_cum = {}
     for q_name, records in q_returns.items():
         if records:
@@ -235,25 +287,39 @@ def run_ic_analysis(
 # ── 팩터별 IC 분석 (가중치 자동 조정용) ───────────────────────────
 
 def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
-                              fundamentals: dict = None) -> dict:
+                              ohlcv_dict: dict = None,
+                              fin_hist: dict = None,
+                              shares_hist: dict = None) -> dict:
     """
-    as_of_date 기준 각 티커의 팩터별 z-score.
-    반환: {ticker: {"mom_3m": z, "mom_1m": z, "low_vol": z, "value": z, "quality": z}}
+    as_of_date 기준 각 티커의 팩터별 z-score (6-팩터).
+
+    반환: {ticker: {"mom_3m": z, "mom_1m": z, "low_vol": z,
+                    "value": z, "quality": z, "ict": z}}
     """
     rows = []
     for tk, close in prices_dict.items():
         sub = close[close.index <= as_of_date]
         if len(sub) < 65:
             continue
-        mom_3m = float((sub.iloc[-1] / sub.iloc[-64] - 1) * 100)   # -(days+1)
+        cur_price = float(sub.iloc[-1])
+        mom_3m = float((sub.iloc[-1] / sub.iloc[-64] - 1) * 100)
         mom_1m = float((sub.iloc[-1] / sub.iloc[-22] - 1) * 100) if len(sub) >= 22 else 0.0
         vol_21 = float(sub.pct_change().iloc[-21:].std() * np.sqrt(252) * 100)
-        fund   = (fundamentals or {}).get(tk, {})
+
+        if fin_hist is not None:
+            fund = _pit_fundamentals(tk, as_of_date, cur_price,
+                                     fin_hist, shares_hist or {})
+        else:
+            fund = {}
+
+        ict_score = _ict_raw_score(ohlcv_dict or {}, tk, as_of_date)
+
         rows.append({
             "ticker": tk,
             "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21,
             "pe":     fund.get("pe", np.nan),
             "margin": fund.get("margin", np.nan),
+            "ict":    ict_score,
         })
 
     if len(rows) < 5:
@@ -282,6 +348,9 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
     else:
         df["z_quality"] = 0.0
 
+    mu_i, sigma_i = df["ict"].mean(), df["ict"].std()
+    df["z_ict"] = (df["ict"] - mu_i) / (sigma_i + 1e-9)
+
     result = {}
     for tk in df.index:
         result[tk] = {
@@ -290,6 +359,7 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
             "low_vol": float(df.loc[tk, "z_low_vol"]),
             "value":   float(df.loc[tk, "z_value"]),
             "quality": float(df.loc[tk, "z_quality"]),
+            "ict":     float(df.loc[tk, "z_ict"]),
         }
     return result
 
@@ -314,9 +384,10 @@ def run_per_factor_ic_analysis(
     start = end - timedelta(days=lookback_years * 365 + 90)
 
     prices_dict = {}
+    ohlcv_dict  = {}
     for i, tk in enumerate(tickers):
         if progress_cb:
-            progress_cb(i / len(tickers) * 0.45)
+            progress_cb(i / len(tickers) * 0.40)
         try:
             raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
             if isinstance(raw.columns, pd.MultiIndex):
@@ -324,6 +395,7 @@ def run_per_factor_ic_analysis(
                 raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
             if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
                 prices_dict[tk] = raw["Close"].dropna()
+                ohlcv_dict[tk]  = raw.dropna(subset=["Close"])
         except Exception:
             pass
 
@@ -331,25 +403,31 @@ def run_per_factor_ic_analysis(
         return {}
 
     if progress_cb:
-        progress_cb(0.5)
-    fundamentals = _fetch_fundamentals_once(list(prices_dict.keys()))
+        progress_cb(0.45)
+    fin_hist    = _fetch_fin_hist(list(prices_dict.keys()))
+    shares_hist = _fetch_shares_hist(list(prices_dict.keys()))
 
-    all_closes = pd.DataFrame(prices_dict).dropna(how="all")
-    dates      = all_closes.index
-    min_start  = 65 + forward_days
+    all_closes    = pd.DataFrame(prices_dict).dropna(how="all")
+    dates         = all_closes.index
+    min_start     = 65 + forward_days
     rebal_indices = list(range(min_start, len(dates) - forward_days, rebal_days))
     if not rebal_indices:
         return {}
 
-    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality"]
+    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict"]
     factor_ics = {f: [] for f in FACTORS}
 
     for step_i, idx in enumerate(rebal_indices):
         if progress_cb:
-            progress_cb(0.55 + step_i / len(rebal_indices) * 0.45)
+            progress_cb(0.50 + step_i / len(rebal_indices) * 0.50)
 
-        as_of        = dates[idx]
-        factor_scores = _calc_per_factor_zscores(prices_dict, as_of, fundamentals=fundamentals)
+        as_of         = dates[idx]
+        factor_scores = _calc_per_factor_zscores(
+            prices_dict, as_of,
+            ohlcv_dict=ohlcv_dict,
+            fin_hist=fin_hist,
+            shares_hist=shares_hist,
+        )
         if len(factor_scores) < 5:
             continue
 
@@ -368,7 +446,7 @@ def run_per_factor_ic_analysis(
 
         y = np.array([returns[t] for t in common])
         for factor in FACTORS:
-            x   = np.array([factor_scores[t][factor] for t in common])
+            x   = np.array([factor_scores[t].get(factor, 0.0) for t in common])
             ic, _ = spearmanr(x, y)
             if not np.isnan(ic):
                 factor_ics[factor].append(float(ic))
@@ -390,3 +468,175 @@ def run_per_factor_ic_analysis(
             "n":            len(ics),
         }
     return result
+
+
+def run_out_of_sample_validation(
+    tickers: list,
+    lookback_years: int = 5,
+    test_fraction: float = 0.25,
+    rebal_days: int = 21,
+    forward_days: int = 21,
+    progress_cb=None,
+) -> dict:
+    """
+    OOS(Out-of-Sample) 검증.
+    학습 기간(1 - test_fraction)에서 팩터 IC 계산 후
+    검증 기간(test_fraction)에서 동일 가중치를 테스트하여 과적합을 탐지.
+
+    Returns
+    -------
+    {
+      "train_period":          {"start": str, "end": str},
+      "test_period":           {"start": str, "end": str},
+      "train_factor_ic":       {factor: stats},
+      "derived_test_weights":  {factor: weight},
+      "test_composite_ic":     float,
+      "train_composite_ic":    float,
+      "overfitting_flag":      bool,
+    }
+    """
+    end_dt   = datetime.now()
+    start_dt = end_dt - timedelta(days=lookback_years * 365 + 90)
+
+    total_days = (end_dt - start_dt).days
+    test_days  = int(total_days * test_fraction)
+    train_end  = end_dt - timedelta(days=test_days)
+
+    train_start_str = start_dt.strftime("%Y-%m-%d")
+    train_end_str   = train_end.strftime("%Y-%m-%d")
+    test_start_str  = (train_end + timedelta(days=1)).strftime("%Y-%m-%d")
+    test_end_str    = end_dt.strftime("%Y-%m-%d")
+
+    if progress_cb:
+        progress_cb(0.05)
+
+    prices_dict = {}
+    ohlcv_dict  = {}
+    for i, tk in enumerate(tickers):
+        if progress_cb:
+            progress_cb(0.05 + i / len(tickers) * 0.30)
+        try:
+            raw = yf.download(tk, start=train_start_str, end=test_end_str,
+                              progress=False, auto_adjust=True)
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw = raw.xs(tk, axis=1, level=1) if tk in raw.columns.get_level_values(1) else raw
+                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+            if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
+                prices_dict[tk] = raw["Close"].dropna()
+                ohlcv_dict[tk]  = raw.dropna(subset=["Close"])
+        except Exception:
+            pass
+
+    if len(prices_dict) < 5:
+        return {}
+
+    if progress_cb:
+        progress_cb(0.35)
+    fin_hist    = _fetch_fin_hist(list(prices_dict.keys()))
+    shares_hist = _fetch_shares_hist(list(prices_dict.keys()))
+
+    all_closes = pd.DataFrame(prices_dict).dropna(how="all")
+    dates      = all_closes.index
+    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict"]
+    min_idx    = 65 + forward_days
+
+    def _walk_forward_ic(date_range, prog_start, prog_end):
+        factor_ics_local = {f: [] for f in FACTORS}
+        rebal_idx_list   = list(range(min_idx, len(date_range) - forward_days, rebal_days))
+
+        for step_i, idx in enumerate(rebal_idx_list):
+            if progress_cb:
+                pct = prog_start + (step_i / max(len(rebal_idx_list), 1)) * (prog_end - prog_start)
+                progress_cb(pct)
+
+            as_of = date_range[idx]
+            factor_scores = _calc_per_factor_zscores(
+                prices_dict, as_of,
+                ohlcv_dict=ohlcv_dict,
+                fin_hist=fin_hist,
+                shares_hist=shares_hist,
+            )
+            if len(factor_scores) < 5:
+                continue
+
+            fwd_date = date_range[min(idx + forward_days, len(date_range) - 1)]
+            returns  = {}
+            for tk in factor_scores:
+                cv = prices_dict[tk][prices_dict[tk].index <= as_of]
+                fv = prices_dict[tk][prices_dict[tk].index <= fwd_date]
+                if len(cv) > 0 and len(fv) > 0:
+                    cp, fp = float(cv.iloc[-1]), float(fv.iloc[-1])
+                    returns[tk] = (fp / cp - 1) * 100 if cp > 0 else np.nan
+
+            common = [t for t in factor_scores if t in returns and not np.isnan(returns[t])]
+            if len(common) < 5:
+                continue
+            y = np.array([returns[t] for t in common])
+            for factor in FACTORS:
+                x  = np.array([factor_scores[t].get(factor, 0.0) for t in common])
+                ic, _ = spearmanr(x, y)
+                if not np.isnan(ic):
+                    factor_ics_local[factor].append(float(ic))
+
+        out = {}
+        for factor, ics in factor_ics_local.items():
+            if not ics:
+                out[factor] = {"mean_ic": 0.0, "std_ic": 0.0, "icir": 0.0,
+                               "pct_positive": 0.0, "n": 0}
+                continue
+            arr = np.array(ics)
+            out[factor] = {
+                "mean_ic":      round(float(arr.mean()), 4),
+                "std_ic":       round(float(arr.std()), 4),
+                "icir":         round(float(arr.mean()) / (float(arr.std()) + 1e-9), 3),
+                "pct_positive": round(float((arr > 0).mean() * 100), 1),
+                "n":            len(ics),
+            }
+        return out
+
+    train_dates = dates[dates <= pd.Timestamp(train_end_str)]
+    test_dates  = dates[dates >  pd.Timestamp(train_end_str)]
+
+    if progress_cb:
+        progress_cb(0.40)
+
+    train_factor_ic = _walk_forward_ic(train_dates, 0.40, 0.70)
+
+    if progress_cb:
+        progress_cb(0.70)
+
+    IC_FLOOR = 0.005
+    raw_w    = {f: max(s.get("mean_ic", IC_FLOOR), IC_FLOOR)
+                for f, s in train_factor_ic.items()}
+    total_w  = sum(raw_w.values())
+    derived_weights = {f: round(v / total_w, 4) for f, v in raw_w.items()}
+
+    test_factor_ic = _walk_forward_ic(test_dates, 0.70, 0.98)
+
+    if progress_cb:
+        progress_cb(0.98)
+
+    train_composite_ic = sum(
+        derived_weights.get(f, 0.0) * train_factor_ic.get(f, {}).get("mean_ic", 0.0)
+        for f in FACTORS
+    )
+    test_composite_ic = sum(
+        derived_weights.get(f, 0.0) * test_factor_ic.get(f, {}).get("mean_ic", 0.0)
+        for f in FACTORS
+    )
+
+    overfitting = (train_composite_ic > 0.01
+                   and test_composite_ic < train_composite_ic * 0.5)
+
+    if progress_cb:
+        progress_cb(1.0)
+
+    return {
+        "train_period":         {"start": train_start_str, "end": train_end_str},
+        "test_period":          {"start": test_start_str,  "end": test_end_str},
+        "train_factor_ic":      train_factor_ic,
+        "derived_test_weights": derived_weights,
+        "test_composite_ic":    round(test_composite_ic, 4),
+        "train_composite_ic":   round(train_composite_ic, 4),
+        "overfitting_flag":     overfitting,
+    }
