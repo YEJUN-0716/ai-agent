@@ -3906,7 +3906,7 @@ def main():
                         f"<div style='text-align:center;padding:8px;border-radius:6px;"
                         f"background:{_sig_color.get(_val,'#9598a1')}22'>"
                         f"<div style='font-size:11px;color:#9598a1'>{_label}</div>"
-                        f"<div style='font-size:15px;font-weight:600;color:{_sig_color.get(_val,\"#9598a1\")}'>"
+                        f"<div style='font-size:15px;font-weight:600;color:{_sig_color.get(_val, '#9598a1')}'>"
                         f"{_val}</div></div>",
                         unsafe_allow_html=True)
 
