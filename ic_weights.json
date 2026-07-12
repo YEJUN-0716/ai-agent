@@ -1,64 +1,180 @@
 {
-  "updated": "2026-07-09T05:09:24.328469+00:00",
+  "updated": "2026-07-12T02:54:27.769511+00:00",
   "universe_size": 37,
+  "lookback_years": 5,
   "per_factor_ic": {
     "mom_3m": {
-      "mean_ic": 0.0419,
-      "std_ic": 0.2501,
-      "icir": 0.167,
-      "pct_positive": 68.2,
-      "n": 22
+      "mean_ic": 0.0164,
+      "std_ic": 0.2633,
+      "icir": 0.062,
+      "pct_positive": 55.2,
+      "n": 58
     },
     "mom_1m": {
-      "mean_ic": 0.0144,
-      "std_ic": 0.226,
-      "icir": 0.064,
-      "pct_positive": 59.1,
-      "n": 22
+      "mean_ic": 0.0007,
+      "std_ic": 0.2453,
+      "icir": 0.003,
+      "pct_positive": 53.4,
+      "n": 58
     },
     "low_vol": {
-      "mean_ic": -0.1497,
-      "std_ic": 0.2705,
-      "icir": -0.553,
-      "pct_positive": 27.3,
-      "n": 22
+      "mean_ic": -0.0663,
+      "std_ic": 0.3339,
+      "icir": -0.199,
+      "pct_positive": 32.8,
+      "n": 58
     },
     "value": {
-      "mean_ic": -0.1267,
-      "std_ic": 0.1904,
-      "icir": -0.665,
-      "pct_positive": 27.3,
-      "n": 22
+      "mean_ic": 0.0,
+      "std_ic": 0.0,
+      "icir": 0.0,
+      "pct_positive": 0.0,
+      "n": 0
     },
     "quality": {
-      "mean_ic": 0.0378,
-      "std_ic": 0.1468,
-      "icir": 0.257,
-      "pct_positive": 54.5,
-      "n": 22
+      "mean_ic": 0.0,
+      "std_ic": 0.0,
+      "icir": 0.0,
+      "pct_positive": 0.0,
+      "n": 0
+    },
+    "ict": {
+      "mean_ic": 0.0094,
+      "std_ic": 0.2123,
+      "icir": 0.044,
+      "pct_positive": 55.2,
+      "n": 58
     }
   },
   "regime_weights": {
     "bull": {
-      "mom_3m": 0.6228,
-      "mom_1m": 0.1529,
-      "low_vol": 0.0319,
-      "value": 0.0319,
-      "quality": 0.1605
+      "mom_3m": 0.572,
+      "mom_1m": 0.1246,
+      "low_vol": 0.0747,
+      "value": 0.0747,
+      "quality": 0.0498,
+      "ict": 0.1041
     },
     "neutral": {
-      "mom_3m": 0.4982,
-      "mom_1m": 0.137,
-      "low_vol": 0.0476,
-      "value": 0.0476,
-      "quality": 0.2697
+      "mom_3m": 0.461,
+      "mom_1m": 0.1124,
+      "low_vol": 0.1124,
+      "value": 0.1124,
+      "quality": 0.0843,
+      "ict": 0.1174
     },
     "bear": {
-      "mom_3m": 0.2665,
-      "mom_1m": 0.0458,
-      "low_vol": 0.1272,
-      "value": 0.0795,
-      "quality": 0.4809
+      "mom_3m": 0.2283,
+      "mom_1m": 0.0348,
+      "low_vol": 0.2784,
+      "value": 0.174,
+      "quality": 0.1392,
+      "ict": 0.1454
     }
+  },
+  "out_of_sample_validation": {
+    "train_period": {
+      "start": "2021-04-14",
+      "end": "2025-03-21"
+    },
+    "test_period": {
+      "start": "2025-03-22",
+      "end": "2026-07-12"
+    },
+    "train_factor_ic": {
+      "mom_3m": {
+        "mean_ic": 0.0025,
+        "std_ic": 0.2641,
+        "icir": 0.009,
+        "pct_positive": 51.2,
+        "n": 43
+      },
+      "mom_1m": {
+        "mean_ic": -0.0172,
+        "std_ic": 0.2471,
+        "icir": -0.07,
+        "pct_positive": 51.2,
+        "n": 43
+      },
+      "low_vol": {
+        "mean_ic": -0.025,
+        "std_ic": 0.3476,
+        "icir": -0.072,
+        "pct_positive": 37.2,
+        "n": 43
+      },
+      "value": {
+        "mean_ic": 0.0,
+        "std_ic": 0.0,
+        "icir": 0.0,
+        "pct_positive": 0.0,
+        "n": 0
+      },
+      "quality": {
+        "mean_ic": 0.0,
+        "std_ic": 0.0,
+        "icir": 0.0,
+        "pct_positive": 0.0,
+        "n": 0
+      },
+      "ict": {
+        "mean_ic": -0.0087,
+        "std_ic": 0.2137,
+        "icir": -0.041,
+        "pct_positive": 46.5,
+        "n": 43
+      }
+    },
+    "derived_test_weights": {
+      "mom_3m": 0.1667,
+      "mom_1m": 0.1667,
+      "low_vol": 0.1667,
+      "value": 0.1667,
+      "quality": 0.1667,
+      "ict": 0.1667
+    },
+    "test_composite_ic": 0.021,
+    "train_composite_ic": -0.0081,
+    "overfitting_flag": false
+  },
+  "caveats": {
+    "survivorship_bias_warning": "⚠️  생존자 편향(Survivorship Bias) 주의\n이 IC 분석은 *현재 상장된* 종목만을 대상으로 합니다.\n과거에 파산하거나 상장폐지된 종목은 제외되어 IC가 과대 추정될 수 있습니다.\n분석 유니버스: 37개 (현재 상장 종목만 포함)\n알려진 상장폐지/구제금융 대형주 사례: 14건 (목록 참고)",
+    "known_failures_in_lookback": [
+      {
+        "ticker": "FRC",
+        "name": "First Republic Bank",
+        "event": "파산/FDIC 인수",
+        "date": "2023-05-01",
+        "note": "SVB 사태 여파 — JP모건에 매각 (2023년 5월)"
+      },
+      {
+        "ticker": "SIVB",
+        "name": "Silicon Valley Bank (SVB)",
+        "event": "파산/FDIC 인수",
+        "date": "2023-03-10",
+        "note": "스타트업 생태계 최대 규모 은행 파산 (2023년 3월)"
+      },
+      {
+        "ticker": "SBNY",
+        "name": "Signature Bank",
+        "event": "파산/FDIC 인수",
+        "date": "2023-03-12",
+        "note": "SVB 사태 이틀 후 파산"
+      },
+      {
+        "ticker": "GE",
+        "name": "General Electric (구조조정)",
+        "event": "주가 -80% 후 분할",
+        "date": "2021-11-09",
+        "note": "다우지수 120년 구성원에서 퇴출(2018), 3개사로 분할"
+      },
+      {
+        "ticker": "BBBYQ",
+        "name": "Bed Bath & Beyond",
+        "event": "파산",
+        "date": "2023-04-23",
+        "note": "소매업 몰락 — 밈주식 거품 이후 파산"
+      }
+    ]
   }
 }
