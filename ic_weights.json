@@ -1,5 +1,5 @@
 {
-  "updated": "2026-07-12T02:54:27.769511+00:00",
+  "updated": "2026-07-12T14:49:28.650086+00:00",
   "universe_size": 37,
   "lookback_years": 5,
   "per_factor_ic": {
@@ -39,8 +39,8 @@
       "n": 0
     },
     "ict": {
-      "mean_ic": 0.0094,
-      "std_ic": 0.2123,
+      "mean_ic": 0.0093,
+      "std_ic": 0.2125,
       "icir": 0.044,
       "pct_positive": 55.2,
       "n": 58
@@ -48,28 +48,28 @@
   },
   "regime_weights": {
     "bull": {
-      "mom_3m": 0.572,
-      "mom_1m": 0.1246,
-      "low_vol": 0.0747,
-      "value": 0.0747,
-      "quality": 0.0498,
-      "ict": 0.1041
+      "mom_3m": 0.5727,
+      "mom_1m": 0.1247,
+      "low_vol": 0.0748,
+      "value": 0.0748,
+      "quality": 0.0499,
+      "ict": 0.1031
     },
     "neutral": {
-      "mom_3m": 0.461,
-      "mom_1m": 0.1124,
-      "low_vol": 0.1124,
-      "value": 0.1124,
-      "quality": 0.0843,
-      "ict": 0.1174
+      "mom_3m": 0.4615,
+      "mom_1m": 0.1126,
+      "low_vol": 0.1126,
+      "value": 0.1126,
+      "quality": 0.0844,
+      "ict": 0.1163
     },
     "bear": {
-      "mom_3m": 0.2283,
-      "mom_1m": 0.0348,
-      "low_vol": 0.2784,
-      "value": 0.174,
-      "quality": 0.1392,
-      "ict": 0.1454
+      "mom_3m": 0.2286,
+      "mom_1m": 0.0349,
+      "low_vol": 0.2788,
+      "value": 0.1743,
+      "quality": 0.1394,
+      "ict": 0.1441
     }
   },
   "out_of_sample_validation": {
@@ -118,9 +118,9 @@
         "n": 0
       },
       "ict": {
-        "mean_ic": -0.0087,
-        "std_ic": 0.2137,
-        "icir": -0.041,
+        "mean_ic": -0.0106,
+        "std_ic": 0.2151,
+        "icir": -0.049,
         "pct_positive": 46.5,
         "n": 43
       }
@@ -134,7 +134,7 @@
       "ict": 0.1667
     },
     "test_composite_ic": 0.021,
-    "train_composite_ic": -0.0081,
+    "train_composite_ic": -0.0084,
     "overfitting_flag": false
   },
   "caveats": {
