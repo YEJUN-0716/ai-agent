@@ -708,9 +708,10 @@ def main():
 
     # 7. 매수 (드로다운 스톱 / 섹터 제한 / 체결 확인)
     remaining  = effective_max_pos - (len(held) - len(sell_done))
-    buy_results = []
-    n_bought    = 0
+    buy_results    = []
+    n_bought       = 0
     skipped_sector = []
+    skipped_price  = []
 
     # cold cache 시 첫 반복에서 len(held) 건의 yfinance 호출이 몰리는 문제 방지
     for _s in held:
@@ -766,6 +767,13 @@ def main():
 
         if buying_power < _size_krw * 0.9:
             print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 {_size:,.0f}{_unit}, 가용 {buying_power:,.0f}원)")
+            continue
+
+        # 소수점 거래 불가 → 주가가 투입금 초과하면 1주도 못 사므로 스킵
+        _sig_price = float(sig.get("price", 0))
+        if _sig_price > 0 and _sig_price > _size:
+            print(f"  [매수 스킵] {sym} 주가 {_sig_price:,.1f}{_unit} > 투입금 {_size:,.0f}{_unit} (소수점 거래 불가)")
+            skipped_price.append(f"{sym}({_sig_price:,.0f}{_unit})")
             continue
 
         _ict     = ict_data.get(sig["ticker"], {})
@@ -856,6 +864,8 @@ def main():
         lines.append(f"트레일링 스톱 발동: {', '.join(_trail_sells)}")
     if skipped_sector:
         lines.append(f"섹터 제한 스킵: {', '.join(skipped_sector)}")
+    if skipped_price:
+        lines.append(f"주가 초과 스킵: {', '.join(skipped_price)}")
     if dd_blocked:
         lines.append(f"⛔ 드로다운 *{dd_pct:.1f}%* → 신규 매수 중단")
     if n_errs:
