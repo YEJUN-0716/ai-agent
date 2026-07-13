@@ -98,18 +98,18 @@ def get_account(client_id: str, client_secret: str, account_seq: str) -> dict:
     """
     hdrs = _headers(client_id, client_secret, account_seq)
 
-    # 1) 보유 자산에서 KRW 평가금액 추출
-    equity = 0.0
+    # 1) 보유 주식 평가금액
+    stock_value = 0.0
     try:
         resp = requests.get(f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
         resp.raise_for_status()
         result = resp.json().get("result", {})
         krw_val = result.get("marketValue", {}).get("amount", {}).get("krw", "0")
-        equity = float(krw_val or 0)
+        stock_value = float(krw_val or 0)
     except Exception as e:
         print(f"  [toss] 자산 조회 실패: {e}")
 
-    # 2) 매수 가능 금액 (GET /api/v1/buying-power?currency=KRW)
+    # 2) 매수 가능 금액 (현금) — GET /api/v1/buying-power?currency=KRW
     buying_power = 0.0
     try:
         resp = requests.get(
@@ -123,6 +123,9 @@ def get_account(client_id: str, client_secret: str, account_seq: str) -> dict:
         buying_power = float(result.get("cashBuyingPower", 0))
     except Exception as e:
         print(f"  [toss] 매수가능금액 조회 실패: {e}")
+
+    # equity = 주식 평가금액 + 현금 (현금 제외 시 포지션 없으면 0이 되어 드로다운 -100% 오진단)
+    equity = stock_value + buying_power
 
     return {
         "equity":          equity,
