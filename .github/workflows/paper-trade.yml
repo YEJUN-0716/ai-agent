@@ -81,6 +81,7 @@ jobs:
 
       - name: 토스 트레이딩 실행
         env:
+          PYTHONUTF8:         "1"
           TOSS_CLIENT_ID:     ${{ secrets.TOSS_CLIENT_ID }}
           TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
           TOSS_ACCOUNT_SEQ:   ${{ secrets.TOSS_ACCOUNT_SEQ }}
