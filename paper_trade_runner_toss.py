@@ -725,7 +725,10 @@ def main():
             print(f"  ICT 참고 [{_tk}] {' / '.join(_sigs[:2])}")
 
     # 5. 시그널 생성
-    signals = generate_signals(factor_df, TOP_N, min_score=BUY_SCORE_MIN, regime=regime)
+    # 후보풀을 TOP_N×5로 넓혀 주가초과·섹터제한 스킵 시 대체 종목 확보
+    # 실제 매수 횟수는 buy loop의 n_bought >= remaining 으로 TOP_N개에서 제한됨
+    _candidate_n = max(TOP_N * 5, 15)
+    signals = generate_signals(factor_df, _candidate_n, min_score=BUY_SCORE_MIN, regime=regime)
     buy_sigs  = [s for s in signals if s["action"] == "매수"]
     sell_sigs = [s for s in signals if s["action"] == "매도"]
     print(f"시그널: 매수 {len(buy_sigs)}건, 매도 {len(sell_sigs)}건")
