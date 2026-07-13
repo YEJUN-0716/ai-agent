@@ -86,53 +86,49 @@ def _get_price(symbol: str, client_id: str, client_secret: str) -> float:
 
 def get_account(client_id: str, client_secret: str, account_seq: str) -> dict:
     """
-    계좌 요약(총 자산평가액, 매수가능금액, 잠금 여부) 반환.
+    계좌 요약(총 자산평가액, 매수가능금액) 반환.
 
     반환 구조:
       {
-        "equity":          float,  # 총 자산평가액(KRW)
-        "buying_power":    float,  # 매수가능금액(KRW)
+        "equity":          float,  # KRW 자산평가액 (GET /api/v1/holdings → result.marketValue.amount.krw)
+        "buying_power":    float,  # 매수가능금액 (GET /api/v1/buying-power?currency=KRW → result.cashBuyingPower)
         "account_blocked": bool,
         "trading_blocked": bool,
       }
-
-    NOTE: 엔드포인트 경로는 실제 docs에서 확인 필요.
-      - 자산 요약: GET /api/v1/assets/summary  (Asset 그룹)
-      - 매수가능금액: GET /api/v1/orders/buyable-amount  (Order Info 그룹)
     """
     hdrs = _headers(client_id, client_secret, account_seq)
 
-    # 1) 자산 요약
+    # 1) 보유 자산에서 KRW 평가금액 추출
     equity = 0.0
-    account_blocked = False
-    trading_blocked = False
     try:
-        resp = requests.get(f"{_BASE}/api/v1/assets/summary",
-                            headers=hdrs, timeout=15)
-        resp.raise_for_status()
-        summary = resp.json().get("result", {})
-        equity = float(summary.get("totalAsset") or summary.get("totalEquity", 0))
-        account_blocked = bool(summary.get("accountBlocked", False))
-        trading_blocked = bool(summary.get("tradingBlocked", False))
-    except Exception as e:
-        print(f"  [toss] 자산 요약 조회 실패: {e}")
-
-    # 2) 매수 가능 금액
-    buying_power = 0.0
-    try:
-        resp = requests.get(f"{_BASE}/api/v1/orders/buyable-amount",
-                            headers=hdrs, timeout=15)
+        resp = requests.get(f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
         resp.raise_for_status()
         result = resp.json().get("result", {})
-        buying_power = float(result.get("buyableAmount") or result.get("amount", 0))
+        krw_val = result.get("marketValue", {}).get("amount", {}).get("krw", "0")
+        equity = float(krw_val or 0)
+    except Exception as e:
+        print(f"  [toss] 자산 조회 실패: {e}")
+
+    # 2) 매수 가능 금액 (GET /api/v1/buying-power?currency=KRW)
+    buying_power = 0.0
+    try:
+        resp = requests.get(
+            f"{_BASE}/api/v1/buying-power",
+            headers=hdrs,
+            params={"currency": "KRW"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        result = resp.json().get("result", {})
+        buying_power = float(result.get("cashBuyingPower", 0))
     except Exception as e:
         print(f"  [toss] 매수가능금액 조회 실패: {e}")
 
     return {
         "equity":          equity,
         "buying_power":    buying_power,
-        "account_blocked": account_blocked,
-        "trading_blocked": trading_blocked,
+        "account_blocked": False,
+        "trading_blocked": False,
     }
 
 
@@ -140,41 +136,32 @@ def get_positions(client_id: str, client_secret: str, account_seq: str) -> list:
     """
     현재 보유 종목 목록 반환.
 
-    각 항목:
+    GET /api/v1/holdings
+    응답: result.items[] 각 항목:
+      symbol, quantity, averagePurchasePrice, lastPrice, profitLoss.amount
+
+    각 반환 항목:
       {
-        "symbol":          str,   # 종목코드 (접미사 없는 순수 코드)
+        "symbol":          str,
         "qty":             str,   # 보유 수량
         "avg_entry_price": str,   # 평균 매입가
         "current_price":   str,   # 현재가
-        "unrealized_pl":   str,   # 평가손익(KRW)
+        "unrealized_pl":   str,   # 평가손익
       }
-
-    NOTE: 엔드포인트 경로 확인 필요.
-      GET /api/v1/assets  (Asset 그룹)
     """
     hdrs = _headers(client_id, client_secret, account_seq)
-    resp = requests.get(f"{_BASE}/api/v1/assets", headers=hdrs, timeout=15)
+    resp = requests.get(f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
     resp.raise_for_status()
-    raw = resp.json()
-
-    # 응답이 { result: { holdings: [...] } } 또는 { result: [...] } 형태일 수 있음
-    result = raw.get("result", {})
-    holdings = (
-        result.get("holdings") or
-        result.get("stocks") or
-        result.get("items") or
-        (result if isinstance(result, list) else [])
-    )
+    items = resp.json().get("result", {}).get("items", [])
 
     positions = []
-    for h in holdings:
+    for h in items:
         positions.append({
-            "symbol":          str(h.get("symbol") or h.get("stockCode", "")),
-            "qty":             str(h.get("quantity") or h.get("qty", "0")),
-            "avg_entry_price": str(h.get("avgPrice") or h.get("avgBuyPrice") or
-                                   h.get("averagePrice", "0")),
-            "current_price":   str(h.get("currentPrice") or h.get("lastPrice", "0")),
-            "unrealized_pl":   str(h.get("unrealizedPnl") or h.get("evaluationProfit", "0")),
+            "symbol":          str(h.get("symbol", "")),
+            "qty":             str(h.get("quantity", "0")),
+            "avg_entry_price": str(h.get("averagePurchasePrice", "0")),
+            "current_price":   str(h.get("lastPrice", "0")),
+            "unrealized_pl":   str(h.get("profitLoss", {}).get("amount", "0")),
             "_raw":            h,
         })
     return positions
@@ -196,12 +183,10 @@ def place_notional_buy(
     토스 API는 수량 지정 방식이므로 현재가로 수량을 역산 후 주문.
 
     POST /api/v1/orders
-    Body 예시:
-      { "symbol": "005930", "side": "BUY", "orderType": "MARKET", "quantity": 10 }
-
-    NOTE: 실제 요청 필드명은 docs에서 확인 필요 (quantity vs qty 등).
+    Body: { symbol, side:"BUY", orderType:"MARKET", quantity:"10" }
+    quantity는 API 스펙상 문자열(decimal string)로 전송.
+    응답: result.orderId
     """
-    # 현재가 조회 → 수량 계산
     price = _get_price(symbol, client_id, client_secret)
     if price <= 0:
         raise ValueError(f"현재가 조회 실패: {symbol}")
@@ -223,19 +208,19 @@ def place_notional_buy(
         "symbol":    symbol,
         "side":      "BUY",
         "orderType": "MARKET",
-        "quantity":  qty,
+        "quantity":  str(qty),   # 스펙: decimal string
     }
 
     resp = requests.post(f"{_BASE}/api/v1/orders", headers=hdrs, json=body, timeout=15)
     resp.raise_for_status()
-    data = resp.json().get("result", resp.json())
+    result = resp.json().get("result", {})
 
     return {
-        "id":     str(data.get("orderId") or data.get("id", "")),
-        "status": str(data.get("status", "placed")),
+        "id":     str(result.get("orderId", "")),
+        "status": "placed",
         "qty":    qty,
         "price":  price,
-        "_raw":   data,
+        "_raw":   result,
     }
 
 
@@ -252,7 +237,9 @@ def place_market_sell(
     시장가 매도.
 
     POST /api/v1/orders
-    Body: { "symbol": "005930", "side": "SELL", "orderType": "MARKET", "quantity": 10 }
+    Body: { symbol, side:"SELL", orderType:"MARKET", quantity:"10" }
+    quantity는 API 스펙상 문자열(decimal string)로 전송.
+    응답: result.orderId
     """
     qty_int = int(float(str(qty)))
     if qty_int < 1:
@@ -268,27 +255,29 @@ def place_market_sell(
         "symbol":    symbol,
         "side":      "SELL",
         "orderType": "MARKET",
-        "quantity":  qty_int,
+        "quantity":  str(qty_int),   # 스펙: decimal string
     }
 
     resp = requests.post(f"{_BASE}/api/v1/orders", headers=hdrs, json=body, timeout=15)
     resp.raise_for_status()
-    data = resp.json().get("result", resp.json())
+    result = resp.json().get("result", {})
 
     return {
-        "id":     str(data.get("orderId") or data.get("id", "")),
-        "status": str(data.get("status", "placed")),
+        "id":     str(result.get("orderId", "")),
+        "status": "placed",
         "qty":    qty_int,
-        "_raw":   data,
+        "_raw":   result,
     }
 
 
 # ── 체결 확인 ──────────────────────────────────────────────────────────
 _FILL_TIMEOUT_SEC  = 60
 _FILL_POLL_SEC     = 5
-# Order History의 CLOSED 상태 = 체결·취소·거부 등 종료된 주문
-# 개별 주문 상세의 status 값은 docs 확인 (FILLED / CANCELLED / REJECTED 등)
-_TERMINAL_STATUSES = {"filled", "cancelled", "rejected", "expired", "closed"}
+# OrderStatus enum (lowercase 비교): FILLED, CANCELED, REJECTED, REPLACED, CANCEL_REJECTED, REPLACE_REJECTED
+_TERMINAL_STATUSES = {
+    "filled", "canceled", "rejected", "replaced",
+    "cancel_rejected", "replace_rejected",
+}
 
 
 def wait_for_fill(
@@ -301,8 +290,7 @@ def wait_for_fill(
     주문 체결 확인 (폴링, 최대 _FILL_TIMEOUT_SEC 초).
 
     GET /api/v1/orders/{orderId}
-
-    NOTE: 응답 status 값은 실제 API 확인 후 _TERMINAL_STATUSES 업데이트 필요.
+    응답: result.status, result.execution.averageFilledPrice, result.execution.filledQuantity
     """
     if order_id == "dry_run":
         return {"status": "dry_run", "filled_avg_price": None}
@@ -318,15 +306,15 @@ def wait_for_fill(
                 timeout=10,
             )
             resp.raise_for_status()
-            data   = resp.json().get("result", resp.json())
-            status = str(data.get("status", "")).lower()
+            data      = resp.json().get("result", {})
+            status    = str(data.get("status", "")).lower()
 
             if status in _TERMINAL_STATUSES:
+                execution = data.get("execution", {})
                 return {
                     "status":           status,
-                    "filled_avg_price": (data.get("filledAvgPrice") or
-                                         data.get("avgFilledPrice")),
-                    "filled_qty":       data.get("filledQuantity") or data.get("filledQty"),
+                    "filled_avg_price": execution.get("averageFilledPrice"),
+                    "filled_qty":       execution.get("filledQuantity"),
                     "_raw":             data,
                 }
         except Exception as e:
