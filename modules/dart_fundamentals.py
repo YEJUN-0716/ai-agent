@@ -131,7 +131,7 @@ def fetch_krx_fundamentals(tickers: list) -> dict:
                 f"{_DART_BASE}/fnlttMultiAcnt.json",
                 params={
                     "crtfc_key":  _DART_KEY,
-                    "year":       year,
+                    "bsns_year":  year,
                     "reprt_code": reprt_code,
                     "corp_code":  ",".join(batch),
                 },
