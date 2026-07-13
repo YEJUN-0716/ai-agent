@@ -1,39 +1,39 @@
-name: 페이퍼 트레이딩 자동 실행
+name: 페이퍼 트레이딩 자동 실행 (Toss)
 
 on:
   schedule:
-    # 미국 장마감(ET 16:00) 후
-    # EDT(UTC-4): 마감 20:00 UTC → 22:00 UTC 실행 (2시간 여유)
-    # EST(UTC-5): 마감 21:00 UTC → 22:00 UTC 실행 (1시간 여유, yfinance 데이터 충분)
-    - cron: "0 22 * * 1-5"
+    # 한국 장마감(KST 15:30) 후
+    # KST = UTC+9 → 15:30 KST = 06:30 UTC
+    # UTC 07:00 실행 (30분 여유)
+    - cron: "0 7 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "DRY_RUN (true=주문 없음, false=실제 페이퍼 주문)"
+        description: "DRY_RUN (true=주문 없음, false=실제 주문)"
         required: false
         default: "true"
       universe:
-        description: "유니버스 이름 (';'로 복수 지정 가능, 예: S&P 500 대형 30;반도체 15)"
+        description: "유니버스 이름 (';'로 복수 지정, 예: 코스피 대형 30;코스닥 기술주 15)"
         required: false
-        default: "S&P 500 대형 30;NASDAQ 기술주 20;반도체 15;배당 귀족 15"
+        default: "코스피 대형 30;코스닥 기술주 15"
       top_n:
         description: "매수 상위 N개"
         required: false
         default: "5"
       capital_per_trade:
-        description: "종목당 투입금 USD"
+        description: "종목당 투입금 KRW"
         required: false
-        default: "1000"
+        default: "500000"
       trail_stop_pct:
         description: "트레일링 스톱 % (고점 대비, 0이면 비활성)"
         required: false
         default: "10"
       buy_score_min:
-        description: "최소 매수 점수 (10~90, 이 점수 미만 종목은 top_n 안이어도 관망)"
+        description: "최소 매수 점수 (10~90)"
         required: false
         default: "60"
       portfolio_dd_stop_pct:
-        description: "포트폴리오 드로다운 스톱 % (고점 대비 자산 감소, 0이면 비활성)"
+        description: "포트폴리오 드로다운 스톱 % (0이면 비활성)"
         required: false
         default: "15"
       max_sector_positions:
@@ -41,17 +41,13 @@ on:
         required: false
         default: "2"
       neutral_max_positions:
-        description: "neutral 레짐 최대 포지션 수 (기본: MAX_POSITIONS*0.7)"
+        description: "neutral 레짐 최대 포지션 수"
         required: false
         default: "7"
       bear_max_positions:
-        description: "bear 레짐 최대 포지션 수 (기본: MAX_POSITIONS*0.4)"
+        description: "bear 레짐 최대 포지션 수"
         required: false
         default: "4"
-      alpaca_mode:
-        description: "Alpaca 모드: paper(기본) 또는 live(실거래 ⚠️)"
-        required: false
-        default: "paper"
 
 # 동시에 두 번 실행 방지 — 동시 실행 시 peak_prices.json/signal_log.json 충돌 위험
 concurrency:
@@ -83,33 +79,33 @@ jobs:
         run: |
           echo "=== 현재 커밋 ==="
           git log --oneline -3
-          echo "=== paper_trade_runner.py 상위 10줄 ==="
-          head -10 paper_trade_runner.py
+          echo "=== paper_trade_runner_toss.py 상위 10줄 ==="
+          head -10 paper_trade_runner_toss.py
           echo "=== Python 버전 ==="
           python --version
 
-      - name: 페이퍼 트레이딩 실행
+      - name: 토스 트레이딩 실행
         env:
-          ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOSS_CLIENT_ID:     ${{ secrets.TOSS_CLIENT_ID }}
+          TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
+          TOSS_ACCOUNT_SEQ:   ${{ secrets.TOSS_ACCOUNT_SEQ }}
+          TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           # schedule 실행 시: 아래 기본값 사용
           # workflow_dispatch 실행 시: input 값 우선
-          UNIVERSE:           ${{ github.event.inputs.universe || 'S&P 500 대형 30;NASDAQ 기술주 20;반도체 15;배당 귀족 15' }}
-          TOP_N:              ${{ github.event.inputs.top_n || '5' }}
-          CAPITAL_PER_TRADE:  ${{ github.event.inputs.capital_per_trade || '1000' }}
-          MAX_POSITIONS:      "10"
-          TRAIL_STOP_PCT:     ${{ github.event.inputs.trail_stop_pct || '10' }}
-          BUY_SCORE_MIN:          ${{ github.event.inputs.buy_score_min || '60' }}
-          PORTFOLIO_DD_STOP_PCT:  ${{ github.event.inputs.portfolio_dd_stop_pct || '15' }}
-          MAX_SECTOR_POSITIONS:    ${{ github.event.inputs.max_sector_positions || '2' }}
-          NEUTRAL_MAX_POSITIONS:   ${{ github.event.inputs.neutral_max_positions || '7' }}
-          BEAR_MAX_POSITIONS:      ${{ github.event.inputs.bear_max_positions || '4' }}
-          ALPACA_MODE:             ${{ github.event.inputs.alpaca_mode || 'paper' }}
+          UNIVERSE:              ${{ github.event.inputs.universe || '코스피 대형 30;코스닥 기술주 15' }}
+          TOP_N:                 ${{ github.event.inputs.top_n || '5' }}
+          CAPITAL_PER_TRADE:     ${{ github.event.inputs.capital_per_trade || '500000' }}
+          MAX_POSITIONS:         "10"
+          TRAIL_STOP_PCT:        ${{ github.event.inputs.trail_stop_pct || '10' }}
+          BUY_SCORE_MIN:         ${{ github.event.inputs.buy_score_min || '60' }}
+          PORTFOLIO_DD_STOP_PCT: ${{ github.event.inputs.portfolio_dd_stop_pct || '15' }}
+          MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '2' }}
+          NEUTRAL_MAX_POSITIONS: ${{ github.event.inputs.neutral_max_positions || '7' }}
+          BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '4' }}
           # schedule은 항상 실제 주문, workflow_dispatch는 input 값 따름
-          DRY_RUN:                ${{ github.event.inputs.dry_run || 'false' }}
-        run: python paper_trade_runner.py
+          DRY_RUN:               ${{ github.event.inputs.dry_run || 'false' }}
+        run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널 로그)
         run: |
