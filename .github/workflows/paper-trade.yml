@@ -15,7 +15,7 @@ on:
       universe:
         description: "유니버스 이름 (';'로 복수 지정, 예: 코스피 대형 30;코스닥 기술주 15)"
         required: false
-        default: "코스피 대형 50;코스닥 기술주 25"
+        default: "코스피 대형 50;코스닥 기술주 25;국내 2차전지 10;국내 바이오 12;국내 반도체 10;국내 금융 10"
       top_n:
         description: "매수 상위 N개"
         required: false
@@ -68,7 +68,7 @@ permissions:
 jobs:
   run-paper-trade:
     runs-on: self-hosted
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: 저장소 체크아웃
@@ -97,7 +97,7 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           # schedule 실행 시: 아래 기본값 사용
           # workflow_dispatch 실행 시: input 값 우선
-          UNIVERSE:              ${{ github.event.inputs.universe || '코스피 대형 50;코스닥 기술주 25' }}
+          UNIVERSE:              ${{ github.event.inputs.universe || '코스피 대형 50;코스닥 기술주 25;국내 2차전지 10;국내 바이오 12;국내 반도체 10;국내 금융 10' }}
           TOP_N:                 ${{ github.event.inputs.top_n || '2' }}
           CAPITAL_KRW:           ${{ github.event.inputs.capital_krw || '100000' }}
           CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '100' }}

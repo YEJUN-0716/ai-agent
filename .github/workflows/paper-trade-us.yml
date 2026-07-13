@@ -14,7 +14,7 @@ on:
       universe:
         description: "유니버스 이름 (';'로 복수 지정)"
         required: false
-        default: "미국 중소형 30;미국 금융주 15;미국 가치배당주 20"
+        default: "미국 중소형 30;미국 금융주 15;미국 가치배당주 20;미국 AI·빅테크 15;미국 헬스케어 15"
       top_n:
         description: "매수 상위 N개"
         required: false
@@ -62,7 +62,7 @@ permissions:
 jobs:
   run-paper-trade-us:
     runs-on: self-hosted
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: 저장소 체크아웃
@@ -87,7 +87,7 @@ jobs:
           TOSS_ACCOUNT_SEQ:      ${{ secrets.TOSS_ACCOUNT_SEQ }}
           TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-          UNIVERSE:              ${{ github.event.inputs.universe || '미국 중소형 30;미국 금융주 15;미국 가치배당주 20' }}
+          UNIVERSE:              ${{ github.event.inputs.universe || '미국 중소형 30;미국 금융주 15;미국 가치배당주 20;미국 AI·빅테크 15;미국 헬스케어 15' }}
           TOP_N:                 ${{ github.event.inputs.top_n || '2' }}
           CAPITAL_KRW:           "500000"
           CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '100' }}
