@@ -70,12 +70,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 디버그 - 커밋 및 파일 확인
+        shell: powershell
         run: |
-          echo "=== 현재 커밋 ==="
+          Write-Host "=== 현재 커밋 ==="
           git log --oneline -3
-          echo "=== paper_trade_runner_toss.py 상위 10줄 ==="
-          head -10 paper_trade_runner_toss.py
-          echo "=== Python 버전 ==="
+          Write-Host "=== paper_trade_runner_toss.py 상위 10줄 ==="
+          Get-Content paper_trade_runner_toss.py -TotalCount 10
+          Write-Host "=== Python 버전 ==="
           python --version
 
       - name: 토스 트레이딩 실행
