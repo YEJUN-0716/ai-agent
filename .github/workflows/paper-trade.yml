@@ -104,10 +104,14 @@ jobs:
         run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널 로그)
+        shell: powershell
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add peak_prices.json signal_log.json equity_log.json || true
-          git diff --staged --quiet || git commit -m "chore: peak & signal & equity log update $(date -u +%Y-%m-%d)"
-          git pull --rebase origin main || true
-          git push || true
+          git add peak_prices.json signal_log.json equity_log.json
+          $staged = git diff --staged --quiet; if ($LASTEXITCODE -ne 0) {
+            $date = (Get-Date -AsUTC).ToString("yyyy-MM-dd")
+            git commit -m "chore: peak & signal & equity log update $date"
+          }
+          git pull --rebase origin main
+          git push
