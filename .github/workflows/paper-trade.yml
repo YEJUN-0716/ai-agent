@@ -95,6 +95,7 @@ jobs:
           TOSS_ACCOUNT_SEQ:   ${{ secrets.TOSS_ACCOUNT_SEQ }}
           TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          DART_API_KEY:       ${{ secrets.DART_API_KEY }}
           # schedule 실행 시: 아래 기본값 사용
           # workflow_dispatch 실행 시: input 값 우선
           UNIVERSE:              ${{ github.event.inputs.universe || '코스피 대형 50;코스닥 기술주 25;국내 2차전지 10;국내 바이오 12;국내 반도체 10;국내 금융 10' }}

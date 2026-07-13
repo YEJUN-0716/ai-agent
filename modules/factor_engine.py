@@ -115,14 +115,28 @@ def fetch_fundamentals(tickers: list) -> dict:
     """
     P/E·PBR·이익률 수집. 반환: {ticker: {"pe": float, "pb": float, "margin": float}}
 
-    한국 주식은 yfinance에서 trailingPE/operatingMargins가 없는 경우가 많아
-    forwardPE·priceToBook·profitMargins 순서로 폴백.
+    KRX 종목(.KS/.KQ): OpenDART에서 영업이익률을 가져오고, P/E·P/B는 yfinance로 보완.
+    US 종목: yfinance 전용.
+
+    yfinance에서 trailingPE/operatingMargins가 없는 경우:
+    forwardPE → priceToBook → profitMargins 순 폴백.
 
     주의: walk-forward IC 분석에서 look-ahead bias를 방지하려면
     point_in_time_fundamentals()를 사용하세요.
     """
+    # DART 일괄 사전 조회 (KRX 종목만, 실패해도 yfinance 폴백)
+    dart_data: dict = {}
+    krx_tickers = [tk for tk in tickers if tk.endswith((".KS", ".KQ"))]
+    if krx_tickers:
+        try:
+            from modules.dart_fundamentals import fetch_krx_fundamentals
+            dart_data = fetch_krx_fundamentals(krx_tickers)
+        except Exception as e:
+            print(f"  [DART] 재무 사전 조회 실패 (yfinance 폴백): {e}")
+
     result = {}
     for tk in tickers:
+        is_krx = tk.endswith((".KS", ".KQ"))
         try:
             info = yf.Ticker(tk).info
 
@@ -134,13 +148,22 @@ def fetch_fundamentals(tickers: list) -> dict:
             pb_raw = info.get("priceToBook")
             pb = min(float(pb_raw), 50.0) if pb_raw and float(pb_raw) > 0 else np.nan
 
-            # 이익률 — operating → profit(순이익률) 순 폴백
-            margin_raw = info.get("operatingMargins") or info.get("profitMargins")
-            margin = float(margin_raw) * 100 if margin_raw is not None else np.nan
+            # 이익률 — KRX: DART 우선 / 없으면 yfinance 폴백
+            if is_krx and dart_data.get(tk, {}).get("margin") is not None:
+                margin = float(dart_data[tk]["margin"])
+            else:
+                margin_raw = info.get("operatingMargins") or info.get("profitMargins")
+                margin = float(margin_raw) * 100 if margin_raw is not None else np.nan
 
             result[tk] = {"pe": pe, "pb": pb, "margin": margin}
         except Exception:
-            result[tk] = {"pe": np.nan, "pb": np.nan, "margin": np.nan}
+            # yfinance 실패해도 DART margin은 사용
+            dart_margin = dart_data.get(tk, {}).get("margin")
+            result[tk] = {
+                "pe":     np.nan,
+                "pb":     np.nan,
+                "margin": float(dart_margin) if dart_margin is not None else np.nan,
+            }
     return result
 
 
