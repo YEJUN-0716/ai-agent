@@ -113,25 +113,34 @@ def _momentum(close: pd.Series) -> dict:
 
 def fetch_fundamentals(tickers: list) -> dict:
     """
-    P/E·영업이익률 수집. 반환: {ticker: {"pe": float, "margin": float}}
+    P/E·PBR·이익률 수집. 반환: {ticker: {"pe": float, "pb": float, "margin": float}}
 
-    주의: 이 함수는 항상 *현재* 기준 재무 데이터를 반환합니다.
-    walk-forward IC 분석에서 look-ahead bias를 방지하려면
+    한국 주식은 yfinance에서 trailingPE/operatingMargins가 없는 경우가 많아
+    forwardPE·priceToBook·profitMargins 순서로 폴백.
+
+    주의: walk-forward IC 분석에서 look-ahead bias를 방지하려면
     point_in_time_fundamentals()를 사용하세요.
     """
     result = {}
     for tk in tickers:
         try:
             info = yf.Ticker(tk).info
-            pe_raw = info.get("trailingPE")
-            if pe_raw is None:
-                pe_raw = info.get("forwardPE")
-            margin_raw = info.get("operatingMargins")
-            pe     = min(float(pe_raw), 200.0) if pe_raw is not None and pe_raw > 0 else np.nan
-            margin = float(margin_raw) * 100   if margin_raw is not None else np.nan
-            result[tk] = {"pe": pe, "margin": margin}
+
+            # P/E — trailing → forward 순 폴백
+            pe_raw = info.get("trailingPE") or info.get("forwardPE")
+            pe = min(float(pe_raw), 200.0) if pe_raw and float(pe_raw) > 0 else np.nan
+
+            # PBR — 가치 팩터 보조 (한국 주식에 상대적으로 더 많이 제공됨)
+            pb_raw = info.get("priceToBook")
+            pb = min(float(pb_raw), 50.0) if pb_raw and float(pb_raw) > 0 else np.nan
+
+            # 이익률 — operating → profit(순이익률) 순 폴백
+            margin_raw = info.get("operatingMargins") or info.get("profitMargins")
+            margin = float(margin_raw) * 100 if margin_raw is not None else np.nan
+
+            result[tk] = {"pe": pe, "pb": pb, "margin": margin}
         except Exception:
-            result[tk] = {"pe": np.nan, "margin": np.nan}
+            result[tk] = {"pe": np.nan, "pb": np.nan, "margin": np.nan}
     return result
 
 
@@ -320,7 +329,8 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
 
     print("  기초체력 데이터 수집 중...")
     fund = fetch_fundamentals([r["ticker"] for r in rows])
-    df["pe"]     = df["ticker"].map(lambda t: fund.get(t, {}).get("pe", np.nan))
+    df["pe"]     = df["ticker"].map(lambda t: fund.get(t, {}).get("pe",     np.nan))
+    df["pb"]     = df["ticker"].map(lambda t: fund.get(t, {}).get("pb",     np.nan))
     df["margin"] = df["ticker"].map(lambda t: fund.get(t, {}).get("margin", np.nan))
 
     for col in ("mom_3m", "mom_1m"):
@@ -333,10 +343,23 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     mu_i, sigma_i = df["ict_raw"].mean(), df["ict_raw"].std()
     df["z_ict"] = (df["ict_raw"] - mu_i) / (sigma_i + 1e-9)
 
+    # 가치 팩터: P/E 우선, 없으면 P/B로 대체 (한국 주식은 P/B가 더 많이 제공됨)
     pe_valid = df["pe"].dropna()
+    pb_valid = df["pb"].dropna()
     if len(pe_valid) >= 3:
         mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
-        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(0.0)
+        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(np.nan)
+        # P/E 없는 종목은 P/B로 보완
+        if len(pb_valid) >= 3:
+            mu_pb, sigma_pb = pb_valid.mean(), pb_valid.std()
+            z_pb = -(df["pb"] - mu_pb) / (sigma_pb + 1e-9)
+            df["z_value"] = df["z_value"].fillna(z_pb).fillna(0.0)
+        else:
+            df["z_value"] = df["z_value"].fillna(0.0)
+    elif len(pb_valid) >= 3:
+        # P/E가 거의 없는 시장(한국 등): P/B만으로 가치 팩터 구성
+        mu_pb, sigma_pb = pb_valid.mean(), pb_valid.std()
+        df["z_value"] = (-(df["pb"] - mu_pb) / (sigma_pb + 1e-9)).fillna(0.0)
     else:
         df["z_value"] = 0.0
 
