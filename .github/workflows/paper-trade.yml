@@ -23,7 +23,7 @@ on:
       capital_krw:
         description: "KRX 종목당 투입금 (원)"
         required: false
-        default: "500000"
+        default: "100000"
       capital_usd:
         description: "미국 종목당 투입금 (달러)"
         required: false
@@ -99,7 +99,7 @@ jobs:
           # workflow_dispatch 실행 시: input 값 우선
           UNIVERSE:              ${{ github.event.inputs.universe || '코스피 대형 30;코스닥 기술주 15' }}
           TOP_N:                 ${{ github.event.inputs.top_n || '2' }}
-          CAPITAL_KRW:           ${{ github.event.inputs.capital_krw || '500000' }}
+          CAPITAL_KRW:           ${{ github.event.inputs.capital_krw || '100000' }}
           CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '100' }}
           KRW_PER_USD:           ${{ github.event.inputs.krw_per_usd || '1400' }}
           MAX_POSITIONS:         "10"
