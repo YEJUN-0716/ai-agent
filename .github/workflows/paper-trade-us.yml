@@ -1,11 +1,10 @@
-name: 페이퍼 트레이딩 자동 실행 (Toss)
+name: 페이퍼 트레이딩 자동 실행 (Toss - 미국)
 
 on:
   schedule:
-    # 한국 장마감(KST 15:30) 후
-    # KST = UTC+9 → 15:30 KST = 06:30 UTC
-    # UTC 07:00 실행 (30분 여유)
-    - cron: "0 7 * * 1-5"
+    # 미국 장마감(EDT 20:00 UTC / EST 21:00 UTC) 후 30분 여유
+    # 夏(EDT): 20:30 UTC / 冬(EST): 21:30 UTC → 21:30 UTC로 고정하면 겨울엔 딱, 여름엔 1시간 여유
+    - cron: "30 21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -13,17 +12,13 @@ on:
         required: false
         default: "true"
       universe:
-        description: "유니버스 이름 (';'로 복수 지정, 예: 코스피 대형 30;코스닥 기술주 15)"
+        description: "유니버스 이름 (';'로 복수 지정)"
         required: false
-        default: "코스피 대형 30;코스닥 기술주 15"
+        default: "S&P 500 대형 30;NASDAQ 기술주 20"
       top_n:
         description: "매수 상위 N개"
         required: false
         default: "5"
-      capital_krw:
-        description: "KRX 종목당 투입금 (원)"
-        required: false
-        default: "500000"
       capital_usd:
         description: "미국 종목당 투입금 (달러)"
         required: false
@@ -33,7 +28,7 @@ on:
         required: false
         default: "1400"
       trail_stop_pct:
-        description: "트레일링 스톱 % (고점 대비, 0이면 비활성)"
+        description: "트레일링 스톱 % (0이면 비활성)"
         required: false
         default: "10"
       buy_score_min:
@@ -45,7 +40,7 @@ on:
         required: false
         default: "15"
       max_sector_positions:
-        description: "동일 섹터 최대 보유 종목 수 (0이면 제한 없음)"
+        description: "동일 섹터 최대 보유 종목 수"
         required: false
         default: "2"
       neutral_max_positions:
@@ -57,16 +52,15 @@ on:
         required: false
         default: "4"
 
-# 동시에 두 번 실행 방지 — 동시 실행 시 peak_prices.json/signal_log.json 충돌 위험
 concurrency:
-  group: paper-trade
+  group: paper-trade-us
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  run-paper-trade:
+  run-paper-trade-us:
     runs-on: self-hosted
     timeout-minutes: 20
 
@@ -82,24 +76,20 @@ jobs:
         run: |
           Write-Host "=== 현재 커밋 ==="
           git log --oneline -3
-          Write-Host "=== paper_trade_runner_toss.py 상위 10줄 ==="
-          Get-Content paper_trade_runner_toss.py -TotalCount 10
           Write-Host "=== Python 버전 ==="
           python --version
 
-      - name: 토스 트레이딩 실행
+      - name: 토스 트레이딩 실행 (미국 종목)
         env:
-          PYTHONUTF8:         "1"
-          TOSS_CLIENT_ID:     ${{ secrets.TOSS_CLIENT_ID }}
-          TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
-          TOSS_ACCOUNT_SEQ:   ${{ secrets.TOSS_ACCOUNT_SEQ }}
-          TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          # schedule 실행 시: 아래 기본값 사용
-          # workflow_dispatch 실행 시: input 값 우선
-          UNIVERSE:              ${{ github.event.inputs.universe || '코스피 대형 30;코스닥 기술주 15' }}
+          PYTHONUTF8:            "1"
+          TOSS_CLIENT_ID:        ${{ secrets.TOSS_CLIENT_ID }}
+          TOSS_CLIENT_SECRET:    ${{ secrets.TOSS_CLIENT_SECRET }}
+          TOSS_ACCOUNT_SEQ:      ${{ secrets.TOSS_ACCOUNT_SEQ }}
+          TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          UNIVERSE:              ${{ github.event.inputs.universe || 'S&P 500 대형 30;NASDAQ 기술주 20' }}
           TOP_N:                 ${{ github.event.inputs.top_n || '5' }}
-          CAPITAL_KRW:           ${{ github.event.inputs.capital_krw || '500000' }}
+          CAPITAL_KRW:           "500000"
           CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '500' }}
           KRW_PER_USD:           ${{ github.event.inputs.krw_per_usd || '1400' }}
           MAX_POSITIONS:         "10"
@@ -109,7 +99,6 @@ jobs:
           MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '2' }}
           NEUTRAL_MAX_POSITIONS: ${{ github.event.inputs.neutral_max_positions || '7' }}
           BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '4' }}
-          # schedule은 항상 실제 주문, workflow_dispatch는 input 값 따름
           DRY_RUN:               ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner_toss.py
 
@@ -121,7 +110,7 @@ jobs:
           git add peak_prices.json signal_log.json equity_log.json
           $staged = git diff --staged --quiet; if ($LASTEXITCODE -ne 0) {
             $date = [System.DateTime]::UtcNow.ToString("yyyy-MM-dd")
-            git commit -m "chore: peak & signal & equity log update $date"
+            git commit -m "chore: US peak & signal & equity log update $date"
           }
           git pull --rebase origin main
           git push

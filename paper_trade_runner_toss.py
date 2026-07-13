@@ -64,7 +64,9 @@ TG_TOKEN      = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
 TOP_N          = int(os.environ.get("TOP_N", "5"))
-CAPITAL_USD    = float(os.environ.get("CAPITAL_PER_TRADE", "1000"))
+CAPITAL_KRW    = float(os.environ.get("CAPITAL_KRW", "500000"))   # KRX 종목 투자금 (원)
+CAPITAL_USD    = float(os.environ.get("CAPITAL_USD",  "500"))      # 미국 종목 투자금 (달러)
+_KRW_PER_USD   = float(os.environ.get("KRW_PER_USD",  "1400"))     # 원/달러 환율 (매수여력 비교용)
 MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 # 레짐별 최대 포지션 수 → bear에서 노출을 줄여 하락 충격 완충
 _REGIME_MAX_POS: dict[str, int] = {
@@ -523,7 +525,7 @@ def main():
     print(f"\n{'='*60}")
     print(f"  자동매매 실행  {run_ts}  [TOSS]")
     print(f"  DRY_RUN={DRY_RUN}  UNIVERSE={UNIVERSE_NAME}  TOP_N={TOP_N}")
-    print(f"  CAPITAL_PER_TRADE={CAPITAL_USD}  MAX_POS={MAX_POSITIONS}")
+    print(f"  CAPITAL_KRW={CAPITAL_KRW}  CAPITAL_USD={CAPITAL_USD}  MAX_POS={MAX_POSITIONS}")
     print(f"  DD_STOP={PORTFOLIO_DD_STOP_PCT}%  MAX_SECTOR={MAX_SECTOR_POSITIONS}")
     print(f"{'='*60}\n")
 
@@ -706,7 +708,8 @@ def main():
             print(f"  [드로다운 스톱] 신규 매수 전면 중단 (dd={dd_pct:.1f}%)")
             break
 
-        sym = _to_broker_sym(sig["ticker"])
+        sym  = _to_broker_sym(sig["ticker"])
+        _mkt = ticker_market(sig["ticker"])          # "KRX" or "US" (접미사 있는 원본 티커 기준)
         if not sym or sym in held:
             continue
 
@@ -721,30 +724,36 @@ def main():
             skipped_sector.append(f"{sym}({sym_sector})")
             continue
 
-        if buying_power < CAPITAL_USD * 0.5:
+        # 시장별 투자금 및 원화 환산 (buying_power는 항상 원화)
+        _capital_base = CAPITAL_KRW if _mkt == "KRX" else CAPITAL_USD
+        _capital_krw  = _capital_base if _mkt == "KRX" else _capital_base * _KRW_PER_USD
+        _unit         = "원" if _mkt == "KRX" else "USD"
+
+        if buying_power < _capital_krw * 0.5:
             print(f"  [매수 스킵] 매수여력 부족")
             break
 
         # 변동성 기반 포지션 사이징
         asset_vol = sig.get("vol_ann", 20.0) / 100
         if asset_vol > 0:
-            _size = CAPITAL_USD * TARGET_VOL_PCT / asset_vol
-            _size = max(CAPITAL_USD * 0.5, min(CAPITAL_USD * 2.0, _size))
+            _size = _capital_base * TARGET_VOL_PCT / asset_vol
+            _size = max(_capital_base * 0.5, min(_capital_base * 2.0, _size))
         else:
-            _size = CAPITAL_USD
+            _size = _capital_base
 
         # 상관관계 페널티 스케일 적용
-        _scale = float(corr_scale.get(sig["ticker"], 1.0))
-        _size  = round(_size * _scale, 2)
+        _scale    = float(corr_scale.get(sig["ticker"], 1.0))
+        _size     = round(_size * _scale, 2)
+        _size_krw = _size if _mkt == "KRX" else _size * _KRW_PER_USD
 
-        if buying_power < _size * 0.9:
-            print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 {_size:,.0f}, 가용 {buying_power:,.0f})")
+        if buying_power < _size_krw * 0.9:
+            print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 {_size:,.0f}{_unit}, 가용 {buying_power:,.0f}원)")
             continue
 
         _ict     = ict_data.get(sig["ticker"], {})
         _ict_adj = _ict.get("adjustment", 0)
         _ict_sig = " / ".join(_ict.get("signals", [])[:2])
-        print(f"  [매수] {sym} {_size:,.0f}  "
+        print(f"  [매수] {sym} {_size:,.0f}{_unit}  "
               f"(스코어 {sig['score']}, ICT {_ict_adj:+d}, RSI {sig['rsi']},"
               f" 변동성 {sig.get('vol_ann', 0):.1f}%, 섹터 {sym_sector})")
         if _ict_sig:
@@ -773,7 +782,7 @@ def main():
 
             buy_results.append(buy_rec)
             if buy_rec.get("fill_status") not in {"cancelled", "rejected", "expired"}:
-                buying_power -= _size
+                buying_power -= _size_krw
                 n_bought += 1
                 bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
         except Exception as e:
