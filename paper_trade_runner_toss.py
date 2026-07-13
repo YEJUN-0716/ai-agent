@@ -65,8 +65,8 @@ TG_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
 TOP_N          = int(os.environ.get("TOP_N", "5"))
 CAPITAL_KRW    = float(os.environ.get("CAPITAL_KRW", "500000"))   # KRX 종목 투자금 (원)
-CAPITAL_USD    = float(os.environ.get("CAPITAL_USD",  "500"))      # 미국 종목 투자금 (달러)
-_KRW_PER_USD   = float(os.environ.get("KRW_PER_USD",  "1400"))     # 원/달러 환율 (매수여력 비교용)
+CAPITAL_USD    = float(os.environ.get("CAPITAL_USD",  "100"))      # 미국 종목 투자금 (달러)
+_KRW_PER_USD   = float(os.environ.get("KRW_PER_USD",  "1400"))     # 원/달러 환율 fallback
 MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 # 레짐별 최대 포지션 수 → bear에서 노출을 줄여 하락 충격 완충
 _REGIME_MAX_POS: dict[str, int] = {
@@ -129,6 +129,21 @@ UNIVERSE_PRESETS = {
 def ticker_market(ticker: str) -> str:
     """'.KS'/'.KQ'로 끝나면 국내(KRX), 그 외는 해외(US)로 판단."""
     return "KRX" if ticker.endswith((".KS", ".KQ")) else "US"
+
+
+def _fetch_krw_per_usd(fallback: float = 1400.0) -> float:
+    """Yahoo Finance KRW=X로 실시간 원/달러 환율 조회. 실패 시 fallback 반환."""
+    try:
+        raw = yf.download("KRW=X", period="5d", progress=False, auto_adjust=True)
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = raw.columns.droplevel(1)
+        if not raw.empty:
+            rate = float(raw["Close"].dropna().iloc[-1])
+            print(f"  [환율] USD/KRW 실시간: {rate:,.1f}원")
+            return rate
+    except Exception as e:
+        print(f"  [환율] 실시간 조회 실패 ({e}) → {fallback:,.0f}원 사용")
+    return fallback
 
 
 def toss_symbol(ticker: str) -> str:
@@ -532,6 +547,9 @@ def main():
     if not TOSS_CLIENT_ID or not TOSS_CLIENT_SECRET or not TOSS_ACCOUNT_SEQ:
         print("[오류] TOSS_CLIENT_ID / TOSS_CLIENT_SECRET / TOSS_ACCOUNT_SEQ 환경변수가 없습니다.")
         sys.exit(1)
+
+    # 0-0. 실시간 환율 (미국 종목 매수여력 원화 환산용)
+    _KRW_PER_USD = _fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400")))
 
     # 0. 시장 레짐 감지
     print("시장 레짐 감지 중...")

@@ -22,7 +22,7 @@ on:
       capital_usd:
         description: "미국 종목당 투입금 (달러)"
         required: false
-        default: "500"
+        default: "100"
       krw_per_usd:
         description: "원/달러 환율 (매수여력 비교용)"
         required: false
@@ -90,7 +90,7 @@ jobs:
           UNIVERSE:              ${{ github.event.inputs.universe || 'S&P 500 대형 30;NASDAQ 기술주 20' }}
           TOP_N:                 ${{ github.event.inputs.top_n || '5' }}
           CAPITAL_KRW:           "500000"
-          CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '500' }}
+          CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '100' }}
           KRW_PER_USD:           ${{ github.event.inputs.krw_per_usd || '1400' }}
           MAX_POSITIONS:         "10"
           TRAIL_STOP_PCT:        ${{ github.event.inputs.trail_stop_pct || '10' }}
