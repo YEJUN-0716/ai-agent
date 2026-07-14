@@ -134,13 +134,24 @@ def fetch_fundamentals(tickers: list) -> dict:
         except Exception as e:
             print(f"  [DART] 재무 사전 조회 실패 (yfinance 폴백): {e}")
 
+    # yf.Ticker().info 병렬 조회 (순차 대비 ~10배 빠름)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _fetch_info(tk: str) -> tuple:
+        try:
+            return tk, yf.Ticker(tk).info
+        except Exception:
+            return tk, {}
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        infos = dict(f.result() for f in as_completed(pool.submit(_fetch_info, tk) for tk in tickers))
+
     result = {}
     for tk in tickers:
-        is_krx = tk.endswith((".KS", ".KQ"))
-        dart_margin = dart_data.get(tk, {}).get("margin")  # try/except 공통 참조
+        is_krx    = tk.endswith((".KS", ".KQ"))
+        dart_margin = dart_data.get(tk, {}).get("margin")
+        info      = infos.get(tk, {})
         try:
-            info = yf.Ticker(tk).info
-
             # P/E — trailing 우선, None일 때만 forward 폴백 (0.0은 trailing로 유지)
             pe_raw = info.get("trailingPE")
             if pe_raw is None:
@@ -152,7 +163,6 @@ def fetch_fundamentals(tickers: list) -> dict:
             pb = min(float(pb_raw), 50.0) if pb_raw and float(pb_raw) > 0 else np.nan
 
             # 이익률 — KRX: DART 우선 / 없으면 yfinance 폴백
-            # operatingMargins=0.0은 실제 손익분기로 유효값이므로 None 체크 사용
             if is_krx and dart_margin is not None:
                 margin = float(dart_margin)
             else:

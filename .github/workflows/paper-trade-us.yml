@@ -68,6 +68,13 @@ jobs:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4.2.2
 
+      - name: pip 캐시
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
