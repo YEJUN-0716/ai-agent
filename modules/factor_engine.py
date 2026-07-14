@@ -137,28 +137,32 @@ def fetch_fundamentals(tickers: list) -> dict:
     result = {}
     for tk in tickers:
         is_krx = tk.endswith((".KS", ".KQ"))
+        dart_margin = dart_data.get(tk, {}).get("margin")  # try/except 공통 참조
         try:
             info = yf.Ticker(tk).info
 
-            # P/E — trailing → forward 순 폴백
-            pe_raw = info.get("trailingPE") or info.get("forwardPE")
-            pe = min(float(pe_raw), 200.0) if pe_raw and float(pe_raw) > 0 else np.nan
+            # P/E — trailing 우선, None일 때만 forward 폴백 (0.0은 trailing로 유지)
+            pe_raw = info.get("trailingPE")
+            if pe_raw is None:
+                pe_raw = info.get("forwardPE")
+            pe = min(float(pe_raw), 200.0) if pe_raw is not None and float(pe_raw) > 0 else np.nan
 
-            # PBR — 가치 팩터 보조 (한국 주식에 상대적으로 더 많이 제공됨)
+            # PBR
             pb_raw = info.get("priceToBook")
             pb = min(float(pb_raw), 50.0) if pb_raw and float(pb_raw) > 0 else np.nan
 
             # 이익률 — KRX: DART 우선 / 없으면 yfinance 폴백
-            if is_krx and dart_data.get(tk, {}).get("margin") is not None:
-                margin = float(dart_data[tk]["margin"])
+            # operatingMargins=0.0은 실제 손익분기로 유효값이므로 None 체크 사용
+            if is_krx and dart_margin is not None:
+                margin = float(dart_margin)
             else:
-                margin_raw = info.get("operatingMargins") or info.get("profitMargins")
+                margin_raw = info.get("operatingMargins")
+                if margin_raw is None:
+                    margin_raw = info.get("profitMargins")
                 margin = float(margin_raw) * 100 if margin_raw is not None else np.nan
 
             result[tk] = {"pe": pe, "pb": pb, "margin": margin}
         except Exception:
-            # yfinance 실패해도 DART margin은 사용
-            dart_margin = dart_data.get(tk, {}).get("margin")
             result[tk] = {
                 "pe":     np.nan,
                 "pb":     np.nan,

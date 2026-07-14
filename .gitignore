@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# DART 캐시 (매일 자동 생성, 커밋 불필요)
+dart_fund_cache.json
+dart_corp_map.json
+
+# 기타 런타임 생성 파일
+*.log

@@ -73,8 +73,8 @@ def _report_period() -> tuple:
     """가장 최근 공시된 사업보고서 기준 (year, reprt_code)."""
     now = datetime.now()
     # 사업보고서 제출 기한: 12월 결산법인 기준 3월 31일
-    # 5월 이후 → 전년도 확정, 5월 미만 → 전전년도가 가장 최근 확정본
-    year = now.year - 1 if now.month >= 5 else now.year - 2
+    # 4월 이후 → 전년도 확정, 4월 미만(1~3월) → 전전년도가 가장 최근 확정본
+    year = now.year - 1 if now.month >= 4 else now.year - 2
     return str(year), "11011"  # 11011 = 사업보고서
 
 
@@ -111,15 +111,18 @@ def fetch_krx_fundamentals(tickers: list) -> dict:
     if not missing:
         return {tk: cache.get(tk, {}) for tk in tickers}
 
-    corp_map = _load_corp_map()
+    # corp_map 로드는 실제 매핑이 필요한 경우에만 (ETF·신규상장만 있으면 불필요한 다운로드 방지)
     corp_to_tk: dict[str, str] = {}
     corp_codes: list[str] = []
-    for tk in missing:
-        sc = tk.split(".")[0]          # "005930.KS" → "005930"
-        cc = corp_map.get(sc)
-        if cc:
-            corp_codes.append(cc)
-            corp_to_tk[cc] = tk
+    _stock_codes = [tk.split(".")[0] for tk in missing]
+    if any(_stock_codes):
+        corp_map = _load_corp_map()
+        for tk in missing:
+            sc = tk.split(".")[0]          # "005930.KS" → "005930"
+            cc = corp_map.get(sc)
+            if cc:
+                corp_codes.append(cc)
+                corp_to_tk[cc] = tk
 
     year, reprt_code = _report_period()
     all_items: list[dict] = []
