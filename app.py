@@ -112,210 +112,322 @@ st.set_page_config(page_title="퀀트 트레이딩 시스템", page_icon="📈",
                    initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* ── 기본 폰트 ── */
+/* ═══════════════════════════════════════════
+   DESIGN TOKENS
+═══════════════════════════════════════════ */
+:root {
+  --bg:        #f8fafc;
+  --surface:   #ffffff;
+  --surface2:  #f1f5f9;
+  --border:    #e2e8f0;
+  --border2:   #cbd5e1;
+
+  --text-1:    #0f172a;
+  --text-2:    #334155;
+  --text-3:    #64748b;
+  --text-4:    #94a3b8;
+
+  --green:     #10b981;
+  --green-bg:  #ecfdf5;
+  --green-bd:  #6ee7b7;
+  --red:       #ef4444;
+  --red-bg:    #fef2f2;
+  --red-bd:    #fca5a5;
+  --amber:     #f59e0b;
+  --amber-bg:  #fffbeb;
+  --amber-bd:  #fcd34d;
+  --blue:      #3b82f6;
+  --blue-bg:   #eff6ff;
+  --blue-bd:   #93c5fd;
+
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.06);
+  --shadow:    0 2px 8px rgba(0,0,0,.08);
+  --shadow-md: 0 4px 16px rgba(0,0,0,.10);
+}
+
+/* ═══════════════════════════════════════════
+   BASE
+═══════════════════════════════════════════ */
 html, body, [class*="css"] {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-1);
+  background: var(--bg);
 }
-
-/* ── 컨테이너 패딩 ── */
 .block-container {
-    padding: 1.2rem 2rem 2rem 2rem !important;
-    max-width: 1600px;
+  padding: 1rem 2rem 3rem !important;
+  max-width: 1600px;
 }
+h1 { font-weight: 800 !important; letter-spacing: -0.8px; font-size: 1.75rem !important; color: var(--text-1); }
+h2 { font-weight: 700 !important; letter-spacing: -0.4px; font-size: 1.25rem !important; color: var(--text-1); }
+h3 { font-weight: 600 !important; letter-spacing: -0.2px; font-size: 1.05rem !important; color: var(--text-2); }
+p  { color: var(--text-2); }
 
-/* ── 헤더 스타일 ── */
-h1 { font-weight: 700 !important; letter-spacing: -0.5px; }
-h2 { font-weight: 600 !important; letter-spacing: -0.3px; }
-h3 { font-weight: 600 !important; }
-
-/* ── 메인 탭 스타일 ── */
+/* ═══════════════════════════════════════════
+   TABS — 메인 (pill/segment)
+═══════════════════════════════════════════ */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 2px;
-    background: #f1f5f9;
-    padding: 4px;
-    border-radius: 10px;
-    border-bottom: none !important;
+  gap: 2px;
+  background: var(--surface2);
+  padding: 3px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border) !important;
 }
 .stTabs [data-baseweb="tab"] {
-    border-radius: 8px !important;
-    padding: 8px 18px !important;
-    font-weight: 500;
-    font-size: 14px;
-    color: #64748b !important;
-    border: none !important;
-    background: transparent !important;
-    transition: all 150ms ease;
+  border-radius: var(--radius-sm) !important;
+  padding: 7px 20px !important;
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text-3) !important;
+  border: none !important;
+  background: transparent !important;
+  transition: all 150ms ease;
+  white-space: nowrap;
 }
 .stTabs [aria-selected="true"] {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    font-weight: 600 !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important;
+  background: var(--surface) !important;
+  color: var(--text-1) !important;
+  font-weight: 600 !important;
+  box-shadow: var(--shadow-sm) !important;
 }
 .stTabs [data-baseweb="tab-panel"] {
-    padding-top: 1.2rem !important;
+  padding-top: 1.25rem !important;
 }
 
-/* ── 서브탭 (퀀트 내부) ── */
+/* ── 서브탭 (underline style) ── */
 .stTabs .stTabs [data-baseweb="tab-list"] {
-    background: transparent;
-    padding: 0;
-    border-bottom: 2px solid #e2e8f0 !important;
-    border-radius: 0;
-    gap: 0;
+  background: transparent;
+  padding: 0;
+  border: none !important;
+  border-bottom: 2px solid var(--border) !important;
+  border-radius: 0;
+  gap: 0;
 }
 .stTabs .stTabs [data-baseweb="tab"] {
-    border-radius: 0 !important;
-    padding: 6px 14px !important;
-    font-size: 13px;
-    font-weight: 500;
-    color: #94a3b8 !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    border-bottom: 2px solid transparent !important;
-    margin-bottom: -2px;
+  border-radius: 0 !important;
+  padding: 7px 16px !important;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-4) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-bottom: 2px solid transparent !important;
+  margin-bottom: -2px;
 }
 .stTabs .stTabs [aria-selected="true"] {
-    color: #059669 !important;
-    font-weight: 600 !important;
-    border-bottom: 2px solid #059669 !important;
-    background: transparent !important;
-    box-shadow: none !important;
+  color: var(--green) !important;
+  font-weight: 600 !important;
+  border-bottom: 2px solid var(--green) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.stTabs .stTabs [data-baseweb="tab-panel"] {
+  padding-top: 1rem !important;
 }
 
-/* ── 메트릭 카드 ── */
+/* ═══════════════════════════════════════════
+   METRIC CARDS
+═══════════════════════════════════════════ */
 [data-testid="metric-container"] {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    padding: 12px 16px !important;
-    transition: box-shadow 150ms ease;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px !important;
+  transition: box-shadow 200ms ease, border-color 200ms ease;
 }
 [data-testid="metric-container"]:hover {
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  box-shadow: var(--shadow);
+  border-color: var(--border2);
 }
 [data-testid="metric-container"] label {
-    font-size: 12px !important;
-    font-weight: 500 !important;
-    color: #64748b !important;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--text-3) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
 }
 [data-testid="metric-container"] [data-testid="stMetricValue"] {
-    font-size: 22px !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
-    font-family: 'JetBrains Mono', 'Inter', monospace !important;
+  font-size: 24px !important;
+  font-weight: 700 !important;
+  color: var(--text-1) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  letter-spacing: -0.5px;
 }
 [data-testid="stMetricDelta"] {
-    font-size: 12px !important;
-    font-weight: 500 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
 }
 
-/* ── 버튼 스타일 ── */
+/* ═══════════════════════════════════════════
+   BUTTONS
+═══════════════════════════════════════════ */
+.stButton > button {
+  border-radius: var(--radius-sm) !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  transition: all 160ms ease !important;
+  height: 40px !important;
+}
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
-    border: none !important;
-    border-radius: 8px !important;
-    color: white !important;
-    font-weight: 600 !important;
-    padding: 0.5rem 1.2rem !important;
-    transition: all 150ms ease !important;
-    box-shadow: 0 1px 3px rgba(5,150,105,0.3) !important;
+  background: var(--green) !important;
+  border: none !important;
+  color: #fff !important;
+  box-shadow: 0 1px 3px rgba(16,185,129,.35) !important;
 }
 .stButton > button[kind="primary"]:hover {
-    box-shadow: 0 4px 12px rgba(5,150,105,0.4) !important;
-    transform: translateY(-1px) !important;
+  background: #059669 !important;
+  box-shadow: 0 4px 14px rgba(16,185,129,.40) !important;
+  transform: translateY(-1px) !important;
 }
 .stButton > button[kind="secondary"] {
-    border-radius: 8px !important;
-    font-weight: 500 !important;
-    border-color: #e2e8f0 !important;
-    transition: all 150ms ease !important;
+  border: 1px solid var(--border2) !important;
+  color: var(--text-2) !important;
+  background: var(--surface) !important;
 }
 .stButton > button[kind="secondary"]:hover {
-    border-color: #059669 !important;
-    color: #059669 !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+  background: var(--green-bg) !important;
 }
 
-/* ── 카드 / 컨테이너 ── */
-div[style*="border-left"] { box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
-div[style*="border-radius:10px"],
-div[style*="border-radius: 10px"],
-div[style*="border-radius:8px"] {
-    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+/* ═══════════════════════════════════════════
+   INPUTS
+═══════════════════════════════════════════ */
+.stTextInput input,
+.stNumberInput input,
+.stSelectbox > div > div,
+.stTextArea textarea {
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border2) !important;
+  font-size: 14px !important;
+  background: var(--surface) !important;
+  color: var(--text-1) !important;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.stTextInput input:focus,
+.stNumberInput input:focus,
+.stTextArea textarea:focus {
+  border-color: var(--green) !important;
+  box-shadow: 0 0 0 3px rgba(16,185,129,.12) !important;
+  outline: none !important;
+}
+.stTextInput label,
+.stNumberInput label,
+.stSelectbox label,
+.stTextArea label {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--text-3) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
 }
 
-/* ── Expander ── */
+/* ═══════════════════════════════════════════
+   EXPANDER
+═══════════════════════════════════════════ */
 details {
-    border-radius: 10px !important;
-    border: 1px solid #e2e8f0 !important;
-    margin-bottom: 6px;
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface);
+  margin-bottom: 8px !important;
+  overflow: hidden;
 }
+details[open] { box-shadow: var(--shadow-sm); }
 summary {
-    font-weight: 500 !important;
-    padding: 10px 14px !important;
-    border-radius: 10px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  color: var(--text-2) !important;
+  padding: 12px 16px !important;
+  cursor: pointer;
+}
+summary:hover { background: var(--surface2) !important; }
+
+/* ═══════════════════════════════════════════
+   DATAFRAME
+═══════════════════════════════════════════ */
+.stDataFrame {
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--border) !important;
+  overflow: hidden;
+}
+.stDataFrame [data-testid="stDataFrameResizable"] th {
+  background: var(--surface2) !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+.stDataFrame [data-testid="stDataFrameResizable"] td {
+  font-size: 13px !important;
+  color: var(--text-2) !important;
+  border-bottom: 1px solid var(--bg) !important;
 }
 
-/* ── 데이터프레임 ── */
-.stDataFrame { border-radius: 8px; overflow: hidden; }
-.stDataFrame thead th {
-    background: #f1f5f9 !important;
-    font-weight: 600 !important;
-    font-size: 12px !important;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: #475569 !important;
+/* ═══════════════════════════════════════════
+   ALERTS
+═══════════════════════════════════════════ */
+.stAlert {
+  border-radius: var(--radius) !important;
+  border-width: 1px !important;
+  font-size: 14px !important;
+}
+[data-testid="stNotificationContentInfo"]    { border-color: var(--blue-bd) !important; background: var(--blue-bg) !important; }
+[data-testid="stNotificationContentSuccess"] { border-color: var(--green-bd) !important; background: var(--green-bg) !important; }
+[data-testid="stNotificationContentWarning"] { border-color: var(--amber-bd) !important; background: var(--amber-bg) !important; }
+[data-testid="stNotificationContentError"]   { border-color: var(--red-bd) !important; background: var(--red-bg) !important; }
+
+/* ═══════════════════════════════════════════
+   MISC
+═══════════════════════════════════════════ */
+.stCheckbox label  { font-size: 14px !important; font-weight: 500; color: var(--text-2); }
+.stRadio label     { font-size: 14px !important; color: var(--text-2); }
+.stCaption, [data-testid="stCaptionContainer"] { color: var(--text-4) !important; font-size: 12px !important; }
+hr { border: none !important; border-top: 1px solid var(--border) !important; margin: 1.2rem 0 !important; }
+[data-testid="stMarkdownContainer"] p { font-size: 14px; line-height: 1.7; color: var(--text-2); }
+code { font-family: 'JetBrains Mono', monospace !important; font-size: 12px !important; background: var(--surface2) !important; padding: 2px 6px !important; border-radius: 4px !important; color: var(--text-1) !important; }
+
+/* ── 진행바 (score bar 등) ── */
+.qt-progress-track {
+  background: var(--surface2);
+  border-radius: 6px;
+  height: 8px;
+  overflow: hidden;
+}
+.qt-progress-fill {
+  height: 8px;
+  border-radius: 6px;
+  transition: width 400ms ease;
 }
 
-/* ── 인풋 필드 ── */
-.stTextInput input, .stNumberInput input, .stSelectbox > div > div {
-    border-radius: 8px !important;
-    border-color: #e2e8f0 !important;
-    font-size: 14px !important;
-    transition: border-color 150ms ease;
-}
-.stTextInput input:focus, .stNumberInput input:focus {
-    border-color: #059669 !important;
-    box-shadow: 0 0 0 3px rgba(5,150,105,0.1) !important;
-}
-
-/* ── 체크박스 & 토글 ── */
-.stCheckbox label { font-size: 14px !important; font-weight: 500; }
-
-/* ── 알림 박스 ── */
-.stAlert { border-radius: 8px !important; }
-
-/* ── 캡션 ── */
-.stCaption { color: #94a3b8 !important; font-size: 12px !important; }
-
-/* ── 구분선 ── */
-hr { border-color: #e2e8f0 !important; margin: 1rem 0 !important; }
-
-/* ── 사이드바 완전 숨김 ── */
-[data-testid="stSidebar"] { display: none !important; }
+/* ── 사이드바 숨김 ── */
+[data-testid="stSidebar"]       { display: none !important; }
 [data-testid="collapsedControl"] { display: none !important; }
 
-/* ── 모바일 반응형 ── */
+/* ── 모바일 ── */
 @media (max-width: 768px) {
-    .block-container { padding: 0.6rem 0.8rem 1.5rem !important; }
-    h1 { font-size: 1.3rem !important; }
-    h2 { font-size: 1.1rem !important; }
-    h3 { font-size: 1rem !important; }
-    .stTabs [data-baseweb="tab"] { padding: 6px 10px !important; font-size: 12px !important; }
-    [data-testid="metric-container"] { padding: 8px 10px !important; }
-    [data-testid="metric-container"] [data-testid="stMetricValue"] { font-size: 17px !important; }
-    .stDataFrame { font-size: 11px; }
+  .block-container { padding: 0.75rem 1rem 2rem !important; }
+  h1 { font-size: 1.35rem !important; }
+  h2 { font-size: 1.05rem !important; }
+  .stTabs [data-baseweb="tab"] { padding: 6px 10px !important; font-size: 12px !important; }
+  [data-testid="metric-container"] { padding: 10px 12px !important; }
+  [data-testid="metric-container"] [data-testid="stMetricValue"] { font-size: 18px !important; }
 }
 
 /* ── 스크롤바 ── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--surface2); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
 </style>""", unsafe_allow_html=True)
 
 TV_BG = TV_PAPER = '#ffffff'
@@ -3458,16 +3570,22 @@ def _draw_chart_legacy(df, ticker, is_krw):
 
 
 def main():
-    st.markdown(
-        "<h1 style='font-size:1.8rem;font-weight:700;color:#0f172a;margin-bottom:2px'>"
-        "📈 퀀트 트레이딩 시스템</h1>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<p style='font-size:13px;color:#64748b;margin-top:0;margin-bottom:1rem'>"
-        "종목 분석 &nbsp;·&nbsp; 팩터 퀀트 &nbsp;·&nbsp; 토스증권 자동매매 &nbsp;·&nbsp; 리스크 관리</p>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("""
+<div style="display:flex;align-items:center;gap:12px;padding:4px 0 12px 0;
+            border-bottom:2px solid #e2e8f0;margin-bottom:18px">
+  <div style="width:40px;height:40px;border-radius:10px;
+              background:linear-gradient(135deg,#10b981,#059669);
+              display:flex;align-items:center;justify-content:center;
+              font-size:20px;flex-shrink:0">📈</div>
+  <div>
+    <div style="font-size:1.45rem;font-weight:800;color:#0f172a;
+                letter-spacing:-0.5px;line-height:1.2">퀀트 트레이딩 시스템</div>
+    <div style="font-size:12.5px;color:#64748b;margin-top:2px">
+      종목 분석 &nbsp;·&nbsp; 팩터 퀀트 &nbsp;·&nbsp; 토스증권 자동매매 &nbsp;·&nbsp; 리스크 관리
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # 사이드바 제거 — 값 하드코딩
     w_tech, w_fund, w_macro = 35, 40, 25
@@ -3481,23 +3599,37 @@ def main():
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
-        c_mkt, c_tkr = st.columns([1,2])
+        st.markdown("""
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;
+            padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+  <div style="font-size:11px;font-weight:700;color:#64748b;
+              text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px">
+    종목 검색
+  </div>
+""", unsafe_allow_html=True)
+        c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
         with c_mkt:
-            market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"])
+            market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"],
+                                  label_visibility="collapsed")
         with c_tkr:
             if market == "한국 (KRX)":
                 ca, cb = st.columns([2,1])
-                ticker_raw = ca.text_input("종목코드", placeholder="005930")
-                sfx = ".KS" if "KS" in cb.radio("거래소", [".KS",".KQ"], horizontal=True) else ".KQ"
+                ticker_raw = ca.text_input("종목코드", placeholder="005930",
+                                           label_visibility="collapsed")
+                sfx = ".KS" if "KS" in cb.radio("거래소", [".KS",".KQ"], horizontal=True,
+                                                   label_visibility="collapsed") else ".KQ"
                 ticker = (ticker_raw.strip()+sfx).upper() if ticker_raw else ""
             elif market == "미국 (NYSE/NASDAQ)":
-                ticker = st.text_input("티커", placeholder="AAPL").strip().upper()
+                ticker = st.text_input("티커", placeholder="AAPL  /  NVDA  /  TSLA",
+                                       label_visibility="collapsed").strip().upper()
             else:
-                ticker = st.text_input("ETF 티커", placeholder="SPY").strip().upper()
-
-        btn_c1, btn_c2 = st.columns([1, 1])
-        run = btn_c1.button("📊 분석 시작", type="primary", disabled=(not ticker))
-        refresh = btn_c2.button("🔄 새로고침", disabled=('tab1' not in st.session_state))
+                ticker = st.text_input("ETF 티커", placeholder="SPY  /  QQQ  /  GLD",
+                                       label_visibility="collapsed").strip().upper()
+        with c_btn1:
+            run = st.button("분석 시작", type="primary", disabled=(not ticker), use_container_width=True)
+        with c_btn2:
+            refresh = st.button("새로고침", disabled=('tab1' not in st.session_state), use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
         if refresh:
             if 'tab1' in st.session_state:
                 del st.session_state['tab1']
@@ -3679,71 +3811,156 @@ def main():
             regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}.get(regime, '➡️ 중립장')
             regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}.get(regime, '#b2b5be')
 
-            st.header(f"{name}  `{ticker}`")
-            _updated = end_dt.strftime('%Y-%m-%d %H:%M')
-            st.caption(f"마지막 업데이트: {_updated} — 🔄 새로고침 버튼으로 최신 데이터 갱신")
+            # ── 종목 헤더 카드 ──────────────────────────────
             live_chg = (live_price - pp) / pp * 100 if pp > 0 else 0
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric(live_label, fmt_p(live_price), f"{live_chg:+.2f}%")
-            c2.metric("52주 고가", fmt_p(float(df['High'].tail(252).max())))
-            c3.metric("52주 저가", fmt_p(float(df['Low'].tail(252).min())))
-            c4.metric("분석 기준일", end_dt.strftime("%Y-%m-%d"))
+            _52h = float(df['High'].tail(252).max())
+            _52l = float(df['Low'].tail(252).min())
+            _chg_color = '#10b981' if live_chg >= 0 else '#ef4444'
+            _chg_arrow = '▲' if live_chg >= 0 else '▼'
+            _regime_badge_color = {'bull':'#10b981','bear':'#ef4444','neutral':'#f59e0b'}.get(regime,'#94a3b8')
+            _regime_bg          = {'bull':'#ecfdf5','bear':'#fef2f2','neutral':'#fffbeb'}.get(regime,'#f8fafc')
 
+            # 프리/애프터 마켓 문자열
+            _ext_html = ''
             if not is_krw:
-                ext_parts = []
+                _ep = []
                 if pre_price and pre_price > 0:
-                    pre_chg_v = pre_chg * 100 if pre_chg and abs(pre_chg) < 1 else (pre_chg or 0)
-                    ext_parts.append(f"🌅 프리마켓 **{fmt_p(pre_price)}** ({pre_chg_v:+.2f}%)")
+                    _pv = pre_chg * 100 if pre_chg and abs(pre_chg) < 1 else (pre_chg or 0)
+                    _ep.append(f"<span style='color:#94a3b8'>프리마켓</span> <b>{fmt_p(pre_price)}</b> "
+                               f"<span style='color:{'#10b981' if _pv>=0 else '#ef4444'}'>{_pv:+.2f}%</span>")
                 if post_price and post_price > 0:
-                    post_chg_v = post_chg * 100 if post_chg and abs(post_chg) < 1 else (post_chg or 0)
-                    ext_parts.append(f"🌙 애프터 **{fmt_p(post_price)}** ({post_chg_v:+.2f}%)")
-                if cp != live_price:
-                    ext_parts.append(f"📊 정규장 종가 **{fmt_p(cp)}** ({chg:+.2f}%)")
-                if ext_parts:
-                    st.caption(" &nbsp;|&nbsp; ".join(ext_parts))
+                    _pov = post_chg * 100 if post_chg and abs(post_chg) < 1 else (post_chg or 0)
+                    _ep.append(f"<span style='color:#94a3b8'>애프터</span> <b>{fmt_p(post_price)}</b> "
+                               f"<span style='color:{'#10b981' if _pov>=0 else '#ef4444'}'>{_pov:+.2f}%</span>")
+                if _ep:
+                    _ext_html = f"<div style='font-size:12px;color:#64748b;margin-top:6px'>{'&nbsp;&nbsp;·&nbsp;&nbsp;'.join(_ep)}</div>"
 
-            if earn_str:
-                st.caption(earn_str)
-            st.markdown(
-                f"<span style='background:{regime_color}35;color:{regime_color};"
-                f"border:1px solid {regime_color};border-radius:6px;"
-                f"padding:3px 10px;font-size:13px;font-weight:600'>"
-                f"시장 국면: {regime_icon}  (SPY vs MA200 {regime_diff:+.1f}%)</span>",
-                unsafe_allow_html=True)
-            st.divider()
+            _earn_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:4px'>📅 {earn_str}</div>"
+                          if earn_str else '')
 
-            cg, cv = st.columns(2)
-            with cg: st.plotly_chart(gauge(total,"종합 점수"), width='stretch')
-            with cv:
+            st.markdown(f"""
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;
+            padding:20px 24px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:1.4rem;font-weight:800;color:#0f172a;letter-spacing:-.3px">{name}</span>
+        <code style="font-size:13px;background:#f1f5f9;color:#334155;padding:3px 8px;border-radius:6px;font-weight:600">{ticker}</code>
+        <span style="font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600;
+                     background:{_regime_bg};color:{_regime_badge_color};
+                     border:1px solid {_regime_badge_color}40">{regime_icon}</span>
+      </div>
+      <div style="margin-top:8px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <span style="font-size:2rem;font-weight:800;color:#0f172a;font-family:'JetBrains Mono',monospace;letter-spacing:-1px">{fmt_p(live_price)}</span>
+        <span style="font-size:1rem;font-weight:700;color:{_chg_color}">{_chg_arrow} {abs(live_chg):.2f}%</span>
+        <span style="font-size:12px;color:#94a3b8">{live_label}</span>
+      </div>
+      {_ext_html}
+      {_earn_html}
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <div style="text-align:center">
+        <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px">52주 고가</div>
+        <div style="font-size:15px;font-weight:700;color:#10b981;font-family:'JetBrains Mono',monospace;margin-top:2px">{fmt_p(_52h)}</div>
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px">52주 저가</div>
+        <div style="font-size:15px;font-weight:700;color:#ef4444;font-family:'JetBrains Mono',monospace;margin-top:2px">{fmt_p(_52l)}</div>
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px">기준일</div>
+        <div style="font-size:13px;font-weight:600;color:#334155;margin-top:2px">{end_dt.strftime('%Y-%m-%d')}</div>
+      </div>
+    </div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+            # ── 종합 점수 대시보드 ──────────────────────────
+            def _score_badge(sc):
+                lbl = score_label(sc)
+                c = score_color(sc)
+                return (f"<span style='font-size:12px;font-weight:700;padding:2px 10px;"
+                        f"border-radius:20px;background:{c}20;color:{c};border:1px solid {c}50'>{lbl}</span>")
+
+            def _bar_html(pct, color):
+                pct = max(0, min(100, pct))
+                return (f"<div style='background:#f1f5f9;border-radius:6px;height:8px;margin-top:6px'>"
+                        f"<div style='background:{color};width:{pct:.0f}%;height:8px;border-radius:6px'></div></div>")
+
+            sc_col1, sc_col2, sc_col3, sc_col4 = st.columns(4)
+            with sc_col1:
+                _tc = score_color(total)
                 st.markdown(f"""
-                <div style='text-align:center;padding:20px 0'>
-                  <div style='font-size:72px;font-weight:bold;color:{score_color(total)}'>{total:.1f}</div>
-                  <div style='font-size:28px;color:{score_color(total)}'>{score_label(total)}</div>
-                  <br><div style='color:#1a1a1a;font-size:15px'>
-                  차트+파동 <b>{t_score:.0f}</b>점 &nbsp;|&nbsp;
-                  재무+퀀트 <b>{f_score:.0f}</b>점 &nbsp;|&nbsp;
-                  매크로+금리 <b>{m_score:.0f}</b>점</div>
-                  <div style='color:#1a1a1a;font-size:11px;margin-top:6px'>
-                  📐 {score_method}</div>
-                </div>""", unsafe_allow_html=True)
+<div style="background:#fff;border:2px solid {_tc}50;border-radius:12px;padding:18px 20px;
+            text-align:center;box-shadow:0 2px 10px {_tc}20">
+  <div style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px">종합 점수</div>
+  <div style="font-size:3.2rem;font-weight:800;color:{_tc};font-family:'JetBrains Mono',monospace;
+              line-height:1;margin:8px 0 6px">{total:.1f}</div>
+  {_score_badge(total)}
+</div>""", unsafe_allow_html=True)
 
-            # 국면 조정 점수 비교 카드
-            regime_label_map = {'bull':'🐂 강세장 가중치', 'bear':'🐻 약세장 가중치', 'neutral':'➡️ 중립장 가중치'}
-            regime_color_map = {'bull':'#26a69a', 'bear':'#ef5350', 'neutral':'#b2b5be'}
+            with sc_col2:
+                _c2 = score_color(t_score)
+                st.markdown(f"""
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;
+            box-shadow:0 1px 4px rgba(0,0,0,.06)">
+  <div style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px">
+    차트+파동 <span style="color:#cbd5e1">({w_tech}%)</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <span style="font-size:2rem;font-weight:800;color:{_c2};font-family:'JetBrains Mono',monospace">{t_score:.0f}</span>
+    {_score_badge(t_score)}
+  </div>
+  {_bar_html(t_score, _c2)}
+</div>""", unsafe_allow_html=True)
+
+            with sc_col3:
+                _c3 = score_color(f_score)
+                st.markdown(f"""
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;
+            box-shadow:0 1px 4px rgba(0,0,0,.06)">
+  <div style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px">
+    재무+퀀트 <span style="color:#cbd5e1">({w_fund}%)</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <span style="font-size:2rem;font-weight:800;color:{_c3};font-family:'JetBrains Mono',monospace">{f_score:.0f}</span>
+    {_score_badge(f_score)}
+  </div>
+  {_bar_html(f_score, _c3)}
+</div>""", unsafe_allow_html=True)
+
+            with sc_col4:
+                _c4 = score_color(m_score)
+                st.markdown(f"""
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;
+            box-shadow:0 1px 4px rgba(0,0,0,.06)">
+  <div style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px">
+    매크로+금리 <span style="color:#cbd5e1">({w_macro}%)</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <span style="font-size:2rem;font-weight:800;color:{_c4};font-family:'JetBrains Mono',monospace">{m_score:.0f}</span>
+    {_score_badge(m_score)}
+  </div>
+  {_bar_html(m_score, _c4)}
+</div>""", unsafe_allow_html=True)
+
+            # ── 국면 조정 배너 ──────────────────────────
+            _rcm = {'bull':'#10b981','bear':'#ef4444','neutral':'#f59e0b'}
+            _rlm = {'bull':'강세장 가중치 적용 시','bear':'약세장 가중치 적용 시','neutral':'중립장 가중치 적용 시'}
+            _rc  = _rcm.get(regime,'#94a3b8')
+            _rl  = _rlm.get(regime,'국면 가중치 적용 시')
             diff = total_adj - total
-            diff_str = f"{diff:+.1f}점"
-            st.markdown(
-                f"<div style='background:{regime_color_map[regime]}30;"
-                f"border:1px solid {regime_color_map[regime]}88;"
-                f"border-radius:8px;padding:10px 16px;"
-                f"display:flex;justify-content:space-between;align-items:center'>"
-                f"<span style='color:{regime_color_map[regime]};font-weight:600'>"
-                f"{regime_label_map[regime]} 적용 시</span>"
-                f"<span style='font-size:20px;font-weight:bold;color:{score_color(total_adj)}'>"
-                f"{total_adj:.1f}점 &nbsp;"
-                f"<span style='font-size:13px;color:{'#26a69a' if diff>=0 else '#ef5350'}'>"
-                f"({diff_str})</span></span></div>",
-                unsafe_allow_html=True)
+            _dc  = '#10b981' if diff >= 0 else '#ef4444'
+            st.markdown(f"""
+<div style="background:{_rc}0f;border:1px solid {_rc}30;border-radius:10px;
+            padding:10px 18px;display:flex;justify-content:space-between;align-items:center;
+            margin:12px 0">
+  <span style="font-size:13px;font-weight:600;color:{_rc}">{regime_icon} &nbsp; {_rl}</span>
+  <span style="font-family:'JetBrains Mono',monospace;font-weight:800;font-size:17px;color:{score_color(total_adj)}">
+    {total_adj:.1f}
+    <span style="font-size:12px;font-weight:600;color:{_dc};margin-left:4px">({diff:+.1f})</span>
+  </span>
+</div>""", unsafe_allow_html=True)
 
             sub1, sub2, sub3, sub4, sub5 = st.tabs(["요약", "차트", "세부분석", "매매전략", "리스크"])
 
@@ -3979,43 +4196,77 @@ def main():
                 # ── 매매 시그널 ──────────────────────────────
                 trade_signals = detect_trading_signals(df, t_det)
                 if trade_signals:
-                    st.subheader("🚨 매매 시그널")
-                    sig_n = min(len(trade_signals), 3)
+                    st.markdown("#### 매매 시그널")
+                    sig_n = min(len(trade_signals), 4)
                     sig_cols = st.columns(sig_n)
-                    for sig_i, (sig_ico, sig_nm, sig_dc) in enumerate(trade_signals):
-                        sig_clr = ('#26a69a' if sig_ico == '🟢' else
-                                   '#ef5350' if sig_ico == '🔴' else
-                                   '#ff9800' if sig_ico == '🟡' else '#42a5f5')
-                        sig_cols[sig_i % sig_n].markdown(
-                            f"<div style='background:{sig_clr}30;border:1px solid {sig_clr}66;"
-                            f"border-radius:8px;padding:10px 14px;margin:4px 0'>"
-                            f"<span style='font-size:18px'>{sig_ico}</span> "
-                            f"<span style='color:{sig_clr};font-weight:600;font-size:14px'>{sig_nm}</span><br>"
-                            f"<span style='color:#1a1a1a;font-size:12px'>{sig_dc}</span></div>",
+                    for sig_i, (sig_ico, sig_nm, sig_dc) in enumerate(trade_signals[:sig_n]):
+                        sig_clr = ('#10b981' if sig_ico == '🟢' else
+                                   '#ef4444' if sig_ico == '🔴' else
+                                   '#f59e0b' if sig_ico == '🟡' else '#3b82f6')
+                        sig_cols[sig_i].markdown(
+                            f"<div style='background:{sig_clr}0e;border:1px solid {sig_clr}40;"
+                            f"border-radius:10px;padding:14px 16px'>"
+                            f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:6px'>"
+                            f"<span style='font-size:16px'>{sig_ico}</span>"
+                            f"<span style='color:{sig_clr};font-weight:700;font-size:14px'>{sig_nm}</span></div>"
+                            f"<span style='color:#334155;font-size:12px;line-height:1.5'>{sig_dc}</span></div>",
                             unsafe_allow_html=True)
 
-                st.subheader("📋 분석 요약")
+                st.markdown("#### 분석 요약")
                 mtf_d = mtf_scores.get('일봉'); mtf_w = mtf_scores.get('주봉'); mtf_m = mtf_scores.get('월봉')
                 mtf_list = [x['score'] for x in [mtf_d, mtf_w, mtf_m] if x is not None and 'score' in x]
                 mtf_avg  = sum(mtf_list) / len(mtf_list) if mtf_list else 50.0
-                mtf_summary = (f"일봉 {mtf_d.get('score',50):.0f} / 주봉 {mtf_w.get('score',50):.0f} / 월봉 {mtf_m.get('score',50):.0f}"
+                mtf_summary = (f"일봉 {mtf_d.get('score',50):.0f} · 주봉 {mtf_w.get('score',50):.0f} · 월봉 {mtf_m.get('score',50):.0f}"
                                if mtf_d and mtf_w and mtf_m else "N/A")
                 mom_3 = mom_data.get('3M'); mom_12 = mom_data.get('12M')
-                mom_summary = (f"3M {mom_3:+.1f}% / 12M {mom_12:+.1f}%"
+                mom_summary = (f"3M {mom_3:+.1f}% · 12M {mom_12:+.1f}%"
                                if mom_3 is not None and mom_12 is not None else "N/A")
                 dcf_summary = (f"기본 {fmt_p(dcf_det.get('내재가치_기본',0))} ({dcf_det.get('상승여력_기본',0):+.1f}%)"
                                if dcf_det else "N/A")
-                st.dataframe(pd.DataFrame([
-                    {'카테고리':'종합 점수',          '점수':f"{total:.1f}",       '등급':score_label(total),       '비고': f"시장: {regime_icon}"},
-                    {'카테고리':'📈 차트+파동',       '점수':f"{t_score:.1f}",     '등급':score_label(t_score),     '비고':f'가중치 {w_tech}%'},
-                    {'카테고리':'💰 재무제표+퀀트',   '점수':f"{f_score:.1f}",     '등급':score_label(f_score),     '비고':f'가중치 {w_fund}% | 업종: {f_det.get("업종","N/A")}'},
-                    {'카테고리':'🌍 매크로+금리',     '점수':f"{m_score:.1f}",     '등급':score_label(m_score),     '비고':f'가중치 {w_macro}%'},
-                    {'카테고리':'🕐 멀티 타임프레임', '점수':f"{mtf_avg:.1f}",     '등급':score_label(mtf_avg),     '비고': mtf_summary},
-                    {'카테고리':'📊 모멘텀',          '점수':f"{mom_data.get('score', 50):.1f}", '등급':score_label(mom_data.get('score', 50)), '비고': mom_summary},
-                    {'카테고리':'💵 DCF 내재가치',    '점수':'참고용',             '등급':'-',                      '비고': dcf_summary},
-                    {'카테고리':'📰 뉴스 감성',       '점수':f"{news_score:.1f}",  '등급':score_label(news_score),  '비고':'참고용'},
-                ]), width='stretch', hide_index=True)
-                st.caption("⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.")
+
+                def _summary_card(icon, title, score, note, is_score=True):
+                    sc_val = float(score) if is_score else 0
+                    clr = score_color(sc_val) if is_score else '#94a3b8'
+                    lbl = score_label(sc_val) if is_score else '참고용'
+                    sc_disp = f"{sc_val:.1f}" if is_score else str(score)
+                    bar = (f"<div style='background:#f1f5f9;border-radius:4px;height:5px;margin-top:8px'>"
+                           f"<div style='background:{clr};width:{min(sc_val,100):.0f}%;height:5px;border-radius:4px'></div>"
+                           f"</div>") if is_score else ""
+                    return (
+                        f"<div style='background:#fff;border:1px solid #e2e8f0;border-radius:10px;"
+                        f"padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,.05)'>"
+                        f"<div style='font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;"
+                        f"letter-spacing:.6px;margin-bottom:6px'>{icon} {title}</div>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+                        f"<span style='font-size:1.5rem;font-weight:800;color:{clr};"
+                        f"font-family:\"JetBrains Mono\",monospace'>{sc_disp}</span>"
+                        f"<span style='font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;"
+                        f"background:{clr}18;color:{clr}'>{lbl}</span>"
+                        f"</div>"
+                        f"<div style='font-size:11px;color:#94a3b8;margin-top:4px'>{note}</div>"
+                        f"{bar}</div>"
+                    )
+
+                _cards = [
+                    _summary_card("📈", "차트+파동",       t_score,   f"가중치 {w_tech}%"),
+                    _summary_card("💰", "재무+퀀트",       f_score,   f"가중치 {w_fund}% | {f_det.get('업종','N/A')}"),
+                    _summary_card("🌍", "매크로+금리",     m_score,   f"가중치 {w_macro}%"),
+                    _summary_card("🕐", "멀티 타임프레임", mtf_avg,   mtf_summary),
+                    _summary_card("📊", "모멘텀",           mom_data.get('score',50), mom_summary),
+                    _summary_card("📰", "뉴스 감성",       news_score, "참고용"),
+                    _summary_card("💵", "DCF 내재가치",     dcf_det.get('상승여력_기본',0) if dcf_det else 50,
+                                  dcf_summary, is_score=False),
+                ]
+
+                _r1, _r2 = st.columns(4), st.columns(3)
+                for _i, (_col, _card) in enumerate(zip(list(_r1) + list(_r2), _cards)):
+                    with _col:
+                        st.markdown(_card, unsafe_allow_html=True)
+
+                st.markdown(
+                    "<p style='font-size:11px;color:#94a3b8;margin-top:12px;text-align:center'>"
+                    "⚠️ 본 분석은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다.</p>",
+                    unsafe_allow_html=True)
 
             with sub3:
                 st.subheader("카테고리별 점수")
@@ -4023,12 +4274,14 @@ def main():
                 def _score_bar(label, score, color):
                     pct = max(min(score, 100), 0)
                     st.markdown(
-                        f"<div style='margin:6px 0'>"
-                        f"<div style='display:flex;justify-content:space-between;margin-bottom:2px'>"
-                        f"<span style='font-weight:600;font-size:14px'>{label}</span>"
-                        f"<span style='font-weight:700;color:{color};font-size:14px'>{score:.0f}점</span></div>"
-                        f"<div style='background:#1e2334;border-radius:4px;height:8px'>"
-                        f"<div style='background:{color};width:{pct}%;height:8px;border-radius:4px'></div>"
+                        f"<div style='margin:10px 0'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:5px'>"
+                        f"<span style='font-weight:600;font-size:14px;color:#334155'>{label}</span>"
+                        f"<span style='font-weight:700;color:{color};font-size:14px;"
+                        f"font-family:\"JetBrains Mono\",monospace'>{score:.0f}</span></div>"
+                        f"<div style='background:#f1f5f9;border-radius:6px;height:9px'>"
+                        f"<div style='background:{color};width:{pct}%;height:9px;border-radius:6px;"
+                        f"transition:width 400ms ease'></div>"
                         f"</div></div>", unsafe_allow_html=True)
 
                 _score_bar(f"📈 차트+파동 ({w_tech}%)", t_score, score_color(t_score))
@@ -4468,8 +4721,12 @@ def main():
 
     # ── Tab 6: 퀀트 ──────────────────────────────────
     with tab6:
-        st.subheader("🧬 퀀트 트레이딩 시스템")
-        st.caption("멀티팩터 랭킹 → 포트폴리오 최적화 → 시스템 시그널 → 전략 백테스트")
+        st.markdown("""
+<div style="display:flex;align-items:center;gap:10px;padding:6px 0 16px 0">
+  <div style="font-size:1.2rem;font-weight:800;color:#0f172a;letter-spacing:-.3px">퀀트 트레이딩</div>
+  <div style="height:1px;flex:1;background:#e2e8f0"></div>
+  <div style="font-size:11.5px;color:#94a3b8">팩터 랭킹 → 포트 최적화 → 시스템 시그널 → 백테스트</div>
+</div>""", unsafe_allow_html=True)
 
         qu_c1, qu_c2 = st.columns([1, 2])
         with qu_c1:
@@ -4504,15 +4761,28 @@ def main():
             if qt_use_timing:
                 _ft_w, _ft_env = get_factor_timing_weights()
                 st.markdown(
-                    f"<div style='background:#ffffff;border-radius:8px;padding:10px 14px;margin:6px 0'>"
-                    f"<b style='color:#42a5f5'>📡 시장 환경:</b> "
-                    f"<span style='color:#1a1a1a'>VIX {_ft_env['vix']} (평균 {_ft_env['vix_avg']}) · "
-                    f"10Y금리 {_ft_env['rate']}% ({_ft_env['rate_chg']:+.2f}%p)</span><br>"
-                    f"<b style='color:#ff9800'>팩터 가중치:</b> "
-                    f"<span style='color:#1a1a1a'>모멘텀 {_ft_w['momentum']*100:.0f}% · "
-                    f"밸류 {_ft_w['value']*100:.0f}% · 퀄리티 {_ft_w['quality']*100:.0f}% · "
-                    f"저변동 {_ft_w['low_vol']*100:.0f}%</span><br>"
-                    f"<span style='color:#26a69a;font-size:12px'>{_ft_env['regime']}</span>"
+                    f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;"
+                    f"padding:12px 18px;margin:8px 0;display:flex;flex-wrap:wrap;gap:20px;align-items:center'>"
+                    f"<div>"
+                    f"<div style='font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;"
+                    f"letter-spacing:.7px;margin-bottom:4px'>시장 환경</div>"
+                    f"<div style='font-size:13px;font-weight:600;color:#334155'>"
+                    f"VIX <span style='color:#3b82f6;font-family:\"JetBrains Mono\",monospace'>{_ft_env['vix']}</span>"
+                    f"<span style='color:#94a3b8;font-size:11px'> (평균 {_ft_env['vix_avg']})</span>"
+                    f" &nbsp;·&nbsp; 10Y금리 <span style='color:#f59e0b;font-family:\"JetBrains Mono\",monospace'>"
+                    f"{_ft_env['rate']}%</span>"
+                    f"<span style='color:#94a3b8;font-size:11px'> ({_ft_env['rate_chg']:+.2f}%p)</span>"
+                    f"</div></div>"
+                    f"<div>"
+                    f"<div style='font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;"
+                    f"letter-spacing:.7px;margin-bottom:4px'>팩터 가중치</div>"
+                    f"<div style='font-size:13px;font-weight:600;color:#334155'>"
+                    f"모멘텀 <b>{_ft_w['momentum']*100:.0f}%</b> &nbsp;·&nbsp; "
+                    f"밸류 <b>{_ft_w['value']*100:.0f}%</b> &nbsp;·&nbsp; "
+                    f"퀄리티 <b>{_ft_w['quality']*100:.0f}%</b> &nbsp;·&nbsp; "
+                    f"저변동 <b>{_ft_w['low_vol']*100:.0f}%</b>"
+                    f"</div></div>"
+                    f"<div style='font-size:12px;font-weight:600;color:#10b981;margin-left:auto'>{_ft_env['regime']}</div>"
                     f"</div>", unsafe_allow_html=True)
                 qt_fw = _ft_w
             else:
