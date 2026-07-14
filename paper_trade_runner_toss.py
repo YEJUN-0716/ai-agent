@@ -601,7 +601,9 @@ def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
             try:
                 _, res = fut.result()
                 results[tk] = res
-            except (Exception, SystemExit):
+            except SystemExit:
+                raise
+            except Exception:
                 results[tk] = {"adjustment": 0, "signals": [], "crt": {}}
     return results
 

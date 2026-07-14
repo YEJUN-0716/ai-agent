@@ -2,8 +2,9 @@ name: 페이퍼 트레이딩 자동 실행 (Toss - 미국)
 
 on:
   schedule:
-    # 미국 장마감(EDT 20:00 UTC / EST 21:00 UTC) 후 30분 여유
-    # 夏(EDT): 20:30 UTC / 冬(EST): 21:30 UTC → 21:30 UTC로 고정하면 겨울엔 딱, 여름엔 1시간 여유
+    # 미국 장마감(ET 16:00) 후 실행
+    # 夏(EDT, UTC-4): 21:30 UTC = 17:30 EDT → 마감 1.5시간 후
+    # 冬(EST, UTC-5): 21:30 UTC = 16:30 EST → 마감 30분 후
     - cron: "30 21 * * 1-5"
   workflow_dispatch:
     inputs:

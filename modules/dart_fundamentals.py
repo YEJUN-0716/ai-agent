@@ -166,8 +166,8 @@ def fetch_krx_fundamentals(tickers: list) -> dict:
         # 영업이익 — "영업이익(손실)" 포함, "기타영업이익" 제외
         elif "영업이익" in acct and "기타" not in acct:
             d.setdefault("op_income", amt)
-        # 당기순이익 (비지배주주 제외)
-        elif "당기순이익" in acct and "지배" not in acct:
+        # 당기순이익 (비지배·연결 제외 → 별도 재무제표 값만 수집)
+        elif "당기순이익" in acct and "지배" not in acct and "연결" not in acct:
             d.setdefault("net_income", amt)
         # 자본총계
         elif "자본총계" in acct:

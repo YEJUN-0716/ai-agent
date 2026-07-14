@@ -2,8 +2,9 @@ name: 일별 P&L 리포트 (Toss)
 
 on:
   schedule:
-    # paper-trade(07:00 UTC) 완료 후 충분한 여유를 두고 발송
-    - cron: "0 8 * * 1-5"
+    # paper-trade(07:00 UTC, timeout 30분) 완료 후 충분한 여유를 두고 발송
+    # 대형 유니버스(127개) 실행 시 최대 07:45 UTC 까지 소요 가능 → 08:30 UTC로 버퍼 확보
+    - cron: "30 8 * * 1-5"
   workflow_dispatch:
 
 concurrency:

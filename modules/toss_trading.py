@@ -19,15 +19,17 @@ _BASE = "https://openapi.tossinvest.com"
 
 # ── OAuth2 토큰 캐싱 ───────────────────────────────────────────────────
 _token_lock  = threading.Lock()
-_token_cache: dict = {}   # {"token": str, "expires_at": float}
+# client_id를 키로 하여 여러 credentials 동시 사용 시 토큰 오염 방지
+_token_cache: dict[str, dict] = {}   # {client_id: {"token": str, "expires_at": float}}
 
 
 def _get_token(client_id: str, client_secret: str) -> str:
     """OAuth2 Client Credentials Grant 토큰 발급 (만료 60초 전 갱신)."""
     with _token_lock:
-        now = time.time()
-        if _token_cache.get("token") and _token_cache.get("expires_at", 0) > now + 60:
-            return str(_token_cache["token"])
+        now   = time.time()
+        entry = _token_cache.get(client_id, {})
+        if entry.get("token") and entry.get("expires_at", 0) > now + 60:
+            return str(entry["token"])
 
         resp = requests.post(
             f"{_BASE}/oauth2/token",
@@ -42,9 +44,11 @@ def _get_token(client_id: str, client_secret: str) -> str:
         resp.raise_for_status()
         data = resp.json()
 
-        _token_cache["token"]      = data["access_token"]
-        _token_cache["expires_at"] = now + int(data.get("expires_in", 86400))
-        return str(_token_cache["token"])
+        _token_cache[client_id] = {
+            "token":      data["access_token"],
+            "expires_at": now + int(data.get("expires_in", 86400)),
+        }
+        return str(_token_cache[client_id]["token"])
 
 
 def _headers(client_id: str, client_secret: str, account_seq: str) -> dict:

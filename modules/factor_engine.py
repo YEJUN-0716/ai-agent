@@ -326,17 +326,19 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     팩터: 모멘텀(3M/1M) + 저변동성 + 가치(저PER) + 퀄리티(영업이익률)
     가중치는 레짐(bull/neutral/bear) + ic_weights.json(있으면)에 따라 동적 조정.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     W = _load_regime_weights().get(regime, REGIME_WEIGHTS["neutral"])
     end   = datetime.now()
     start = end - timedelta(days=200)
-    rows  = []
-    for tk in tickers:
+
+    def _fetch_ticker(tk: str):
         try:
             raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.droplevel(1)
             if raw.empty or len(raw) < 60:
-                continue
+                return None
             close = raw["Close"].dropna()
             mom   = _momentum(close)
             rsi   = _rsi(close)
@@ -347,7 +349,7 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
                     ict_raw = float(_ict_factor_score(raw))
                 except Exception:
                     ict_raw = 50.0
-            rows.append({
+            return {
                 "ticker":  tk,
                 "mom_1m":  mom.get("1M", 0),
                 "mom_3m":  mom.get("3M", 0),
@@ -355,9 +357,18 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
                 "vol_ann": vol,
                 "ict_raw": ict_raw,
                 "price":   float(close.iloc[-1]),
-            })
+            }
         except Exception as e:
             print(f"  [{tk}] 데이터 오류: {e}")
+            return None
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futs = {pool.submit(_fetch_ticker, tk): tk for tk in tickers}
+        for fut in as_completed(futs):
+            result = fut.result()
+            if result is not None:
+                rows.append(result)
 
     if not rows:
         return pd.DataFrame()
