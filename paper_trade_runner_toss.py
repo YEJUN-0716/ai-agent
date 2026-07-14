@@ -709,8 +709,13 @@ def main():
         sys.exit(0)
     print(f"  팩터 상위 5개: {factor_df.head(5)['ticker'].tolist()}")
 
-    # 4-1. ICT/CRT 시그널 보조 (상위 후보에 대해 병렬 분석)
-    ict_top_n = min(max(TOP_N * 3, 15), len(factor_df))
+    # 5. 시그널 생성
+    # 후보풀을 TOP_N×5로 넓혀 주가초과·섹터제한 스킵 시 대체 종목 확보
+    # sell_set 침범 방지: 하위 25%와 겹치지 않도록 유니버스 상위 75% 이내로 제한
+    _candidate_n = min(max(TOP_N * 5, 15), max(len(factor_df) * 3 // 4, TOP_N))
+
+    # 4-1. ICT/CRT 시그널 보조 (_candidate_n과 범위 일치시켜 모든 매수 후보 커버)
+    ict_top_n = min(_candidate_n, len(factor_df))
     print(f"ICT/CRT 분석 중 (상위 {ict_top_n}개)...")
     ict_data: dict[str, dict] = {}
     try:
@@ -724,10 +729,6 @@ def main():
         if _sigs:
             print(f"  ICT 참고 [{_tk}] {' / '.join(_sigs[:2])}")
 
-    # 5. 시그널 생성
-    # 후보풀을 TOP_N×5로 넓혀 주가초과·섹터제한 스킵 시 대체 종목 확보
-    # 실제 매수 횟수는 buy loop의 n_bought >= remaining 으로 TOP_N개에서 제한됨
-    _candidate_n = max(TOP_N * 5, 15)
     signals = generate_signals(factor_df, _candidate_n, min_score=BUY_SCORE_MIN, regime=regime)
     buy_sigs  = [s for s in signals if s["action"] == "매수"]
     sell_sigs = [s for s in signals if s["action"] == "매도"]
@@ -790,7 +791,7 @@ def main():
     bought_sectors: dict[str, int] = {}
 
     for sig in buy_sigs:
-        if n_bought >= max(0, remaining):
+        if n_bought >= max(0, min(remaining, TOP_N)):
             break
         if dd_blocked:
             print(f"  [드로다운 스톱] 신규 매수 전면 중단 (dd={dd_pct:.1f}%)")

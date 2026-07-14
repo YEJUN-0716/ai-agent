@@ -72,8 +72,9 @@ def _load_corp_map() -> dict:
 def _report_period() -> tuple:
     """가장 최근 공시된 사업보고서 기준 (year, reprt_code)."""
     now = datetime.now()
-    # 사업보고서는 결산 후 90일 이내 — 4월 말까지는 전전년도, 5월부터 전년도
-    year = now.year - 1
+    # 사업보고서 제출 기한: 12월 결산법인 기준 3월 31일
+    # 5월 이후 → 전년도 확정, 5월 미만 → 전전년도가 가장 최근 확정본
+    year = now.year - 1 if now.month >= 5 else now.year - 2
     return str(year), "11011"  # 11011 = 사업보고서
 
 
@@ -156,11 +157,11 @@ def fetch_krx_fundamentals(tickers: list) -> dict:
         except ValueError:
             continue
         d = company.setdefault(cc, {})
-        # 매출액
-        if any(k in acct for k in ("수익(매출액)", "매출액")) and "원가" not in acct:
+        # 매출액 — 정확한 계정명만 허용 (부분일치 시 "제품매출액" 등 세부항목 오매칭 방지)
+        if acct.strip() in ("수익(매출액)", "매출액"):
             d.setdefault("revenue", amt)
-        # 영업이익
-        elif "영업이익" in acct and "손실" not in acct:
+        # 영업이익 — "영업이익(손실)" 포함, "기타영업이익" 제외
+        elif "영업이익" in acct and "기타" not in acct:
             d.setdefault("op_income", amt)
         # 당기순이익 (비지배주주 제외)
         elif "당기순이익" in acct and "지배" not in acct:
@@ -187,6 +188,6 @@ def fetch_krx_fundamentals(tickers: list) -> dict:
     with open(_FUND_CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump({"date": today, "data": cache}, f, ensure_ascii=False, indent=2)
 
-    n_margin = sum(1 for v in cache.values() if v.get("margin") is not None)
+    n_margin = sum(1 for tk in missing if cache.get(tk, {}).get("margin") is not None)
     print(f"  [DART] {n_margin}/{len(missing)}개 영업이익률 수집 완료")
     return {tk: cache.get(tk, {}) for tk in tickers}
