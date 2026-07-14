@@ -38,7 +38,13 @@ def send_tg(msg: str):
         json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
         timeout=10,
     )
-    print("[TG] 발송 성공" if resp.status_code == 200 else f"[TG 오류] {resp.status_code}")
+    if resp.status_code == 400 and "parse entities" in resp.text:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT_ID, "text": msg},
+            timeout=10,
+        )
+    print("[TG] 발송 성공" if resp.status_code == 200 else f"[TG 오류] {resp.text}")
 
 
 def load_equity_log() -> list:

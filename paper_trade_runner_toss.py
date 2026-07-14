@@ -552,11 +552,18 @@ def send_tg(msg: str):
         print("[TG] TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 없음 → 발송 생략")
         return
     try:
+        # Markdown 먼저 시도, 특수문자 파싱 오류 시 plain text로 재시도
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
             timeout=10,
         )
+        if resp.status_code == 400 and "parse entities" in resp.text:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                json={"chat_id": TG_CHAT_ID, "text": msg},
+                timeout=10,
+            )
         if resp.status_code == 200:
             print("[TG] 발송 성공 ✓")
         else:
