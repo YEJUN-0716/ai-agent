@@ -29,15 +29,7 @@ try:
 except Exception:
     _STAT_AVAILABLE = False
 
-try:
-    from modules.paper_trading import (
-        get_account as _pt_get_account,
-        get_positions as _pt_get_positions,
-        sync_signals_to_orders as _pt_sync,
-    )
-    _PT_AVAILABLE = True
-except Exception:
-    _PT_AVAILABLE = False
+_PT_AVAILABLE = False
 
 try:
     from modules.ml_signals import train_and_validate_ml_signal as _ml_train
@@ -75,18 +67,7 @@ try:
 except Exception:
     _OPS_SAFETY_AVAILABLE = False
 
-try:
-    from modules.paper_trade_tracker import (
-        get_account_summary as _pt_acct_summary,
-        get_open_positions as _pt_open_pos,
-        get_portfolio_history as _pt_history,
-        get_closed_orders as _pt_orders,
-        compute_live_metrics as _pt_live_metrics,
-        compare_with_benchmark as _pt_compare,
-    )
-    _PT_TRACKER_AVAILABLE = True
-except Exception:
-    _PT_TRACKER_AVAILABLE = False
+_PT_TRACKER_AVAILABLE = False
 
 try:
     from modules.tax_kr import OverseasStockLedger as _TaxLedger, calc_capital_gains_tax as _calc_tax, suggest_year_end_tax_loss_harvesting as _tax_harvest
@@ -127,32 +108,214 @@ def _pit_snapshot(ticker, info):
         except Exception:
             pass
 
-st.set_page_config(page_title="종합 주식 분석 시스템", page_icon="📊", layout="wide",
+st.set_page_config(page_title="퀀트 트레이딩 시스템", page_icon="📈", layout="wide",
                    initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
-/* 모바일 반응형 */
-@media (max-width: 768px) {
-    .block-container { padding: 0.5rem 0.8rem !important; }
-    h1 { font-size: 1.4rem !important; }
-    h2 { font-size: 1.1rem !important; }
-    h3 { font-size: 1rem !important; }
-    .stTabs [data-baseweb="tab-list"] { gap: 0; }
-    .stTabs [data-baseweb="tab"] { padding: 6px 8px; font-size: 12px; }
-    [data-testid="metric-container"] { padding: 8px 6px; }
-    [data-testid="metric-container"] label { font-size: 11px !important; }
-    [data-testid="metric-container"] [data-testid="stMetricValue"] { font-size: 18px !important; }
-    .stDataFrame { font-size: 11px; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── 기본 폰트 ── */
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
-/* 탭 스타일 */
-.stTabs [data-baseweb="tab-list"] { gap: 4px; }
-.stTabs [data-baseweb="tab"] { border-radius: 6px 6px 0 0; }
-/* 카드 그림자 */
-div[style*="border-left"] { box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-div[style*="border-radius:10px"] { box-shadow: 0 1px 4px rgba(0,0,0,0.10); }
-/* 사이드바 완전 숨김 */
+
+/* ── 컨테이너 패딩 ── */
+.block-container {
+    padding: 1.2rem 2rem 2rem 2rem !important;
+    max-width: 1600px;
+}
+
+/* ── 헤더 스타일 ── */
+h1 { font-weight: 700 !important; letter-spacing: -0.5px; }
+h2 { font-weight: 600 !important; letter-spacing: -0.3px; }
+h3 { font-weight: 600 !important; }
+
+/* ── 메인 탭 스타일 ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 2px;
+    background: #f1f5f9;
+    padding: 4px;
+    border-radius: 10px;
+    border-bottom: none !important;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px !important;
+    padding: 8px 18px !important;
+    font-weight: 500;
+    font-size: 14px;
+    color: #64748b !important;
+    border: none !important;
+    background: transparent !important;
+    transition: all 150ms ease;
+}
+.stTabs [aria-selected="true"] {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important;
+}
+.stTabs [data-baseweb="tab-panel"] {
+    padding-top: 1.2rem !important;
+}
+
+/* ── 서브탭 (퀀트 내부) ── */
+.stTabs .stTabs [data-baseweb="tab-list"] {
+    background: transparent;
+    padding: 0;
+    border-bottom: 2px solid #e2e8f0 !important;
+    border-radius: 0;
+    gap: 0;
+}
+.stTabs .stTabs [data-baseweb="tab"] {
+    border-radius: 0 !important;
+    padding: 6px 14px !important;
+    font-size: 13px;
+    font-weight: 500;
+    color: #94a3b8 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-bottom: 2px solid transparent !important;
+    margin-bottom: -2px;
+}
+.stTabs .stTabs [aria-selected="true"] {
+    color: #059669 !important;
+    font-weight: 600 !important;
+    border-bottom: 2px solid #059669 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+/* ── 메트릭 카드 ── */
+[data-testid="metric-container"] {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 16px !important;
+    transition: box-shadow 150ms ease;
+}
+[data-testid="metric-container"]:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+[data-testid="metric-container"] label {
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    color: #64748b !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    font-size: 22px !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    font-family: 'JetBrains Mono', 'Inter', monospace !important;
+}
+[data-testid="stMetricDelta"] {
+    font-size: 12px !important;
+    font-weight: 500 !important;
+}
+
+/* ── 버튼 스타일 ── */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    color: white !important;
+    font-weight: 600 !important;
+    padding: 0.5rem 1.2rem !important;
+    transition: all 150ms ease !important;
+    box-shadow: 0 1px 3px rgba(5,150,105,0.3) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    box-shadow: 0 4px 12px rgba(5,150,105,0.4) !important;
+    transform: translateY(-1px) !important;
+}
+.stButton > button[kind="secondary"] {
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+    border-color: #e2e8f0 !important;
+    transition: all 150ms ease !important;
+}
+.stButton > button[kind="secondary"]:hover {
+    border-color: #059669 !important;
+    color: #059669 !important;
+}
+
+/* ── 카드 / 컨테이너 ── */
+div[style*="border-left"] { box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+div[style*="border-radius:10px"],
+div[style*="border-radius: 10px"],
+div[style*="border-radius:8px"] {
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+/* ── Expander ── */
+details {
+    border-radius: 10px !important;
+    border: 1px solid #e2e8f0 !important;
+    margin-bottom: 6px;
+}
+summary {
+    font-weight: 500 !important;
+    padding: 10px 14px !important;
+    border-radius: 10px !important;
+}
+
+/* ── 데이터프레임 ── */
+.stDataFrame { border-radius: 8px; overflow: hidden; }
+.stDataFrame thead th {
+    background: #f1f5f9 !important;
+    font-weight: 600 !important;
+    font-size: 12px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #475569 !important;
+}
+
+/* ── 인풋 필드 ── */
+.stTextInput input, .stNumberInput input, .stSelectbox > div > div {
+    border-radius: 8px !important;
+    border-color: #e2e8f0 !important;
+    font-size: 14px !important;
+    transition: border-color 150ms ease;
+}
+.stTextInput input:focus, .stNumberInput input:focus {
+    border-color: #059669 !important;
+    box-shadow: 0 0 0 3px rgba(5,150,105,0.1) !important;
+}
+
+/* ── 체크박스 & 토글 ── */
+.stCheckbox label { font-size: 14px !important; font-weight: 500; }
+
+/* ── 알림 박스 ── */
+.stAlert { border-radius: 8px !important; }
+
+/* ── 캡션 ── */
+.stCaption { color: #94a3b8 !important; font-size: 12px !important; }
+
+/* ── 구분선 ── */
+hr { border-color: #e2e8f0 !important; margin: 1rem 0 !important; }
+
+/* ── 사이드바 완전 숨김 ── */
 [data-testid="stSidebar"] { display: none !important; }
 [data-testid="collapsedControl"] { display: none !important; }
+
+/* ── 모바일 반응형 ── */
+@media (max-width: 768px) {
+    .block-container { padding: 0.6rem 0.8rem 1.5rem !important; }
+    h1 { font-size: 1.3rem !important; }
+    h2 { font-size: 1.1rem !important; }
+    h3 { font-size: 1rem !important; }
+    .stTabs [data-baseweb="tab"] { padding: 6px 10px !important; font-size: 12px !important; }
+    [data-testid="metric-container"] { padding: 8px 10px !important; }
+    [data-testid="metric-container"] [data-testid="stMetricValue"] { font-size: 17px !important; }
+    .stDataFrame { font-size: 11px; }
+}
+
+/* ── 스크롤바 ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 </style>""", unsafe_allow_html=True)
 
 TV_BG = TV_PAPER = '#ffffff'
@@ -1393,82 +1556,6 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     eq_df      = pd.DataFrame({'날짜': dates, '전략': equity, '매수보유': bh_eq})
     return metrics, eq_df, pd.DataFrame(trades)
 
-# ─────────────────────────────────────────────
-# ALPACA REAL-TIME DATA
-# ─────────────────────────────────────────────
-_ALPACA_DATA = "https://data.alpaca.markets/v2"
-
-def _alpaca_headers(key, secret):
-    return {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
-
-def _get_alpaca_keys():
-    """secrets → env → session_state 순서로 Alpaca 키 조회."""
-    try:
-        k = st.secrets.get("ALPACA_API_KEY", "")
-        s = st.secrets.get("ALPACA_SECRET_KEY", "")
-        if k and s:
-            return k, s
-    except Exception:
-        pass
-    k = os.environ.get("ALPACA_API_KEY", "")
-    s = os.environ.get("ALPACA_SECRET_KEY", "")
-    if k and s:
-        return k, s
-    return (st.session_state.get('alpaca_key', ''),
-            st.session_state.get('alpaca_secret', ''))
-
-def get_alpaca_quote(symbol, key, secret):
-    """최신 호가 (bid/ask/spread). IEX 피드 사용 (무료)."""
-    try:
-        r = requests.get(
-            f"{_ALPACA_DATA}/stocks/{symbol}/quotes/latest",
-            headers=_alpaca_headers(key, secret),
-            params={"feed": "iex"}, timeout=5)
-        if r.status_code == 200:
-            q = r.json().get('quote', {})
-            ap = q.get('ap', 0) or 0
-            bp = q.get('bp', 0) or 0
-            return {
-                'ask':       ap,
-                'bid':       bp,
-                'ask_size':  q.get('as', 0),
-                'bid_size':  q.get('bs', 0),
-                'spread':    ap - bp,
-                'spread_pct': (ap - bp) / bp * 100 if bp > 0 else 0,
-                'timestamp': q.get('t', ''),
-            }
-        return {'error': f"HTTP {r.status_code}: {r.text[:80]}"}
-    except Exception as e:
-        return {'error': str(e)[:80]}
-
-def get_alpaca_bars(symbol, key, secret, timeframe='5Min', limit=100):
-    """분봉 데이터 (오늘 장중). IEX 피드 사용."""
-    try:
-        r = requests.get(
-            f"{_ALPACA_DATA}/stocks/{symbol}/bars",
-            headers=_alpaca_headers(key, secret),
-            params={"timeframe": timeframe, "limit": limit,
-                    "feed": "iex", "sort": "asc"}, timeout=10)
-        if r.status_code != 200:
-            return None
-        bars = r.json().get('bars', [])
-        if not bars:
-            return None
-        df = pd.DataFrame(bars)
-        df['t'] = pd.to_datetime(df['t'], utc=True).dt.tz_convert('America/New_York')
-        df = df.set_index('t')
-        df = df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low',
-                                 'c': 'Close', 'v': 'Volume'})
-        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
-    except Exception:
-        return None
-
-def test_alpaca_connection(key, secret):
-    """연결 테스트 — AAPL 최신 호가 조회로 확인."""
-    result = get_alpaca_quote('AAPL', key, secret)
-    if result and 'error' not in result:
-        return True, f"연결 성공 ✅  AAPL ask={result['ask']:.2f}  bid={result['bid']:.2f}"
-    return False, result.get('error', '알 수 없는 오류') if result else '연결 실패'
 
 
 def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
@@ -3371,8 +3458,16 @@ def _draw_chart_legacy(df, ticker, is_krw):
 
 
 def main():
-    st.title("📊 종합 주식 분석 시스템")
-    st.caption("차트+파동 · 재무제표+퀀트 · 매크로+금리 종합 점수")
+    st.markdown(
+        "<h1 style='font-size:1.8rem;font-weight:700;color:#0f172a;margin-bottom:2px'>"
+        "📈 퀀트 트레이딩 시스템</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='font-size:13px;color:#64748b;margin-top:0;margin-bottom:1rem'>"
+        "종목 분석 &nbsp;·&nbsp; 팩터 퀀트 &nbsp;·&nbsp; 토스증권 자동매매 &nbsp;·&nbsp; 리스크 관리</p>",
+        unsafe_allow_html=True,
+    )
 
     # 사이드바 제거 — 값 하드코딩
     w_tech, w_fund, w_macro = 35, 40, 25
@@ -3382,7 +3477,7 @@ def main():
     max_position_pct = 20
     min_rr           = 1.5
 
-    tab1, tab6, tab_journal = st.tabs(["📊 종목 분석", "🧬 퀀트", "📓 매매 일지"])
+    tab1, tab6, tab_journal = st.tabs(["종목 분석", "퀀트 · 자동매매", "매매 일지"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -3650,69 +3745,9 @@ def main():
                 f"({diff_str})</span></span></div>",
                 unsafe_allow_html=True)
 
-            sub1, sub2, sub3, sub4, sub5 = st.tabs(["📋 요약", "📈 차트", "🔬 세부분석", "💡 매매전략", "⚠️ 리스크"])
+            sub1, sub2, sub3, sub4, sub5 = st.tabs(["요약", "차트", "세부분석", "매매전략", "리스크"])
 
             with sub2:
-                # ── ⚡ Alpaca 실시간 시세 ─────────────────────
-                _al_key, _al_sec = _get_alpaca_keys()
-                if _al_key and _al_sec and not is_krw:
-                    with st.expander("⚡ 실시간 시세 (Alpaca)", expanded=True):
-                        al_r_col, al_btn_col = st.columns([4, 1])
-                        al_r_col.caption(f"Alpaca IEX 피드 — 무료 플랜 15분 지연 / 유료 플랜 실시간")
-                        if al_btn_col.button("🔄 새로고침", key="alpaca_refresh"):
-                            _al_cache_key = f"alpaca_{ticker}"
-                            if _al_cache_key in st.session_state:
-                                del st.session_state[_al_cache_key]
-
-                        cache_key = f"alpaca_{ticker}"
-                        if cache_key not in st.session_state:
-                            with st.spinner("실시간 데이터 로딩..."):
-                                _aq = get_alpaca_quote(ticker, _al_key, _al_sec)
-                                _ab = get_alpaca_bars(ticker, _al_key, _al_sec,
-                                                      timeframe='5Min', limit=80)
-                            st.session_state[cache_key] = {'quote': _aq, 'bars': _ab,
-                                                           'fetched': datetime.now()}
-                        cached = st.session_state[cache_key]
-                        aq = cached['quote']
-                        ab = cached['bars']
-                        fetched_at = cached['fetched'].strftime('%H:%M:%S')
-
-                        if aq and 'error' not in aq:
-                            aq_c1, aq_c2, aq_c3, aq_c4 = st.columns(4)
-                            aq_c1.metric("매도 호가 (Ask)", f"${aq['ask']:.2f}",
-                                         f"{aq['ask_size']}주")
-                            aq_c2.metric("매수 호가 (Bid)", f"${aq['bid']:.2f}",
-                                         f"{aq['bid_size']}주")
-                            aq_c3.metric("스프레드",
-                                         f"${aq['spread']:.3f}",
-                                         f"{aq['spread_pct']:.3f}%")
-                            ts_str = str(aq['timestamp'])[:19].replace('T', ' ')
-                            aq_c4.metric("호가 시각", ts_str[:10], ts_str[11:19])
-                        elif aq and 'error' in aq:
-                            st.warning(f"호가 조회 실패: {aq['error']}")
-
-                        if ab is not None and not ab.empty:
-                            fig_in = go.Figure(go.Candlestick(
-                                x=ab.index, open=ab['Open'], high=ab['High'],
-                                low=ab['Low'], close=ab['Close'],
-                                increasing_line_color=TV_UP,
-                                decreasing_line_color=TV_DOWN,
-                                name='5분봉'))
-                            fig_in.update_layout(
-                                height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                                font=dict(color=TV_TEXT),
-                                title=dict(text=f"{ticker} 장중 5분봉  (조회: {fetched_at})",
-                                           font=dict(size=12)),
-                                xaxis=dict(gridcolor=TV_GRID, rangeslider_visible=False,
-                                           type='category',
-                                           tickformat='%H:%M',
-                                           nticks=12),
-                                yaxis=dict(gridcolor=TV_GRID, side='right'),
-                                margin=dict(l=0, r=60, t=35, b=0))
-                            st.plotly_chart(fig_in, width='stretch')
-                        else:
-                            st.info("분봉 데이터 없음 — 장 중에만 표시됩니다.")
-
                 # ── 2×2 차트 그리드 ──────────────────────────────
                 st.subheader("📈 차트 분석")
 
@@ -4449,9 +4484,9 @@ def main():
                 st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
         qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6, qt_sub7, qt_sub8, qt_sub9, qt_sub10 = st.tabs([
-            "📊 팩터 랭킹", "⚖️ 포트폴리오 최적화", "🤖 시스템 시그널",
-            "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션", "🧠 ML 신호",
-            "🧪 고급 분석", "🔒 운영 안전성", "💴 세금 계산기",
+            "팩터 랭킹", "포트폴리오 최적화", "시스템 시그널",
+            "팩터 백테스트", "종목 백테스팅", "섹터 로테이션", "ML 신호",
+            "고급 분석", "운영 안전성", "세금 계산기",
         ])
 
         with qt_sub1:
@@ -4826,44 +4861,24 @@ def main():
                         st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
                     st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
 
-                # ── Alpaca 페이퍼 트레이딩 ────────────────────
-                with st.expander("📡 Alpaca 페이퍼 트레이딩 (자동주문 시뮬레이션)", expanded=False):
-                    if not _PT_AVAILABLE:
-                        st.error("modules/paper_trading.py 로드 실패")
-                    else:
-                        st.caption("⚠️ Paper Trading 전용 엔드포인트만 사용 — 실계좌 주문 절대 불가")
-                        _pt_c1, _pt_c2 = st.columns(2)
-                        _pt_key    = _pt_c1.text_input("Alpaca API Key ID", type="password", key="pt_key")
-                        _pt_secret = _pt_c2.text_input("Alpaca Secret Key", type="password", key="pt_secret")
-                        _pt_dry    = st.toggle("Dry-run 모드 (실제 주문 없이 미리보기)", value=True, key="pt_dry")
-                        _pt_cap    = st.number_input("종목당 매수 수량 (주)", min_value=1, value=1, step=1, key="pt_qty")
+                # ── 토스증권 자동매매 안내 ────────────────────
+                with st.expander("🤖 토스증권 자동매매 시스템", expanded=False):
+                    st.markdown(
+                        """
+**GitHub Actions 기반 자동 실행 파이프라인**
 
-                        if _pt_key and _pt_secret:
-                            _pt_a1, _pt_a2 = st.columns(2)
-                            if _pt_a1.button("🔍 계좌 확인", key="pt_check"):
-                                try:
-                                    _acct = _pt_get_account(_pt_key, _pt_secret)
-                                    st.success(f"계좌: {_acct.get('account_number','?')} · 현금: ${float(_acct.get('cash',0)):,.0f} · 포트폴리오: ${float(_acct.get('portfolio_value',0)):,.0f}")
-                                except Exception as _e:
-                                    st.error(f"연결 실패: {_e}")
+| 구분 | 실행 시간 | 워크플로 |
+|------|-----------|----------|
+| 🇰🇷 국내 (KRX) | 매일 장마감 후 UTC 07:00 | `paper-trade.yml` |
+| 🇺🇸 미국 | 매일 장마감 후 UTC 21:30 | `paper-trade-us.yml` |
 
-                            if _pt_a2.button("📤 시그널 → 주문 전송", key="pt_submit",
-                                             type=("secondary" if _pt_dry else "primary")):
-                                _actions_for_pt = st.session_state.get('qt_signals', {}).get('actions', [])
-                                if not _actions_for_pt:
-                                    st.warning("먼저 시스템 시그널을 생성하세요.")
-                                else:
-                                    _cap_map = {a['ticker']: _pt_cap for a in _actions_for_pt}
-                                    _pt_results = _pt_sync(
-                                        _actions_for_pt, _pt_key, _pt_secret,
-                                        capital_per_trade=_cap_map, dry_run=_pt_dry)
-                                    for _pr in _pt_results:
-                                        _status = "🔵 DRY" if _pt_dry else ("✅" if 'error' not in _pr else "❌")
-                                        st.markdown(f"{_status} **{_pr.get('ticker','?')}** {_pr.get('side','?').upper()} {_pr.get('qty','?')}주 — {_pr.get('reason','')[:60]}")
-                                        if 'error' in _pr:
-                                            st.error(_pr['error'])
-                        else:
-                            st.info("Alpaca Paper Trading API 키를 입력하세요. [alpaca.markets](https://app.alpaca.markets)에서 무료 발급")
+- 시그널 생성 → 토스증권 API → 자동 주문 전송
+- 매수·매도·스톱로스 결과는 **텔레그램**으로 실시간 알림
+- 결과는 `equity_log.json`, `signal_log.json`에 자동 저장 (GitHub Actions commit)
+""",
+                        unsafe_allow_html=False,
+                    )
+                    st.caption("⚙️ `.github/workflows/paper-trade.yml` 및 `paper_trade_runner_toss.py` 참고")
 
                 # ── 패턴 필터 ──────────────────────────────────
                 buy_tkrs = [a['ticker'] for a in actions if '매수' in a['action']]
@@ -6064,192 +6079,47 @@ def main():
                         st.rerun()
 
                 # 포지션 대사
-                with st.expander("⚖️ 포지션 대사 (의도 vs 브로커)", expanded=False):
-                    st.caption("앱이 생각하는 보유 수량과 Alpaca 실제 포지션을 비교해 불일치를 탐지합니다.")
+                with st.expander("⚖️ 포지션 대사 (의도 vs 실제)", expanded=False):
+                    st.caption("앱이 생각하는 보유 수량과 실제 포지션을 비교해 불일치를 탐지합니다.")
                     _rec_intended_raw = st.text_area(
-                        "의도 포지션 (JSON, 예: {\"AAPL\": 10, \"NVDA\": 5})",
-                        value='{"AAPL": 10, "NVDA": 5}', key="rec_intended")
+                        "의도 포지션 (JSON, 예: {\"삼성전자.KS\": 10, \"005490.KS\": 5})",
+                        value='{}', key="rec_intended")
                     if st.button("⚖️ 포지션 대사 실행", key="rec_run"):
                         try:
                             import json as _json_rec
                             _intended = _json_rec.loads(_rec_intended_raw)
+                            if _OPS_SAFETY_AVAILABLE:
+                                _rec_result = _reconcile_pos(_intended, [])
+                                if _rec_result['ok']:
+                                    st.success("✅ 포지션 일치")
+                                else:
+                                    st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
+                                    st.dataframe(pd.DataFrame(_rec_result['mismatches']), width='stretch')
+                            else:
+                                st.info("ops_safety 모듈 없음 — 의도 포지션만 표시합니다.")
+                                st.json(_intended)
                         except ValueError:
                             st.error("JSON 파싱 오류")
-                            _intended = None
-                        if _intended is not None:
-                            if _PT_AVAILABLE and 'api_key' in st.secrets.get('alpaca', {}):
-                                try:
-                                    _broker_pos = _pt_get_positions(
-                                        st.secrets['alpaca']['api_key'],
-                                        st.secrets['alpaca']['secret_key'])
-                                    _rec_result = _reconcile_pos(_intended, _broker_pos)
-                                    if _rec_result['ok']:
-                                        st.success("✅ 포지션 일치")
-                                    else:
-                                        st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
-                                        st.dataframe(pd.DataFrame(_rec_result['mismatches']), width='stretch')
-                                    if _rec_result['extra_in_broker']:
-                                        st.warning(f"브로커에만 있는 종목: {_rec_result['extra_in_broker']}")
-                                except Exception as _rec_e:
-                                    st.error(f"Alpaca 연결 오류: {_rec_e}")
-                            else:
-                                st.info("Alpaca 미설정 — 브로커 데이터 없이 의도 포지션만 표시합니다.")
-                                st.json(_intended)
 
-            # ── 페이퍼 트레이딩 성과 모니터 ──────────────────────────
-            with st.expander("📈 페이퍼 트레이딩 성과 모니터", expanded=True):
-                st.caption("Alpaca Paper Trading 계좌의 실시간 성과를 백테스트 결과와 비교합니다.")
-                if not _PT_TRACKER_AVAILABLE:
-                    st.error("modules/paper_trade_tracker.py 로드 실패.")
-                elif not _PT_AVAILABLE:
-                    st.error("modules/paper_trading.py 로드 실패.")
-                else:
-                    _ptm_key, _ptm_sec = _get_alpaca_keys()
-                    # secrets/env에 키가 없으면 직접 입력 UI 제공
-                    if not _ptm_key or not _ptm_sec:
-                        st.info("Alpaca **페이퍼 트레이딩** API 키를 입력하세요. [alpaca.markets](https://app.alpaca.markets) → Paper Trading → API Keys")
-                        _ptm_col1, _ptm_col2 = st.columns(2)
-                        _ptm_key_in = _ptm_col1.text_input("API Key (PK...)", value=st.session_state.get("alpaca_key", ""), type="password", key="ptm_key_input")
-                        _ptm_sec_in = _ptm_col2.text_input("Secret Key", value=st.session_state.get("alpaca_secret", ""), type="password", key="ptm_sec_input")
-                        if _ptm_key_in and _ptm_sec_in:
-                            st.session_state["alpaca_key"] = _ptm_key_in
-                            st.session_state["alpaca_secret"] = _ptm_sec_in
-                            _ptm_key, _ptm_sec = _ptm_key_in, _ptm_sec_in
-                        else:
-                            st.stop()
-                    if _ptm_key and _ptm_sec:
-                        _ptm_period = st.selectbox("조회 기간", ["1W", "1M", "3M", "6M"], index=1, key="ptm_period")
-                        if st.button("🔄 Alpaca 데이터 새로고침", key="ptm_refresh"):
-                            for _k in [k for k in st.session_state if k.startswith("ptm_cache_")]:
-                                del st.session_state[_k]
-                            st.rerun()
+            # ── 토스 자동매매 성과 안내 ──────────────────────────
+            with st.expander("📈 토스증권 자동매매 성과 모니터링", expanded=True):
+                st.markdown(
+                    """
+자동매매 실행 결과는 **텔레그램 봇**으로 매일 수신됩니다.
 
-                        # 계좌 요약
-                        try:
-                            if "ptm_cache_acct" not in st.session_state:
-                                st.session_state["ptm_cache_acct"] = _pt_acct_summary(_ptm_key, _ptm_sec)
-                            _ptm_acct = st.session_state["ptm_cache_acct"]
-                            _pmc1, _pmc2, _pmc3, _pmc4 = st.columns(4)
-                            _pmc1.metric("총 자산", f"${_ptm_acct['equity']:,.2f}")
-                            _pmc2.metric("매수여력", f"${_ptm_acct['buying_power']:,.2f}")
-                            _pmc3.metric("오늘 손익", f"${_ptm_acct['day_pl']:+,.2f}",
-                                         delta=f"{_ptm_acct['day_pl_pct']:+.2f}%",
-                                         delta_color="normal")
-                            _pmc4.metric("계좌 상태", _ptm_acct['status'],
-                                         delta="거래차단" if _ptm_acct['trading_blocked'] else "정상",
-                                         delta_color="inverse" if _ptm_acct['trading_blocked'] else "off")
-                        except Exception as _ptm_e:
-                            st.error(f"계좌 조회 오류: {_ptm_e}")
+**확인 방법:**
+- 텔레그램에서 일별 P&L 리포트 확인 (`daily_report_toss.py`)
+- GitHub Actions → `paper-trade.yml` 로그에서 실행 내역 확인
+- `equity_log.json`: 일별 자산가치 추적
+- `signal_log.json`: 매수/매도 시그널 이력
 
-                        # 보유 포지션
-                        try:
-                            if "ptm_cache_pos" not in st.session_state:
-                                st.session_state["ptm_cache_pos"] = _pt_open_pos(_ptm_key, _ptm_sec)
-                            _ptm_pos = st.session_state["ptm_cache_pos"]
-                            if not _ptm_pos.empty:
-                                st.markdown("**현재 보유 포지션**")
-                                st.dataframe(
-                                    _ptm_pos.style.format({
-                                        "수량": "{:.4f}", "평균단가($)": "{:.2f}",
-                                        "현재가($)": "{:.2f}", "미실현손익($)": "{:+,.2f}",
-                                        "수익률(%)": "{:+.2f}%", "평가금액($)": "{:,.2f}",
-                                    }),
-                                    width='stretch'
-                                )
-                            else:
-                                st.info("현재 보유 중인 포지션 없음")
-                        except Exception as _ptm_e2:
-                            st.error(f"포지션 조회 오류: {_ptm_e2}")
-
-                        # equity 곡선
-                        try:
-                            _ptm_cache_k = f"ptm_cache_hist_{_ptm_period}"
-                            if _ptm_cache_k not in st.session_state:
-                                st.session_state[_ptm_cache_k] = _pt_history(_ptm_key, _ptm_sec, _ptm_period)
-                            _ptm_hist = st.session_state[_ptm_cache_k]
-                            if not _ptm_hist.empty:
-                                _ptm_fig = go.Figure()
-                                _ptm_fig.add_trace(go.Scatter(
-                                    x=_ptm_hist["date"].astype(str), y=_ptm_hist["equity"],
-                                    mode="lines+markers", name="페이퍼 계좌 자산",
-                                    line=dict(color="#26a69a", width=2),
-                                    fill="tozeroy", fillcolor="rgba(38,166,154,0.1)"
-                                ))
-                                _ptm_fig.update_layout(
-                                    height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                                    font=dict(color=TV_TEXT),
-                                    title=dict(text="Alpaca 페이퍼 계좌 자산 추이", font=dict(size=13)),
-                                    yaxis=dict(title="자산($)", gridcolor=TV_GRID),
-                                    xaxis=dict(gridcolor=TV_GRID),
-                                    margin=dict(l=20, r=20, t=40, b=20)
-                                )
-                                st.plotly_chart(_ptm_fig, width='stretch')
-
-                                # 성과 지표
-                                _ptm_live = _pt_live_metrics(_ptm_hist)
-                                if "error" not in _ptm_live:
-                                    _pml1, _pml2, _pml3, _pml4 = st.columns(4)
-                                    _pml1.metric("누적 수익률", f"{_ptm_live['total_return_pct']:+.2f}%")
-                                    _pml2.metric("MDD", f"{_ptm_live['mdd_pct']:.2f}%")
-                                    _pml3.metric("Sharpe (연율)", f"{_ptm_live['sharpe']:.3f}")
-                                    _pml4.metric("연율 수익률", f"{_ptm_live['annualized_ret_pct']:+.2f}%")
-
-                                    # 백테스트 비교 (세션에 백테스트 결과 있을 때만)
-                                    _bt_ref = st.session_state.get("tab3", {}).get("metrics", {})
-                                    if _bt_ref:
-                                        _bt_tr  = float(str(_bt_ref.get("전략 수익률", "0")).replace("%","").replace("+","") or 0)
-                                        _bt_sh  = float(str(_bt_ref.get("Sharpe Ratio", "0")) or 0)
-                                        _bt_mdd = float(str(_bt_ref.get("최대낙폭(MDD)", "0")).replace("%","") or 0)
-                                        if _bt_tr or _bt_sh:
-                                            _ptm_cmp = _pt_compare(_ptm_hist, _bt_tr, _bt_sh, _bt_mdd)
-                                            if "error" not in _ptm_cmp:
-                                                st.markdown("**📊 실전(페이퍼) vs 백테스트 비교**")
-                                                _cmp_df = pd.DataFrame({
-                                                    "": ["누적수익률(%)", "Sharpe", "MDD(%)"],
-                                                    "페이퍼 실전": [
-                                                        f"{_ptm_cmp['live']['total_return_pct']:+.2f}",
-                                                        f"{_ptm_cmp['live']['sharpe']:.3f}",
-                                                        f"{_ptm_cmp['live']['mdd_pct']:.2f}",
-                                                    ],
-                                                    "백테스트": [
-                                                        f"{_ptm_cmp['backtest']['total_return_pct']:+.2f}",
-                                                        f"{_ptm_cmp['backtest']['sharpe']:.3f}",
-                                                        f"{_ptm_cmp['backtest']['mdd_pct']:.2f}",
-                                                    ],
-                                                    "Gap": [
-                                                        f"{_ptm_cmp['gap']['return_pct']:+.2f}",
-                                                        f"{_ptm_cmp['gap']['sharpe']:+.3f}",
-                                                        f"{_ptm_cmp['gap']['mdd_pct']:+.2f}",
-                                                    ],
-                                                }).set_index("")
-                                                st.dataframe(_cmp_df, width='stretch')
-                                                if "⚠️" in _ptm_cmp["verdict"]:
-                                                    st.warning(_ptm_cmp["verdict"])
-                                                else:
-                                                    st.success(_ptm_cmp["verdict"])
-                                        else:
-                                            st.caption("💡 종목 백테스팅(qt_sub5) 탭에서 백테스트를 먼저 실행하면 비교 테이블이 여기 표시됩니다.")
-                        except Exception as _ptm_e3:
-                            st.error(f"포트폴리오 이력 조회 오류: {_ptm_e3}")
-
-                        # 체결 주문 내역
-                        with st.expander("📋 체결 주문 내역", expanded=False):
-                            try:
-                                if "ptm_cache_orders" not in st.session_state:
-                                    st.session_state["ptm_cache_orders"] = _pt_orders(_ptm_key, _ptm_sec, limit=100)
-                                _ptm_ord = st.session_state["ptm_cache_orders"]
-                                if not _ptm_ord.empty:
-                                    st.dataframe(_ptm_ord, width='stretch')
-                                else:
-                                    st.info("체결된 주문 내역 없음")
-                            except Exception as _ptm_e4:
-                                st.error(f"주문 내역 조회 오류: {_ptm_e4}")
-
-                        st.divider()
-                        st.caption(
-                            "⚙️ 자동 실행: GitHub Actions → `.github/workflows/paper-trade.yml` 참고. "
-                            "매일 미국 장마감 후(ET 17:30) `paper_trade_runner.py`가 시그널을 Alpaca Paper에 주문으로 전송합니다."
-                        )
+**주요 성과 지표 (GitHub Actions 로그):**
+- 총 자산 · 매수여력 · 당일 수익률
+- 보유 포지션 목록 · 미실현 손익
+- 누적 수익률 · Sharpe · 최대낙폭(MDD)
+"""
+                )
+                st.caption("⚙️ 자동 실행: `.github/workflows/paper-trade.yml` (국내) / `paper-trade-us.yml` (미국)")
 
         # ── qt_sub10: 세금 계산기 ─────────────────────────────────
         with qt_sub10:
