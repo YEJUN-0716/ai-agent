@@ -163,8 +163,8 @@ def fetch_krx_fundamentals(tickers: list) -> dict:
         # 매출액 — 정확한 계정명만 허용 (부분일치 시 "제품매출액" 등 세부항목 오매칭 방지)
         if acct.strip() in ("수익(매출액)", "매출액"):
             d.setdefault("revenue", amt)
-        # 영업이익 — "영업이익(손실)" 포함, "기타영업이익" 제외
-        elif "영업이익" in acct and "기타" not in acct:
+        # 영업이익 — "영업이익(손실)" 포함, "기타영업이익"·"연결영업이익" 제외
+        elif "영업이익" in acct and "기타" not in acct and "연결" not in acct:
             d.setdefault("op_income", amt)
         # 당기순이익 (비지배·연결 제외 → 별도 재무제표 값만 수집)
         elif "당기순이익" in acct and "지배" not in acct and "연결" not in acct:

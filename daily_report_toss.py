@@ -63,7 +63,7 @@ def calc_perf(records: list) -> dict:
     equities  = [r["equity"] for r in records]
     port_rets = [(equities[i] / equities[i - 1] - 1) for i in range(1, len(equities))]
     mean_r    = float(np.mean(port_rets))
-    std_r     = float(np.std(port_rets))
+    std_r     = float(np.std(port_rets, ddof=1))
     sharpe    = (mean_r / (std_r + 1e-9)) * np.sqrt(252) if std_r > 0 else 0.0
 
     peak_e, max_dd = equities[0], 0.0

@@ -91,8 +91,8 @@ def _rsi(close: pd.Series, period: int = 14) -> float:
         except Exception:
             pass
     delta = close.diff().dropna()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi_series = 100 - 100 / (1 + rs)
     if rsi_series.empty:

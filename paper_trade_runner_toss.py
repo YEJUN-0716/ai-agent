@@ -320,7 +320,7 @@ def calc_performance_metrics(records: list) -> dict:
 
     # 일별 수익률
     port_rets = [(equities[i] / equities[i-1] - 1) for i in range(1, len(equities))]
-    mean_r, std_r = float(np.mean(port_rets)), float(np.std(port_rets))
+    mean_r, std_r = float(np.mean(port_rets)), float(np.std(port_rets, ddof=1))
     sharpe = (mean_r / (std_r + 1e-9)) * np.sqrt(252) if std_r > 0 else 0.0
 
     # 최대 드로다운
@@ -932,7 +932,7 @@ def main():
 
     lines = [
         f"*페이퍼 트레이딩* `{run_ts}` {mode_tag}",
-        f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `{equity_now:,.0f}`",
+        f"{'[DRY-RUN]' if DRY_RUN else '[실제 주문]'}  자산 `{equity_now:,.0f}원`",
         f"{regime_emoji} 레짐: *{regime.upper()}*  SPY/MA={regime_info['spy_ratio']:.3f}  VIX={regime_info['vix']:.1f}"
         + (f"  (MAX_POS→{effective_max_pos})" if effective_max_pos < MAX_POSITIONS else ""),
         "",
