@@ -73,7 +73,7 @@ def main():
     if sector_neutral:
         fdf = core.calc_factor_scores_sectoral(tickers, factor_weights=factor_weights)
     else:
-        fdf = core.calc_factor_scores(tickers)
+        fdf = core.calc_factor_scores(tickers, factor_weights=factor_weights)
 
     failed = list(fdf.attrs.get('failed', [])) if fdf is not None else []
 

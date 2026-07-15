@@ -1,7 +1,7 @@
 """
 토스증권 일별 P&L 리포트
 =================================================================
-GitHub Actions daily-report.yml의 toss-report 잡에서 self-hosted 러너로 실행.
+GitHub Actions daily-report.yml의 toss-report 잡에서 클라우드 러너로 실행.
 equity_log.json(paper_trade_runner_toss.py가 기록) + Toss API 현재 포지션.
 
 환경변수:
