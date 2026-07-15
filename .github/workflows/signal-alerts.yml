@@ -1,0 +1,64 @@
+name: 퀀트 시그널 알림 (수동매매용)
+
+on:
+  schedule:
+    # 미국 장마감 후 — paper-trade-us(21:30 UTC) 완료 여유 두고 22:30 UTC 실행
+    # 夏(EDT): 22:30 UTC = 18:30 EDT / 冬(EST): 22:30 UTC = 17:30 EST
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      universe:
+        description: "유니버스 이름 (UNIVERSE_PRESETS 키 또는 쉼표구분 티커)"
+        required: false
+        default: "S&P 500 대형 30"
+      top_n:
+        description: "추천 상위 N개"
+        required: false
+        default: "5"
+      capital:
+        description: "종목당 가상 투자금 (달러, 수량 계산용)"
+        required: false
+        default: "10000"
+      sector_neutral:
+        description: "섹터 중립 팩터 스코어 사용 여부 (true/false)"
+        required: false
+        default: "true"
+      factor_timing:
+        description: "VIX 기반 팩터 타이밍 가중치 사용 여부 (true/false)"
+        required: false
+        default: "true"
+
+concurrency:
+  group: signal-alerts
+  cancel-in-progress: false
+
+jobs:
+  signal-scan:
+    runs-on: self-hosted
+    timeout-minutes: 20
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: pip 캐시
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 퀀트 시그널 스캔 & 텔레그램 발송
+        env:
+          PYTHONUTF8:      "1"
+          TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          UNIVERSE:        ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
+          TOP_N:           ${{ github.event.inputs.top_n || '5' }}
+          CAPITAL:         ${{ github.event.inputs.capital || '10000' }}
+          SECTOR_NEUTRAL:  ${{ github.event.inputs.sector_neutral || 'true' }}
+          FACTOR_TIMING:   ${{ github.event.inputs.factor_timing || 'true' }}
+        run: python signal_worker.py
