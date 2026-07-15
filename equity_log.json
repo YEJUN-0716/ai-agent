@@ -34,6 +34,13 @@
       "spy_price": 750.35,
       "unrealized_pnl": 3.8,
       "n_positions": 1
+    },
+    {
+      "date": "2026-07-15",
+      "equity": 37351.0,
+      "spy_price": 752.83,
+      "unrealized_pnl": -1.83,
+      "n_positions": 1
     }
   ]
 }
