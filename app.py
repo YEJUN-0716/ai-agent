@@ -677,8 +677,8 @@ def calc_rsi(prices, period=14):
         if result is not None:
             return result
     delta = prices.diff()
-    gain  = delta.where(delta > 0, 0).rolling(period).mean()
-    loss  = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    gain  = delta.clip(lower=0).ewm(alpha=1/period, adjust=False).mean()
+    loss  = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
     return 100 - (100 / (1 + gain / loss.replace(0, 1e-10)))
 
 
