@@ -62,30 +62,21 @@ permissions:
 
 jobs:
   run-paper-trade-us:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4.2.2
 
-      - name: pip 캐시
-        uses: actions/cache@v4
+      - name: Python 설정
+        uses: actions/setup-python@v5
         with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: 의존성 설치
         run: pip install -r requirements.txt
-
-      - name: 디버그 - 커밋 및 파일 확인
-        shell: powershell
-        run: |
-          Write-Host "=== 현재 커밋 ==="
-          git log --oneline -3
-          Write-Host "=== Python 버전 ==="
-          python --version
 
       - name: 토스 트레이딩 실행 (미국 종목)
         env:
@@ -112,14 +103,12 @@ jobs:
         run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널 로그)
-        shell: powershell
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           git add peak_prices.json signal_log.json equity_log.json
-          $staged = git diff --staged --quiet; if ($LASTEXITCODE -ne 0) {
-            $date = [System.DateTime]::UtcNow.ToString("yyyy-MM-dd")
-            git commit -m "chore: US peak & signal & equity log update $date"
-          }
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: US peak & signal & equity log update $(date -u +%Y-%m-%d)"
+          fi
           git pull --rebase origin main
           git push

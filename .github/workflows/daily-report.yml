@@ -13,12 +13,18 @@ concurrency:
 
 jobs:
   toss-report:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: 의존성 설치
         run: pip install -r requirements.txt

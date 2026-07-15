@@ -34,31 +34,30 @@ concurrency:
 
 jobs:
   signal-scan:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4.2.2
 
-      - name: pip 캐시
-        uses: actions/cache@v4
+      - name: Python 설정
+        uses: actions/setup-python@v5
         with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
       - name: 퀀트 시그널 스캔 & 텔레그램 발송
         env:
-          PYTHONUTF8:      "1"
-          TELEGRAM_TOKEN:  ${{ secrets.TELEGRAM_TOKEN }}
+          PYTHONUTF8:       "1"
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          UNIVERSE:        ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
-          TOP_N:           ${{ github.event.inputs.top_n || '5' }}
-          CAPITAL:         ${{ github.event.inputs.capital || '10000' }}
-          SECTOR_NEUTRAL:  ${{ github.event.inputs.sector_neutral || 'true' }}
-          FACTOR_TIMING:   ${{ github.event.inputs.factor_timing || 'true' }}
+          UNIVERSE:         ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
+          TOP_N:            ${{ github.event.inputs.top_n || '5' }}
+          CAPITAL:          ${{ github.event.inputs.capital || '10000' }}
+          SECTOR_NEUTRAL:   ${{ github.event.inputs.sector_neutral || 'true' }}
+          FACTOR_TIMING:    ${{ github.event.inputs.factor_timing || 'true' }}
         run: python signal_worker.py
