@@ -133,9 +133,16 @@ def main():
             avg     = float(p.get("avg_entry_price", 0) or 0)
             pnl_pct = ((cur / avg - 1) * 100) if avg > 0 else 0.0
             sign    = "+" if pnl >= 0 else ""
+            is_us   = not sym.isdigit()   # 6자리 숫자=KRX, 그 외=US
+            if is_us:
+                cur_str = f"${cur:,.2f}"
+                pnl_str = f"${pnl:,.2f}"
+            else:
+                cur_str = f"{cur:,.0f}원"
+                pnl_str = f"{pnl:,.0f}원"
             lines.append(
-                f"  `{sym}` {qty}주  {cur:,.0f}원  "
-                f"{sign}{pnl_pct:.1f}% ({sign}{pnl:,.0f}원)"
+                f"  `{sym}` {qty}주  {cur_str}  "
+                f"{sign}{pnl_pct:.1f}% ({sign}{pnl_str})"
             )
     else:
         lines.append("\n보유 포지션 없음")
