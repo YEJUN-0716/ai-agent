@@ -886,7 +886,7 @@ def main():
                     buy_rec["ok"] = False
 
             buy_results.append(buy_rec)
-            if buy_rec.get("fill_status") not in {"cancelled", "rejected", "expired"}:
+            if buy_rec.get("fill_status") not in {"canceled", "rejected", "replaced", "cancel_rejected", "replace_rejected"}:
                 buying_power -= _size_krw
                 n_bought += 1
                 bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
