@@ -3005,9 +3005,16 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def optimize_portfolio(tickers, method='equal', risk_free=0.045):
+def optimize_portfolio(tickers, method='equal', risk_free=None):
     """포트폴리오 최적화: equal/min_vol/risk_parity/max_sharpe"""
-    end = datetime.now(); start = end - timedelta(days=390)
+    if risk_free is None:
+        try:
+            _irx = yf.download('^IRX', period='5d', progress=False)
+            if isinstance(_irx.columns, pd.MultiIndex): _irx.columns = _irx.columns.droplevel(1)
+            risk_free = float(_irx['Close'].iloc[-1]) / 100 if not _irx.empty else 0.045
+        except Exception:
+            risk_free = 0.045
+    end = datetime.now(); start = end - timedelta(days=756)  # 3년 → 공분산 더 안정적
     prices = pd.DataFrame()
     valid_tickers = []
     for tk in tickers:
@@ -3196,7 +3203,12 @@ def get_factor_timing_weights():
         regime += ' + 금리하락(모멘텀↑)'
 
     total = sum(w.values())
-    w = {k: round(v/total, 2) for k, v in w.items()}
+    w = {k: v / total for k, v in w.items()}
+    # 3자리 반올림 후 합계 오차를 가장 큰 항목에 보정 (round 2에서 합≠1.0 방지)
+    w = {k: round(v, 3) for k, v in w.items()}
+    _diff = round(1.0 - sum(w.values()), 3)
+    if _diff:
+        w[max(w, key=w.get)] = round(w[max(w, key=w.get)] + _diff, 3)
     env = {'vix': round(vix, 1), 'vix_avg': round(vix_avg, 1),
            'rate': round(rate, 2), 'rate_chg': round(rate_chg, 2), 'regime': regime}
     return w, env
