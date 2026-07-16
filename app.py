@@ -1655,7 +1655,7 @@ def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
     dd_series = (eq_s - roll_max) / roll_max * 100
     mdd       = float(dd_series.min())
     daily_ret = eq_s.pct_change().dropna().iloc[19:]  # 워밍업 0수익률 19개 제외
-    sharpe    = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0
+    sharpe    = float((daily_ret.mean() - 0.045/252) / daily_ret.std() * np.sqrt(252)) if daily_ret.std() > 0 else 0
     calmar    = cagr / abs(mdd) if mdd < 0 else 0.0
 
     sells = [t for t in trades if '매도' in t['구분']]
@@ -2455,8 +2455,7 @@ def calc_dcf(ticker, treasury_yield=4.5):
         eps  = info.get('trailingEps') or info.get('forwardEps')
         if not eps or eps <= 0: return None, {}
         g_raw = info.get('earningsGrowth')
-        if g_raw is None: g_raw = info.get('revenueGrowth')
-        if g_raw is None: g_raw = 0.07
+        if g_raw is None: g_raw = 0.07  # revenueGrowth는 EPS 성장과 다르므로 사용 안 함; 보수적 기본값 7%
         g = float(g_raw) * 100 if abs(float(g_raw)) <= 1 else float(g_raw)
         g = max(min(g, 30.0), -5.0)
         y = max(treasury_yield, 1.0)
@@ -2477,7 +2476,7 @@ def calc_dcf(ticker, treasury_yield=4.5):
 def calc_risk_metrics(ticker):
     """Beta, 역사적 VaR(95%/99%), CVaR, 연간변동성, Sharpe"""
     try:
-        end = datetime.now(); start = end - timedelta(days=390)
+        end = datetime.now(); start = end - timedelta(days=756)  # 3년 → Beta 더 안정적
         sdf   = download_stock(ticker, start=start, end=end)
         spydf = download_stock('SPY', start=start, end=end)
         sr = sdf['Close'].pct_change().dropna()
@@ -2485,20 +2484,29 @@ def calc_risk_metrics(ticker):
         idx = sr.index.intersection(mr.index)
         if len(idx) < 60: return {}
         sr = sr.loc[idx]; mr = mr.loc[idx]
+        # 현재 ^IRX(3M T-bill) 기반 무위험수익률
+        try:
+            _irx = yf.download('^IRX', period='5d', progress=False)
+            if isinstance(_irx.columns, pd.MultiIndex): _irx.columns = _irx.columns.droplevel(1)
+            rf_annual = float(_irx['Close'].iloc[-1]) / 100 if not _irx.empty else 0.045
+        except Exception:
+            rf_annual = 0.045
+        rf_label = f"{rf_annual*100:.1f}%"
         beta   = np.cov(sr.values, mr.values)[0][1] / (np.var(mr.values) + 1e-12)
         var95  = float(np.percentile(sr.values, 5))  * 100
         var99  = float(np.percentile(sr.values, 1))  * 100
         thresh = np.percentile(sr.values, 5)
         cvar95 = float(sr[sr <= thresh].mean()) * 100 if (sr <= thresh).any() else var95
         vol    = float(sr.std()) * np.sqrt(252) * 100
-        sharpe = float((sr.mean() - 4.5/252/100) / sr.std() * np.sqrt(252)) if sr.std() > 0 else 0
+        daily_rf = rf_annual / 252
+        sharpe = float((sr.mean() - daily_rf) / sr.std() * np.sqrt(252)) if sr.std() > 0 else 0
         return {
             'Beta': round(beta, 2),
             'VaR 95% (1일)': f"{var95:.2f}%",
             'VaR 99% (1일)': f"{var99:.2f}%",
             'CVaR 95%': f"{cvar95:.2f}%",
             '연간 변동성': f"{vol:.1f}%",
-            'Sharpe (RF 4.5%)': round(sharpe, 2),
+            f'Sharpe (RF {rf_label})': round(sharpe, 2),
         }
     except:
         return {}
