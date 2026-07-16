@@ -3,9 +3,13 @@
 GitHub Actions 크론(매일 장마감 후)에서 실행되며, Tab6(퀀트)의
 generate_system_signals()를 그대로 호출해 매수/매도 후보를 알려준다.
 자동 주문은 하지 않음 — 알림을 보고 사용자가 직접 매매한다.
+
+매수 시그널은 signal_log.json에 기록되어 21일 후 수익률을 자동 추적한다.
 """
+import json
 import os
 import sys
+from datetime import datetime, date
 
 import app as core
 
@@ -91,6 +95,57 @@ def main():
     ok, err = core.send_telegram(token, chat_id, msg)
     print(f"텔레그램 발송: {'성공' if ok else f'실패 ({err})'}")
     print(msg)
+
+    # ── 매수 시그널 → signal_log.json 저장 ──────────────────────────
+    save_signal_log(actions)
+
+
+def save_signal_log(actions):
+    """매수 시그널을 signal_log.json에 기록. 당일 중복은 건너뜀."""
+    buy_actions = [a for a in actions if '매수' in a['action']]
+    if not buy_actions:
+        print("매수 시그널 없음 — signal_log.json 업데이트 생략.")
+        return
+
+    log_path = os.path.join(os.path.dirname(__file__), "signal_log.json")
+    existing: dict = {}
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, encoding='utf-8') as f:
+                existing = json.load(f)
+        except Exception as e:
+            print(f"signal_log.json 로드 오류 (초기화): {e}")
+
+    signals = existing.get('signals', [])
+    today = date.today().isoformat()
+    existing_keys = {(s.get('symbol'), s.get('entry_date')) for s in signals}
+    added = 0
+
+    for a in buy_actions:
+        raw_price = a['price'].replace('$', '').replace('₩', '').replace(',', '')
+        try:
+            raw_price = float(raw_price)
+        except ValueError:
+            raw_price = 0.0
+        if (a['ticker'], today) not in existing_keys:
+            signals.append({
+                'symbol':      a['ticker'],
+                'entry_date':  today,
+                'entry_price': raw_price,
+                'action':      a['action'],
+                'reason':      a['reason'],
+                'source':      'github_actions',
+                'return_pct':  None,
+            })
+            existing_keys.add((a['ticker'], today))
+            added += 1
+
+    if added:
+        with open(log_path, 'w', encoding='utf-8') as f:
+            json.dump({'signals': signals}, f, ensure_ascii=False, indent=2)
+        print(f"signal_log.json: {added}건 신규 기록 (누적 {len(signals)}건)")
+    else:
+        print("signal_log.json: 당일 신규 시그널 없음 (중복 스킵).")
 
 
 if __name__ == "__main__":

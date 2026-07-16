@@ -32,6 +32,9 @@ concurrency:
   group: signal-alerts
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   signal-scan:
     runs-on: ubuntu-latest
@@ -61,3 +64,16 @@ jobs:
           SECTOR_NEUTRAL:   ${{ github.event.inputs.sector_neutral || 'true' }}
           FACTOR_TIMING:    ${{ github.event.inputs.factor_timing || 'true' }}
         run: python signal_worker.py
+
+      - name: 시그널 로그 커밋 (변경 있을 때만)
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add signal_log.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: signal log update $(date -u +%Y-%m-%d)"
+            git pull --rebase origin main
+            git push
+          else
+            echo "signal_log.json 변경 없음 — 커밋 생략"
+          fi
