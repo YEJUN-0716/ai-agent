@@ -18,7 +18,7 @@ on:
       capital:
         description: "종목당 가상 투자금 (달러, 수량 계산용)"
         required: false
-        default: "10000"
+        default: "100000"
       sector_neutral:
         description: "섹터 중립 팩터 스코어 사용 여부 (true/false)"
         required: false
@@ -57,7 +57,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           UNIVERSE:         ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
           TOP_N:            ${{ github.event.inputs.top_n || '5' }}
-          CAPITAL:          ${{ github.event.inputs.capital || '10000' }}
+          CAPITAL:          ${{ github.event.inputs.capital || '100000' }}
           SECTOR_NEUTRAL:   ${{ github.event.inputs.sector_neutral || 'true' }}
           FACTOR_TIMING:    ${{ github.event.inputs.factor_timing || 'true' }}
         run: python signal_worker.py

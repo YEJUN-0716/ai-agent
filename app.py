@@ -6664,25 +6664,28 @@ def main():
                         except ValueError:
                             st.error("JSON 파싱 오류")
 
-            # ── 토스 자동매매 성과 안내 ──────────────────────────
-            with st.expander("📈 토스증권 자동매매 성과 모니터링", expanded=True):
+            # ── 시그널 자동 발송 현황 ──────────────────────────
+            with st.expander("📡 시그널 자동 발송 현황", expanded=True):
                 st.markdown(
                     """
-자동매매 실행 결과는 **텔레그램 봇**으로 매일 수신됩니다.
+**⚠️ 현재 모드: 시그널 발송 전용 — 실제 주문 없음**
 
-**확인 방법:**
-- 텔레그램에서 일별 P&L 리포트 확인 (`daily_report_toss.py`)
-- GitHub Actions → `paper-trade.yml` 로그에서 실행 내역 확인
-- `equity_log.json`: 일별 자산가치 추적
-- `signal_log.json`: 매수/매도 시그널 이력
+매일 장마감 후 퀀트 시스템이 자동으로 시그널을 스캔해 **텔레그램**으로 발송합니다.
+시그널을 받은 후 직접 판단해서 수동으로 매매하세요.
 
-**주요 성과 지표 (GitHub Actions 로그):**
-- 총 자산 · 매수여력 · 당일 수익률
-- 보유 포지션 목록 · 미실현 손익
-- 누적 수익률 · Sharpe · 최대낙폭(MDD)
+**자동 스캔 일정:**
+- 미국 장마감 후 UTC 22:30 (월~금) — `signal-alerts.yml`
+
+**텔레그램으로 수신되는 내용:**
+- 매수 / 조건부 매수 / 매도 / 관망 시그널
+- 종목별 현재가 · 가상 투자금 배분 · 수량 · 근거
+
+**시그널 적중률 추적:**
+- 매수 시그널은 `signal_log.json`에 자동 기록
+- 퀀트탭 → 시스템 시그널 → '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
 """
                 )
-                st.caption("⚙️ 자동 실행: `.github/workflows/paper-trade.yml` (국내) / `paper-trade-us.yml` (미국)")
+                st.caption("⚙️ `.github/workflows/signal-alerts.yml` · `signal_worker.py` — 실제 주문 워크플로는 비활성화 상태")
 
         # ── qt_sub10: 세금 계산기 ─────────────────────────────────
         with qt_sub10:

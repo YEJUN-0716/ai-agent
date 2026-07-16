@@ -1,11 +1,10 @@
 name: 페이퍼 트레이딩 자동 실행 (Toss - 미국)
 
 on:
-  schedule:
-    # 미국 장마감(ET 16:00) 후 실행
-    # 夏(EDT, UTC-4): 21:30 UTC = 17:30 EDT → 마감 1.5시간 후
-    # 冬(EST, UTC-5): 21:30 UTC = 16:30 EST → 마감 30분 후
-    - cron: "30 21 * * 1-5"
+  # ⚠️ 크론 스케줄 비활성화 — 시그널 전용 모드 (실제 주문 없음)
+  # 자동 스캔은 signal-alerts.yml 이 담당
+  # schedule:
+  #   - cron: "30 21 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -99,7 +98,7 @@ jobs:
           MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '2' }}
           NEUTRAL_MAX_POSITIONS: ${{ github.event.inputs.neutral_max_positions || '7' }}
           BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '4' }}
-          DRY_RUN:               ${{ github.event.inputs.dry_run || 'false' }}
+          DRY_RUN:               ${{ github.event.inputs.dry_run || 'true' }}
         run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널 로그)

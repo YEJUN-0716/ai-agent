@@ -58,7 +58,7 @@ def main():
 
     universe_raw = os.environ.get('UNIVERSE', 'S&P 500 대형 30')
     top_n = int(os.environ.get('TOP_N', '5'))
-    capital = float(os.environ.get('CAPITAL', '10000'))
+    capital = float(os.environ.get('CAPITAL', '100000'))
     sector_neutral = _env_bool('SECTOR_NEUTRAL', True)
     factor_timing = _env_bool('FACTOR_TIMING', True)
 
