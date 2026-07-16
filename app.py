@@ -3090,7 +3090,16 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capi
             mom = calc_momentum(df); mom_3m = mom.get('3M', 0) or 0
             in_buy = tk in buy_candidates; in_sell = tk in sell_candidates
             trend_up = cp > ma20 > ma60; trend_dn = cp < ma20 < ma60
-            oversold = rsi < 35; overbought = rsi > 70
+            # 거래량 확인 (평균 대비 80% 미만이면 신호 신뢰도 낮음)
+            vr = float(df['Volume'].iloc[-1]) / (float(df['Volume'].rolling(20).mean().iloc[-1]) + 1e-9)
+            vol_confirm = vr >= 0.8
+            # 강한 상승추세 판단 (ADX > 25 + pdi > ndi)
+            _adx_s, _pdi_s, _ndi_s = calc_adx(df['High'], df['Low'], p)
+            _adx_v = float(_adx_s.iloc[-1]) if not np.isnan(float(_adx_s.iloc[-1])) else 20
+            strong_trend_up = trend_up and _adx_v > 25 and float(_pdi_s.iloc[-1]) > float(_ndi_s.iloc[-1])
+            # 강한 추세에서 과매수 임계 완화 (모멘텀 종목 과도 차단 방지)
+            overbought_th = 80 if strong_trend_up else 70
+            oversold = rsi < 35; overbought = rsi > overbought_th
             target_w = weights.get(tk, 0) if weights else (1.0/top_n if in_buy else 0)
 
             f_score_v = 0
@@ -3113,12 +3122,16 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capi
                         'price': fp, 'alloc': alloc_str, 'qty': qty_str,
                         'reason': reason, 'priority': priority, 'mom': f"{mom_3m:+.1f}%"}
 
-            if in_buy and is_top_factor and not overbought:
+            if in_buy and is_top_factor and not overbought and vol_confirm:
                 actions.append(_make_action('🟢 매수', target_w,
-                    f"팩터 {f_score_v:.0f}점 (최상위) — 추세 무관 진입 (RSI {rsi:.0f})", 'HIGH'))
+                    f"팩터 {f_score_v:.0f}점 (최상위) — 거래량 확인 (RSI {rsi:.0f})", 'HIGH'))
+            elif in_buy and is_top_factor and not overbought and not vol_confirm:
+                actions.append(_make_action('🟡 조건부 매수', target_w * 0.7,
+                    f"팩터 {f_score_v:.0f}점 (최상위) — 거래량 부족({vr:.1f}×), 소량 선진입", 'NORMAL'))
             elif in_buy and (trend_up or oversold) and not overbought:
+                vol_note = '' if vol_confirm else f' | 거래량 주의({vr:.1f}×)'
                 actions.append(_make_action('🟢 매수', target_w,
-                    f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f})",
+                    f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f}){vol_note}",
                     'HIGH' if oversold else 'NORMAL'))
             elif in_buy and is_strong_factor and not overbought:
                 actions.append(_make_action('🟡 조건부 매수', target_w * 0.7,
@@ -3138,9 +3151,9 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capi
         except Exception:
             continue
 
-    rebal_days = 20 - (datetime.now().timetuple().tm_yday % 20)
+    rebal_days = (20 - datetime.now().timetuple().tm_yday % 20) % 20
     rebal_info = {
-        'next_rebal': f"{rebal_days}일 후",
+        'next_rebal': '오늘 리밸런싱' if rebal_days == 0 else f"{rebal_days}일 후",
         'buy_count': sum(1 for a in actions if '매수' in a['action']),
         'sell_count': sum(1 for a in actions if '매도' in a['action'] or '축소' in a['action']),
         'hold_count': sum(1 for a in actions if '관망' in a['action'] or '대기' in a['action']),
