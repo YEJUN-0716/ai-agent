@@ -124,16 +124,23 @@ def main():
         for fail in failures:
             print(f"  [{fail['date']}] {fail['ticker']} — {fail['event']}")
 
+    ic_unavailable = [f for f, s in per_factor.items() if s.get("n", 0) == 0]
     output = {
         "updated":               datetime.now(timezone.utc).isoformat(),
         "universe_size":         len(TICKERS),
         "lookback_years":        LOOKBACK_YEARS,
         "per_factor_ic":         per_factor,
+        "ic_unavailable_factors": ic_unavailable,
         "regime_weights":        ic_rw,
         "out_of_sample_validation": oos,
         "caveats": {
-            "survivorship_bias_warning":      warning,
-            "known_failures_in_lookback":     failures,
+            "survivorship_bias_warning":  warning,
+            "known_failures_in_lookback": failures,
+            "ic_data_note": (
+                f"IC 미계산 팩터 {ic_unavailable}: PIT 재무 데이터 미확보 "
+                "→ 기본 REGIME_WEIGHTS 비례 배분 적용중. "
+                "SimFin·EDGAR 연동 시 해결 가능."
+            ) if ic_unavailable else "",
         },
     }
     with open(IC_WEIGHT_FILE, "w") as f:

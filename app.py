@@ -2826,12 +2826,39 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 # ─────────────────────────────────────────────
 
 def _zscore_to_score(series):
-    """Z-score를 20~80 범위의 점수로 변환. 평균=50, ±2σ가 20/80."""
+    """Z-score를 20~80 범위의 점수로 변환. 평균=50, ±2σ가 20/80. 1~99% 윈저라이징 적용."""
+    lo, hi = series.quantile(0.01), series.quantile(0.99)
+    series = series.clip(lo, hi)
     m = series.mean(); s = series.std()
     if pd.isna(s) or s < 1e-9:
         return pd.Series(50.0, index=series.index)
     z = (series - m) / s
     return (z * 15 + 50).clip(20, 80).fillna(50.0)
+
+def _load_ic_factor_weights_4f(regime=None):
+    """ic_weights.json의 6팩터 레짐 가중치를 4팩터(momentum/value/quality/low_vol)로 매핑."""
+    try:
+        import json as _json, os as _os
+        ic_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'ic_weights.json')
+        with open(ic_path, encoding='utf-8') as _f:
+            _d = _json.load(_f)
+        if regime is None:
+            regime, _ = get_market_regime()
+        rw = _d.get('regime_weights', {}).get(regime, {})
+        if not rw:
+            return None
+        momentum = rw.get('mom_3m', 0) + rw.get('mom_1m', 0)
+        value    = rw.get('value',   0)
+        quality  = rw.get('quality', 0)
+        low_vol  = rw.get('low_vol', 0)
+        total_4f = momentum + value + quality + low_vol
+        if total_4f < 0.01:
+            return None
+        return {k: v / total_4f for k, v in
+                [('momentum', momentum), ('value', value), ('quality', quality), ('low_vol', low_vol)]}
+    except Exception:
+        return None
+
 
 def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                        extra_factors=False, min_avg_volume=0, factor_weights=None):
@@ -2856,12 +2883,15 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                 avg_vol = float(df['Volume'].tail(20).mean()) if 'Volume' in df.columns else 0
                 if avg_vol < min_avg_volume:
                     failed.append(tk); continue
-            mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
-            mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+            # P1-A: skip-1M 모멘텀 (2~12개월 누적, 단기 역전 제거)
+            mom_skip1m = ((float(df['Close'].iloc[-21]) / float(df['Close'].iloc[-252]) - 1) * 100
+                          if len(df) >= 252 else 0)
             daily_ret = df['Close'].pct_change().dropna()
-            annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
+            # P2-A: trailing 252일 변동성 (전체 기간 사용 시 과거 급등락 오염 방지)
+            annual_vol = float(daily_ret.tail(252).std()) * np.sqrt(252) * 100
 
-            per, pbr, roe_v, pm_v, rg_v, name = None, None, 0, 0, 0, tk
+            per, pbr, roe_v, pm_v, name = None, None, 0, 0, tk
+            fcf_yield_pct, accrual_q = 0.0, 50.0
             info = {}
             try:
                 info = yf.Ticker(tk).info or {}
@@ -2872,9 +2902,16 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                 roe_v = round(roe * 100, 2) if roe is not None else 0
                 pm = info.get('profitMargins')
                 pm_v = (pm*100 if pm else 0)
-                rg = info.get('revenueGrowth')
-                rg_v = (rg*100 if rg else 0)
                 name = info.get('shortName', tk)[:20]
+                # P3-A: FCF 수익률 (밸류 팩터 보완)
+                fcf  = info.get('freeCashflow')
+                mcap = info.get('marketCap')
+                ni_v = info.get('netIncomeToCommon')
+                if fcf and mcap and mcap > 0:
+                    fcf_yield_pct = fcf / mcap * 100
+                # P3-B: 발생액 역수 (FCF/NI > 1 = 현금이익 > 회계이익 = 이익 품질 높음)
+                if fcf and ni_v and ni_v > 0:
+                    accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
             except Exception:
                 pass
 
@@ -2882,9 +2919,12 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
             row = {
                 'ticker': tk, 'name': name, 'price': cp,
-                'momentum_raw': round(mom_12m - mom_1m, 2),
-                'value_raw': round(ep*0.5+bp*0.5, 2),
-                'quality_raw': round(roe_v*0.4+pm_v*0.3+rg_v*0.3, 2),
+                # P1-A: skip-1M 공식
+                'momentum_raw': round(mom_skip1m, 2),
+                # P3-A: EP 40% + BP 30% + FCF수익률 30%
+                'value_raw': round(ep*0.40 + bp*0.30 + fcf_yield_pct*0.30, 2),
+                # P2-B: 매출성장률 제거, P3-B: 발생액 품질 추가
+                'quality_raw': round(roe_v*0.45 + pm_v*0.35 + accrual_q*0.20, 2),
                 'low_vol_raw': round(max(100-annual_vol, 0), 2),
                 'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
             }
@@ -2913,12 +2953,19 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             extra_cols.append(fname)
             extra_w.append(w)
     base_w = 1 - sum(extra_w)
-    _fw = factor_weights or {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+    # P1-B: low_vol 기본값 축소 (IC ICIR=-0.199 반영), P2-C: IC가중치 블렌딩
+    _default_fw = {'momentum': 0.35, 'value': 0.25, 'quality': 0.32, 'low_vol': 0.08}
+    if factor_weights is None:
+        _ic_fw = _load_ic_factor_weights_4f()
+        _fw = ({k: _default_fw[k] * 0.5 + _ic_fw.get(k, _default_fw[k]) * 0.5 for k in _default_fw}
+               if _ic_fw else _default_fw)
+    else:
+        _fw = factor_weights
     _fw_sum = sum(_fw.values()) or 1.0
-    rdf['composite'] = (rdf['momentum'] * _fw.get('momentum', 0.30) / _fw_sum * base_w +
+    rdf['composite'] = (rdf['momentum'] * _fw.get('momentum', 0.35) / _fw_sum * base_w +
                         rdf['value']    * _fw.get('value',    0.25) / _fw_sum * base_w +
-                        rdf['quality']  * _fw.get('quality',  0.30) / _fw_sum * base_w +
-                        rdf['low_vol']  * _fw.get('low_vol',  0.15) / _fw_sum * base_w)
+                        rdf['quality']  * _fw.get('quality',  0.32) / _fw_sum * base_w +
+                        rdf['low_vol']  * _fw.get('low_vol',  0.08) / _fw_sum * base_w)
     for fname, w in zip(extra_cols, extra_w):
         rdf['composite'] += rdf[fname] * w
     rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
@@ -3098,13 +3145,16 @@ def get_factor_timing_weights():
         vix, vix_avg, rate, rate_chg = 20, 20, 4.0, 0
 
     if vix > 25:
+        # 고변동성: 저변동성 보호 유지 (IC 음수여도 하락장 방어 역할)
         w = {'momentum': 0.15, 'value': 0.25, 'quality': 0.35, 'low_vol': 0.25}
         regime = '고변동성 — 퀄리티·저변동 강조'
     elif vix < 15:
-        w = {'momentum': 0.40, 'value': 0.20, 'quality': 0.25, 'low_vol': 0.15}
+        # P1-B: low_vol ICIR=-0.199 반영, 모멘텀 강화
+        w = {'momentum': 0.45, 'value': 0.22, 'quality': 0.25, 'low_vol': 0.08}
         regime = '저변동성 — 모멘텀 강조'
     else:
-        w = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
+        # P1-B: 보통 국면도 low_vol 축소
+        w = {'momentum': 0.35, 'value': 0.25, 'quality': 0.32, 'low_vol': 0.08}
         regime = '보통'
 
     if rate_chg > 0.3:
@@ -3140,11 +3190,14 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
             if len(df) < 30: continue
             cp = float(df['Close'].iloc[-1])
             daily_ret = df['Close'].pct_change().dropna()
-            annual_vol = float(daily_ret.std()) * np.sqrt(252) * 100
-            mom_12m = (cp / float(df['Close'].iloc[-252]) - 1) * 100 if len(df) >= 252 else 0
-            mom_1m = (cp / float(df['Close'].iloc[-21]) - 1) * 100 if len(df) >= 21 else 0
+            # P2-A: trailing 252일 변동성
+            annual_vol = float(daily_ret.tail(252).std()) * np.sqrt(252) * 100
+            # P1-A: skip-1M 모멘텀 (2~12개월 누적)
+            mom_skip1m = ((float(df['Close'].iloc[-21]) / float(df['Close'].iloc[-252]) - 1) * 100
+                          if len(df) >= 252 else 0)
 
-            sector, per, pbr, roe_v, pm_v, rg_v, name = 'Unknown', None, None, 0, 0, 0, tk
+            sector, per, pbr, roe_v, pm_v, name = 'Unknown', None, None, 0, 0, tk
+            fcf_yield_pct, accrual_q = 0.0, 50.0
             try:
                 info = yf.Ticker(tk).info or {}
                 sector = info.get('sector', 'Unknown')
@@ -3154,9 +3207,16 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
                 roe_v = round(roe * 100, 2) if roe is not None else 0
                 pm = info.get('profitMargins')
                 pm_v = (pm*100 if pm else 0)
-                rg = info.get('revenueGrowth')
-                rg_v = (rg*100 if rg else 0)
                 name = info.get('shortName', tk)[:20]
+                # P3-A: FCF 수익률 (밸류 팩터 보완)
+                fcf  = info.get('freeCashflow')
+                mcap = info.get('marketCap')
+                ni_v = info.get('netIncomeToCommon')
+                if fcf and mcap and mcap > 0:
+                    fcf_yield_pct = fcf / mcap * 100
+                # P3-B: 발생액 역수 (이익 품질)
+                if fcf and ni_v and ni_v > 0:
+                    accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
             except Exception:
                 pass
 
@@ -3164,8 +3224,9 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
             bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
             results.append({
                 'ticker': tk, 'name': name, 'price': cp, 'sector': sector,
-                'momentum_raw': mom_12m - mom_1m, 'value_raw': ep*0.5+bp*0.5,
-                'quality_raw': roe_v*0.4+pm_v*0.3+rg_v*0.3,
+                'momentum_raw': mom_skip1m,
+                'value_raw': ep*0.40 + bp*0.30 + fcf_yield_pct*0.30,
+                'quality_raw': roe_v*0.45 + pm_v*0.35 + accrual_q*0.20,
                 'low_vol_raw': max(100-annual_vol, 0),
                 'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
             })
