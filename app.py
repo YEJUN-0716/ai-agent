@@ -5280,7 +5280,8 @@ def main():
 
             sc1, sc2, sc3 = st.columns(3)
             qt_top_n = sc1.slider("매수 후보 수 (Top N)", 3, 10, 5, key="qt_top_n")
-            qt_capital = sc2.number_input("총 투자금", min_value=100, value=10000, step=1000, key="qt_capital")
+            qt_capital = sc2.number_input("가상 투자금 $ (시뮬레이션 전용, 실거래 없음)",
+                                          min_value=1000, value=100000, step=10000, key="qt_capital")
             qt_rebal = sc3.selectbox("리밸런싱 주기", ["월간 (20일)", "격주 (10일)", "주간 (5일)"],
                                       key="qt_rebal")
 
@@ -5293,6 +5294,33 @@ def main():
                         qt_tickers, factor_df=fdf, weights=opt_w,
                         top_n=qt_top_n, capital=qt_capital)
                 st.session_state['qt_signals'] = {'actions': actions, 'rebal': rebal}
+
+                # ── 매수 시그널 → signal_log.json 저장 ──────────────────
+                import json as _json_w
+                _sl_path_w = os.path.join(os.path.dirname(__file__), "signal_log.json")
+                _buy_acts  = [a for a in actions if '매수' in a['action']]
+                if _buy_acts:
+                    _existing_w: dict = {}
+                    if os.path.exists(_sl_path_w):
+                        try:
+                            with open(_sl_path_w) as _fw: _existing_w = _json_w.load(_fw)
+                        except Exception: pass
+                    _sigs_w = _existing_w.get('signals', [])
+                    _today_w = datetime.now().strftime('%Y-%m-%d')
+                    _existing_keys = {(s.get('symbol'), s.get('entry_date')) for s in _sigs_w}
+                    for _a in _buy_acts:
+                        _raw_px = _a['price'].replace('$','').replace('₩','').replace(',','')
+                        try: _raw_px = float(_raw_px)
+                        except Exception: _raw_px = 0.0
+                        if (_a['ticker'], _today_w) not in _existing_keys:
+                            _sigs_w.append({'symbol': _a['ticker'], 'entry_date': _today_w,
+                                            'entry_price': _raw_px, 'action': _a['action'],
+                                            'reason': _a['reason'], 'source': 'app',
+                                            'return_pct': None})
+                    try:
+                        with open(_sl_path_w, 'w') as _fw2:
+                            _json_w.dump({'signals': _sigs_w}, _fw2, ensure_ascii=False, indent=2)
+                    except Exception: pass
 
             if 'qt_signals' in st.session_state:
                 qs = st.session_state['qt_signals']
@@ -5352,24 +5380,24 @@ def main():
                         st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
                     st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
 
-                # ── 토스증권 자동매매 안내 ────────────────────
-                with st.expander("🤖 토스증권 자동매매 시스템", expanded=False):
+                # ── 시그널 자동 발송 안내 ─────────────────────
+                with st.expander("📡 시그널 자동 발송 (GitHub Actions → 텔레그램)", expanded=False):
                     st.markdown(
                         """
-**GitHub Actions 기반 자동 실행 파이프라인**
+**⚠️ 이 시스템은 시그널 발송 전용입니다 — 실제 주문 집행 없음.**
 
 | 구분 | 실행 시간 | 워크플로 |
 |------|-----------|----------|
-| 🇰🇷 국내 (KRX) | 매일 장마감 후 UTC 07:00 | `paper-trade.yml` |
-| 🇺🇸 미국 | 매일 장마감 후 UTC 21:30 | `paper-trade-us.yml` |
+| 🇺🇸 미국 장 마감 후 | 매일 UTC 21:30 (월~금) | `signal-alerts.yml` |
 
-- 시그널 생성 → 토스증권 API → 자동 주문 전송
-- 매수·매도·스톱로스 결과는 **텔레그램**으로 실시간 알림
-- 결과는 `equity_log.json`, `signal_log.json`에 자동 저장 (GitHub Actions commit)
+- 장마감 후 유니버스 전체 스캔 → 팩터 상위 종목 필터링
+- 매수 / 매도 / 조건부 매수 시그널만 **텔레그램**으로 발송
+- 실제 주문은 발송하지 않으며, 직접 판단 후 수동 매매
+- 발송 기록은 `signal_log.json`에 저장 → 아래 적중률 추적에 활용
 """,
                         unsafe_allow_html=False,
                     )
-                    st.caption("⚙️ `.github/workflows/paper-trade.yml` 및 `paper_trade_runner_toss.py` 참고")
+                    st.caption("⚙️ `.github/workflows/signal-alerts.yml` 및 `signal_worker.py` 참고")
 
                 # ── 패턴 필터 ──────────────────────────────────
                 buy_tkrs = [a['ticker'] for a in actions if '매수' in a['action']]
@@ -5438,13 +5466,49 @@ def main():
             # ── 시그널 적중률 추적 (signal_log.json) ─────────────
             st.divider()
             st.subheader("📊 과거 시그널 적중률")
-            st.caption("GitHub Actions 페이퍼 트레이딩이 발생시킨 매수 시그널의 21일 후 실제 수익률 통계.")
+            st.caption("앱 또는 GitHub Actions에서 발생한 매수 시그널의 21일 후 실제 수익률 추적.")
             import json as _json
             _sl_path = os.path.join(os.path.dirname(__file__), "signal_log.json")
             if os.path.exists(_sl_path):
                 try:
                     with open(_sl_path) as _slf:
                         _sl_data = _json.load(_slf).get("signals", [])
+
+                    # 21일 이상 경과한 미평가 시그널 → 현재가 조회 후 return_pct 계산
+                    _today_dt = datetime.now().date()
+                    _needs_eval = [s for s in _sl_data
+                                   if s.get('return_pct') is None
+                                   and s.get('entry_date') and s.get('entry_price')
+                                   and (_today_dt - pd.to_datetime(s['entry_date']).date()).days >= 21]
+                    if _needs_eval:
+                        _eval_tickers = list({s['symbol'] for s in _needs_eval})
+                        _cur_prices: dict = {}
+                        for _etk in _eval_tickers:
+                            try:
+                                _ep_df = yf.download(_etk, period='2d', progress=False)
+                                if isinstance(_ep_df.columns, pd.MultiIndex):
+                                    _ep_df.columns = _ep_df.columns.droplevel(1)
+                                if not _ep_df.empty:
+                                    _cur_prices[_etk] = float(_ep_df['Close'].dropna().iloc[-1])
+                            except Exception:
+                                pass
+                        _log_updated = False
+                        for _s in _sl_data:
+                            if (_s.get('return_pct') is None and _s.get('symbol') in _cur_prices
+                                    and _s.get('entry_price') and _s['entry_price'] > 0):
+                                _age = (_today_dt - pd.to_datetime(_s['entry_date']).date()).days
+                                if _age >= 21:
+                                    _s['return_pct'] = round(
+                                        (_cur_prices[_s['symbol']] / _s['entry_price'] - 1) * 100, 2)
+                                    _log_updated = True
+                        if _log_updated:
+                            try:
+                                with open(_sl_path, 'w') as _slf2:
+                                    _json.dump({'signals': _sl_data}, _slf2,
+                                               ensure_ascii=False, indent=2)
+                            except Exception:
+                                pass
+
                     _sl_done = [s for s in _sl_data if s.get("return_pct") is not None]
                     _sl_pend = [s for s in _sl_data if s.get("return_pct") is None]
                     if _sl_done:
@@ -5479,14 +5543,22 @@ def main():
                         )
                         st.plotly_chart(_fig_sl, width='stretch')
                     else:
-                        st.info("아직 판정된 시그널이 없습니다. 페이퍼 트레이딩이 21일 이상 실행되면 결과가 쌓입니다.")
+                        if _sl_pend:
+                            st.info(f"대기 중인 시그널 {len(_sl_pend)}건 — 시그널 발생 21일 후 자동 평가됩니다.")
+                        else:
+                            st.info("아직 시그널 기록이 없습니다. '시스템 시그널 생성'을 실행하면 매수 시그널이 자동 기록됩니다.")
                 except Exception as _e:
                     st.warning(f"시그널 로그 로드 오류: {_e}")
             else:
-                st.info("signal_log.json 없음 — 페이퍼 트레이딩 첫 실행 후 생성됩니다.")
+                st.info("signal_log.json 없음 — 시그널을 생성하면 자동으로 만들어집니다.")
 
         with qt_sub4:
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
+            st.info(
+                "**⚠️ 생존자 편향 주의** — 현재 선택된 유니버스는 *지금* 살아있는 종목만 포함합니다. "
+                "백테스트 기간 중 퇴출·상장폐지된 종목은 자동으로 제외되어 실제보다 수익률이 "
+                "과대평가될 수 있습니다. 워크-포워드 검증(학습/검증 분리) 결과를 함께 참고하세요."
+            )
 
             btc1, btc2 = st.columns(2)
             bt_years = btc1.selectbox("백테스트 기간", [1, 2, 3, 5], index=2, format_func=lambda x: f"{x}년", key="qt_bt_years")
