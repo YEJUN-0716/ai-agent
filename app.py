@@ -3193,6 +3193,7 @@ def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capi
 
 
 UNIVERSE_PRESETS = {
+    # ── 기존 프리셋 ───────────────────────────────────────────────────────────
     'S&P 500 대형 30': ['AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','BRK-B','JPM','V',
                         'JNJ','UNH','XOM','PG','HD','MA','ABBV','MRK','KO','PEP',
                         'COST','AVGO','LLY','WMT','MCD','CRM','ADBE','CSCO','ACN','TMO'],
@@ -3205,6 +3206,76 @@ UNIVERSE_PRESETS = {
     '한국 대형 15': ['005930.KS','000660.KS','035420.KS','005380.KS','051910.KS',
                     '006400.KS','035720.KS','003670.KS','105560.KS','055550.KS',
                     '000270.KS','068270.KS','028260.KS','034730.KS','012330.KS'],
+
+    # ── S&P 500 전체 (시가총액 상위 기준) ────────────────────────────────────
+    'S&P 500 전체 (500종목)': [
+        # 정보기술
+        'AAPL','MSFT','NVDA','AVGO','ORCL','CRM','ADBE','INTU','AMD','QCOM',
+        'TXN','AMAT','LRCX','KLAC','MU','SNPS','CDNS','FTNT','ANSS','EPAM',
+        'HPQ','HPE','NTAP','WDC','STX','JNPR','KEYS','TRMB','CTSH','ACN',
+        'IBM','IT','FFIV','PAYC','GDDY','GPN','FIS','FISV','PAYX','ADP',
+        # 커뮤니케이션
+        'GOOGL','META','NFLX','DIS','CMCSA','T','VZ','TMUS','CHTR','EA',
+        'ATVI','TTWO','OMC','IPG','LYV','WBD','FOX','NWSA','PARA','MTCH',
+        # 임의소비재
+        'AMZN','TSLA','HD','MCD','NKE','LOW','SBUX','TJX','BKNG','MAR',
+        'HLT','YUM','ORLY','AZO','ULTA','ROST','DG','DLTR','BBY','KMX',
+        'PHM','DHI','LEN','NVR','TOL','F','GM','APTV','BWA','LEA',
+        # 필수소비재
+        'WMT','COST','PG','KO','PEP','PM','MO','MDLZ','CL','KMB',
+        'GIS','K','SJM','CAG','HRL','MKC','CHD','CLX','EL','COTY',
+        # 헬스케어
+        'LLY','UNH','JNJ','ABBV','MRK','TMO','ABT','DHR','BMY','AMGN',
+        'GILD','VRTX','REGN','BIIB','ILMN','IQV','IDXX','WAT','MTD','A',
+        'HCA','CI','ELV','HUM','CNC','MOH','DVA','HSIC','ZBH','STE',
+        # 금융
+        'BRK-B','JPM','BAC','WFC','GS','MS','BLK','AXP','C','USB',
+        'TFC','PNC','SCHW','COF','MTB','FITB','HBAN','RF','CFG','KEY',
+        'CB','MMC','AON','MET','PRU','AFL','AIG','PGR','TRV','ALL',
+        'BX','KKR','APO','CG','ARES','TROW','IVZ','BEN','AMG','NTRS',
+        # 산업재
+        'GE','HON','CAT','UPS','BA','RTX','LMT','NOC','GD','TDG',
+        'ITW','EMR','ETN','PH','ROK','DOV','IR','XYL','GNRC','FBHS',
+        'UNP','CSX','NSC','KSU','WAB','FDX','CHRW','EXPD','GWW','FAST',
+        # 에너지
+        'XOM','CVX','COP','EOG','SLB','MPC','PSX','VLO','PXD','DVN',
+        'HAL','BKR','FANG','OXY','APA','MRO','HES','CTRA','EQT','RRC',
+        # 소재
+        'LIN','APD','SHW','ECL','PPG','NEM','FCX','NUE','STLD','RS',
+        'ALB','MOS','CF','FMC','IFF','RPM','SON','SEE','PKG','IP',
+        # 유틸리티
+        'NEE','DUK','SO','D','AEP','EXC','SRE','PEG','XEL','ED',
+        'ETR','FE','EIX','WEC','ES','AWK','CMS','NI','LNT','EVRG',
+        # 부동산
+        'AMT','PLD','CCI','EQIX','PSA','O','WELL','SPG','DLR','EQR',
+        'AVB','MAA','UDR','CPT','ESS','HST','REG','FRT','BXP','VTR',
+    ],
+
+    # ── 섹터별 대표주 ─────────────────────────────────────────────────────────
+    '헬스케어 15': ['LLY','UNH','JNJ','ABBV','MRK','TMO','ABT','DHR','BMY','AMGN',
+                   'GILD','VRTX','REGN','HCA','CI'],
+    '금융 15': ['JPM','BAC','WFC','GS','MS','BLK','AXP','C','COF','PGR',
+               'CB','MMC','BX','KKR','SCHW'],
+    '에너지 15': ['XOM','CVX','COP','EOG','SLB','MPC','PSX','VLO','PXD','DVN',
+                 'HAL','OXY','BKR','HES','FANG'],
+    '소비재·유통 15': ['AMZN','HD','MCD','NKE','LOW','SBUX','TJX','BKNG','COST','WMT',
+                      'ORLY','AZO','ROST','DG','DLTR'],
+    '산업재 15': ['GE','HON','CAT','UPS','RTX','LMT','ITW','EMR','ETN','PH',
+                 'UNP','CSX','FDX','NOC','GD'],
+    '리츠·부동산 12': ['AMT','PLD','CCI','EQIX','PSA','O','WELL','SPG','DLR','EQR',
+                      'AVB','VTR'],
+
+    # ── 성장주 테마 ───────────────────────────────────────────────────────────
+    'AI·클라우드 20': ['NVDA','MSFT','GOOGL','META','AMZN','ORCL','CRM','SNPS','CDNS','PLTR',
+                      'AI','SNOW','DDOG','MDB','NET','CFLT','ZS','CRWD','S','GTLB'],
+    'EV·자율주행 15': ['TSLA','RIVN','LCID','FSR','NIO','LI','XPEV','GM','F','APTV',
+                      'ON','MCHP','TI','NXPI','MPWR'],
+    '바이오테크 15': ['MRNA','BNTX','REGN','VRTX','BIIB','ILMN','GILD','AMGN','SGEN','ALNY',
+                     'BMRN','RARE','IONS','EXAS','FATE'],
+    '핀테크·결제 12': ['V','MA','PYPL','SQ','AFRM','SOFI','NU','UPST','LC','BILL',
+                      'FIS','FISV'],
+    '사이버보안 12': ['CRWD','ZS','PANW','FTNT','S','CYBR','OKTA','TENB','RPD','QLYS',
+                     'VRNS','SAIL'],
 }
 
 
@@ -4885,7 +4956,10 @@ def main():
                 qt_tickers = [t.strip().upper() for t in qt_input.split(',') if t.strip()]
             else:
                 qt_tickers = UNIVERSE_PRESETS[qt_preset]
-                st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
+                if len(qt_tickers) >= 100:
+                    st.warning(f"⚠️ {len(qt_tickers)}개 종목 — 조회에 수 분 이상 소요될 수 있습니다. {', '.join(qt_tickers[:8])}...")
+                else:
+                    st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
         qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6, qt_sub7, qt_sub8, qt_sub9, qt_sub10 = st.tabs([
             "팩터 랭킹", "포트폴리오 최적화", "시스템 시그널",
