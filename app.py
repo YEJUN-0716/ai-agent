@@ -1091,6 +1091,17 @@ def _score_fcf_yield(pct):
     elif pct > 0: return 35
     else:         return 15
 
+def _score_roa(v):
+    """ROA 전용 스코어 (yfinance 소수 반환 → % 변환 후 적용)"""
+    if v is None or np.isnan(v): return 50
+    r = v * 100 if abs(v) <= 1 else v   # 소수 → %
+    if r < 0:    return 10
+    elif r < 2:  return 30
+    elif r < 5:  return 50
+    elif r < 10: return 70
+    elif r < 15: return 85
+    else:        return 95
+
 def _score_int_coverage(v):
     if v is None or np.isnan(v): return 50
     if v > 15:   return 95
@@ -1229,10 +1240,10 @@ def fundamental_score(ticker, df=None):
         roa = info.get('returnOnAssets')
         pm  = info.get('profitMargins')
         pm_s = 50
-        if pm:
+        if pm is not None:   # 0.0도 의미 있는 값 — if pm: 쓰면 0% 기업이 중립 처리됨
             pp = pm*100
             pm_s = 10 if pp<0 else (40 if pp<5 else (60 if pp<10 else (80 if pp<20 else 90)))
-        det['수익성'] = _score_roe(roe)*0.4 + _score_roe(roa*300 if roa is not None else None)*0.3 + pm_s*0.3
+        det['수익성'] = _score_roe(roe)*0.4 + _score_roa(roa)*0.3 + pm_s*0.3
         det['ROE'] = roe; det['ROA'] = roa; det['순이익률'] = pm
 
         # ── 성장성 (13%) ──────────────────────────────
@@ -1243,7 +1254,7 @@ def fundamental_score(ticker, df=None):
         # ── FCF 품질 (12%): FCF수익률 ─────────────────
         fcf  = info.get('freeCashflow')
         mcap = info.get('marketCap')
-        fcf_yield = (fcf / mcap * 100) if (fcf and mcap and mcap > 0) else None
+        fcf_yield = (fcf / mcap * 100) if (fcf is not None and mcap and mcap > 0) else None
         det['FCF품질'] = float(_score_fcf_yield(fcf_yield))
         det['FCF수익률'] = fcf_yield
 
@@ -1315,13 +1326,13 @@ def macro_score():
     end = datetime.now(); start = end - timedelta(days=400)
     try:
         tnx = yf.download('^TNX',     start=start, end=end, progress=False)
-        fvx = yf.download('^FVX',     start=start, end=end, progress=False)
+        irx = yf.download('^IRX',     start=start, end=end, progress=False)  # 3개월 T-bill (10Y-3M 스프레드)
         vix = yf.download('^VIX',     start=start, end=end, progress=False)
         dxy = yf.download('DX-Y.NYB', start=start, end=end, progress=False)
         hyg = yf.download('HYG',      start=start, end=end, progress=False)  # 하이일드 채권
         lqd = yf.download('LQD',      start=start, end=end, progress=False)  # 투자등급 채권
         gld = yf.download('GLD',      start=start, end=end, progress=False)  # 금(인플레/공포)
-        for d in [tnx, fvx, vix, dxy, hyg, lqd, gld]:
+        for d in [tnx, irx, vix, dxy, hyg, lqd, gld]:
             if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
             d.dropna(subset=['Close'], inplace=True)
 
@@ -1334,9 +1345,10 @@ def macro_score():
             det['금리환경'] = lvl*0.4 + tr*0.6
         else: det['금리환경'] = 50.0
 
-        # ── 장단기금리차 (20%) ────────────────────────
-        if len(tnx) > 0 and len(fvx) > 0:
-            sp = float(tnx['Close'].iloc[-1]) - float(fvx['Close'].iloc[-1]); data['장단기스프레드'] = sp
+        # ── 장단기금리차 (20%) — 10Y-3M (Fed 선호 경기침체 지표) ──
+        if len(tnx) > 0 and len(irx) > 0:
+            # ^IRX = 13주 T-bill (연율 discount basis); 10Y-3M 스프레드
+            sp = float(tnx['Close'].iloc[-1]) - float(irx['Close'].iloc[-1]); data['장단기스프레드(10Y-3M)'] = sp
             det['장단기금리차'] = 80 if sp>1.5 else (70 if sp>0.5 else (50 if sp>=0 else (35 if sp>-0.5 else 20)))
         else: det['장단기금리차'] = 50.0
 
@@ -1441,10 +1453,10 @@ def bt_signals_full(df):
     # ── RSI (10%) ──────────────────────────────
     rsi = calc_rsi(p)
     rs  = pd.Series(50.0, index=p.index)
-    rs[(rsi > 60) & (rsi <= 70)] = 75
-    rs[rsi > 70]                 = 40
-    rs[(rsi >= 30) & (rsi < 40)] = 30
-    rs[rsi < 30]                 = 60
+    rs[rsi < 30]                              = 70  # 과매도 → 반등 신호
+    rs[(rsi >= 30) & (rsi < 40)]             = 60  # 과매도 회복 구간
+    rs[(rsi > 60) & (rsi <= 70)]             = 65  # 모멘텀 구간
+    rs[rsi > 70]                              = 35  # 과매수 → 조정 신호
     rs_b = pd.Series(0.0, index=p.index)
     rsi_tr = rsi - rsi.shift(10)
     rs_b[(rsi_tr > 5)  & (rsi > 40) & (rsi < 70)] = 20
@@ -1479,8 +1491,9 @@ def bt_signals_full(df):
     bs[pos < 0.2]                   = 30
     bw_now = rng / p.clip(lower=1e-9)
     bw_avg = bw_now.rolling(20).mean()
+    bull_bt = (pdi_bt > ndi_bt).fillna(False)
     bs_b = pd.Series(0.0, index=p.index)
-    bs_b[bw_now < bw_avg * 0.7] = 10
+    bs_b[(bw_now < bw_avg * 0.7) & bull_bt] = 10  # 스퀴즈 + 상승추세일 때만 보너스
     bs = (bs + bs_b).clip(0, 100).fillna(50)
 
     # ── 거래량 (7%) ────────────────────────────
@@ -1528,14 +1541,17 @@ def bt_signals_full(df):
     ads[(adx_f > 40) & ~bull]                  = 15
     ads[(adx_f > 25) & (adx_f <= 40) &  bull]  = 72
     ads[(adx_f > 25) & (adx_f <= 40) & ~bull]  = 28
-    ads[(adx_f > 18) & (adx_f <= 25) &  bull]  = 58
-    ads[(adx_f > 18) & (adx_f <= 25) & ~bull]  = 42
+    ads[(adx_f > 20) & (adx_f <= 25) &  bull]  = 58  # has_trend 기준 20과 통일
+    ads[(adx_f > 20) & (adx_f <= 25) & ~bull]  = 42
 
     # ── OBV (10%) ──────────────────────────────
     obv    = calc_obv(p, v)
     obv_ma = obv.rolling(20).mean()
-    obv_s  = pd.Series(35.0, index=p.index)
-    obv_s[obv > obv_ma] = 65
+    obv_above = (obv > obv_ma); obv_rising = (obv > obv.shift(5)).fillna(False)
+    obv_s = pd.Series(25.0, index=p.index)
+    obv_s[obv_above  & obv_rising]  = 75
+    obv_s[obv_above  & ~obv_rising] = 55
+    obv_s[~obv_above & obv_rising]  = 40
     obv_b  = pd.Series(0.0, index=p.index)
     pr20o  = p.shift(20); obv20 = obv.shift(20)
     obv_b[(p < pr20o) & (obv > obv20)] =  20
