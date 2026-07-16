@@ -715,8 +715,10 @@ def calc_stochastic(high, low, close, k=14, d=3):
             return result[f'STOCHk_{k}_{d}_{d}'], result[f'STOCHd_{k}_{d}_{d}']
     lo = low.rolling(k).min()
     hi = high.rolling(k).max()
-    pct_k = (close - lo) / (hi - lo + 1e-9) * 100
-    return pct_k, pct_k.rolling(d).mean()
+    fast_k = (close - lo) / (hi - lo + 1e-9) * 100
+    slow_k = fast_k.rolling(d).mean()   # Slow %K = 3-period SMA of fast %K
+    slow_d = slow_k.rolling(d).mean()   # Slow %D = 3-period SMA of Slow %K
+    return slow_k, slow_d
 
 
 def calc_adx(high, low, close, period=14):
@@ -729,11 +731,12 @@ def calc_adx(high, low, close, period=14):
     up  = high.diff(); dn = -low.diff()
     pdm = up.where((up > dn) & (up > 0), 0.0)
     ndm = dn.where((dn > up) & (dn > 0), 0.0)
-    atr = tr.rolling(period).mean()
-    pdi = pdm.rolling(period).mean() / (atr + 1e-9) * 100
-    ndi = ndm.rolling(period).mean() / (atr + 1e-9) * 100
+    # Wilder's smoothed MA (EWM alpha=1/period) — SMA gives wrong ADX values
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
+    pdi = pdm.ewm(alpha=1/period, adjust=False).mean() / (atr + 1e-9) * 100
+    ndi = ndm.ewm(alpha=1/period, adjust=False).mean() / (atr + 1e-9) * 100
     dx  = (pdi - ndi).abs() / (pdi + ndi + 1e-9) * 100
-    return dx.rolling(period).mean(), pdi, ndi
+    return dx.ewm(alpha=1/period, adjust=False).mean(), pdi, ndi
 
 
 def calc_obv(close, volume):
@@ -917,11 +920,11 @@ def technical_score(df):
     rv = float(rsi_s.iloc[-1])
     rsi_ob = 65 if (has_trend and bull_trend and adx > 30) else 70
     rsi_os = 35 if (has_trend and not bull_trend and adx > 30) else 30
-    if rsi_os <= rv <= 60:      rsi = 50
-    elif 60 < rv <= rsi_ob:     rsi = 75
-    elif rv > rsi_ob:           rsi = 40
-    elif rsi_os - 10 <= rv < rsi_os: rsi = 30
-    else:                        rsi = 60
+    if rv < rsi_os:              rsi = 70   # 과매도 → 반등 매수 신호
+    elif rv < rsi_os + 10:      rsi = 60   # 과매도 회복 구간
+    elif rv <= 60:               rsi = 50   # 중립
+    elif rv <= rsi_ob:           rsi = 65   # 모멘텀 지속 구간
+    else:                        rsi = 35   # 과매수 → 조정 신호
     rsi_tr = rv - float(rsi_s.iloc[-10]) if len(rsi_s) >= 10 else 0
     if rsi_tr > 5 and rsi_os < rv < rsi_ob: rsi = min(rsi+20, 100)
     elif rsi_tr < -5:                        rsi = max(rsi-10, 0)
@@ -962,7 +965,7 @@ def technical_score(df):
     if len(p) >= 40:
         bw_now = rng / (cp + 1e-9)
         bw_avg = float(((bb_u - bb_l2) / p).rolling(20).mean().iloc[-1])
-        if bw_now < bw_avg * 0.7: bb = min(bb+10, 100)   # 스퀴즈 → 돌파 기대
+        if bw_now < bw_avg * 0.7 and bull_trend: bb = min(bb+10, 100)   # 스퀴즈 + 상승추세 → 상향 돌파 기대
     det['볼린저밴드'] = float(bb)
 
     # ── 거래량 (7%) ────────────────────────────
@@ -996,7 +999,7 @@ def technical_score(df):
     # ── ADX 추세강도 (17%) — 이미 선행 계산됨 ───
     if adx > 40:   adx_v = 85 if bull_trend else 15
     elif adx > 25: adx_v = 72 if bull_trend else 28
-    elif adx > 18: adx_v = 58 if bull_trend else 42
+    elif adx > 20: adx_v = 58 if bull_trend else 42  # has_trend 기준과 일치
     else:          adx_v = 50
     det['ADX추세강도'] = float(adx_v)
     det['ADX값'] = round(adx, 1)
@@ -1004,7 +1007,12 @@ def technical_score(df):
     # ── OBV (온밸런스볼륨) (10%) ───────────────
     obv = calc_obv(p, v)
     obv_ma = obv.rolling(20).mean()
-    obv_v = 65 if float(obv.iloc[-1]) > float(obv_ma.iloc[-1]) else 35
+    obv_above = float(obv.iloc[-1]) > float(obv_ma.iloc[-1])
+    obv_rising = (float(obv.iloc[-1]) > float(obv.iloc[-5])) if len(obv) >= 5 else True
+    if obv_above and obv_rising:      obv_v = 75  # OBV MA 위 + 상승 중
+    elif obv_above and not obv_rising: obv_v = 55  # OBV MA 위 + 하락 전환
+    elif not obv_above and obv_rising: obv_v = 40  # OBV MA 아래지만 회복 중
+    else:                              obv_v = 25  # OBV MA 아래 + 하락 중
     # OBV 다이버전스: 가격↓ OBV↑ → 강세 반전 신호
     if len(p) >= 20:
         if cp < float(p.iloc[-20]) and float(obv.iloc[-1]) > float(obv.iloc[-20]):
@@ -1792,7 +1800,7 @@ def calc_indicator_ics(df, horizon=20):
 
     rsi = calc_rsi(p)
     rs  = pd.Series(50.0, index=p.index)
-    rs[(rsi>60)&(rsi<=70)]=75; rs[rsi>70]=40; rs[(rsi>=30)&(rsi<40)]=30; rs[rsi<30]=60
+    rs[rsi<30]=70; rs[(rsi>=30)&(rsi<40)]=60; rs[(rsi>60)&(rsi<=70)]=65; rs[rsi>70]=35
 
     ml, sl2, hist = calc_macd(p)
     ms_b = pd.Series(0.0, index=p.index)
@@ -1820,9 +1828,14 @@ def calc_indicator_ics(df, horizon=20):
     ads=pd.Series(50.0,index=p.index)
     ads[(adx_f>40)&bull]=85; ads[(adx_f>40)&~bull]=15
     ads[(adx_f>25)&(adx_f<=40)&bull]=72; ads[(adx_f>25)&(adx_f<=40)&~bull]=28
+    ads[(adx_f>20)&(adx_f<=25)&bull]=58; ads[(adx_f>20)&(adx_f<=25)&~bull]=42
 
     obv=calc_obv(p,v); obv_ma=obv.rolling(20).mean()
-    obv_s=pd.Series(35.0,index=p.index); obv_s[obv>obv_ma]=65
+    obv_above=(obv>obv_ma); obv_rising=(obv>obv.shift(5)).fillna(False)
+    obv_s=pd.Series(25.0,index=p.index)
+    obv_s[obv_above & obv_rising]=75
+    obv_s[obv_above & ~obv_rising]=55
+    obv_s[~obv_above & obv_rising]=40
 
     DEFAULT_W = REGIME_TECH_WEIGHTS['neutral']
     ics = {
