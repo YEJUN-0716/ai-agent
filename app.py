@@ -763,9 +763,10 @@ def detect_trading_signals(df, t_det):
     vr = float(df['Volume'].iloc[-1]) / (float(df['Volume'].rolling(20).mean().iloc[-1]) + 1e-9)
     vol_ok = vr >= 0.8
 
-    # ── RSI (동적 임계값: 추세장에서 완화) ────────
-    rsi_ob = 65 if (has_trend and adx_val > 30) else 70
-    rsi_os = 35 if (has_trend and adx_val > 30) else 30
+    # ── RSI (동적 임계값: 추세장에서 방향별 완화) ─
+    bull_trend_sig = t_det.get('bull_trend', True)
+    rsi_ob = 65 if (has_trend and bull_trend_sig and adx_val > 30) else 70
+    rsi_os = 35 if (has_trend and not bull_trend_sig and adx_val > 30) else 30
     if rsi_v < rsi_os:
         signals.append(('🟢', 'RSI 과매도', f'RSI {rsi_v:.1f} < {rsi_os} — 반등 가능'))
         bull += 1
@@ -897,6 +898,7 @@ def technical_score(df):
     pdi = float(pdi_s.iloc[-1]); ndi = float(ndi_s.iloc[-1])
     bull_trend = pdi > ndi
     has_trend = adx > 20
+    det['bull_trend'] = bool(bull_trend)
 
     # ── MA 정렬 (15%) ─────────────────────────
     ma20  = p.rolling(20).mean()
@@ -1347,9 +1349,9 @@ def macro_score():
 
         # ── 장단기금리차 (20%) — 10Y-3M (Fed 선호 경기침체 지표) ──
         if len(tnx) > 0 and len(irx) > 0:
-            # ^IRX = 13주 T-bill (연율 discount basis); 10Y-3M 스프레드
+            # ^IRX = 13주 T-bill (연율); 10Y-3M 스프레드 — 임계값을 10Y-3M 정상 범위(-2.5~+3%)로 재보정
             sp = float(tnx['Close'].iloc[-1]) - float(irx['Close'].iloc[-1]); data['장단기스프레드(10Y-3M)'] = sp
-            det['장단기금리차'] = 80 if sp>1.5 else (70 if sp>0.5 else (50 if sp>=0 else (35 if sp>-0.5 else 20)))
+            det['장단기금리차'] = 80 if sp>2.0 else (65 if sp>0.5 else (50 if sp>=0 else (35 if sp>-1.0 else 20)))
         else: det['장단기금리차'] = 50.0
 
         # ── VIX 공포지수 (20%) ────────────────────────
@@ -1434,6 +1436,7 @@ def bt_signals_full(df):
     adx_v_bt, pdi_bt, ndi_bt = calc_adx(h, l, p)
     adx_f_bt = adx_v_bt.fillna(0)
     has_trend_bt = adx_f_bt > 20
+    bull_bt = (pdi_bt > ndi_bt).fillna(False)  # 방향 벡터 — RSI/BB/ADX 섹션에서 공유 사용
 
     # ── MA 정렬 (15%) — ADX 필터 + 3봉 지속 확인
     ma20, ma60, ma120 = p.rolling(20).mean(), p.rolling(60).mean(), p.rolling(120).mean()
@@ -1450,17 +1453,22 @@ def bt_signals_full(df):
     ma_s = (ma_s + gc_bonus.astype(float)*15 - dc_bonus.astype(float)*15
                  + gc_weak.astype(float)*5  - dc_weak.astype(float)*5).clip(0, 100).fillna(50)
 
-    # ── RSI (10%) ──────────────────────────────
+    # ── RSI (10%) — 동적 임계값 (technical_score와 동일 로직 벡터화) ──
     rsi = calc_rsi(p)
+    # 강한 방향성 추세에서 임계값 동적 조정 (ADX>30 조건)
+    rsi_os_bt = pd.Series(30.0, index=p.index)
+    rsi_os_bt[(~bull_bt) & (adx_f_bt > 30)] = 35.0  # 강한 하락추세 → 과매도 임계 상향
+    rsi_ob_bt = pd.Series(70.0, index=p.index)
+    rsi_ob_bt[bull_bt & (adx_f_bt > 30)]    = 65.0  # 강한 상승추세 → 과매수 임계 하향
     rs  = pd.Series(50.0, index=p.index)
-    rs[rsi < 30]                              = 70  # 과매도 → 반등 신호
-    rs[(rsi >= 30) & (rsi < 40)]             = 60  # 과매도 회복 구간
-    rs[(rsi > 60) & (rsi <= 70)]             = 65  # 모멘텀 구간
-    rs[rsi > 70]                              = 35  # 과매수 → 조정 신호
+    rs[rsi < rsi_os_bt]                              = 70  # 과매도 → 반등 신호
+    rs[(rsi >= rsi_os_bt) & (rsi < rsi_os_bt + 10)] = 60  # 과매도 회복 구간
+    rs[(rsi > 60) & (rsi <= rsi_ob_bt)]              = 65  # 모멘텀 구간
+    rs[rsi > rsi_ob_bt]                              = 35  # 과매수 → 조정 신호
     rs_b = pd.Series(0.0, index=p.index)
     rsi_tr = rsi - rsi.shift(10)
-    rs_b[(rsi_tr > 5)  & (rsi > 40) & (rsi < 70)] = 20
-    rs_b[rsi_tr < -5]                              = -10
+    rs_b[(rsi_tr > 5) & (rsi > rsi_os_bt) & (rsi < rsi_ob_bt)] = 20
+    rs_b[rsi_tr < -5]                                            = -10
     pr20 = p.shift(20); rsi20 = rsi.shift(20)
     rs_b[(p < pr20) & (rsi > rsi20)] += 15
     rs_b[(p > pr20) & (rsi < rsi20)] -= 15
@@ -1491,7 +1499,6 @@ def bt_signals_full(df):
     bs[pos < 0.2]                   = 30
     bw_now = rng / p.clip(lower=1e-9)
     bw_avg = bw_now.rolling(20).mean()
-    bull_bt = (pdi_bt > ndi_bt).fillna(False)
     bs_b = pd.Series(0.0, index=p.index)
     bs_b[(bw_now < bw_avg * 0.7) & bull_bt] = 10  # 스퀴즈 + 상승추세일 때만 보너스
     bs = (bs + bs_b).clip(0, 100).fillna(50)
@@ -1532,10 +1539,9 @@ def bt_signals_full(df):
     sts_b[k_down] = -20
     sts = (sts + sts_b).clip(0, 100).fillna(50)
 
-    # ── ADX (17%) ──────────────────────────────
-    adx_v, pdi, ndi = calc_adx(h, l, p)
-    adx_f = adx_v.fillna(0)
-    bull  = (pdi > ndi).fillna(False)
+    # ── ADX (17%) ── 선행 계산 값 재사용 (중복 호출 제거) ──
+    adx_f = adx_f_bt
+    bull  = bull_bt
     ads   = pd.Series(50.0, index=p.index)
     ads[(adx_f > 40) &  bull]                  = 85
     ads[(adx_f > 40) & ~bull]                  = 15
@@ -1852,6 +1858,12 @@ def calc_indicator_ics(df, horizon=20):
     obv_s[obv_above & obv_rising]=75
     obv_s[obv_above & ~obv_rising]=55
     obv_s[~obv_above & obv_rising]=40
+    # OBV 다이버전스 보너스 (bt_signals_full/technical_score와 동기화)
+    pr20o=p.shift(20); obv20=obv.shift(20)
+    obv_b=pd.Series(0.0,index=p.index)
+    obv_b[(p<pr20o)&(obv>obv20)]+=20   # 강세 다이버전스: 가격↓ OBV↑
+    obv_b[(p>pr20o)&(obv<obv20)]-=20   # 약세 다이버전스: 가격↑ OBV↓
+    obv_s=(obv_s+obv_b).clip(0,100)
 
     DEFAULT_W = REGIME_TECH_WEIGHTS['neutral']
     ics = {
@@ -2456,7 +2468,8 @@ def calc_dcf(ticker, treasury_yield=4.5):
         if not eps or eps <= 0: return None, {}
         g_raw = info.get('earningsGrowth')
         if g_raw is None: g_raw = 0.07  # revenueGrowth는 EPS 성장과 다르므로 사용 안 함; 보수적 기본값 7%
-        g = float(g_raw) * 100 if abs(float(g_raw)) <= 1 else float(g_raw)
+        # yfinance는 소수 반환(0.15=15%); 단 초고성장(>100%)은 소수로 >1.0 가능 — 클램핑이 처리
+        g = float(g_raw) * 100 if abs(float(g_raw)) < 10 else float(g_raw)
         g = max(min(g, 30.0), -5.0)
         y = max(treasury_yield, 1.0)
         intrinsic    = eps * (8.5 + 2*g) * (4.4 / y)
@@ -2488,7 +2501,8 @@ def calc_risk_metrics(ticker):
         try:
             _irx = yf.download('^IRX', period='5d', progress=False)
             if isinstance(_irx.columns, pd.MultiIndex): _irx.columns = _irx.columns.droplevel(1)
-            rf_annual = float(_irx['Close'].iloc[-1]) / 100 if not _irx.empty else 0.045
+            _irx_val = _irx['Close'].dropna()
+            rf_annual = float(_irx_val.iloc[-1]) / 100 if not _irx_val.empty else 0.045
         except Exception:
             rf_annual = 0.045
         rf_label = f"{rf_annual*100:.1f}%"
@@ -2944,11 +2958,13 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                 fcf  = info.get('freeCashflow')
                 mcap = info.get('marketCap')
                 ni_v = info.get('netIncomeToCommon')
-                if fcf and mcap and mcap > 0:
-                    fcf_yield_pct = fcf / mcap * 100
-                # P3-B: 발생액 역수 (FCF/NI > 1 = 현금이익 > 회계이익 = 이익 품질 높음)
-                if fcf and ni_v and ni_v > 0:
+                if fcf is not None and mcap and mcap > 0:
+                    fcf_yield_pct = fcf / mcap * 100  # 음수 FCF도 반영 (현금 소각 패널티)
+                # P3-B: 발생액 품질 (FCF>0 + NI>0 이어야 의미 있음; 음수 NI는 기본값 유지)
+                if fcf is not None and ni_v is not None and ni_v > 0 and fcf > 0:
                     accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
+                elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
+                    accrual_q = 0.0  # GAAP흑자+현금소각 → 최저 품질
             except Exception:
                 pass
 
@@ -3022,7 +3038,7 @@ def optimize_portfolio(tickers, method='equal', risk_free=None):
             risk_free = float(_irx['Close'].iloc[-1]) / 100 if not _irx.empty else 0.045
         except Exception:
             risk_free = 0.045
-    end = datetime.now(); start = end - timedelta(days=756)  # 3년 → 공분산 더 안정적
+    end = datetime.now(); start = end - timedelta(days=1095)  # 3 캘린더년 (756일은 ~2년 거래일)
     prices = pd.DataFrame()
     valid_tickers = []
     for tk in tickers:
@@ -3035,6 +3051,13 @@ def optimize_portfolio(tickers, method='equal', risk_free=None):
             continue
     if len(valid_tickers) < 2: return {}, {}, pd.DataFrame()
     returns = prices.pct_change().dropna()
+    # 신규 상장 티커가 포함되면 공통 기간이 단축됨 — 충분한 룩백 보장
+    if len(returns) < 200:
+        long_tickers = [c for c in prices.columns if prices[c].notna().sum() >= 200]
+        if len(long_tickers) >= 2:
+            prices = prices[long_tickers]
+            valid_tickers = long_tickers
+            returns = prices.pct_change().dropna()
     n = len(valid_tickers)
     cov = returns.cov() * 252
     corr = returns.corr()
@@ -3274,11 +3297,12 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
                 fcf  = info.get('freeCashflow')
                 mcap = info.get('marketCap')
                 ni_v = info.get('netIncomeToCommon')
-                if fcf and mcap and mcap > 0:
+                if fcf is not None and mcap and mcap > 0:
                     fcf_yield_pct = fcf / mcap * 100
-                # P3-B: 발생액 역수 (이익 품질)
-                if fcf and ni_v and ni_v > 0:
+                if fcf is not None and ni_v is not None and ni_v > 0 and fcf > 0:
                     accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
+                elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
+                    accrual_q = 0.0
             except Exception:
                 pass
 
@@ -3458,7 +3482,7 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
     roll_max = eq_s.expanding().max()
     mdd = float(((eq_s - roll_max)/roll_max*100).min())
     daily_r = eq_s.pct_change().dropna()
-    sharpe = float(daily_r.mean()/daily_r.std()*np.sqrt(252)) if daily_r.std() > 0 else 0
+    sharpe = float((daily_r.mean() - 0.045/252) / daily_r.std() * np.sqrt(252)) if daily_r.std() > 0 else 0
     avg_turnover = total_turnover / max(len(trade_log), 1) * 100
     round_trip_cost = 2 * commission + 2 * slippage
     total_cost_pct = total_turnover * round_trip_cost * 100
@@ -4486,8 +4510,8 @@ def main():
                     st.divider()
                     if '10Y금리' in m_data:
                         st.caption(f"10Y 금리: {m_data['10Y금리']:.2f}%  |  3M변화: {m_data.get('3M금리변화',0):+.2f}%p")
-                    if '장단기스프레드' in m_data:
-                        st.caption(f"장단기 스프레드: {m_data['장단기스프레드']:.2f}%p")
+                    if '장단기스프레드(10Y-3M)' in m_data:
+                        st.caption(f"장단기 스프레드(10Y-3M): {m_data['장단기스프레드(10Y-3M)']:.2f}%p")
                     if 'VIX' in m_data:
                         st.caption(f"VIX: {m_data['VIX']:.1f}  |  DXY: {m_data.get('DXY','N/A')}")
                     if '신용스프레드(HYG-LQD)' in m_data:
@@ -6078,7 +6102,7 @@ def main():
                         pf_years  = max(pf_days / 365, 0.01)
                         pf_cagr   = ((pf_final / pbt_capital) ** (1 / pf_years) - 1) * 100
                         pf_dr     = pd.Series(pbt_eq.values).pct_change().dropna()
-                        pf_sharpe = float(pf_dr.mean() / pf_dr.std() * np.sqrt(252)) if pf_dr.std() > 0 else 0
+                        pf_sharpe = float((pf_dr.mean() - 0.045/252) / pf_dr.std() * np.sqrt(252)) if pf_dr.std() > 0 else 0
                         roll_max  = pd.Series(pbt_eq.values).expanding().max()
                         pf_mdd    = float(((pd.Series(pbt_eq.values) - roll_max) / roll_max * 100).min())
                         pm1, pm2, pm3, pm4 = st.columns(4)
