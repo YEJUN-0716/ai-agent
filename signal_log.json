@@ -3,13 +3,58 @@
     {
       "id": "AMAT-2026-07-08",
       "symbol": "AMAT",
-      "action": "\ub9e4\uc218",
+      "action": "매수",
       "entry_date": "2026-07-08",
       "entry_price": 570.5,
       "score": 68.7,
       "rsi": 50.2,
       "outcome_date": null,
       "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "symbol": "AAPL",
+      "entry_date": "2026-07-17",
+      "entry_price": 333.74,
+      "action": "🟢 매수",
+      "reason": "팩터 61점 + 상승추세 (RSI 72)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "GOOGL",
+      "entry_date": "2026-07-17",
+      "entry_price": 346.77,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 59점 — 추세 확인 시 비중 확대 (RSI 42)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "KO",
+      "entry_date": "2026-07-17",
+      "entry_price": 81.56,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 59점 — 추세 확인 시 비중 확대 (RSI 49)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "PEP",
+      "entry_date": "2026-07-17",
+      "entry_price": 137.12,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 56점 — 추세 확인 시 비중 확대 (RSI 43)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "LLY",
+      "entry_date": "2026-07-17",
+      "entry_price": 1179.11,
+      "action": "🟢 매수",
+      "reason": "팩터 58점 + 상승추세 (RSI 55) | 거래량 주의(0.7×)",
+      "source": "github_actions",
       "return_pct": null
     }
   ]
