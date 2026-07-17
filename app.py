@@ -38,7 +38,7 @@ except Exception:
     _ML_AVAILABLE = False
 
 try:
-    from modules.risk_management import run_backtest_sized
+    from modules.risk_management import run_backtest_sized, kelly_fraction
     _RISK_MGMT_ENABLED = True
 except Exception:
     _RISK_MGMT_ENABLED = False
@@ -3877,7 +3877,8 @@ def _watchlist_snapshot(ticker):
 # AI 애널리스트 팀 — 4개 부서 직원 + 총괄 + 트레이더
 # ─────────────────────────────────────────────
 
-TEAM_WEIGHTS = {'차트+파동+모멘텀': 30, '퀀트+재무': 35, '매크로+금리': 20, 'ICT+CRT': 15}
+TEAM_WEIGHTS = {'차트+파동+모멘텀': 20, '퀀트+재무': 20, '매크로+금리': 15,
+                'ICT+CRT': 15, '백테스팅팀': 15, '리스크팀': 15}
 
 
 def _team_verdict(score):
@@ -3945,6 +3946,81 @@ def macro_rate_analyst(m_score, m_det):
     return build_analyst_report('매크로+금리', '🌍', m_score, reasons, m_det)
 
 
+def _parse_pct(s):
+    """'63.4%' / '+2.1%' 같은 포맷된 문자열을 float로 역파싱."""
+    try:
+        return float(str(s).replace('%', '').replace('+', ''))
+    except Exception:
+        return None
+
+
+def backtest_analyst(df):
+    """백테스팅팀 직원: 기술 시그널 전략을 이 종목 과거 데이터에 그대로 적용했을 때의 성과 검증.
+    look-ahead bias 방지를 위해 순수 기술적 백테스트만 사용(재무/매크로 보정 없음)."""
+    try:
+        metrics, _, _ = run_backtest(df)
+        sharpe = _parse_pct(metrics.get('Sharpe Ratio'))
+        win_rate = _parse_pct(metrics.get('승률'))
+
+        sharpe_score = float(np.clip((sharpe or 0) * 20 + 50, 0, 100))
+        winrate_score = float(np.clip(win_rate if win_rate is not None else 50, 0, 100))
+        score = sharpe_score * 0.5 + winrate_score * 0.5
+
+        reasons = [
+            f"승률 {metrics.get('승률','N/A')} (총 {metrics.get('총 매매','N/A')})",
+            f"Sharpe {metrics.get('Sharpe Ratio','N/A')} · Profit Factor {metrics.get('Profit Factor','N/A')}",
+            f"전략 {metrics.get('전략 수익률','N/A')} vs 매수보유 {metrics.get('매수보유 수익률','N/A')}",
+            f"최대낙폭(MDD) {metrics.get('최대낙폭(MDD)','N/A')}",
+        ]
+        detail = {
+            **metrics,
+            '_win_rate_raw': win_rate,
+            '_avg_win_raw': _parse_pct(metrics.get('평균 수익')),
+            '_avg_loss_raw': _parse_pct(metrics.get('평균 손실')),
+        }
+        return build_analyst_report('백테스팅팀', '📉', score, reasons, detail)
+    except Exception as e:
+        return build_analyst_report('백테스팅팀', '📉', 50.0, [f'백테스트 실패: {e}'])
+
+
+def risk_analyst(ticker, backtest_report=None):
+    """리스크팀 직원: Beta·VaR·연간변동성·Sharpe 기반 안전성 점수 +
+    (백테스팅팀 자료가 있으면) Kelly 공식 기반 권장 비중."""
+    try:
+        rm = calc_risk_metrics(ticker)
+        if not rm:
+            return build_analyst_report('리스크팀', '🛡️', 50.0, ['리스크 데이터 부족 — 데이터 이력 짧음'])
+
+        vol = _parse_pct(rm.get('연간 변동성'))
+        var95 = _parse_pct(rm.get('VaR 95% (1일)'))
+        beta = rm.get('Beta', 1.0) or 1.0
+        sharpe_key = next((k for k in rm if k.startswith('Sharpe')), None)
+        sharpe = rm.get(sharpe_key, 0) if sharpe_key else 0
+
+        vol_score    = float(np.clip(100 - (vol if vol is not None else 30) * 1.5, 0, 100))
+        var_score    = float(np.clip(100 + (var95 if var95 is not None else -3) * 15, 0, 100))
+        sharpe_score = float(np.clip((sharpe or 0) * 20 + 50, 0, 100))
+        beta_score   = float(np.clip(100 - abs(beta - 1.0) * 30, 50, 100))
+        score = vol_score * 0.35 + var_score * 0.25 + sharpe_score * 0.30 + beta_score * 0.10
+
+        reasons = [
+            f"Beta {beta:.2f}", f"연간 변동성 {rm.get('연간 변동성','N/A')}",
+            f"VaR 95%(1일) {rm.get('VaR 95% (1일)','N/A')}",
+            f"{sharpe_key or 'Sharpe'} {sharpe}",
+        ]
+
+        if backtest_report and _RISK_MGMT_ENABLED:
+            d = backtest_report.get('detail', {})
+            wr, aw, al = d.get('_win_rate_raw'), d.get('_avg_win_raw'), d.get('_avg_loss_raw')
+            if wr is not None and aw is not None and al not in (None, 0):
+                kelly = kelly_fraction(wr / 100, aw, al)
+                reasons.append(f"권장 비중(Half-Kelly): 총자본의 {kelly*100:.1f}%")
+
+        return build_analyst_report('리스크팀', '🛡️', score, reasons, rm)
+    except Exception as e:
+        return build_analyst_report('리스크팀', '🛡️', 50.0, [f'리스크 분석 실패: {e}'])
+
+
 def manager_consolidate(reports):
     """총괄 직원: 4개 부서 보고서를 규칙 기반으로 종합 — 가중합 + 합의율."""
     total_w = sum(r['weight'] for r in reports) or 1
@@ -3952,10 +4028,11 @@ def manager_consolidate(reports):
     verdicts = [r['verdict'] for r in reports]
     buy_n, sell_n, neu_n = verdicts.count('매수'), verdicts.count('매도'), verdicts.count('중립')
     n = len(reports)
+    majority = n * 0.6  # 60% 이상 동의 시 "우세"로 판정
 
-    if buy_n >= 3:
+    if buy_n >= majority:
         consensus = f'매수 우세 ({buy_n}/{n}명 매수)'
-    elif sell_n >= 3:
+    elif sell_n >= majority:
         consensus = f'매도 우세 ({sell_n}/{n}명 매도)'
     elif buy_n > sell_n and buy_n > 0:
         consensus = f'매수 쏠림, 의견 갈림 ({buy_n}매수·{sell_n}매도·{neu_n}중립)'
@@ -3980,8 +4057,9 @@ def manager_consolidate(reports):
     }
 
 
-def trader_signal_lines(df, manager_report):
-    """트레이더 직원: 총괄 보고서 + 지지/저항 레벨로 매수/매도 라인 산출."""
+def trader_signal_lines(df, manager_report, risk_report=None):
+    """트레이더 직원: 총괄 보고서 + 지지/저항 레벨로 매수/매도 라인 산출.
+    리스크팀 보고서에 Kelly 권장 비중이 있으면 그대로 인용한다."""
     cp = float(df['Close'].iloc[-1])
     sr = find_sr_levels(df['Close'], df['High'], df['Low'])
     supports = sorted([s['level'] for s in sr if not s['above']], reverse=True)
@@ -4000,12 +4078,20 @@ def trader_signal_lines(df, manager_report):
     else:
         stance = '신규 진입 보류 — 저항/지지 재테스트 대기'
 
+    position_note = None
+    if risk_report:
+        for r in risk_report['reasons']:
+            if 'Half-Kelly' in r:
+                position_note = r
+                break
+
     return {
         'stance': stance,
         'buy_line': buy_line, 'sell_line': sell_line,
         'buy_dist': (buy_line - cp) / cp * 100,
         'sell_dist': (sell_line - cp) / cp * 100,
         'current': cp,
+        'position_note': position_note,
     }
 
 
@@ -4406,19 +4492,22 @@ def main():
 </div>""", unsafe_allow_html=True)
 
             # ── AI 애널리스트 팀 리포트 ──────────────────────
-            with st.expander("🏢 AI 애널리스트 팀 리포트 — 4개 부서 → 총괄 → 매수/매도 라인", expanded=False):
-                _team_reports = [
-                    technical_momentum_analyst(t_score, t_det, mom_data),
-                    quant_fundamental_analyst(f_score, f_det, dcf_det),
-                    macro_rate_analyst(m_score, m_det),
-                    ict_crt_analyst(df),
-                ]
-                _tc1, _tc2, _tc3, _tc4 = st.columns(4)
-                for _tcol, _rep in zip([_tc1, _tc2, _tc3, _tc4], _team_reports):
-                    with _tcol:
-                        _rc = score_color(_rep['score'])
-                        _reason_html = ''.join(f"<li>{r}</li>" for r in _rep['reasons']) or '<li>참고할 세부 신호 없음</li>'
-                        st.markdown(f"""
+            with st.expander("🏢 AI 애널리스트 팀 리포트 — 6개 부서 → 총괄 → 매수/매도 라인", expanded=False):
+                with st.spinner("팀 리포트 작성 중 (백테스트·리스크 분석 포함)..."):
+                    _bt_rep = backtest_analyst(df)
+                    _team_reports = [
+                        technical_momentum_analyst(t_score, t_det, mom_data),
+                        quant_fundamental_analyst(f_score, f_det, dcf_det),
+                        macro_rate_analyst(m_score, m_det),
+                        ict_crt_analyst(df),
+                        _bt_rep,
+                        risk_analyst(ticker, _bt_rep),
+                    ]
+
+                def _render_report_card(_rep):
+                    _rc = score_color(_rep['score'])
+                    _reason_html = ''.join(f"<li>{r}</li>" for r in _rep['reasons']) or '<li>참고할 세부 신호 없음</li>'
+                    st.markdown(f"""
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
             box-shadow:0 1px 4px rgba(0,0,0,.06);height:100%">
   <div style="font-size:12px;font-weight:700;color:var(--text-3)">{_rep['icon']} {_rep['name']} <span style="color:var(--text-4)">({_rep['weight']}%)</span></div>
@@ -4428,6 +4517,15 @@ def main():
   </div>
   <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:16px;line-height:1.6">{_reason_html}</ul>
 </div>""", unsafe_allow_html=True)
+
+                _tr1 = st.columns(3)
+                for _tcol, _rep in zip(_tr1, _team_reports[:3]):
+                    with _tcol:
+                        _render_report_card(_rep)
+                _tr2 = st.columns(3)
+                for _tcol, _rep in zip(_tr2, _team_reports[3:]):
+                    with _tcol:
+                        _render_report_card(_rep)
 
                 st.markdown("")
                 _mgr = manager_consolidate(_team_reports)
@@ -4444,8 +4542,11 @@ def main():
   <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {_mgr['strongest_opinion']}{_dissent_html}</div>
 </div>""", unsafe_allow_html=True)
 
-                _trader = trader_signal_lines(df, _mgr)
+                _risk_rep = next(r for r in _team_reports if r['name'] == '리스크팀')
+                _trader = trader_signal_lines(df, _mgr, _risk_rep)
                 _tl_color = '#10b981' if _mgr['verdict'] == '매수' else ('#ef4444' if _mgr['verdict'] == '매도' else '#f59e0b')
+                _pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {_trader['position_note']}</div>"
+                             if _trader['position_note'] else '')
                 st.markdown(f"""
 <div style="background:{_tl_color}0d;border:1px solid {_tl_color}40;border-radius:10px;padding:14px 18px;margin-top:8px">
   <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 직원 — 매수/매도 라인</div>
@@ -4455,7 +4556,7 @@ def main():
       <span style="color:var(--text-4);font-size:11px">({_trader['buy_dist']:+.1f}%)</span></span>
     <span>🔴 매도 라인: <b style="font-family:'JetBrains Mono',monospace">{fmt_p(_trader['sell_line'])}</b>
       <span style="color:var(--text-4);font-size:11px">({_trader['sell_dist']:+.1f}%)</span></span>
-  </div>
+  </div>{_pos_html}
 </div>""", unsafe_allow_html=True)
                 st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
 
