@@ -3873,6 +3873,142 @@ def _watchlist_snapshot(ticker):
     }
 
 
+# ─────────────────────────────────────────────
+# AI 애널리스트 팀 — 4개 부서 직원 + 총괄 + 트레이더
+# ─────────────────────────────────────────────
+
+TEAM_WEIGHTS = {'차트+파동+모멘텀': 30, '퀀트+재무': 35, '매크로+금리': 20, 'ICT+CRT': 15}
+
+
+def _team_verdict(score):
+    return '매수' if score >= 65 else ('매도' if score <= 40 else '중립')
+
+
+def build_analyst_report(name, icon, score, reasons, detail=None):
+    """4개 부서 직원 공통 보고서 포맷."""
+    return {
+        'name': name, 'icon': icon, 'score': round(float(score), 1),
+        'weight': TEAM_WEIGHTS.get(name, 25),
+        'verdict': _team_verdict(score),
+        'reasons': [r for r in reasons if r][:4],
+        'detail': detail or {},
+    }
+
+
+def ict_crt_analyst(df):
+    """ICT+CRT 직원: 구조 점수 + CRT/FVG/OB 조정을 합산한 보고서."""
+    try:
+        from modules.ict_analysis import ict_factor_score, calc_ict_adjustment
+        base = ict_factor_score(df)
+        adj_info = calc_ict_adjustment(df)
+        score = float(np.clip(base + adj_info['adjustment'], 0, 100))
+        reasons = adj_info['signals'] or ['뚜렷한 ICT/CRT 신호 없음 — 구조적으로 중립']
+        return build_analyst_report('ICT+CRT', '🧭', score, reasons, adj_info)
+    except Exception as e:
+        return build_analyst_report('ICT+CRT', '🧭', 50.0, [f'ICT 분석 실패: {e}'])
+
+
+def technical_momentum_analyst(t_score, t_det, mom_data):
+    """차트+파동+모멘텀 직원: 기술점수 70% + 모멘텀점수 30%."""
+    mom_score = mom_data.get('score', 50.0) if mom_data else 50.0
+    score = t_score * 0.7 + mom_score * 0.3
+    reasons = []
+    if t_det.get('RSI값') is not None:
+        reasons.append(f"RSI {t_det['RSI값']}")
+    if t_det.get('ADX추세강도') is not None:
+        reasons.append(f"ADX추세강도 {t_det['ADX추세강도']:.0f}점")
+    if t_det.get('MA정렬') is not None:
+        reasons.append(f"MA정렬 {t_det['MA정렬']:.0f}점")
+    if mom_data and mom_data.get('3M') is not None:
+        reasons.append(f"3개월 모멘텀 {mom_data['3M']:+.1f}%")
+    return build_analyst_report('차트+파동+모멘텀', '📈', score, reasons,
+                                 {**t_det, '모멘텀점수': mom_score})
+
+
+def quant_fundamental_analyst(f_score, f_det, dcf_det=None):
+    """퀀트+재무 직원: fundamental_score(밸류·수익성·성장성·안전성·품질) 기반."""
+    reasons = []
+    if f_det.get('업종'):
+        reasons.append(f"업종 {f_det['업종']} (평균 PER {f_det.get('업종평균PER','N/A')})")
+    if f_det.get('ROE') is not None:
+        reasons.append(f"ROE {f_det['ROE']*100:.1f}%")
+    if f_det.get('매출성장') is not None:
+        reasons.append(f"매출성장 {f_det['매출성장']*100:+.1f}%")
+    if dcf_det and dcf_det.get('상승여력_기본') is not None:
+        reasons.append(f"DCF 내재가치 대비 {dcf_det['상승여력_기본']:+.1f}%")
+    return build_analyst_report('퀀트+재무', '💼', f_score, reasons, f_det)
+
+
+def macro_rate_analyst(m_score, m_det):
+    """매크로+금리 직원: macro_score(장단기금리차·VIX·환율 등) 기반."""
+    reasons = [f"{k}: {v}" for k, v in list(m_det.items())[:4] if not isinstance(v, dict)]
+    return build_analyst_report('매크로+금리', '🌍', m_score, reasons, m_det)
+
+
+def manager_consolidate(reports):
+    """총괄 직원: 4개 부서 보고서를 규칙 기반으로 종합 — 가중합 + 합의율."""
+    total_w = sum(r['weight'] for r in reports) or 1
+    weighted_score = sum(r['score'] * r['weight'] for r in reports) / total_w
+    verdicts = [r['verdict'] for r in reports]
+    buy_n, sell_n, neu_n = verdicts.count('매수'), verdicts.count('매도'), verdicts.count('중립')
+    n = len(reports)
+
+    if buy_n >= 3:
+        consensus = f'매수 우세 ({buy_n}/{n}명 매수)'
+    elif sell_n >= 3:
+        consensus = f'매도 우세 ({sell_n}/{n}명 매도)'
+    elif buy_n > sell_n and buy_n > 0:
+        consensus = f'매수 쏠림, 의견 갈림 ({buy_n}매수·{sell_n}매도·{neu_n}중립)'
+    elif sell_n > buy_n and sell_n > 0:
+        consensus = f'매도 쏠림, 의견 갈림 ({buy_n}매수·{sell_n}매도·{neu_n}중립)'
+    else:
+        consensus = f'의견 분산 — 관망 권고 ({buy_n}매수·{sell_n}매도·{neu_n}중립)'
+
+    agreement = round(max(buy_n, sell_n, neu_n) / n * 100)
+    strongest = max(reports, key=lambda r: abs(r['score'] - 50))
+    weakest_agree = min(reports, key=lambda r: 0 if r['verdict'] == _team_verdict(weighted_score) else 1)
+
+    return {
+        'total_score': round(weighted_score, 1),
+        'verdict': _team_verdict(weighted_score),
+        'consensus': consensus,
+        'agreement': agreement,
+        'buy_n': buy_n, 'sell_n': sell_n, 'neutral_n': neu_n,
+        'strongest_opinion': f"{strongest['icon']} {strongest['name']} ({strongest['score']:.0f}점, {strongest['verdict']})",
+        'dissent': (f"{weakest_agree['icon']} {weakest_agree['name']}만 {weakest_agree['verdict']} 의견"
+                    if weakest_agree['verdict'] != _team_verdict(weighted_score) else None),
+    }
+
+
+def trader_signal_lines(df, manager_report):
+    """트레이더 직원: 총괄 보고서 + 지지/저항 레벨로 매수/매도 라인 산출."""
+    cp = float(df['Close'].iloc[-1])
+    sr = find_sr_levels(df['Close'], df['High'], df['Low'])
+    supports = sorted([s['level'] for s in sr if not s['above']], reverse=True)
+    resistances = sorted([s['level'] for s in sr if s['above']])
+
+    verdict = manager_report['verdict']
+    agreement = manager_report['agreement']
+
+    buy_line  = supports[0] if supports else cp * 0.97
+    sell_line = resistances[0] if resistances else cp * 1.05
+
+    if verdict == '매수':
+        stance = '분할 매수 검토' if agreement >= 75 else '소액 선진입, 지지선 확인 후 비중 확대'
+    elif verdict == '매도':
+        stance = '비중 축소 검토' if agreement >= 75 else '일부 이익실현, 저항선 이탈 시 전량 정리'
+    else:
+        stance = '신규 진입 보류 — 저항/지지 재테스트 대기'
+
+    return {
+        'stance': stance,
+        'buy_line': buy_line, 'sell_line': sell_line,
+        'buy_dist': (buy_line - cp) / cp * 100,
+        'sell_dist': (sell_line - cp) / cp * 100,
+        'current': cp,
+    }
+
+
 def main():
     _hdr_col1, _hdr_col2 = st.columns([5, 1])
     with _hdr_col1:
@@ -4072,12 +4208,12 @@ def main():
                                 if ed:
                                     ed = ed[0] if isinstance(ed, list) else ed
                                     days_left = (pd.Timestamp(ed).date() - datetime.now().date()).days
-                                    _earn_str = f"다음 실적발표: **{pd.Timestamp(ed).strftime('%Y-%m-%d')}** ({days_left:+d}일)"
+                                    _earn_str = f"다음 실적발표: <b>{pd.Timestamp(ed).strftime('%Y-%m-%d')}</b> ({days_left:+d}일)"
                                     if 0 <= days_left <= 14: _earn_str += " 🔔"
                             elif isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.index:
                                 ed = cal.loc['Earnings Date'].iloc[0]
                                 days_left = (pd.Timestamp(ed).date() - datetime.now().date()).days
-                                _earn_str = f"다음 실적발표: **{pd.Timestamp(ed).strftime('%Y-%m-%d')}** ({days_left:+d}일)"
+                                _earn_str = f"다음 실적발표: <b>{pd.Timestamp(ed).strftime('%Y-%m-%d')}</b> ({days_left:+d}일)"
                                 if 0 <= days_left <= 14: _earn_str += " 🔔"
                     except Exception:
                         pass
@@ -4163,6 +4299,7 @@ def main():
 
             _earn_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:4px'>📅 {earn_str}</div>"
                           if earn_str else '')
+            _extra_html = _ext_html + _earn_html
 
             st.markdown(f"""
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
@@ -4180,9 +4317,7 @@ def main():
         <span style="font-size:2rem;font-weight:800;color:var(--text-1);font-family:'JetBrains Mono',monospace;letter-spacing:-1px">{fmt_p(live_price)}</span>
         <span style="font-size:1rem;font-weight:700;color:{_chg_color}">{_chg_arrow} {abs(live_chg):.2f}%</span>
         <span style="font-size:12px;color:var(--text-4)">{live_label}</span>
-      </div>
-      {_ext_html}
-      {_earn_html}
+      </div>{_extra_html}
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap">
       <div style="text-align:center">
@@ -4269,6 +4404,60 @@ def main():
   </div>
   {_bar_html(m_score, _c4)}
 </div>""", unsafe_allow_html=True)
+
+            # ── AI 애널리스트 팀 리포트 ──────────────────────
+            with st.expander("🏢 AI 애널리스트 팀 리포트 — 4개 부서 → 총괄 → 매수/매도 라인", expanded=False):
+                _team_reports = [
+                    technical_momentum_analyst(t_score, t_det, mom_data),
+                    quant_fundamental_analyst(f_score, f_det, dcf_det),
+                    macro_rate_analyst(m_score, m_det),
+                    ict_crt_analyst(df),
+                ]
+                _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+                for _tcol, _rep in zip([_tc1, _tc2, _tc3, _tc4], _team_reports):
+                    with _tcol:
+                        _rc = score_color(_rep['score'])
+                        _reason_html = ''.join(f"<li>{r}</li>" for r in _rep['reasons']) or '<li>참고할 세부 신호 없음</li>'
+                        st.markdown(f"""
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
+            box-shadow:0 1px 4px rgba(0,0,0,.06);height:100%">
+  <div style="font-size:12px;font-weight:700;color:var(--text-3)">{_rep['icon']} {_rep['name']} <span style="color:var(--text-4)">({_rep['weight']}%)</span></div>
+  <div style="display:flex;align-items:baseline;gap:8px;margin:6px 0">
+    <span style="font-size:1.6rem;font-weight:800;color:{_rc};font-family:'JetBrains Mono',monospace">{_rep['score']:.0f}</span>
+    <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;background:{_rc}20;color:{_rc}">{_rep['verdict']}</span>
+  </div>
+  <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:16px;line-height:1.6">{_reason_html}</ul>
+</div>""", unsafe_allow_html=True)
+
+                st.markdown("")
+                _mgr = manager_consolidate(_team_reports)
+                _mc  = score_color(_mgr['total_score'])
+                _dissent_html = f"<br>⚠️ {_mgr['dissent']}" if _mgr['dissent'] else ''
+                st.markdown(f"""
+<div style="background:{_mc}0d;border:1px solid {_mc}40;border-radius:10px;padding:14px 18px;margin-top:4px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">🧑‍💼 총괄 직원 종합 보고서</div>
+  <div style="display:flex;align-items:baseline;gap:12px;margin:6px 0;flex-wrap:wrap">
+    <span style="font-size:2rem;font-weight:800;color:{_mc};font-family:'JetBrains Mono',monospace">{_mgr['total_score']:.1f}</span>
+    <span style="font-size:13px;font-weight:700;color:{_mc}">{_mgr['consensus']}</span>
+    <span style="font-size:11px;color:var(--text-4)">팀 합의율 {_mgr['agreement']}%</span>
+  </div>
+  <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {_mgr['strongest_opinion']}{_dissent_html}</div>
+</div>""", unsafe_allow_html=True)
+
+                _trader = trader_signal_lines(df, _mgr)
+                _tl_color = '#10b981' if _mgr['verdict'] == '매수' else ('#ef4444' if _mgr['verdict'] == '매도' else '#f59e0b')
+                st.markdown(f"""
+<div style="background:{_tl_color}0d;border:1px solid {_tl_color}40;border-radius:10px;padding:14px 18px;margin-top:8px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 직원 — 매수/매도 라인</div>
+  <div style="font-size:13px;font-weight:700;color:{_tl_color};margin:6px 0">{_trader['stance']}</div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
+    <span>🟢 매수 라인: <b style="font-family:'JetBrains Mono',monospace">{fmt_p(_trader['buy_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({_trader['buy_dist']:+.1f}%)</span></span>
+    <span>🔴 매도 라인: <b style="font-family:'JetBrains Mono',monospace">{fmt_p(_trader['sell_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({_trader['sell_dist']:+.1f}%)</span></span>
+  </div>
+</div>""", unsafe_allow_html=True)
+                st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
 
             # ── 국면 조정 배너 ──────────────────────────
             _rcm = {'bull':'#10b981','bear':'#ef4444','neutral':'#f59e0b'}
