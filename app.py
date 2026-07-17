@@ -3823,6 +3823,56 @@ def _draw_chart_legacy(df, ticker, is_krw):
     return fig
 
 
+# ─────────────────────────────────────────────
+# 관심종목 (WATCHLIST) — 로컬 JSON 영속화
+# ─────────────────────────────────────────────
+
+_WATCHLIST_PATH = os.path.join(os.path.dirname(__file__), "watchlist.json")
+
+
+def _load_watchlist():
+    if os.path.exists(_WATCHLIST_PATH):
+        try:
+            with open(_WATCHLIST_PATH, encoding='utf-8') as f:
+                return json.load(f).get('tickers', [])
+        except Exception:
+            return []
+    return []
+
+
+def _save_watchlist(tickers):
+    try:
+        with open(_WATCHLIST_PATH, 'w', encoding='utf-8') as f:
+            json.dump({'tickers': tickers}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _watchlist_snapshot(ticker):
+    """관심종목 테이블 한 행: 현재가·등락률·RSI·기술점수."""
+    end = datetime.now()
+    df = download_stock(ticker, start=end - timedelta(days=260), end=end)
+    if df.empty or len(df) < 30:
+        return None
+    df = df.dropna(subset=['Close'])
+    p = df['Close']
+    cp = float(p.iloc[-1])
+    pp = float(p.iloc[-2]) if len(p) >= 2 else cp
+    chg = (cp - pp) / pp * 100 if pp else 0
+    rsi = float(calc_rsi(p).iloc[-1])
+    mom = calc_momentum(df)
+    t_sc, t_det = (technical_score(df) if len(df) >= 120 else (None, {}))
+    is_krw = ticker.endswith('.KS') or ticker.endswith('.KQ')
+    fp = f"₩{cp:,.0f}" if is_krw else f"${cp:,.2f}"
+    return {
+        '티커': ticker, '현재가': fp, '등락률': f"{chg:+.2f}%",
+        'RSI': round(rsi, 1),
+        '기술점수': round(t_sc, 1) if t_sc is not None else None,
+        '3M모멘텀': f"{mom['3M']:+.1f}%" if mom.get('3M') is not None else 'N/A',
+        '_chg_raw': chg, '_cp_raw': cp, '_is_krw': is_krw,
+    }
+
+
 def main():
     _hdr_col1, _hdr_col2 = st.columns([5, 1])
     with _hdr_col1:
@@ -3870,7 +3920,8 @@ def main():
     max_position_pct = 20
     min_rr           = 1.5
 
-    tab1, tab6, tab_journal = st.tabs(["종목 분석", "퀀트 · 자동매매", "매매 일지"])
+    tab1, tab6, tab_watch, tab_journal = st.tabs(
+        ["종목 분석", "퀀트 · 자동매매", "⭐ 관심종목", "매매 일지"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -7074,6 +7125,118 @@ worksheet_name = "trades"
             st.info("아직 매매 기록이 없습니다. 위 폼으로 첫 거래를 기록하세요.")
             if not _gs_ok:
                 st.caption("💡 세션이 종료되면 기록이 사라집니다. Google Sheets 연동 또는 CSV 백업을 권장합니다.")
+
+    # ── Tab: 관심종목 ──────────────────────────────
+    with tab_watch:
+        st.subheader("⭐ 관심종목")
+        st.caption("관심 있는 종목을 등록해두고 한 번에 현재가·RSI·기술점수를 확인하거나, 2개 이상 골라 성과를 비교합니다.")
+
+        if 'watchlist' not in st.session_state:
+            st.session_state['watchlist'] = _load_watchlist()
+        _wl = st.session_state['watchlist']
+
+        _wa_c1, _wa_c2 = st.columns([4, 1])
+        _wa_ticker = _wa_c1.text_input("종목 추가 (티커)", placeholder="AAPL, NVDA, 005930.KS ...",
+                                        key="wl_add_input", label_visibility="collapsed")
+        if _wa_c2.button("➕ 추가", key="wl_add_btn", use_container_width=True):
+            _new_tk = _wa_ticker.strip().upper()
+            if _new_tk and _new_tk not in _wl:
+                _wl.append(_new_tk)
+                _save_watchlist(_wl)
+                del st.session_state['wl_add_input']
+                st.rerun()
+
+        if not _wl:
+            st.info("관심종목이 비어 있습니다. 위에 티커를 입력하고 추가하세요.")
+        else:
+            _chip_cols = st.columns(min(len(_wl), 8) or 1)
+            for _i, _tk in enumerate(_wl):
+                with _chip_cols[_i % len(_chip_cols)]:
+                    if st.button(f"✕ {_tk}", key=f"wl_rm_{_tk}", help=f"{_tk} 삭제", use_container_width=True):
+                        _wl.remove(_tk)
+                        _save_watchlist(_wl)
+                        st.rerun()
+
+            st.divider()
+
+            if st.button("🔄 새로고침", type="primary", key="wl_refresh"):
+                with st.spinner(f"{len(_wl)}개 종목 조회 중..."):
+                    _rows = []
+                    _failed = []
+                    for _tk in _wl:
+                        try:
+                            _row = _watchlist_snapshot(_tk)
+                            if _row: _rows.append(_row)
+                            else: _failed.append(_tk)
+                        except Exception:
+                            _failed.append(_tk)
+                st.session_state['wl_rows'] = _rows
+                st.session_state['wl_failed'] = _failed
+
+            if 'wl_rows' in st.session_state:
+                _rows = st.session_state['wl_rows']
+                _failed = st.session_state.get('wl_failed', [])
+                if _rows:
+                    _wl_df = pd.DataFrame(_rows)
+                    _disp_df = _wl_df[['티커', '현재가', '등락률', 'RSI', '기술점수', '3M모멘텀']]
+
+                    def _hl_chg(row):
+                        c = _wl_df.loc[row.name, '_chg_raw']
+                        color = '#26a69a' if c > 0 else ('#ef5350' if c < 0 else '')
+                        return [f'color:{color};font-weight:600' if col == '등락률' else ''
+                                for col in row.index]
+
+                    st.dataframe(
+                        _disp_df.style.apply(_hl_chg, axis=1)
+                                .format({'RSI': '{:.1f}',
+                                         '기술점수': lambda x: f'{x:.1f}' if x is not None else 'N/A'}),
+                        width='stretch', hide_index=True)
+                if _failed:
+                    st.caption(f"⚠️ 조회 실패: {', '.join(_failed)}")
+
+                # ── 종목간 비교 뷰 ──────────────────────────
+                st.markdown("#### 🆚 종목 비교")
+                st.caption("1년 성과 비교 (시작점=100 정규화)")
+                _cmp_sel = st.multiselect("비교할 종목 선택 (2~5개)",
+                    options=[r['티커'] for r in _rows], default=[r['티커'] for r in _rows][:3],
+                    max_selections=5, key="wl_cmp_sel")
+
+                if len(_cmp_sel) >= 2:
+                    _cmp_end = datetime.now()
+                    _cmp_start = _cmp_end - timedelta(days=365)
+                    _fig_cmp = go.Figure()
+                    _cmp_rows = []
+                    _palette = ['#2962ff', '#ef5350', '#26a69a', '#f59e0b', '#ab47bc']
+                    for _ci, _tk in enumerate(_cmp_sel):
+                        _cdf = download_stock(_tk, start=_cmp_start, end=_cmp_end)
+                        if _cdf.empty: continue
+                        _cdf = _cdf.dropna(subset=['Close'])
+                        _norm = _cdf['Close'] / float(_cdf['Close'].iloc[0]) * 100
+                        _fig_cmp.add_trace(go.Scatter(
+                            x=_cdf.index, y=_norm.values, mode='lines', name=_tk,
+                            line=dict(color=_palette[_ci % len(_palette)], width=2)))
+                        _row_match = next((r for r in _rows if r['티커'] == _tk), None)
+                        if _row_match:
+                            _cmp_rows.append({
+                                '티커': _tk,
+                                '1년 수익률': f"{(_norm.iloc[-1] - 100):+.1f}%",
+                                'RSI': _row_match['RSI'],
+                                '기술점수': _row_match['기술점수'],
+                                '3M모멘텀': _row_match['3M모멘텀'],
+                            })
+                    _fig_cmp.update_layout(
+                        height=380, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                        font=dict(color=TV_TEXT),
+                        xaxis=dict(gridcolor=TV_GRID), yaxis=dict(gridcolor=TV_GRID, title="정규화 지수"),
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        legend=dict(orientation='h', y=1.12))
+                    st.plotly_chart(_fig_cmp, width='stretch')
+                    if _cmp_rows:
+                        st.dataframe(pd.DataFrame(_cmp_rows), width='stretch', hide_index=True)
+                else:
+                    st.caption("비교하려면 2개 이상 선택하세요.")
+            else:
+                st.caption("🔄 새로고침을 눌러 관심종목 현황을 불러오세요.")
 
 
 if __name__ == "__main__":

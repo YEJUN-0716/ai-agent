@@ -10,3 +10,6 @@ dart_corp_map.json
 
 # 기타 런타임 생성 파일
 *.log
+
+# 개인 관심종목 (로컬 전용, 사용자마다 다름 — GH Actions 관리 대상 아님)
+watchlist.json
