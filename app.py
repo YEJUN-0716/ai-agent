@@ -338,7 +338,7 @@ p  { color: var(--text-2); }
 details {
   border-radius: var(--radius) !important;
   border: 1px solid var(--border) !important;
-  background: var(--surface);
+  background: var(--surface) !important;
   margin-bottom: 8px !important;
   overflow: hidden;
 }
@@ -347,6 +347,7 @@ summary {
   font-weight: 600 !important;
   font-size: 14px !important;
   color: var(--text-2) !important;
+  background: var(--surface) !important;
   padding: 12px 16px !important;
   cursor: pointer;
 }
@@ -4095,6 +4096,91 @@ def trader_signal_lines(df, manager_report, risk_report=None):
     }
 
 
+# ─────────────────────────────────────────────
+# 자동매매 운영팀 — 모니터링·보고 전용 (실주문 로직 없음)
+# ─────────────────────────────────────────────
+
+def build_ops_report(name, icon, status, reasons):
+    """운영팀 공통 보고서 포맷. status: 정상/주의/경고."""
+    return {'name': name, 'icon': icon, 'status': status,
+            'reasons': [r for r in reasons if r][:4]}
+
+
+def signal_pipeline_employee():
+    """시그널 파이프라인 직원: signal_log.json 상태 점검 (신호 발생/평가 현황)."""
+    path = os.path.join(os.path.dirname(__file__), "signal_log.json")
+    if not os.path.exists(path):
+        return build_ops_report('시그널 파이프라인', '📡', '주의',
+                                 ['signal_log.json 없음 — 아직 발생한 시그널 이력이 없음'])
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f).get('signals', [])
+        if not data:
+            return build_ops_report('시그널 파이프라인', '📡', '주의', ['기록된 시그널 0건'])
+
+        dates = sorted(s['entry_date'] for s in data if s.get('entry_date'))
+        last_date = dates[-1] if dates else None
+        pending = sum(1 for s in data if s.get('return_pct') is None)
+        done = len(data) - pending
+        days_since = ((datetime.now().date() - pd.to_datetime(last_date).date()).days
+                      if last_date else None)
+
+        status = '주의' if (days_since is not None and days_since > 5) else '정상'
+        reasons = [
+            f"누적 시그널 {len(data)}건 (평가완료 {done} · 대기 {pending})",
+            f"최근 시그널: {last_date}" + (f" ({days_since}일 전)" if days_since is not None else ''),
+            "자동 스캔: signal-alerts.yml (매일 UTC 22:30, 월~금)",
+        ]
+        return build_ops_report('시그널 파이프라인', '📡', status, reasons)
+    except Exception as e:
+        return build_ops_report('시그널 파이프라인', '📡', '경고', [f'로그 읽기 실패: {e}'])
+
+
+def execution_mode_employee():
+    """실행 모드 직원: 현재 시스템이 시그널 전용 모드임을 명시 — 안전성 투명성 담당."""
+    return build_ops_report('실행 모드', '⚙️', '정상', [
+        '현재 모드: 시그널 전용 — 실제 주문 없음',
+        'signal-alerts.yml: 활성 (텔레그램 알림만 발송)',
+        'paper-trade-us.yml: 크론 비활성화 (DRY_RUN 기본값 true)',
+        '실제 매매는 시그널 확인 후 사용자가 직접 실행',
+    ])
+
+
+def risk_guardrail_employee():
+    """리스크 가드레일 직원: 킬스위치·서킷브레이커 모듈 로드 상태와 설정 위치 안내
+    (계좌 연동 없이 모니터링만 — 실제 값 점검은 아래 위젯에서 수행)."""
+    reasons = [
+        '일일 손실 한도 킬스위치: 아래 "킬스위치" 위젯에서 설정·점검',
+        '포지션 대사(의도 vs 실제): 아래 "포지션 대사" 위젯에서 실행',
+        ('드로다운 서킷브레이커 모듈 로드됨' if _RISK_MGMT_ENABLED
+         else '⚠️ risk_management 모듈 로드 실패 — 서킷브레이커 비활성'),
+    ]
+    status = '정상' if (_OPS_SAFETY_AVAILABLE and _RISK_MGMT_ENABLED) else '주의'
+    return build_ops_report('리스크 가드레일', '🛡️', status, reasons)
+
+
+def equity_log_employee():
+    """계좌 현황 직원: equity_log.json 상태 (시그널 전용 모드에서는 보통 비어있는 게 정상)."""
+    path = os.path.join(os.path.dirname(__file__), "equity_log.json")
+    if not os.path.exists(path):
+        return build_ops_report('계좌 현황', '📊', '정상',
+            ['equity_log.json 없음 — 시그널 전용 모드에서는 정상 (실거래가 없어 자산 변동 기록도 없음)'])
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        records = data if isinstance(data, list) else data.get('records', [])
+        if not records:
+            return build_ops_report('계좌 현황', '📊', '정상',
+                ['equity_log.json 존재하나 기록 0건 (과거 페이퍼 트레이딩 이력 없음)'])
+        last = records[-1]
+        reasons = [f'{len(records)}개 기록 존재 (과거 페이퍼 트레이딩 이력)']
+        if last.get('date') and last.get('equity') is not None:
+            reasons.append(f"최근 기록: {last['date']} · 자산 {last['equity']:,.0f}")
+        return build_ops_report('계좌 현황', '📊', '정상', reasons)
+    except Exception as e:
+        return build_ops_report('계좌 현황', '📊', '경고', [f'로그 읽기 실패: {e}'])
+
+
 def main():
     _hdr_col1, _hdr_col2 = st.columns([5, 1])
     with _hdr_col1:
@@ -7007,6 +7093,31 @@ def main():
         # ── qt_sub9: 운영 안전성 ──────────────────────────────────
         with qt_sub9:
             st.subheader("🔒 운영 안전성")
+
+            # ── 자동매매 운영팀 리포트 (모니터링 전용) ──────────
+            st.caption("⚙️ 자동매매 운영팀 — 4명이 파이프라인·안전장치 상태만 점검합니다. 주문 실행 로직은 없습니다.")
+            _ops_reports = [
+                execution_mode_employee(),
+                signal_pipeline_employee(),
+                risk_guardrail_employee(),
+                equity_log_employee(),
+            ]
+            _ops_cols = st.columns(4)
+            _ops_status_color = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444'}
+            for _ocol, _orep in zip(_ops_cols, _ops_reports):
+                with _ocol:
+                    _osc = _ops_status_color.get(_orep['status'], '#94a3b8')
+                    _oreason_html = ''.join(f"<li>{r}</li>" for r in _orep['reasons']) or '<li>참고할 정보 없음</li>'
+                    st.markdown(f"""
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
+            box-shadow:0 1px 4px rgba(0,0,0,.06);height:100%">
+  <div style="font-size:12px;font-weight:700;color:var(--text-3)">{_orep['icon']} {_orep['name']}</div>
+  <div style="margin:6px 0">
+    <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:12px;background:{_osc}20;color:{_osc}">{_orep['status']}</span>
+  </div>
+  <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:16px;line-height:1.6">{_oreason_html}</ul>
+</div>""", unsafe_allow_html=True)
+            st.divider()
 
             if not _OPS_SAFETY_AVAILABLE:
                 st.error("modules/ops_safety.py 로드 실패.")
