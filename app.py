@@ -4313,6 +4313,46 @@ def advanced_research_employee():
 
 _OFFICE_STATUS_COLOR = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}
 
+# 보고서 카드의 기능성 아이콘(rep['icon'])은 앱 전역(Tab1 카드·퀀트탭 배지)에서 재사용되므로 그대로 두고,
+# 사무실 방 안의 아바타(클릭 타일)에만 쓸 사람 캐릭터 이모지를 직원 이름 기준으로 별도 매핑한다.
+_OFFICE_AVATARS = {
+    '차트+파동+모멘텀': '🧑‍💻', '퀀트+재무': '🧑‍💼', '매크로+금리': '🧑‍🏫',
+    'ICT+CRT': '🕵️', '백테스팅팀': '🧑‍🔬', '리스크팀': '💂', '총괄': '🧑‍⚖️',
+    '실행 모드': '🧑‍✈️', '시그널 파이프라인': '🧑‍🔧', '리스크 가드레일': '👮', '계좌 현황': '🕴️',
+    '팩터 랭킹': '🧑‍🔬', '시스템 시그널': '🤖', '섹터 로테이션': '🧑‍🚀',
+    'ML 신호': '👩‍💻',
+    '팩터 백테스트': '🧑‍🔬', '종목 백테스팅': '🧑‍💻',
+    '고급 분석': '🕵️‍♀️',
+}
+
+
+def _office_avatar(name):
+    return _OFFICE_AVATARS.get(name, '🧑‍💼')
+
+
+def inject_office_css():
+    """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS를 한 번 주입.
+    st.container(key=...)가 만드는 안정적인 st-key-* 클래스를 이용해
+    사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음)."""
+    st.markdown("""
+<style>
+div[class*="st-key-office_room_"] {
+    background:
+        radial-gradient(circle at 14px 14px, rgba(0,0,0,.05) 1.6px, transparent 1.6px) 0 0/28px 28px,
+        linear-gradient(180deg, rgba(120,100,60,.06) 0%, rgba(120,100,60,.06) 100%);
+    border-radius: 14px !important;
+    border: 1px solid var(--border) !important;
+    padding: 16px 14px 12px 14px !important;
+}
+div[class*="st-key-office_room_"] button {
+    font-size: 1.1rem !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    border-radius: 12px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 def _office_normalize(rep):
     """분석직원(score 보고서) / 운영·시스템직원(status 보고서)을 공통 표시 포맷으로 변환."""
@@ -4346,18 +4386,22 @@ def render_office_rooms(rooms):
     방마다 즉시 session_state를 읽어 카드를 그리면 방금 클릭한 방보다 먼저 그려진 방이
     직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다.
     rooms: [(room_key, room_name, room_icon, employees), ...]"""
+    inject_office_css()
     slots = {}
     for room_key, room_name, room_icon, employees in rooms:
         st.markdown(f"""
-<div style="font-size:13px;font-weight:800;color:var(--text-1);margin:18px 0 8px 0;
-            display:flex;align-items:center;gap:8px">
-  <span style="font-size:18px">{room_icon}</span> {room_name}
+<div style="display:inline-flex;align-items:center;gap:8px;margin:18px 0 8px 0;
+            background:var(--surface);border:1px solid var(--border);border-left:4px solid #8b6f3e;
+            border-radius:0 8px 8px 0;padding:5px 14px 5px 10px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
+  <span style="font-size:18px">{room_icon}</span>
+  <span style="font-size:13px;font-weight:800;color:var(--text-1)">{room_name}</span>
+  <span style="font-size:10px;color:var(--text-4)">· 직원 {len(employees)}명</span>
 </div>""", unsafe_allow_html=True)
-        with st.container(border=True):
+        with st.container(border=True, key=f"office_room_{room_key}"):
             cols = st.columns(len(employees))
-            for col, (emp_key, label, _fn) in zip(cols, employees):
+            for col, (emp_key, name, avatar, _fn) in zip(cols, employees):
                 with col:
-                    if st.button(label, key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
+                    if st.button(f"{avatar} {name}", key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
                         st.session_state['office_view'] = (room_key, emp_key)
             slots[room_key] = (st.empty(), employees)
 
@@ -4365,7 +4409,7 @@ def render_office_rooms(rooms):
     for room_key, (slot, employees) in slots.items():
         with slot:
             if _sel and _sel[0] == room_key:
-                _fn = next(fn for k, _, fn in employees if k == _sel[1])
+                _fn = next(fn for k, _, _, fn in employees if k == _sel[1])
                 render_office_report_card(_fn())
             else:
                 st.caption("👆 직원을 클릭하면 이 방에서 보고서를 볼 수 있습니다.")
@@ -4382,8 +4426,8 @@ def office_analyst_employees():
                'reasons': [mgr['consensus'], f"팀 합의율 {mgr['agreement']}%",
                            f"가장 강한 의견: {mgr['strongest_opinion']}"]
                + ([mgr['dissent']] if mgr['dissent'] else [])}
-    employees = [(r['name'], f"{r['icon']} {r['name']}", (lambda rr=r: rr)) for r in snap['reports']]
-    employees.append(('총괄', '🧑‍💼 총괄', lambda: mgr_rep))
+    employees = [(r['name'], r['name'], _office_avatar(r['name']), (lambda rr=r: rr)) for r in snap['reports']]
+    employees.append(('총괄', '총괄', _office_avatar('총괄'), lambda: mgr_rep))
     return employees
 
 
@@ -7760,27 +7804,30 @@ worksheet_name = "trades"
                         unsafe_allow_html=True)
             st.info("아직 종목 분석이 실행되지 않았습니다 — '종목 분석' 탭에서 종목을 먼저 분석하면 이 방이 열립니다.")
 
+        def _emp(emp_key, name, fn):
+            return (emp_key, name, _office_avatar(name), fn)
+
         _rooms += [
             ('ops', '자동매매 운영팀', '⚙️', [
-                ('exec', '⚙️ 실행 모드', execution_mode_employee),
-                ('sig', '📡 시그널 파이프라인', signal_pipeline_employee),
-                ('risk', '🛡️ 리스크 가드레일', risk_guardrail_employee),
-                ('eq', '📊 계좌 현황', equity_log_employee),
+                _emp('exec', '실행 모드', execution_mode_employee),
+                _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
+                _emp('risk', '리스크 가드레일', risk_guardrail_employee),
+                _emp('eq', '계좌 현황', equity_log_employee),
             ]),
             ('siggen', '시그널 생성팀', '📡', [
-                ('rank', '📊 팩터 랭킹', factor_ranking_employee),
-                ('sys', '🤖 시스템 시그널', system_signal_employee),
-                ('sector', '🔄 섹터 로테이션', sector_rotation_employee),
+                _emp('rank', '팩터 랭킹', factor_ranking_employee),
+                _emp('sys', '시스템 시그널', system_signal_employee),
+                _emp('sector', '섹터 로테이션', sector_rotation_employee),
             ]),
             ('ml', 'ML 시그널팀', '🧠', [
-                ('ml', '🧠 ML 신호', ml_signal_employee),
+                _emp('ml', 'ML 신호', ml_signal_employee),
             ]),
             ('bt', '백테스트 검증팀', '📉', [
-                ('factor_bt', '📉 팩터 백테스트', factor_backtest_employee),
-                ('stock_bt', '📊 종목 백테스팅', stock_backtest_employee),
+                _emp('factor_bt', '팩터 백테스트', factor_backtest_employee),
+                _emp('stock_bt', '종목 백테스팅', stock_backtest_employee),
             ]),
             ('qa', '퀀트 리서치/QA팀', '🔬', [
-                ('adv', '🔬 고급 분석', advanced_research_employee),
+                _emp('adv', '고급 분석', advanced_research_employee),
             ]),
         ]
         render_office_rooms(_rooms)
