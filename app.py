@@ -5,6 +5,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
+from typing import Callable, List, NamedTuple, Optional, Union
 import requests
 import os
 import json
@@ -50,30 +51,12 @@ except Exception:
     _DATA_INTEGRITY_AVAILABLE = False
 
 try:
-    from modules.portfolio_allocator import (
-        inverse_vol_weights as _inv_vol_weights,
-        risk_parity_weights as _rp_weights,
-        combine_strategies as _combine_strategies,
-        diversification_report as _diversification_report,
-        compute_strategy_correlation as _strategy_corr,
-    )
-    _PORTFOLIO_ALLOCATOR_AVAILABLE = True
-except Exception:
-    _PORTFOLIO_ALLOCATOR_AVAILABLE = False
-
-try:
     from modules.ops_safety import KillSwitch as _KillSwitch, reconcile_positions as _reconcile_pos, AlertDispatcher as _AlertDispatcher
     _OPS_SAFETY_AVAILABLE = True
 except Exception:
     _OPS_SAFETY_AVAILABLE = False
 
 _PT_TRACKER_AVAILABLE = False
-
-try:
-    from modules.tax_kr import OverseasStockLedger as _TaxLedger, calc_capital_gains_tax as _calc_tax, suggest_year_end_tax_loss_harvesting as _tax_harvest
-    _TAX_KR_AVAILABLE = True
-except Exception:
-    _TAX_KR_AVAILABLE = False
 
 try:
     from modules.alpha_decay_monitor import detect_alpha_decay as _detect_alpha_decay, rolling_performance_vs_baseline as _rolling_perf_vs_bt, cusum_change_detection as _cusum_detect
@@ -607,31 +590,6 @@ def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
     if half_kelly:
         f *= 0.5
     return min(f, 0.25)
-
-
-def monte_carlo_portfolio(returns_arr, capital: float,
-                          horizon_days: int = 252, n_sim: int = 1000):
-    """수익률 배열로 몬테카를로 시뮬레이션. 백분위 결과 반환."""
-    mu  = float(np.mean(returns_arr))
-    sig = float(np.std(returns_arr))
-    paths = np.zeros((n_sim, horizon_days + 1))
-    paths[:, 0] = capital
-    rng = np.random.default_rng(42)
-    daily = rng.normal(mu, sig, (n_sim, horizon_days))
-    for t in range(1, horizon_days + 1):
-        paths[:, t] = paths[:, t - 1] * (1 + daily[:, t - 1])
-    final = paths[:, -1]
-    pct   = np.percentile(final, [5, 25, 50, 75, 95])
-    return {
-        'paths': paths,
-        'final': final,
-        'p5':  pct[0], 'p25': pct[1], 'p50': pct[2],
-        'p75': pct[3], 'p95': pct[4],
-        'prob_profit':    float(np.mean(final > capital)),
-        'prob_loss_20':   float(np.mean(final < capital * 0.80)),
-        'max_loss_p5':    round((pct[0] / capital - 1) * 100, 1),
-        'best_p95':       round((pct[4] / capital - 1) * 100, 1),
-    }
 
 
 # ─────────────────────────────────────────────
@@ -3065,78 +3023,6 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
     return rdf
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def optimize_portfolio(tickers, method='equal', risk_free=None):
-    """포트폴리오 최적화: equal/min_vol/risk_parity/max_sharpe"""
-    if risk_free is None:
-        try:
-            _irx = yf.download('^IRX', period='5d', progress=False)
-            if isinstance(_irx.columns, pd.MultiIndex): _irx.columns = _irx.columns.droplevel(1)
-            risk_free = float(_irx['Close'].iloc[-1]) / 100 if not _irx.empty else 0.045
-        except Exception:
-            risk_free = 0.045
-    end = datetime.now(); start = end - timedelta(days=1095)  # 3 캘린더년 (756일은 ~2년 거래일)
-    prices = pd.DataFrame()
-    valid_tickers = []
-    for tk in tickers:
-        try:
-            df = download_stock(tk, start=start, end=end)
-            if not df.empty and len(df) >= 60:
-                prices[tk] = df['Close']
-                valid_tickers.append(tk)
-        except Exception:
-            continue
-    if len(valid_tickers) < 2: return {}, {}, pd.DataFrame()
-    returns = prices.pct_change().dropna()
-    # 신규 상장 티커가 포함되면 공통 기간이 단축됨 — 충분한 룩백 보장
-    if len(returns) < 200:
-        long_tickers = [c for c in prices.columns if prices[c].notna().sum() >= 200]
-        if len(long_tickers) >= 2:
-            prices = prices[long_tickers]
-            valid_tickers = long_tickers
-            returns = prices.pct_change().dropna()
-    n = len(valid_tickers)
-    cov = returns.cov() * 252
-    corr = returns.corr()
-    mean_ret = returns.mean() * 252
-
-    if method == 'equal':
-        w = np.array([1.0/n]*n)
-    elif method == 'min_vol':
-        from scipy.optimize import minimize
-        cons = {'type': 'eq', 'fun': lambda w: w.sum() - 1}
-        bounds = [(0.02, 0.40)] * n
-        x0 = np.array([1.0/n]*n)
-        res = minimize(lambda w: np.sqrt(w @ cov.values @ w),
-                       x0, method='SLSQP', bounds=bounds, constraints=cons)
-        w = res.x if res.success else x0
-    elif method == 'risk_parity':
-        vol = np.sqrt(np.diag(cov.values))
-        inv_vol = 1.0 / (vol + 1e-10)
-        w = inv_vol / inv_vol.sum()
-    elif method == 'max_sharpe':
-        from scipy.optimize import minimize
-        def neg_sharpe(w):
-            ret = w @ mean_ret.values
-            vol = np.sqrt(w @ cov.values @ w)
-            return -(ret - risk_free) / (vol + 1e-10)
-        cons = {'type': 'eq', 'fun': lambda w: w.sum() - 1}
-        bounds = [(0.02, 0.40)] * n
-        x0 = np.array([1.0/n]*n)
-        res = minimize(neg_sharpe, x0, method='SLSQP', bounds=bounds, constraints=cons)
-        w = res.x if res.success else x0
-    else:
-        w = np.array([1.0/n]*n)
-    w = w / w.sum()
-    port_ret = float(w @ mean_ret.values) * 100
-    port_vol = float(np.sqrt(w @ cov.values @ w)) * 100
-    port_sharpe = (port_ret/100 - risk_free) / (port_vol/100 + 1e-10)
-    weights = {tk: round(float(wt), 4) for tk, wt in zip(valid_tickers, w)}
-    stats = {'expected_return': round(port_ret, 2), 'volatility': round(port_vol, 2),
-             'sharpe': round(port_sharpe, 2), 'n_assets': n}
-    return weights, stats, corr
-
-
 def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capital=10000):
     """시스템 트레이딩 엔진: 규칙 기반 매수/매도/리밸런싱 시그널."""
     actions = []
@@ -3612,76 +3498,6 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
     }
     return metrics, eq_df, trade_log
 
-# ─────────────────────────────────────────────
-# GOOGLE SHEETS 연동 (매매 일지 영속 저장)
-# ─────────────────────────────────────────────
-
-def _gs_configured():
-    """Streamlit secrets에 GS 설정이 있는지 확인."""
-    try:
-        return ("gcp_service_account" in st.secrets and
-                "google_sheets" in st.secrets and
-                "spreadsheet_id" in st.secrets["google_sheets"])
-    except Exception:
-        return False
-
-@st.cache_resource(show_spinner=False)
-def _gs_client():
-    """gspread 클라이언트. 인증 실패 시 None 반환."""
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        scopes = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]), scopes=scopes)
-        return gspread.authorize(creds)
-    except Exception:
-        return None
-
-def _gs_load_trades():
-    """Google Sheets에서 매매 기록 로드. 실패 시 None."""
-    gc = _gs_client()
-    if gc is None:
-        return None
-    try:
-        sh = gc.open_by_key(st.secrets["google_sheets"]["spreadsheet_id"])
-        ws_name = st.secrets["google_sheets"].get("worksheet_name", "trades")
-        try:
-            ws = sh.worksheet(ws_name)
-        except Exception:
-            return []
-        records = ws.get_all_records()
-        # 빈 문자열 → None 변환 (수치 컬럼 복원)
-        cleaned = []
-        for r in records:
-            cleaned.append({k: (None if v == '' else v) for k, v in r.items()})
-        return cleaned
-    except Exception:
-        return None
-
-def _gs_save_trades(trades):
-    """매매 기록을 Google Sheets에 저장. 성공 시 True."""
-    gc = _gs_client()
-    if gc is None:
-        return False
-    try:
-        sh = gc.open_by_key(st.secrets["google_sheets"]["spreadsheet_id"])
-        ws_name = st.secrets["google_sheets"].get("worksheet_name", "trades")
-        try:
-            ws = sh.worksheet(ws_name)
-        except Exception:
-            ws = sh.add_worksheet(title=ws_name, rows=2000, cols=20)
-        ws.clear()
-        if trades:
-            df_gs = pd.DataFrame(trades).fillna('')
-            ws.update([df_gs.columns.tolist()] + df_gs.values.tolist())
-        return True
-    except Exception:
-        return False
-
 
 # ─────────────────────────────────────────────
 # MAIN APP
@@ -3822,56 +3638,6 @@ def _draw_chart_legacy(df, ticker, is_krw):
     fig.update_yaxes(row=4, col=1, range=[0, 100])
     fig.update_yaxes(row=5, col=1, range=[0, 100])
     return fig
-
-
-# ─────────────────────────────────────────────
-# 관심종목 (WATCHLIST) — 로컬 JSON 영속화
-# ─────────────────────────────────────────────
-
-_WATCHLIST_PATH = os.path.join(os.path.dirname(__file__), "watchlist.json")
-
-
-def _load_watchlist():
-    if os.path.exists(_WATCHLIST_PATH):
-        try:
-            with open(_WATCHLIST_PATH, encoding='utf-8') as f:
-                return json.load(f).get('tickers', [])
-        except Exception:
-            return []
-    return []
-
-
-def _save_watchlist(tickers):
-    try:
-        with open(_WATCHLIST_PATH, 'w', encoding='utf-8') as f:
-            json.dump({'tickers': tickers}, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def _watchlist_snapshot(ticker):
-    """관심종목 테이블 한 행: 현재가·등락률·RSI·기술점수."""
-    end = datetime.now()
-    df = download_stock(ticker, start=end - timedelta(days=260), end=end)
-    if df.empty or len(df) < 30:
-        return None
-    df = df.dropna(subset=['Close'])
-    p = df['Close']
-    cp = float(p.iloc[-1])
-    pp = float(p.iloc[-2]) if len(p) >= 2 else cp
-    chg = (cp - pp) / pp * 100 if pp else 0
-    rsi = float(calc_rsi(p).iloc[-1])
-    mom = calc_momentum(df)
-    t_sc, t_det = (technical_score(df) if len(df) >= 120 else (None, {}))
-    is_krw = ticker.endswith('.KS') or ticker.endswith('.KQ')
-    fp = f"₩{cp:,.0f}" if is_krw else f"${cp:,.2f}"
-    return {
-        '티커': ticker, '현재가': fp, '등락률': f"{chg:+.2f}%",
-        'RSI': round(rsi, 1),
-        '기술점수': round(t_sc, 1) if t_sc is not None else None,
-        '3M모멘텀': f"{mom['3M']:+.1f}%" if mom.get('3M') is not None else 'N/A',
-        '_chg_raw': chg, '_cp_raw': cp, '_is_krw': is_krw,
-    }
 
 
 # ─────────────────────────────────────────────
@@ -4101,13 +3867,19 @@ def trader_signal_lines(df, manager_report, risk_report=None):
 # ─────────────────────────────────────────────
 
 def build_ops_report(name, icon, status, reasons):
-    """운영팀 공통 보고서 포맷. status: 정상/주의/경고."""
+    """운영팀·시스템/멀티종목팀 공통 보고서 포맷. status: 정상/주의/경고/대기.
+    팀 소속은 이 dict가 아니라 사무실의 방 구성(main()의 _rooms 목록)으로 결정된다 —
+    보고서 자체에 팀을 중복 태깅하지 않는다."""
     return {'name': name, 'icon': icon, 'status': status,
             'reasons': [r for r in reasons if r][:4]}
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def signal_pipeline_employee():
-    """시그널 파이프라인 직원: signal_log.json 상태 점검 (신호 발생/평가 현황)."""
+    """시그널 파이프라인 직원: signal_log.json 상태 점검 (신호 발생/평가 현황).
+    앱 안에서 signal_log.json을 쓰는 두 지점(시스템 시그널 생성, 21일 수익률 평가)이
+    각자 .clear()로 이 캐시를 무효화하므로, 세션 내 갱신은 즉시 반영되고 그 사이엔
+    매 rerun·중복 호출마다 파일을 다시 읽지 않는다."""
     path = os.path.join(os.path.dirname(__file__), "signal_log.json")
     if not os.path.exists(path):
         return build_ops_report('시그널 파이프라인', '📡', '주의',
@@ -4159,8 +3931,11 @@ def risk_guardrail_employee():
     return build_ops_report('리스크 가드레일', '🛡️', status, reasons)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def equity_log_employee():
-    """계좌 현황 직원: equity_log.json 상태 (시그널 전용 모드에서는 보통 비어있는 게 정상)."""
+    """계좌 현황 직원: equity_log.json 상태 (시그널 전용 모드에서는 보통 비어있는 게 정상).
+    equity_log.json은 앱 안에서는 쓰지 않고 외부 페이퍼 트레이딩 스크립트만 갱신하므로
+    무효화 없이 캐시해도 안전하다."""
     path = os.path.join(os.path.dirname(__file__), "equity_log.json")
     if not os.path.exists(path):
         return build_ops_report('계좌 현황', '📊', '정상',
@@ -4188,49 +3963,35 @@ def equity_log_employee():
 #          퀀트 리서치/QA팀(고급 분석)
 # ─────────────────────────────────────────────
 
-SYSTEM_TEAMS = {
-    '팩터 랭킹': '시그널 생성팀', '시스템 시그널': '시그널 생성팀', '섹터 로테이션': '시그널 생성팀',
-    'ML 신호': 'ML 시그널팀',
-    '팩터 백테스트': '백테스트 검증팀', '종목 백테스팅': '백테스트 검증팀',
-    '고급 분석': '퀀트 리서치/QA팀',
-}
-
-
-def build_system_report(name, icon, status, reasons):
-    """시스템/멀티종목 담당 직원 공통 보고서 포맷 (팀 소속 자동 태깅). status: 정상/주의/경고/대기."""
-    return {'name': name, 'icon': icon, 'team': SYSTEM_TEAMS.get(name, ''),
-            'status': status, 'reasons': [r for r in reasons if r][:4]}
-
-
 def factor_ranking_employee():
     """팩터 랭킹 담당(시그널 생성팀): 세션에 실행된 팩터 분석 결과 상태."""
     fdf = st.session_state.get('qt_factors')
     if fdf is None or fdf.empty:
-        return build_system_report('팩터 랭킹', '📊', '대기',
+        return build_ops_report('팩터 랭킹', '📊', '대기',
             ['아직 팩터 분석 미실행 — "📊 팩터 분석 실행" 버튼으로 시작'])
     failed = fdf.attrs.get('failed', [])
     top = fdf.iloc[0]
     reasons = [f"{len(fdf)}개 종목 분석 완료 (1위: {top['ticker']} {top['composite']:.0f}점)"]
     if failed:
         reasons.append(f"⚠️ {len(failed)}개 종목 분석 실패: {', '.join(failed[:3])}")
-    return build_system_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons)
+    return build_ops_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons)
 
 
 def system_signal_employee():
     """시스템 시그널 담당(시그널 생성팀): 세션에서 생성한 매매 액션 상태."""
     qs = st.session_state.get('qt_signals')
     if not qs:
-        return build_system_report('시스템 시그널', '🤖', '대기',
+        return build_ops_report('시스템 시그널', '🤖', '대기',
             ['아직 시그널 미생성 — "🤖 시스템 시그널 생성" 버튼으로 시작'])
     rebal = qs['rebal']
     reasons = [f"매수 {rebal['buy_count']} · 매도 {rebal['sell_count']} · 관망 {rebal['hold_count']}",
                f"다음 리밸런싱: {rebal['next_rebal']}"]
-    return build_system_report('시스템 시그널', '🤖', '정상', reasons)
+    return build_ops_report('시스템 시그널', '🤖', '정상', reasons)
 
 
 def sector_rotation_employee():
     """섹터 로테이션 담당(시그널 생성팀): 신규 다운로드 없이 정적 상태만 안내(비용 방지)."""
-    return build_system_report('섹터 로테이션', '🔄', '정상',
+    return build_ops_report('섹터 로테이션', '🔄', '정상',
         ['12개 섹터 ETF 모멘텀 랭킹 상시 제공 (1시간 캐시)',
          '모멘텀 = 1M×50% + 3M×30% + 6M×20%'])
 
@@ -4238,15 +3999,15 @@ def sector_rotation_employee():
 def ml_signal_employee():
     """ML 신호 담당(ML 시그널팀): Purged K-Fold 검증 결과 상태."""
     if not _ML_AVAILABLE:
-        return build_system_report('ML 신호', '🧠', '경고', ['modules/ml_signals.py 로드 실패'])
+        return build_ops_report('ML 신호', '🧠', '경고', ['modules/ml_signals.py 로드 실패'])
     mr = st.session_state.get('ml_result')
     if not mr:
-        return build_system_report('ML 신호', '🧠', '대기',
+        return build_ops_report('ML 신호', '🧠', '대기',
             ['아직 학습 미실행 — "🧠 ML 신호 학습 & 검증" 버튼으로 시작'])
     res = mr['res']
     reasons = [f"{mr['ticker']} 평균 AUC {res['mean_auc']:.4f} ({res['interpretation']})",
                f"AUC 표준편차 {res['std_auc']:.4f} · Fold {res['n_folds_used']}개"]
-    return build_system_report('ML 신호', '🧠', '정상' if res['mean_auc'] >= 0.53 else '주의', reasons)
+    return build_ops_report('ML 신호', '🧠', '정상' if res['mean_auc'] >= 0.53 else '주의', reasons)
 
 
 def factor_backtest_employee():
@@ -4264,19 +4025,19 @@ def factor_backtest_employee():
         status = '정상'
     if not reasons:
         reasons = ['아직 백테스트/IC 검증 미실행']
-    return build_system_report('팩터 백테스트', '📉', status, reasons)
+    return build_ops_report('팩터 백테스트', '📉', status, reasons)
 
 
 def stock_backtest_employee():
     """종목 백테스팅 담당(백테스트 검증팀): 개별 종목 전략 백테스트 상태."""
     bt = st.session_state.get('tab3')
     if not bt:
-        return build_system_report('종목 백테스팅', '📊', '대기',
+        return build_ops_report('종목 백테스팅', '📊', '대기',
             ['아직 백테스팅 미실행 — "📉 백테스팅 시작" 버튼으로 시작'])
     m = bt['metrics']
     reasons = [f"{bt['bt_ticker']} 전략 {m.get('전략 수익률','N/A')} vs 매수보유 {m.get('매수보유 수익률','N/A')}",
                f"Sharpe {m.get('Sharpe Ratio','N/A')} · MDD {m.get('최대낙폭(MDD)','N/A')}"]
-    return build_system_report('종목 백테스팅', '📊', '정상', reasons)
+    return build_ops_report('종목 백테스팅', '📊', '정상', reasons)
 
 
 def advanced_research_employee():
@@ -4291,12 +4052,33 @@ def advanced_research_employee():
     reasons = [f"검증 모듈 {len(loaded)}/5개 로드됨: {', '.join(loaded) or '없음'}"]
     if failed:
         reasons.append(f"⚠️ 로드 실패: {', '.join(failed)}")
-    return build_system_report('고급 분석', '🔬', status, reasons)
+    return build_ops_report('고급 분석', '🔬', status, reasons)
 
 
 # ─────────────────────────────────────────────
 # 사무실 뷰 — 팀별 방 + 직원 클릭 → 보고서, 마지막 총괄 트레이더 종합 보고
 # ─────────────────────────────────────────────
+
+class OfficeEmployee(NamedTuple):
+    """방 안의 직원 한 명. panel_fn이 있으면 보고서 카드 아래에 실제 업무 화면(입력폼·실행버튼·결과)을
+    이어서 그린다 — 이름 있는 필드라 emp[3]/emp[4] 같은 위치 인덱싱과 len() 방어 코드가 필요 없다."""
+    key: str
+    name: str
+    avatar: str
+    report_fn: Callable
+    panel_fn: Optional[Callable] = None
+
+
+class OfficeRoom(NamedTuple):
+    """사무실의 방(팀) 하나. employees는 직원 리스트이거나, 인자 없는 callable
+    (team_panel_fn 실행 *이후*에 평가됨 — AI애널리스트팀처럼 그 방의 공용 패널이 실행돼야
+    로스터가 정해지는 경우에 사용)."""
+    key: str
+    name: str
+    icon: str
+    employees: Union[List[OfficeEmployee], Callable[[], List[OfficeEmployee]]]
+    team_panel_fn: Optional[Callable] = None
+
 
 _OFFICE_STATUS_COLOR = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}
 
@@ -4318,9 +4100,12 @@ def _office_avatar(name):
 
 
 def inject_office_css():
-    """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS를 한 번 주입.
+    """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS를 세션당 한 번만 주입.
     st.container(key=...)가 만드는 안정적인 st-key-* 클래스를 이용해
     사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음)."""
+    if st.session_state.get('_office_css_injected'):
+        return
+    st.session_state['_office_css_injected'] = True
     st.markdown("""
 <style>
 div[class*="st-key-office_room_"] {
@@ -4351,10 +4136,15 @@ def _office_normalize(rep):
             'headline': rep['status'], 'reasons': rep['reasons']}
 
 
+def _reasons_to_html(reasons, empty_msg='참고할 정보 없음'):
+    """근거 리스트를 <li> HTML로 변환 — 사무실 카드와 Tab1 팀 카드가 공유하는 로직."""
+    return ''.join(f"<li>{r}</li>" for r in reasons) or f'<li>{empty_msg}</li>'
+
+
 def render_office_report_card(rep):
     """선택된 직원의 보고서 카드를 표시."""
     n = _office_normalize(rep)
-    _reason_html = ''.join(f"<li>{r}</li>" for r in n['reasons']) or '<li>참고할 정보 없음</li>'
+    _reason_html = _reasons_to_html(n['reasons'])
     st.markdown(f"""
 <div style="background:{n['color']}0d;border:1px solid {n['color']}40;border-radius:10px;
             padding:12px 16px;margin:8px 0 4px 0">
@@ -4366,52 +4156,45 @@ def render_office_report_card(rep):
 </div>""", unsafe_allow_html=True)
 
 
-def render_office_rooms(rooms):
+def render_office_rooms(rooms: List[OfficeRoom]):
     """여러 방을 2단계로 렌더링: 1) 모든 방의 헤더·(팀 공용 패널)·버튼을 먼저 그려 클릭을 확정하고(카드 자리는 예약만),
     2) 최종 확정된 선택값으로 해당 방의 카드 자리에만 보고서를 채운다.
     한 번의 rerun 안에서 버튼을 st.button()으로 순차 평가하는 Streamlit 특성상,
     방마다 즉시 session_state를 읽어 카드를 그리면 방금 클릭한 방보다 먼저 그려진 방이
-    직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다.
-    rooms: [(room_key, room_name, room_icon, employees, team_panel_fn), ...]
-      - employees: 직원 리스트, 또는 인자 없는 callable(팀 공용 패널 실행 *이후*에 평가됨 — 예:
-        AI애널리스트팀처럼 그 방의 공용 패널이 실행돼야 로스터가 정해지는 경우에 사용)
-      - team_panel_fn: 방 안에서 직원 선택과 무관하게 항상 그려지는 팀 공용 패널(선택, 5번째 요소)"""
+    직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다."""
     inject_office_css()
     slots = {}
     for room in rooms:
-        room_key, room_name, room_icon, employees = room[0], room[1], room[2], room[3]
-        team_panel_fn = room[4] if len(room) > 4 else None
         st.markdown(f"""
 <div style="display:inline-flex;align-items:center;gap:8px;margin:18px 0 8px 0;
             background:var(--surface);border:1px solid var(--border);border-left:4px solid #8b6f3e;
             border-radius:0 8px 8px 0;padding:5px 14px 5px 10px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
-  <span style="font-size:18px">{room_icon}</span>
-  <span style="font-size:13px;font-weight:800;color:var(--text-1)">{room_name}</span>
+  <span style="font-size:18px">{room.icon}</span>
+  <span style="font-size:13px;font-weight:800;color:var(--text-1)">{room.name}</span>
 </div>""", unsafe_allow_html=True)
-        with st.container(border=True, key=f"office_room_{room_key}"):
-            if team_panel_fn is not None:
-                team_panel_fn()
-            _employees = employees() if callable(employees) else employees
-            if _employees:
-                st.caption(f"👥 직원 {len(_employees)}명")
-                cols = st.columns(len(_employees))
-                for col, emp in zip(cols, _employees):
-                    emp_key, name, avatar = emp[0], emp[1], emp[2]
+        with st.container(border=True, key=f"office_room_{room.key}"):
+            if room.team_panel_fn is not None:
+                room.team_panel_fn()
+            employees = room.employees() if callable(room.employees) else room.employees
+            if employees:
+                st.caption(f"👥 직원 {len(employees)}명")
+                cols = st.columns(len(employees))
+                for col, emp in zip(cols, employees):
                     with col:
-                        if st.button(f"{avatar} {name}", key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
-                            st.session_state['office_view'] = (room_key, emp_key)
-            slots[room_key] = (st.container(), _employees)
+                        if st.button(f"{emp.avatar} {emp.name}", key=f"office_btn_{room.key}_{emp.key}", use_container_width=True):
+                            st.session_state['office_view'] = (room.key, emp.key)
+            slots[room.key] = (st.container(), employees)
 
     _sel = st.session_state.get('office_view')
     for room_key, (slot, employees) in slots.items():
         with slot:
             if employees and _sel and _sel[0] == room_key:
-                _emp = next((e for e in employees if e[0] == _sel[1]), None)
-                if _emp is not None:
-                    render_office_report_card(_emp[3]())
-                    if len(_emp) > 4 and _emp[4] is not None:
+                emp = next((e for e in employees if e.key == _sel[1]), None)
+                if emp is not None:
+                    render_office_report_card(emp.report_fn())
+                    if emp.panel_fn is not None:
                         st.markdown("")
-                        _emp[4]()
+                        emp.panel_fn()
             elif employees:
                 st.caption("👆 직원을 클릭하면 이 방에서 보고서와 업무 화면을 볼 수 있습니다.")
 
@@ -4427,8 +4210,9 @@ def office_analyst_employees():
                'reasons': [mgr['consensus'], f"팀 합의율 {mgr['agreement']}%",
                            f"가장 강한 의견: {mgr['strongest_opinion']}"]
                + ([mgr['dissent']] if mgr['dissent'] else [])}
-    employees = [(r['name'], r['name'], _office_avatar(r['name']), (lambda rr=r: rr)) for r in snap['reports']]
-    employees.append(('총괄', '총괄', _office_avatar('총괄'), lambda: mgr_rep))
+    employees = [OfficeEmployee(r['name'], r['name'], _office_avatar(r['name']), (lambda rr=r: rr))
+                 for r in snap['reports']]
+    employees.append(OfficeEmployee('총괄', '총괄', _office_avatar('총괄'), lambda: mgr_rep))
     return employees
 
 
@@ -4853,7 +4637,7 @@ def main():
 
                 def _render_report_card(_rep):
                     _rc = score_color(_rep['score'])
-                    _reason_html = ''.join(f"<li>{r}</li>" for r in _rep['reasons']) or '<li>참고할 세부 신호 없음</li>'
+                    _reason_html = _reasons_to_html(_rep['reasons'], '참고할 세부 신호 없음')
                     st.markdown(f"""
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
             box-shadow:0 1px 4px rgba(0,0,0,.06);height:100%">
@@ -5880,6 +5664,7 @@ def main():
                     try:
                         with open(_sl_path_w, 'w') as _fw2:
                             _json_w.dump({'signals': _sigs_w}, _fw2, ensure_ascii=False, indent=2)
+                        signal_pipeline_employee.clear()
                     except Exception: pass
 
             if 'qt_signals' in st.session_state:
@@ -6066,6 +5851,7 @@ def main():
                                 with open(_sl_path, 'w') as _slf2:
                                     _json.dump({'signals': _sl_data}, _slf2,
                                                ensure_ascii=False, indent=2)
+                                signal_pipeline_employee.clear()
                             except Exception:
                                 pass
 
@@ -7254,32 +7040,32 @@ def main():
     st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면(분석 실행)을 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
 
     def _emp(emp_key, name, fn, panel_fn=None):
-        return (emp_key, name, _office_avatar(name), fn, panel_fn)
+        return OfficeEmployee(emp_key, name, _office_avatar(name), fn, panel_fn)
 
     def _analyst_roster():
         return office_analyst_employees() or []
 
     _rooms = [
-        ('analyst', 'AI 애널리스트팀', '📈', _analyst_roster, render_stock_analysis_panel),
-        ('ops', '자동매매 운영팀', '⚙️', [
+        OfficeRoom('analyst', 'AI 애널리스트팀', '📈', _analyst_roster, render_stock_analysis_panel),
+        OfficeRoom('ops', '자동매매 운영팀', '⚙️', [
             _emp('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
             _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
             _emp('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
             _emp('eq', '계좌 현황', equity_log_employee),
         ]),
-        ('siggen', '시그널 생성팀', '📡', [
+        OfficeRoom('siggen', '시그널 생성팀', '📡', [
             _emp('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
             _emp('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
             _emp('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
         ], render_universe_picker),
-        ('ml', 'ML 시그널팀', '🧠', [
+        OfficeRoom('ml', 'ML 시그널팀', '🧠', [
             _emp('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
         ]),
-        ('bt', '백테스트 검증팀', '📉', [
+        OfficeRoom('bt', '백테스트 검증팀', '📉', [
             _emp('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
             _emp('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
         ]),
-        ('qa', '퀀트 리서치/QA팀', '🔬', [
+        OfficeRoom('qa', '퀀트 리서치/QA팀', '🔬', [
             _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
         ]),
     ]
