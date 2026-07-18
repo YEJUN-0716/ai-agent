@@ -4476,10 +4476,8 @@ def main():
         f"<span style='font-size:11px;color:var(--text-4)'>📡 시그널 전용 모드 — 매일 장마감 후 자동 스캔, 실제 주문 없음</span>"
         f"</div>", unsafe_allow_html=True)
 
-    tab_office, tab_watch, tab_journal = st.tabs(
-        ["🏢 사무실", "⭐ 관심종목", "매매 일지"])
 
-    # ── Tab 1: 단일 종목 분석 ─────────────────
+    # ── AI 애널리스트팀 방 공용 패널: 단일 종목 분석 ──────
     def render_stock_analysis_panel():
         # 사이드바 제거 — 값 하드코딩 (이 패널 전용)
         w_tech, w_fund, w_macro = 35, 40, 25
@@ -7243,448 +7241,72 @@ def main():
                     except ValueError:
                         st.error("JSON 파싱 오류")
 
-    with tab_journal:
-        _gs_ok = _gs_configured()
-        if _gs_ok:
-            st.caption("매매 기록 추적 · Google Sheets 자동 동기화 · 시그널 적중률 분석")
-        else:
-            st.caption("매매 기록 추적 · 시그널 적중률 분석 · CSV 백업/복원")
+    st.subheader("🏢 사무실")
+    st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면(분석 실행)을 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
 
-        # ── 초기화 + Google Sheets 자동 로드 ──────────────────
-        if 'trades' not in st.session_state:
-            st.session_state['trades'] = []
-            if _gs_ok and not st.session_state.get('_gs_loaded'):
-                with st.spinner("Google Sheets에서 기록 불러오는 중..."):
-                    _loaded = _gs_load_trades()
-                if _loaded is not None:
-                    st.session_state['trades'] = _loaded
-                    st.session_state['_gs_loaded'] = True
+    def _emp(emp_key, name, fn, panel_fn=None):
+        return (emp_key, name, _office_avatar(name), fn, panel_fn)
 
-        # ── Google Sheets 상태 표시줄 ──────────────────────────
-        if _gs_ok:
-            _gsc1, _gsc2, _gsc3 = st.columns([2, 1, 1])
-            sid = st.secrets["google_sheets"].get("spreadsheet_id", "")
-            _gsc1.success(f"Google Sheets 연결됨  |  스프레드시트 ID: `{sid[:20]}…`")
-            if _gsc2.button("☁️ GS에 저장", key="gs_push"):
-                with st.spinner("저장 중..."):
-                    _ok = _gs_save_trades(st.session_state['trades'])
-                if _ok:
-                    st.success("Google Sheets 저장 완료")
-                else:
-                    st.error("저장 실패 — 인증 또는 권한을 확인하세요")
-            if _gsc3.button("🔄 GS에서 불러오기", key="gs_pull"):
-                with st.spinner("불러오는 중..."):
-                    _pulled = _gs_load_trades()
-                if _pulled is not None:
-                    st.session_state['trades'] = _pulled
-                    st.rerun()
-                else:
-                    st.error("불러오기 실패")
-        else:
-            with st.expander("☁️ Google Sheets 연동 설정 방법", expanded=False):
-                st.markdown("""
-**설정하면 앱을 껐다 켜도 매매 기록이 유지됩니다.**
+    def _analyst_roster():
+        return office_analyst_employees() or []
 
-1. [Google Cloud Console](https://console.cloud.google.com/) → 새 프로젝트 생성
-2. APIs & Services → **Google Sheets API** + **Google Drive API** 활성화
-3. IAM & Admin → Service Accounts → 새 계정 생성 → JSON 키 다운로드
-4. Google Sheets에서 새 스프레드시트 생성 → 서비스 계정 이메일에 **편집자** 권한 공유
-5. Streamlit Cloud → App settings → **Secrets** 탭에 아래 형식으로 추가:
+    _rooms = [
+        ('analyst', 'AI 애널리스트팀', '📈', _analyst_roster, render_stock_analysis_panel),
+        ('ops', '자동매매 운영팀', '⚙️', [
+            _emp('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
+            _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
+            _emp('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
+            _emp('eq', '계좌 현황', equity_log_employee),
+        ]),
+        ('siggen', '시그널 생성팀', '📡', [
+            _emp('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
+            _emp('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
+            _emp('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
+        ], render_universe_picker),
+        ('ml', 'ML 시그널팀', '🧠', [
+            _emp('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
+        ]),
+        ('bt', '백테스트 검증팀', '📉', [
+            _emp('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
+            _emp('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
+        ]),
+        ('qa', '퀀트 리서치/QA팀', '🔬', [
+            _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
+        ]),
+    ]
+    render_office_rooms(_rooms)
 
-```toml
-[gcp_service_account]
-type = "service_account"
-project_id = "your-project-id"
-private_key_id = "..."
-private_key = "-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
-client_email = "your-sa@project.iam.gserviceaccount.com"
-client_id = "..."
-auth_uri = "https://accounts.google.com/o/oauth2/auth"
-token_uri = "https://oauth2.googleapis.com/token"
+    # ── 총괄 트레이더 최종 보고 ──────────────
+    st.markdown("---")
+    _status_fns = [
+        execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
+        factor_ranking_employee, system_signal_employee, sector_rotation_employee,
+        ml_signal_employee, factor_backtest_employee, stock_backtest_employee, advanced_research_employee,
+    ]
+    _statuses = [fn()['status'] for fn in _status_fns]
+    _warn_n, _caution_n = _statuses.count('경고'), _statuses.count('주의')
+    _ok_n, _wait_n = _statuses.count('정상'), _statuses.count('대기')
+    if _warn_n:
+        _final_color, _final_headline = '#ef4444', f"⚠️ 경고 {_warn_n}건 — 확인 필요"
+    elif _caution_n:
+        _final_color, _final_headline = '#f59e0b', f"🟡 주의 {_caution_n}건"
+    else:
+        _final_color, _final_headline = '#10b981', "✅ 전체 정상 운영 중"
 
-[google_sheets]
-spreadsheet_id = "스프레드시트_URL에서_/d/와_/edit_사이_ID"
-worksheet_name = "trades"
-```
-""")
+    _analyst_line = ''
+    _snap = st.session_state.get('office_analyst_snapshot')
+    if _snap:
+        _m = _snap['manager']
+        _analyst_line = (f"<div style='margin-top:6px'>📈 {_snap['ticker']} 분석: "
+                          f"<b style='color:{score_color(_m['total_score'])}'>{_m['total_score']:.1f}점 · {_m['consensus']}</b></div>")
 
-        # ── CSV 업로드로 복원 (GS 미설정 시 주 백업 수단) ──────
-        with st.expander("📂 CSV로 불러오기", expanded=False):
-            _up = st.file_uploader("이전 세션 CSV 업로드", type='csv', key='journal_upload')
-            if _up:
-                try:
-                    _udf = pd.read_csv(_up)
-                    st.session_state['trades'] = _udf.to_dict('records')
-                    if _gs_ok:
-                        _gs_save_trades(st.session_state['trades'])
-                    st.success(f"{len(st.session_state['trades'])}건 복원 완료")
-                except Exception as _ue:
-                    st.error(f"업로드 오류: {_ue}")
-
-        # ── 새 매매 입력 폼 ────────────────────────────────────
-        with st.expander("➕ 새 매매 기록 추가", expanded=True):
-            _j1, _j2, _j3, _j4 = st.columns(4)
-            _j_tkr   = _j1.text_input("종목 티커", key="j_tkr").upper().strip()
-            _j_act   = _j2.selectbox("구분", ["매수", "매도"], key="j_act")
-            _j_date  = _j3.date_input("날짜", key="j_date")
-            _j_price = _j4.number_input("가격 ($)", min_value=0.01, value=100.0, step=0.01, key="j_price")
-            _j5, _j6, _j7, _j8 = st.columns(4)
-            _j_shares = _j5.number_input("수량 (주)", min_value=1, value=10, key="j_shares")
-            _j_sig    = _j6.selectbox("시그널 출처", ["퀀트 시스템", "패턴 분석", "수동 판단", "대시보드"], key="j_sig")
-            _j_exit_p = _j7.number_input("청산가 (0=미청산)", min_value=0.0, value=0.0, step=0.01, key="j_exit_p")
-            _j_note   = _j8.text_input("메모", key="j_note")
-            if st.button("✅ 기록 추가", key="j_add"):
-                if _j_tkr:
-                    _pnl = (_j_exit_p - _j_price) * _j_shares if (_j_act == "매수" and _j_exit_p > 0) else \
-                           (_j_price - _j_exit_p) * _j_shares if (_j_act == "매도" and _j_exit_p > 0) else None
-                    _pnl_pct = (_j_exit_p / _j_price - 1) * 100 if (_j_act == "매수" and _j_exit_p > 0) else \
-                               (_j_price / _j_exit_p - 1) * 100 if (_j_act == "매도" and _j_exit_p > 0) else None
-                    st.session_state['trades'].append({
-                        '날짜': str(_j_date), '종목': _j_tkr, '구분': _j_act,
-                        '진입가': _j_price, '수량': _j_shares,
-                        '투자금': round(_j_price * _j_shares, 2),
-                        '청산가': _j_exit_p if _j_exit_p > 0 else None,
-                        '손익($)': round(_pnl, 2) if _pnl is not None else None,
-                        '손익(%)': round(_pnl_pct, 2) if _pnl_pct is not None else None,
-                        '시그널': _j_sig, '메모': _j_note,
-                    })
-                    if _gs_ok:
-                        _gs_save_trades(st.session_state['trades'])
-                    st.success(f"{_j_tkr} {_j_act} 기록 추가" + (" + GS 저장" if _gs_ok else " 완료"))
-                else:
-                    st.warning("종목 티커를 입력하세요.")
-
-        # ── 기록 테이블 + 전체 성과 요약 ──────────────────────
-        if st.session_state['trades']:
-            _tdf = pd.DataFrame(st.session_state['trades'])
-
-            _closed = _tdf[_tdf['손익(%)'].notna()].copy()
-            _closed['손익(%)'] = pd.to_numeric(_closed['손익(%)'], errors='coerce')
-            _closed['손익($)'] = pd.to_numeric(_closed['손익($)'], errors='coerce')
-            _closed = _closed.dropna(subset=['손익(%)'])
-
-            if not _closed.empty:
-                _wins   = _closed[_closed['손익(%)'] > 0]
-                _losses = _closed[_closed['손익(%)'] <= 0]
-                _wr     = len(_wins) / len(_closed) * 100
-                _avg_w  = float(_wins['손익(%)'].mean()) if not _wins.empty else 0
-                _avg_l  = abs(float(_losses['손익(%)'].mean())) if not _losses.empty else 0
-                _total_pnl = float(_closed['손익($)'].sum())
-                _pf = (_wins['손익($)'].sum() / max(abs(_losses['손익($)'].sum()), 0.01)
-                       if not _wins.empty else 0)
-                _kf_calc = kelly_fraction(_wr/100, _avg_w, _avg_l) if _avg_l > 0 else 0
-                _exp_val = _wr/100 * _avg_w - (1-_wr/100) * _avg_l
-
-                _jm1, _jm2, _jm3, _jm4, _jm5, _jm6 = st.columns(6)
-                _jm1.metric("승률",       f"{_wr:.1f}%",    f"{len(_closed)}건 청산")
-                _jm2.metric("평균 수익",  f"+{_avg_w:.1f}%", f"{len(_wins)}승")
-                _jm3.metric("평균 손실",  f"-{_avg_l:.1f}%", f"{len(_losses)}패")
-                _jm4.metric("수익 팩터",  f"{_pf:.2f}",      "1.5+ 우수")
-                _jm5.metric("기대값/매매", f"{_exp_val:+.2f}%")
-                _jm6.metric("권장 Kelly", f"{_kf_calc*100:.1f}%", "half-Kelly")
-
-            # 전체 기록 표
-            st.markdown("#### 📋 전체 매매 기록")
-            _edit_df = st.data_editor(_tdf, width='stretch', num_rows="dynamic",
-                                      key="journal_editor")
-            _sv1, _sv2 = st.columns(2)
-            if _sv1.button("💾 변경사항 저장", key="j_save"):
-                st.session_state['trades'] = _edit_df.to_dict('records')
-                if _gs_ok:
-                    _gs_save_trades(st.session_state['trades'])
-                st.success("저장 완료" + (" + GS 동기화" if _gs_ok else ""))
-            _csv_data = _tdf.to_csv(index=False).encode('utf-8-sig')
-            _sv2.download_button("⬇️ CSV 다운로드", _csv_data,
-                                 file_name=f"trades_{datetime.now().strftime('%Y%m%d')}.csv",
-                                 mime='text/csv', key='j_download')
-
-            # ── 시그널 출처별 적중률 분석 ──────────────────────
-            if not _closed.empty and '시그널' in _closed.columns:
-                st.markdown("#### 📡 시그널 출처별 성과 분석")
-
-                def _sig_stats(g):
-                    wins_g = g[g['손익(%)'] > 0]
-                    loss_g = g[g['손익(%)'] <= 0]
-                    wr_g = len(wins_g) / len(g) * 100
-                    avg_w_g = float(wins_g['손익(%)'].mean()) if not wins_g.empty else 0
-                    avg_l_g = abs(float(loss_g['손익(%)'].mean())) if not loss_g.empty else 0
-                    pf_g = (wins_g['손익($)'].sum() /
-                            max(abs(loss_g['손익($)'].sum()), 0.01)) if not wins_g.empty else 0
-                    ev_g = wr_g/100 * avg_w_g - (1 - wr_g/100) * avg_l_g
-                    return pd.Series({
-                        '거래수': len(g),
-                        '승률(%)': round(wr_g, 1),
-                        '평균수익(%)': round(avg_w_g, 2),
-                        '평균손실(%)': round(avg_l_g, 2),
-                        '수익팩터': round(pf_g, 2),
-                        '기대값(%)': round(ev_g, 2),
-                        '총손익($)': round(float(g['손익($)'].sum()), 2),
-                    })
-
-                _sig_df = _closed.groupby('시그널').apply(_sig_stats).reset_index()
-                _sig_df = _sig_df.sort_values('기대값(%)', ascending=False)
-
-                # 컬러 스타일 적용
-                def _color_wr(val):
-                    if isinstance(val, (int, float)):
-                        if val >= 60: return 'color: #26a69a; font-weight:600'
-                        if val < 45:  return 'color: #ef5350; font-weight:600'
-                    return ''
-                def _color_ev(val):
-                    if isinstance(val, (int, float)):
-                        if val > 0: return 'color: #26a69a'
-                        if val < 0: return 'color: #ef5350'
-                    return ''
-
-                st.dataframe(
-                    _sig_df.style
-                        .map(_color_wr, subset=['승률(%)'])
-                        .map(_color_ev, subset=['기대값(%)', '총손익($)']),
-                    width='stretch', hide_index=True)
-
-                # 시그널별 승률 바 차트
-                _fig_sig = go.Figure()
-                _fig_sig.add_trace(go.Bar(
-                    name='승률(%)', x=_sig_df['시그널'], y=_sig_df['승률(%)'],
-                    marker_color=['#26a69a' if v >= 50 else '#ef5350' for v in _sig_df['승률(%)']],
-                    text=[f"{v:.0f}%" for v in _sig_df['승률(%)']],
-                    textposition='outside', yaxis='y'))
-                _fig_sig.add_trace(go.Bar(
-                    name='기대값(%)', x=_sig_df['시그널'], y=_sig_df['기대값(%)'],
-                    marker_color='rgba(41,98,255,0.6)',
-                    text=[f"{v:+.2f}%" for v in _sig_df['기대값(%)']],
-                    textposition='outside', yaxis='y2'))
-                _fig_sig.update_layout(
-                    height=300, barmode='group',
-                    plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    font=dict(color=TV_TEXT),
-                    yaxis=dict(title='승률(%)', gridcolor=TV_GRID, side='left'),
-                    yaxis2=dict(title='기대값(%)', overlaying='y', side='right',
-                                showgrid=False),
-                    legend=dict(orientation='h', y=1.1),
-                    margin=dict(l=0, r=60, t=30, b=0))
-                st.plotly_chart(_fig_sig, width='stretch')
-
-            # ── 누적 손익 곡선 ──────────────────────────────────
-            if not _closed.empty and '날짜' in _closed.columns:
-                try:
-                    _cum = _closed.sort_values('날짜').copy()
-                    _cum['누적손익($)'] = _cum['손익($)'].cumsum()
-                    _fig_cum = go.Figure()
-                    _fig_cum.add_trace(go.Scatter(
-                        x=_cum['날짜'], y=_cum['누적손익($)'],
-                        mode='lines+markers', name='누적 손익',
-                        line=dict(color='#2962ff', width=2),
-                        fill='tozeroy',
-                        fillcolor='rgba(41,98,255,0.08)'))
-                    _fig_cum.add_hline(y=0, line_color='#999999', line_dash='dot', line_width=1)
-                    _fig_cum.update_layout(
-                        height=220, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color=TV_TEXT),
-                        yaxis=dict(title='누적 손익 ($)', gridcolor=TV_GRID),
-                        xaxis=dict(gridcolor=TV_GRID),
-                        margin=dict(l=0, r=20, t=10, b=0), showlegend=False)
-                    st.plotly_chart(_fig_cum, width='stretch')
-                except Exception:
-                    pass
-
-            # ── 종목별 손익 바 차트 ─────────────────────────────
-            if not _closed.empty:
-                _fig_j = go.Figure(go.Bar(
-                    x=_closed['종목'], y=_closed['손익(%)'],
-                    marker_color=['#26a69a' if v > 0 else '#ef5350'
-                                  for v in _closed['손익(%)']],
-                    text=[f"{v:+.1f}%" for v in _closed['손익(%)']],
-                    textposition='outside'))
-                _fig_j.update_layout(
-                    height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                    yaxis_title="손익 (%)", font=dict(color=TV_TEXT),
-                    margin=dict(l=0, r=20, t=10, b=0))
-                st.plotly_chart(_fig_j, width='stretch')
-        else:
-            st.info("아직 매매 기록이 없습니다. 위 폼으로 첫 거래를 기록하세요.")
-            if not _gs_ok:
-                st.caption("💡 세션이 종료되면 기록이 사라집니다. Google Sheets 연동 또는 CSV 백업을 권장합니다.")
-
-    # ── Tab: 사무실 ────────────────────────────────
-    with tab_office:
-        st.subheader("🏢 사무실")
-        st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면(분석 실행)을 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
-
-        def _emp(emp_key, name, fn, panel_fn=None):
-            return (emp_key, name, _office_avatar(name), fn, panel_fn)
-
-        def _analyst_roster():
-            return office_analyst_employees() or []
-
-        _rooms = [
-            ('analyst', 'AI 애널리스트팀', '📈', _analyst_roster, render_stock_analysis_panel),
-            ('ops', '자동매매 운영팀', '⚙️', [
-                _emp('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
-                _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
-                _emp('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
-                _emp('eq', '계좌 현황', equity_log_employee),
-            ]),
-            ('siggen', '시그널 생성팀', '📡', [
-                _emp('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
-                _emp('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
-                _emp('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
-            ], render_universe_picker),
-            ('ml', 'ML 시그널팀', '🧠', [
-                _emp('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
-            ]),
-            ('bt', '백테스트 검증팀', '📉', [
-                _emp('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
-                _emp('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
-            ]),
-            ('qa', '퀀트 리서치/QA팀', '🔬', [
-                _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
-            ]),
-        ]
-        render_office_rooms(_rooms)
-
-        # ── 총괄 트레이더 최종 보고 ──────────────
-        st.markdown("---")
-        _status_fns = [
-            execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
-            factor_ranking_employee, system_signal_employee, sector_rotation_employee,
-            ml_signal_employee, factor_backtest_employee, stock_backtest_employee, advanced_research_employee,
-        ]
-        _statuses = [fn()['status'] for fn in _status_fns]
-        _warn_n, _caution_n = _statuses.count('경고'), _statuses.count('주의')
-        _ok_n, _wait_n = _statuses.count('정상'), _statuses.count('대기')
-        if _warn_n:
-            _final_color, _final_headline = '#ef4444', f"⚠️ 경고 {_warn_n}건 — 확인 필요"
-        elif _caution_n:
-            _final_color, _final_headline = '#f59e0b', f"🟡 주의 {_caution_n}건"
-        else:
-            _final_color, _final_headline = '#10b981', "✅ 전체 정상 운영 중"
-
-        _analyst_line = ''
-        _snap = st.session_state.get('office_analyst_snapshot')
-        if _snap:
-            _m = _snap['manager']
-            _analyst_line = (f"<div style='margin-top:6px'>📈 {_snap['ticker']} 분석: "
-                              f"<b style='color:{score_color(_m['total_score'])}'>{_m['total_score']:.1f}점 · {_m['consensus']}</b></div>")
-
-        st.markdown(f"""
+    st.markdown(f"""
 <div style="background:{_final_color}0d;border:1px solid {_final_color}40;border-radius:12px;padding:16px 20px">
   <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 총괄 트레이더 — 전사 종합 보고</div>
   <div style="font-size:1.3rem;font-weight:800;color:{_final_color};margin:6px 0">{_final_headline}</div>
   <div style="font-size:12px;color:var(--text-3)">정상 {_ok_n} · 주의 {_caution_n} · 경고 {_warn_n} · 대기 {_wait_n} (운영·시스템팀 {len(_statuses)}명 기준){_analyst_line}</div>
 </div>""", unsafe_allow_html=True)
 
-    # ── Tab: 관심종목 ──────────────────────────────
-    with tab_watch:
-        st.subheader("⭐ 관심종목")
-        st.caption("관심 있는 종목을 등록해두고 한 번에 현재가·RSI·기술점수를 확인하거나, 2개 이상 골라 성과를 비교합니다.")
-
-        if 'watchlist' not in st.session_state:
-            st.session_state['watchlist'] = _load_watchlist()
-        _wl = st.session_state['watchlist']
-
-        _wa_c1, _wa_c2 = st.columns([4, 1])
-        _wa_ticker = _wa_c1.text_input("종목 추가 (티커)", placeholder="AAPL, NVDA, 005930.KS ...",
-                                        key="wl_add_input", label_visibility="collapsed")
-        if _wa_c2.button("➕ 추가", key="wl_add_btn", use_container_width=True):
-            _new_tk = _wa_ticker.strip().upper()
-            if _new_tk and _new_tk not in _wl:
-                _wl.append(_new_tk)
-                _save_watchlist(_wl)
-                del st.session_state['wl_add_input']
-                st.rerun()
-
-        if not _wl:
-            st.info("관심종목이 비어 있습니다. 위에 티커를 입력하고 추가하세요.")
-        else:
-            _chip_cols = st.columns(min(len(_wl), 8) or 1)
-            for _i, _tk in enumerate(_wl):
-                with _chip_cols[_i % len(_chip_cols)]:
-                    if st.button(f"✕ {_tk}", key=f"wl_rm_{_tk}", help=f"{_tk} 삭제", use_container_width=True):
-                        _wl.remove(_tk)
-                        _save_watchlist(_wl)
-                        st.rerun()
-
-            st.divider()
-
-            if st.button("🔄 새로고침", type="primary", key="wl_refresh"):
-                with st.spinner(f"{len(_wl)}개 종목 조회 중..."):
-                    _rows = []
-                    _failed = []
-                    for _tk in _wl:
-                        try:
-                            _row = _watchlist_snapshot(_tk)
-                            if _row: _rows.append(_row)
-                            else: _failed.append(_tk)
-                        except Exception:
-                            _failed.append(_tk)
-                st.session_state['wl_rows'] = _rows
-                st.session_state['wl_failed'] = _failed
-
-            if 'wl_rows' in st.session_state:
-                _rows = st.session_state['wl_rows']
-                _failed = st.session_state.get('wl_failed', [])
-                if _rows:
-                    _wl_df = pd.DataFrame(_rows)
-                    _disp_df = _wl_df[['티커', '현재가', '등락률', 'RSI', '기술점수', '3M모멘텀']]
-
-                    def _hl_chg(row):
-                        c = _wl_df.loc[row.name, '_chg_raw']
-                        color = '#26a69a' if c > 0 else ('#ef5350' if c < 0 else '')
-                        return [f'color:{color};font-weight:600' if col == '등락률' else ''
-                                for col in row.index]
-
-                    st.dataframe(
-                        _disp_df.style.apply(_hl_chg, axis=1)
-                                .format({'RSI': '{:.1f}',
-                                         '기술점수': lambda x: f'{x:.1f}' if x is not None else 'N/A'}),
-                        width='stretch', hide_index=True)
-                if _failed:
-                    st.caption(f"⚠️ 조회 실패: {', '.join(_failed)}")
-
-                # ── 종목간 비교 뷰 ──────────────────────────
-                st.markdown("#### 🆚 종목 비교")
-                st.caption("1년 성과 비교 (시작점=100 정규화)")
-                _cmp_sel = st.multiselect("비교할 종목 선택 (2~5개)",
-                    options=[r['티커'] for r in _rows], default=[r['티커'] for r in _rows][:3],
-                    max_selections=5, key="wl_cmp_sel")
-
-                if len(_cmp_sel) >= 2:
-                    _cmp_end = datetime.now()
-                    _cmp_start = _cmp_end - timedelta(days=365)
-                    _fig_cmp = go.Figure()
-                    _cmp_rows = []
-                    _palette = ['#2962ff', '#ef5350', '#26a69a', '#f59e0b', '#ab47bc']
-                    for _ci, _tk in enumerate(_cmp_sel):
-                        _cdf = download_stock(_tk, start=_cmp_start, end=_cmp_end)
-                        if _cdf.empty: continue
-                        _cdf = _cdf.dropna(subset=['Close'])
-                        _norm = _cdf['Close'] / float(_cdf['Close'].iloc[0]) * 100
-                        _fig_cmp.add_trace(go.Scatter(
-                            x=_cdf.index, y=_norm.values, mode='lines', name=_tk,
-                            line=dict(color=_palette[_ci % len(_palette)], width=2)))
-                        _row_match = next((r for r in _rows if r['티커'] == _tk), None)
-                        if _row_match:
-                            _cmp_rows.append({
-                                '티커': _tk,
-                                '1년 수익률': f"{(_norm.iloc[-1] - 100):+.1f}%",
-                                'RSI': _row_match['RSI'],
-                                '기술점수': _row_match['기술점수'],
-                                '3M모멘텀': _row_match['3M모멘텀'],
-                            })
-                    _fig_cmp.update_layout(
-                        height=380, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-                        font=dict(color=TV_TEXT),
-                        xaxis=dict(gridcolor=TV_GRID), yaxis=dict(gridcolor=TV_GRID, title="정규화 지수"),
-                        margin=dict(l=0, r=0, t=40, b=0),
-                        legend=dict(orientation='h', y=1.12))
-                    st.plotly_chart(_fig_cmp, width='stretch')
-                    if _cmp_rows:
-                        st.dataframe(pd.DataFrame(_cmp_rows), width='stretch', hide_index=True)
-                else:
-                    st.caption("비교하려면 2개 이상 선택하세요.")
-            else:
-                st.caption("🔄 새로고침을 눌러 관심종목 현황을 불러오세요.")
 
 
 if __name__ == "__main__":
