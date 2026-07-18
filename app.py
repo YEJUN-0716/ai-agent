@@ -4181,6 +4181,212 @@ def equity_log_employee():
         return build_ops_report('계좌 현황', '📊', '경고', [f'로그 읽기 실패: {e}'])
 
 
+# ─────────────────────────────────────────────
+# 시스템/멀티종목 담당팀 — 퀀트탭 서브탭별 담당자 (모니터링·상태 보고 전용)
+# 4팀 7명: 시그널 생성팀(팩터 랭킹·시스템 시그널·섹터 로테이션),
+#          ML 시그널팀(ML 신호), 백테스트 검증팀(팩터 백테스트·종목 백테스팅),
+#          퀀트 리서치/QA팀(고급 분석)
+# ─────────────────────────────────────────────
+
+SYSTEM_TEAMS = {
+    '팩터 랭킹': '시그널 생성팀', '시스템 시그널': '시그널 생성팀', '섹터 로테이션': '시그널 생성팀',
+    'ML 신호': 'ML 시그널팀',
+    '팩터 백테스트': '백테스트 검증팀', '종목 백테스팅': '백테스트 검증팀',
+    '고급 분석': '퀀트 리서치/QA팀',
+}
+
+
+def build_system_report(name, icon, status, reasons):
+    """시스템/멀티종목 담당 직원 공통 보고서 포맷 (팀 소속 자동 태깅). status: 정상/주의/경고/대기."""
+    return {'name': name, 'icon': icon, 'team': SYSTEM_TEAMS.get(name, ''),
+            'status': status, 'reasons': [r for r in reasons if r][:4]}
+
+
+def render_team_badge(rep):
+    """서브탭 상단에 담당 직원 상태를 한 줄 배지로 표시."""
+    _c = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}.get(rep['status'], '#94a3b8')
+    _reason = ' · '.join(rep['reasons']) or '참고할 정보 없음'
+    st.markdown(f"""
+<div style="background:{_c}0d;border:1px solid {_c}40;border-radius:8px;padding:8px 14px;margin-bottom:10px;
+            display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <span style="font-size:11px;font-weight:700;color:var(--text-4)">{rep['icon']} {rep['team']} · {rep['name']} 담당</span>
+  <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:{_c}20;color:{_c}">{rep['status']}</span>
+  <span style="font-size:12px;color:var(--text-3)">{_reason}</span>
+</div>""", unsafe_allow_html=True)
+
+
+def factor_ranking_employee():
+    """팩터 랭킹 담당(시그널 생성팀): 세션에 실행된 팩터 분석 결과 상태."""
+    fdf = st.session_state.get('qt_factors')
+    if fdf is None or fdf.empty:
+        return build_system_report('팩터 랭킹', '📊', '대기',
+            ['아직 팩터 분석 미실행 — "📊 팩터 분석 실행" 버튼으로 시작'])
+    failed = fdf.attrs.get('failed', [])
+    top = fdf.iloc[0]
+    reasons = [f"{len(fdf)}개 종목 분석 완료 (1위: {top['ticker']} {top['composite']:.0f}점)"]
+    if failed:
+        reasons.append(f"⚠️ {len(failed)}개 종목 분석 실패: {', '.join(failed[:3])}")
+    return build_system_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons)
+
+
+def system_signal_employee():
+    """시스템 시그널 담당(시그널 생성팀): 세션에서 생성한 매매 액션 상태."""
+    qs = st.session_state.get('qt_signals')
+    if not qs:
+        return build_system_report('시스템 시그널', '🤖', '대기',
+            ['아직 시그널 미생성 — "🤖 시스템 시그널 생성" 버튼으로 시작'])
+    rebal = qs['rebal']
+    reasons = [f"매수 {rebal['buy_count']} · 매도 {rebal['sell_count']} · 관망 {rebal['hold_count']}",
+               f"다음 리밸런싱: {rebal['next_rebal']}"]
+    return build_system_report('시스템 시그널', '🤖', '정상', reasons)
+
+
+def sector_rotation_employee():
+    """섹터 로테이션 담당(시그널 생성팀): 신규 다운로드 없이 정적 상태만 안내(비용 방지)."""
+    return build_system_report('섹터 로테이션', '🔄', '정상',
+        ['12개 섹터 ETF 모멘텀 랭킹 상시 제공 (1시간 캐시)',
+         '모멘텀 = 1M×50% + 3M×30% + 6M×20%'])
+
+
+def ml_signal_employee():
+    """ML 신호 담당(ML 시그널팀): Purged K-Fold 검증 결과 상태."""
+    if not _ML_AVAILABLE:
+        return build_system_report('ML 신호', '🧠', '경고', ['modules/ml_signals.py 로드 실패'])
+    mr = st.session_state.get('ml_result')
+    if not mr:
+        return build_system_report('ML 신호', '🧠', '대기',
+            ['아직 학습 미실행 — "🧠 ML 신호 학습 & 검증" 버튼으로 시작'])
+    res = mr['res']
+    reasons = [f"{mr['ticker']} 평균 AUC {res['mean_auc']:.4f} ({res['interpretation']})",
+               f"AUC 표준편차 {res['std_auc']:.4f} · Fold {res['n_folds_used']}개"]
+    return build_system_report('ML 신호', '🧠', '정상' if res['mean_auc'] >= 0.53 else '주의', reasons)
+
+
+def factor_backtest_employee():
+    """팩터 백테스트 담당(백테스트 검증팀): 팩터 전략 백테스트 + IC 검증 상태."""
+    reasons, status = [], '대기'
+    qbt = st.session_state.get('qt_bt')
+    if qbt:
+        m = qbt['metrics']
+        reasons.append(f"전략 {m['total_return']:+.1f}% (알파 {m['alpha']:+.1f}%p) · Sharpe {m['sharpe']:.2f}")
+        status = '정상'
+    icr = st.session_state.get('ic_result')
+    if icr:
+        s = icr['summary']
+        reasons.append(f"IC 검증: 평균 IC {s['mean_ic']:+.4f} · ICIR {s['icir']:+.2f}")
+        status = '정상'
+    if not reasons:
+        reasons = ['아직 백테스트/IC 검증 미실행']
+    return build_system_report('팩터 백테스트', '📉', status, reasons)
+
+
+def stock_backtest_employee():
+    """종목 백테스팅 담당(백테스트 검증팀): 개별 종목 전략 백테스트 상태."""
+    bt = st.session_state.get('tab3')
+    if not bt:
+        return build_system_report('종목 백테스팅', '📊', '대기',
+            ['아직 백테스팅 미실행 — "📉 백테스팅 시작" 버튼으로 시작'])
+    m = bt['metrics']
+    reasons = [f"{bt['bt_ticker']} 전략 {m.get('전략 수익률','N/A')} vs 매수보유 {m.get('매수보유 수익률','N/A')}",
+               f"Sharpe {m.get('Sharpe Ratio','N/A')} · MDD {m.get('최대낙폭(MDD)','N/A')}"]
+    return build_system_report('종목 백테스팅', '📊', '정상', reasons)
+
+
+def advanced_research_employee():
+    """고급 분석 담당(퀀트 리서치/QA팀): 무결성·스트레스·알파디케이·시그널디케이·팩터리스크
+    5개 검증 모듈의 로드 상태를 점검(각 분석은 세션 상태로 남지 않아 실행 결과 자체는 집계하지 않음)."""
+    mods = [('데이터 무결성', _DATA_INTEGRITY_AVAILABLE), ('스트레스 테스트', _STRESS_TEST_AVAILABLE),
+            ('알파 디케이', _ALPHA_DECAY_AVAILABLE), ('시그널 디케이', _SIGNAL_DECAY_AVAILABLE),
+            ('팩터 리스크모델', _FACTOR_RISK_AVAILABLE)]
+    loaded = [n for n, ok in mods if ok]
+    failed = [n for n, ok in mods if not ok]
+    status = '정상' if not failed else ('경고' if len(failed) >= 3 else '주의')
+    reasons = [f"검증 모듈 {len(loaded)}/5개 로드됨: {', '.join(loaded) or '없음'}"]
+    if failed:
+        reasons.append(f"⚠️ 로드 실패: {', '.join(failed)}")
+    return build_system_report('고급 분석', '🔬', status, reasons)
+
+
+# ─────────────────────────────────────────────
+# 사무실 뷰 — 팀별 방 + 직원 클릭 → 보고서, 마지막 총괄 트레이더 종합 보고
+# ─────────────────────────────────────────────
+
+_OFFICE_STATUS_COLOR = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}
+
+
+def _office_normalize(rep):
+    """분석직원(score 보고서) / 운영·시스템직원(status 보고서)을 공통 표시 포맷으로 변환."""
+    if 'score' in rep:
+        return {'icon': rep['icon'], 'name': rep['name'], 'color': score_color(rep['score']),
+                'headline': f"{rep['score']:.0f}점 · {rep['verdict']}", 'reasons': rep['reasons']}
+    return {'icon': rep['icon'], 'name': rep['name'],
+            'color': _OFFICE_STATUS_COLOR.get(rep['status'], '#94a3b8'),
+            'headline': rep['status'], 'reasons': rep['reasons']}
+
+
+def render_office_report_card(rep):
+    """선택된 직원의 보고서 카드를 표시."""
+    n = _office_normalize(rep)
+    _reason_html = ''.join(f"<li>{r}</li>" for r in n['reasons']) or '<li>참고할 정보 없음</li>'
+    st.markdown(f"""
+<div style="background:{n['color']}0d;border:1px solid {n['color']}40;border-radius:10px;
+            padding:12px 16px;margin:8px 0 4px 0">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+    <span style="font-size:13px;font-weight:700;color:var(--text-2)">{n['icon']} {n['name']}</span>
+    <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:{n['color']}20;color:{n['color']}">{n['headline']}</span>
+  </div>
+  <ul style="font-size:12px;color:var(--text-3);margin:0;padding-left:18px;line-height:1.7">{_reason_html}</ul>
+</div>""", unsafe_allow_html=True)
+
+
+def render_office_rooms(rooms):
+    """여러 방을 2단계로 렌더링: 1) 모든 방의 헤더·버튼을 먼저 그려 클릭을 확정하고(카드 자리는 예약만),
+    2) 최종 확정된 선택값으로 해당 방의 카드 자리에만 보고서를 채운다.
+    한 번의 rerun 안에서 버튼을 st.button()으로 순차 평가하는 Streamlit 특성상,
+    방마다 즉시 session_state를 읽어 카드를 그리면 방금 클릭한 방보다 먼저 그려진 방이
+    직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다.
+    rooms: [(room_key, room_name, room_icon, employees), ...]"""
+    slots = {}
+    for room_key, room_name, room_icon, employees in rooms:
+        st.markdown(f"""
+<div style="font-size:13px;font-weight:800;color:var(--text-1);margin:18px 0 8px 0;
+            display:flex;align-items:center;gap:8px">
+  <span style="font-size:18px">{room_icon}</span> {room_name}
+</div>""", unsafe_allow_html=True)
+        with st.container(border=True):
+            cols = st.columns(len(employees))
+            for col, (emp_key, label, _fn) in zip(cols, employees):
+                with col:
+                    if st.button(label, key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
+                        st.session_state['office_view'] = (room_key, emp_key)
+            slots[room_key] = (st.empty(), employees)
+
+    _sel = st.session_state.get('office_view')
+    for room_key, (slot, employees) in slots.items():
+        with slot:
+            if _sel and _sel[0] == room_key:
+                _fn = next(fn for k, _, fn in employees if k == _sel[1])
+                render_office_report_card(_fn())
+            else:
+                st.caption("👆 직원을 클릭하면 이 방에서 보고서를 볼 수 있습니다.")
+
+
+def office_analyst_employees():
+    """AI 애널리스트팀 방의 직원 목록 — Tab1에서 마지막으로 분석한 종목 스냅샷 기반.
+    아직 분석 이력이 없으면 None."""
+    snap = st.session_state.get('office_analyst_snapshot')
+    if not snap:
+        return None
+    mgr = snap['manager']
+    mgr_rep = {'icon': '🧑‍💼', 'name': '총괄', 'score': mgr['total_score'], 'verdict': mgr['verdict'],
+               'reasons': [mgr['consensus'], f"팀 합의율 {mgr['agreement']}%",
+                           f"가장 강한 의견: {mgr['strongest_opinion']}"]
+               + ([mgr['dissent']] if mgr['dissent'] else [])}
+    employees = [(r['name'], f"{r['icon']} {r['name']}", (lambda rr=r: rr)) for r in snap['reports']]
+    employees.append(('총괄', '🧑‍💼 총괄', lambda: mgr_rep))
+    return employees
+
+
 def main():
     _hdr_col1, _hdr_col2 = st.columns([5, 1])
     with _hdr_col1:
@@ -4228,8 +4434,8 @@ def main():
     max_position_pct = 20
     min_rr           = 1.5
 
-    tab1, tab6, tab_watch, tab_journal = st.tabs(
-        ["종목 분석", "퀀트 · 자동매매", "⭐ 관심종목", "매매 일지"])
+    tab1, tab6, tab_office, tab_watch, tab_journal = st.tabs(
+        ["종목 분석", "퀀트 · 자동매매", "🏢 사무실", "⭐ 관심종목", "매매 일지"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
     with tab1:
@@ -4630,6 +4836,9 @@ def main():
 
                 _risk_rep = next(r for r in _team_reports if r['name'] == '리스크팀')
                 _trader = trader_signal_lines(df, _mgr, _risk_rep)
+                st.session_state['office_analyst_snapshot'] = {
+                    'ticker': ticker, 'reports': _team_reports, 'manager': _mgr, 'trader': _trader,
+                }
                 _tl_color = '#10b981' if _mgr['verdict'] == '매수' else ('#ef4444' if _mgr['verdict'] == '매도' else '#f59e0b')
                 _pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {_trader['position_note']}</div>"
                              if _trader['position_note'] else '')
@@ -5456,6 +5665,7 @@ def main():
         ])
 
         with qt_sub1:
+            render_team_badge(factor_ranking_employee())
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
             qt_sector_neutral = st.checkbox("🏭 섹터 중립화 (섹터 편향 제거)", value=True, key="qt_sector")
             _ef_col, _liq_col = st.columns(2)
@@ -5764,6 +5974,7 @@ def main():
                                 st.plotly_chart(_pa_fig, width='stretch')
 
         with qt_sub3:
+            render_team_badge(system_signal_employee())
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
 
             sc1, sc2, sc3 = st.columns(3)
@@ -6041,6 +6252,7 @@ def main():
                 st.info("signal_log.json 없음 — 시그널을 생성하면 자동으로 만들어집니다.")
 
         with qt_sub4:
+            render_team_badge(factor_backtest_employee())
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
             st.info(
                 "**⚠️ 생존자 편향 주의** — 현재 선택된 유니버스는 *지금* 살아있는 종목만 포함합니다. "
@@ -6245,6 +6457,7 @@ def main():
 
 
         with qt_sub5:
+            render_team_badge(stock_backtest_employee())
             st.subheader("📉 전략 백테스팅")
             st.caption("사이드바 가중치와 동일한 **종합점수**(차트+재무+매크로) 기반으로 과거 성과를 검증합니다. 수수료·슬리피지 반영.")
 
@@ -6747,6 +6960,7 @@ def main():
 
         # ── qt_sub6: 섹터 로테이션 ─────────────────────────────
         with qt_sub6:
+            render_team_badge(sector_rotation_employee())
             st.caption("12개 섹터 ETF 모멘텀 랭킹 — 상위 3~4개 섹터 집중, 하위 회피 전략")
             _sr_c, _sr_btn = st.columns([4, 1])
             with _sr_btn:
@@ -6799,6 +7013,7 @@ def main():
 
         # ── qt_sub7: ML 신호 ───────────────────────────────────────
         with qt_sub7:
+            render_team_badge(ml_signal_employee())
             st.subheader("🧠 ML 신호 (Purged K-Fold 검증)")
             st.caption(
                 "9개 기술지표 feature → GradientBoosting 분류 → Purged K-Fold AUC 검증. "
@@ -6920,6 +7135,7 @@ def main():
 
         # ── qt_sub8: 고급 분석 ────────────────────────────────────
         with qt_sub8:
+            render_team_badge(advanced_research_employee())
             st.subheader("🧪 고급 분석")
 
             # ── 데이터 무결성 ──
@@ -7526,6 +7742,79 @@ worksheet_name = "trades"
             st.info("아직 매매 기록이 없습니다. 위 폼으로 첫 거래를 기록하세요.")
             if not _gs_ok:
                 st.caption("💡 세션이 종료되면 기록이 사라집니다. Google Sheets 연동 또는 CSV 백업을 권장합니다.")
+
+    # ── Tab: 사무실 ────────────────────────────────
+    with tab_office:
+        st.subheader("🏢 사무실")
+        st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서를 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
+
+        _rooms = []
+        _analyst_employees = office_analyst_employees()
+        if _analyst_employees:
+            _snap_ticker = st.session_state['office_analyst_snapshot']['ticker']
+            _rooms.append(('analyst', f'AI 애널리스트팀 — 최근 분석: {_snap_ticker}', '📈', _analyst_employees))
+        else:
+            st.markdown("""
+<div style="font-size:13px;font-weight:800;color:var(--text-1);margin:18px 0 8px 0;
+            display:flex;align-items:center;gap:8px"><span style="font-size:18px">📈</span> AI 애널리스트팀</div>""",
+                        unsafe_allow_html=True)
+            st.info("아직 종목 분석이 실행되지 않았습니다 — '종목 분석' 탭에서 종목을 먼저 분석하면 이 방이 열립니다.")
+
+        _rooms += [
+            ('ops', '자동매매 운영팀', '⚙️', [
+                ('exec', '⚙️ 실행 모드', execution_mode_employee),
+                ('sig', '📡 시그널 파이프라인', signal_pipeline_employee),
+                ('risk', '🛡️ 리스크 가드레일', risk_guardrail_employee),
+                ('eq', '📊 계좌 현황', equity_log_employee),
+            ]),
+            ('siggen', '시그널 생성팀', '📡', [
+                ('rank', '📊 팩터 랭킹', factor_ranking_employee),
+                ('sys', '🤖 시스템 시그널', system_signal_employee),
+                ('sector', '🔄 섹터 로테이션', sector_rotation_employee),
+            ]),
+            ('ml', 'ML 시그널팀', '🧠', [
+                ('ml', '🧠 ML 신호', ml_signal_employee),
+            ]),
+            ('bt', '백테스트 검증팀', '📉', [
+                ('factor_bt', '📉 팩터 백테스트', factor_backtest_employee),
+                ('stock_bt', '📊 종목 백테스팅', stock_backtest_employee),
+            ]),
+            ('qa', '퀀트 리서치/QA팀', '🔬', [
+                ('adv', '🔬 고급 분석', advanced_research_employee),
+            ]),
+        ]
+        render_office_rooms(_rooms)
+
+        # ── 총괄 트레이더 최종 보고 ──────────────
+        st.markdown("---")
+        _status_fns = [
+            execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
+            factor_ranking_employee, system_signal_employee, sector_rotation_employee,
+            ml_signal_employee, factor_backtest_employee, stock_backtest_employee, advanced_research_employee,
+        ]
+        _statuses = [fn()['status'] for fn in _status_fns]
+        _warn_n, _caution_n = _statuses.count('경고'), _statuses.count('주의')
+        _ok_n, _wait_n = _statuses.count('정상'), _statuses.count('대기')
+        if _warn_n:
+            _final_color, _final_headline = '#ef4444', f"⚠️ 경고 {_warn_n}건 — 확인 필요"
+        elif _caution_n:
+            _final_color, _final_headline = '#f59e0b', f"🟡 주의 {_caution_n}건"
+        else:
+            _final_color, _final_headline = '#10b981', "✅ 전체 정상 운영 중"
+
+        _analyst_line = ''
+        _snap = st.session_state.get('office_analyst_snapshot')
+        if _snap:
+            _m = _snap['manager']
+            _analyst_line = (f"<div style='margin-top:6px'>📈 {_snap['ticker']} 분석: "
+                              f"<b style='color:{score_color(_m['total_score'])}'>{_m['total_score']:.1f}점 · {_m['consensus']}</b></div>")
+
+        st.markdown(f"""
+<div style="background:{_final_color}0d;border:1px solid {_final_color}40;border-radius:12px;padding:16px 20px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 총괄 트레이더 — 전사 종합 보고</div>
+  <div style="font-size:1.3rem;font-weight:800;color:{_final_color};margin:6px 0">{_final_headline}</div>
+  <div style="font-size:12px;color:var(--text-3)">정상 {_ok_n} · 주의 {_caution_n} · 경고 {_warn_n} · 대기 {_wait_n} (운영·시스템팀 {len(_statuses)}명 기준){_analyst_line}</div>
+</div>""", unsafe_allow_html=True)
 
     # ── Tab: 관심종목 ──────────────────────────────
     with tab_watch:
