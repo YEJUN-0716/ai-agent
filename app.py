@@ -4181,6 +4181,132 @@ def equity_log_employee():
         return build_ops_report('계좌 현황', '📊', '경고', [f'로그 읽기 실패: {e}'])
 
 
+# ─────────────────────────────────────────────
+# 시스템/멀티종목 담당팀 — 퀀트탭 서브탭별 담당자 (모니터링·상태 보고 전용)
+# 4팀 7명: 시그널 생성팀(팩터 랭킹·시스템 시그널·섹터 로테이션),
+#          ML 시그널팀(ML 신호), 백테스트 검증팀(팩터 백테스트·종목 백테스팅),
+#          퀀트 리서치/QA팀(고급 분석)
+# ─────────────────────────────────────────────
+
+SYSTEM_TEAMS = {
+    '팩터 랭킹': '시그널 생성팀', '시스템 시그널': '시그널 생성팀', '섹터 로테이션': '시그널 생성팀',
+    'ML 신호': 'ML 시그널팀',
+    '팩터 백테스트': '백테스트 검증팀', '종목 백테스팅': '백테스트 검증팀',
+    '고급 분석': '퀀트 리서치/QA팀',
+}
+
+
+def build_system_report(name, icon, status, reasons):
+    """시스템/멀티종목 담당 직원 공통 보고서 포맷 (팀 소속 자동 태깅). status: 정상/주의/경고/대기."""
+    return {'name': name, 'icon': icon, 'team': SYSTEM_TEAMS.get(name, ''),
+            'status': status, 'reasons': [r for r in reasons if r][:4]}
+
+
+def render_team_badge(rep):
+    """서브탭 상단에 담당 직원 상태를 한 줄 배지로 표시."""
+    _c = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}.get(rep['status'], '#94a3b8')
+    _reason = ' · '.join(rep['reasons']) or '참고할 정보 없음'
+    st.markdown(f"""
+<div style="background:{_c}0d;border:1px solid {_c}40;border-radius:8px;padding:8px 14px;margin-bottom:10px;
+            display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <span style="font-size:11px;font-weight:700;color:var(--text-4)">{rep['icon']} {rep['team']} · {rep['name']} 담당</span>
+  <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:{_c}20;color:{_c}">{rep['status']}</span>
+  <span style="font-size:12px;color:var(--text-3)">{_reason}</span>
+</div>""", unsafe_allow_html=True)
+
+
+def factor_ranking_employee():
+    """팩터 랭킹 담당(시그널 생성팀): 세션에 실행된 팩터 분석 결과 상태."""
+    fdf = st.session_state.get('qt_factors')
+    if fdf is None or fdf.empty:
+        return build_system_report('팩터 랭킹', '📊', '대기',
+            ['아직 팩터 분석 미실행 — "📊 팩터 분석 실행" 버튼으로 시작'])
+    failed = fdf.attrs.get('failed', [])
+    top = fdf.iloc[0]
+    reasons = [f"{len(fdf)}개 종목 분석 완료 (1위: {top['ticker']} {top['composite']:.0f}점)"]
+    if failed:
+        reasons.append(f"⚠️ {len(failed)}개 종목 분석 실패: {', '.join(failed[:3])}")
+    return build_system_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons)
+
+
+def system_signal_employee():
+    """시스템 시그널 담당(시그널 생성팀): 세션에서 생성한 매매 액션 상태."""
+    qs = st.session_state.get('qt_signals')
+    if not qs:
+        return build_system_report('시스템 시그널', '🤖', '대기',
+            ['아직 시그널 미생성 — "🤖 시스템 시그널 생성" 버튼으로 시작'])
+    rebal = qs['rebal']
+    reasons = [f"매수 {rebal['buy_count']} · 매도 {rebal['sell_count']} · 관망 {rebal['hold_count']}",
+               f"다음 리밸런싱: {rebal['next_rebal']}"]
+    return build_system_report('시스템 시그널', '🤖', '정상', reasons)
+
+
+def sector_rotation_employee():
+    """섹터 로테이션 담당(시그널 생성팀): 신규 다운로드 없이 정적 상태만 안내(비용 방지)."""
+    return build_system_report('섹터 로테이션', '🔄', '정상',
+        ['12개 섹터 ETF 모멘텀 랭킹 상시 제공 (1시간 캐시)',
+         '모멘텀 = 1M×50% + 3M×30% + 6M×20%'])
+
+
+def ml_signal_employee():
+    """ML 신호 담당(ML 시그널팀): Purged K-Fold 검증 결과 상태."""
+    if not _ML_AVAILABLE:
+        return build_system_report('ML 신호', '🧠', '경고', ['modules/ml_signals.py 로드 실패'])
+    mr = st.session_state.get('ml_result')
+    if not mr:
+        return build_system_report('ML 신호', '🧠', '대기',
+            ['아직 학습 미실행 — "🧠 ML 신호 학습 & 검증" 버튼으로 시작'])
+    res = mr['res']
+    reasons = [f"{mr['ticker']} 평균 AUC {res['mean_auc']:.4f} ({res['interpretation']})",
+               f"AUC 표준편차 {res['std_auc']:.4f} · Fold {res['n_folds_used']}개"]
+    return build_system_report('ML 신호', '🧠', '정상' if res['mean_auc'] >= 0.53 else '주의', reasons)
+
+
+def factor_backtest_employee():
+    """팩터 백테스트 담당(백테스트 검증팀): 팩터 전략 백테스트 + IC 검증 상태."""
+    reasons, status = [], '대기'
+    qbt = st.session_state.get('qt_bt')
+    if qbt:
+        m = qbt['metrics']
+        reasons.append(f"전략 {m['total_return']:+.1f}% (알파 {m['alpha']:+.1f}%p) · Sharpe {m['sharpe']:.2f}")
+        status = '정상'
+    icr = st.session_state.get('ic_result')
+    if icr:
+        s = icr['summary']
+        reasons.append(f"IC 검증: 평균 IC {s['mean_ic']:+.4f} · ICIR {s['icir']:+.2f}")
+        status = '정상'
+    if not reasons:
+        reasons = ['아직 백테스트/IC 검증 미실행']
+    return build_system_report('팩터 백테스트', '📉', status, reasons)
+
+
+def stock_backtest_employee():
+    """종목 백테스팅 담당(백테스트 검증팀): 개별 종목 전략 백테스트 상태."""
+    bt = st.session_state.get('tab3')
+    if not bt:
+        return build_system_report('종목 백테스팅', '📊', '대기',
+            ['아직 백테스팅 미실행 — "📉 백테스팅 시작" 버튼으로 시작'])
+    m = bt['metrics']
+    reasons = [f"{bt['bt_ticker']} 전략 {m.get('전략 수익률','N/A')} vs 매수보유 {m.get('매수보유 수익률','N/A')}",
+               f"Sharpe {m.get('Sharpe Ratio','N/A')} · MDD {m.get('최대낙폭(MDD)','N/A')}"]
+    return build_system_report('종목 백테스팅', '📊', '정상', reasons)
+
+
+def advanced_research_employee():
+    """고급 분석 담당(퀀트 리서치/QA팀): 무결성·스트레스·알파디케이·시그널디케이·팩터리스크
+    5개 검증 모듈의 로드 상태를 점검(각 분석은 세션 상태로 남지 않아 실행 결과 자체는 집계하지 않음)."""
+    mods = [('데이터 무결성', _DATA_INTEGRITY_AVAILABLE), ('스트레스 테스트', _STRESS_TEST_AVAILABLE),
+            ('알파 디케이', _ALPHA_DECAY_AVAILABLE), ('시그널 디케이', _SIGNAL_DECAY_AVAILABLE),
+            ('팩터 리스크모델', _FACTOR_RISK_AVAILABLE)]
+    loaded = [n for n, ok in mods if ok]
+    failed = [n for n, ok in mods if not ok]
+    status = '정상' if not failed else ('경고' if len(failed) >= 3 else '주의')
+    reasons = [f"검증 모듈 {len(loaded)}/5개 로드됨: {', '.join(loaded) or '없음'}"]
+    if failed:
+        reasons.append(f"⚠️ 로드 실패: {', '.join(failed)}")
+    return build_system_report('고급 분석', '🔬', status, reasons)
+
+
 def main():
     _hdr_col1, _hdr_col2 = st.columns([5, 1])
     with _hdr_col1:
@@ -5456,6 +5582,7 @@ def main():
         ])
 
         with qt_sub1:
+            render_team_badge(factor_ranking_employee())
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
             qt_sector_neutral = st.checkbox("🏭 섹터 중립화 (섹터 편향 제거)", value=True, key="qt_sector")
             _ef_col, _liq_col = st.columns(2)
@@ -5764,6 +5891,7 @@ def main():
                                 st.plotly_chart(_pa_fig, width='stretch')
 
         with qt_sub3:
+            render_team_badge(system_signal_employee())
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
 
             sc1, sc2, sc3 = st.columns(3)
@@ -6041,6 +6169,7 @@ def main():
                 st.info("signal_log.json 없음 — 시그널을 생성하면 자동으로 만들어집니다.")
 
         with qt_sub4:
+            render_team_badge(factor_backtest_employee())
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
             st.info(
                 "**⚠️ 생존자 편향 주의** — 현재 선택된 유니버스는 *지금* 살아있는 종목만 포함합니다. "
@@ -6245,6 +6374,7 @@ def main():
 
 
         with qt_sub5:
+            render_team_badge(stock_backtest_employee())
             st.subheader("📉 전략 백테스팅")
             st.caption("사이드바 가중치와 동일한 **종합점수**(차트+재무+매크로) 기반으로 과거 성과를 검증합니다. 수수료·슬리피지 반영.")
 
@@ -6747,6 +6877,7 @@ def main():
 
         # ── qt_sub6: 섹터 로테이션 ─────────────────────────────
         with qt_sub6:
+            render_team_badge(sector_rotation_employee())
             st.caption("12개 섹터 ETF 모멘텀 랭킹 — 상위 3~4개 섹터 집중, 하위 회피 전략")
             _sr_c, _sr_btn = st.columns([4, 1])
             with _sr_btn:
@@ -6799,6 +6930,7 @@ def main():
 
         # ── qt_sub7: ML 신호 ───────────────────────────────────────
         with qt_sub7:
+            render_team_badge(ml_signal_employee())
             st.subheader("🧠 ML 신호 (Purged K-Fold 검증)")
             st.caption(
                 "9개 기술지표 feature → GradientBoosting 분류 → Purged K-Fold AUC 검증. "
@@ -6920,6 +7052,7 @@ def main():
 
         # ── qt_sub8: 고급 분석 ────────────────────────────────────
         with qt_sub8:
+            render_team_badge(advanced_research_employee())
             st.subheader("🧪 고급 분석")
 
             # ── 데이터 무결성 ──
