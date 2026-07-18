@@ -4367,42 +4367,52 @@ def render_office_report_card(rep):
 
 
 def render_office_rooms(rooms):
-    """여러 방을 2단계로 렌더링: 1) 모든 방의 헤더·버튼을 먼저 그려 클릭을 확정하고(카드 자리는 예약만),
+    """여러 방을 2단계로 렌더링: 1) 모든 방의 헤더·(팀 공용 패널)·버튼을 먼저 그려 클릭을 확정하고(카드 자리는 예약만),
     2) 최종 확정된 선택값으로 해당 방의 카드 자리에만 보고서를 채운다.
     한 번의 rerun 안에서 버튼을 st.button()으로 순차 평가하는 Streamlit 특성상,
     방마다 즉시 session_state를 읽어 카드를 그리면 방금 클릭한 방보다 먼저 그려진 방이
     직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다.
-    rooms: [(room_key, room_name, room_icon, employees), ...]"""
+    rooms: [(room_key, room_name, room_icon, employees, team_panel_fn), ...]
+      - employees: 직원 리스트, 또는 인자 없는 callable(팀 공용 패널 실행 *이후*에 평가됨 — 예:
+        AI애널리스트팀처럼 그 방의 공용 패널이 실행돼야 로스터가 정해지는 경우에 사용)
+      - team_panel_fn: 방 안에서 직원 선택과 무관하게 항상 그려지는 팀 공용 패널(선택, 5번째 요소)"""
     inject_office_css()
     slots = {}
-    for room_key, room_name, room_icon, employees in rooms:
+    for room in rooms:
+        room_key, room_name, room_icon, employees = room[0], room[1], room[2], room[3]
+        team_panel_fn = room[4] if len(room) > 4 else None
         st.markdown(f"""
 <div style="display:inline-flex;align-items:center;gap:8px;margin:18px 0 8px 0;
             background:var(--surface);border:1px solid var(--border);border-left:4px solid #8b6f3e;
             border-radius:0 8px 8px 0;padding:5px 14px 5px 10px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
   <span style="font-size:18px">{room_icon}</span>
   <span style="font-size:13px;font-weight:800;color:var(--text-1)">{room_name}</span>
-  <span style="font-size:10px;color:var(--text-4)">· 직원 {len(employees)}명</span>
 </div>""", unsafe_allow_html=True)
         with st.container(border=True, key=f"office_room_{room_key}"):
-            cols = st.columns(len(employees))
-            for col, emp in zip(cols, employees):
-                emp_key, name, avatar = emp[0], emp[1], emp[2]
-                with col:
-                    if st.button(f"{avatar} {name}", key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
-                        st.session_state['office_view'] = (room_key, emp_key)
-            slots[room_key] = (st.container(), employees)
+            if team_panel_fn is not None:
+                team_panel_fn()
+            _employees = employees() if callable(employees) else employees
+            if _employees:
+                st.caption(f"👥 직원 {len(_employees)}명")
+                cols = st.columns(len(_employees))
+                for col, emp in zip(cols, _employees):
+                    emp_key, name, avatar = emp[0], emp[1], emp[2]
+                    with col:
+                        if st.button(f"{avatar} {name}", key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
+                            st.session_state['office_view'] = (room_key, emp_key)
+            slots[room_key] = (st.container(), _employees)
 
     _sel = st.session_state.get('office_view')
     for room_key, (slot, employees) in slots.items():
         with slot:
-            if _sel and _sel[0] == room_key:
-                _emp = next(e for e in employees if e[0] == _sel[1])
-                render_office_report_card(_emp[3]())
-                if len(_emp) > 4 and _emp[4] is not None:
-                    st.markdown("")
-                    _emp[4]()
-            else:
+            if employees and _sel and _sel[0] == room_key:
+                _emp = next((e for e in employees if e[0] == _sel[1]), None)
+                if _emp is not None:
+                    render_office_report_card(_emp[3]())
+                    if len(_emp) > 4 and _emp[4] is not None:
+                        st.markdown("")
+                        _emp[4]()
+            elif employees:
                 st.caption("👆 직원을 클릭하면 이 방에서 보고서와 업무 화면을 볼 수 있습니다.")
 
 
@@ -4420,6 +4430,11 @@ def office_analyst_employees():
     employees = [(r['name'], r['name'], _office_avatar(r['name']), (lambda rr=r: rr)) for r in snap['reports']]
     employees.append(('총괄', '총괄', _office_avatar('총괄'), lambda: mgr_rep))
     return employees
+
+
+# 종목 분석 가중치 — 사이드바 제거, 값 하드코딩 (여러 사무실 직원 패널이 공유하는 상수)
+w_tech, w_fund, w_macro = 35, 40, 25
+total_w = 100
 
 
 def main():
@@ -4461,19 +4476,19 @@ def main():
         f"<span style='font-size:11px;color:var(--text-4)'>📡 시그널 전용 모드 — 매일 장마감 후 자동 스캔, 실제 주문 없음</span>"
         f"</div>", unsafe_allow_html=True)
 
-    # 사이드바 제거 — 값 하드코딩
-    w_tech, w_fund, w_macro = 35, 40, 25
-    total_w          = 100
-    acct_capital     = 10_000_000
-    risk_per_trade   = 1.0
-    max_position_pct = 20
-    min_rr           = 1.5
-
-    tab1, tab6, tab_office, tab_watch, tab_journal = st.tabs(
-        ["종목 분석", "퀀트 · 자동매매", "🏢 사무실", "⭐ 관심종목", "매매 일지"])
+    tab_office, tab_watch, tab_journal = st.tabs(
+        ["🏢 사무실", "⭐ 관심종목", "매매 일지"])
 
     # ── Tab 1: 단일 종목 분석 ─────────────────
-    with tab1:
+    def render_stock_analysis_panel():
+        # 사이드바 제거 — 값 하드코딩 (이 패널 전용)
+        w_tech, w_fund, w_macro = 35, 40, 25
+        total_w          = 100
+        acct_capital     = 10_000_000
+        risk_per_trade   = 1.0
+        max_position_pct = 20
+        min_rr           = 1.5
+
         st.markdown("""
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;
             padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
@@ -5666,33 +5681,32 @@ def main():
                     st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
 
 
-    # ── Tab 6: 퀀트 ──────────────────────────────────
-    with tab6:
-        st.markdown("""
-<div style="display:flex;align-items:center;gap:10px;padding:6px 0 16px 0">
-  <div style="font-size:1.2rem;font-weight:800;color:var(--text-1);letter-spacing:-.3px">퀀트 트레이딩</div>
-  <div style="height:1px;flex:1;background:var(--border)"></div>
-</div>""", unsafe_allow_html=True)
-
-        qu_c1, qu_c2 = st.columns([1, 2])
-        with qu_c1:
-            qt_preset = st.selectbox("유니버스 프리셋", ["직접 입력"] + list(UNIVERSE_PRESETS.keys()), key="qt_preset")
-        with qu_c2:
-            if qt_preset == "직접 입력":
-                qt_input = st.text_input("종목 (쉼표 구분, 10~30개 권장)",
-                    "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,JPM,V,JNJ,UNH,XOM,PG,HD,MA", key="qt_universe")
-                qt_tickers = [t.strip().upper() for t in qt_input.split(',') if t.strip()]
-            else:
-                qt_tickers = UNIVERSE_PRESETS[qt_preset]
-                if len(qt_tickers) >= 100:
-                    st.warning(f"⚠️ {len(qt_tickers)}개 종목 — 조회에 수 분 이상 소요될 수 있습니다. {', '.join(qt_tickers[:8])}...")
+    # ── 시스템/멀티종목 담당 직원 패널 정의 모음 (사무실 탭에서 호출됨) ──
+    # 탭이 아니라 main() 내부 함수로만 존재 — main()의 w_tech/w_fund/w_macro/total_w
+    # 클로저를 그대로 쓰기 위해 이 위치(main() 안)에 정의를 둔다.
+    if True:
+        def render_universe_picker():
+            """시그널 생성팀 방 공용 자원 — 여러 팀 직원이 함께 쓰는 종목 유니버스 입력.
+            st.session_state['qt_tickers']에 저장해 어느 직원 패널에서든 읽을 수 있게 한다."""
+            qu_c1, qu_c2 = st.columns([1, 2])
+            with qu_c1:
+                qt_preset = st.selectbox("유니버스 프리셋", ["직접 입력"] + list(UNIVERSE_PRESETS.keys()), key="qt_preset")
+            with qu_c2:
+                if qt_preset == "직접 입력":
+                    qt_input = st.text_input("종목 (쉼표 구분, 10~30개 권장)",
+                        "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,JPM,V,JNJ,UNH,XOM,PG,HD,MA", key="qt_universe")
+                    qt_tickers = [t.strip().upper() for t in qt_input.split(',') if t.strip()]
                 else:
-                    st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
-
-        st.caption("🏢 사무실 탭의 각 팀 직원 카드에서 발굴·실행·검증·운영 안전성 업무를 진행합니다. "
-                   "여기서는 위 유니버스만 설정하면 됩니다.")
+                    qt_tickers = UNIVERSE_PRESETS[qt_preset]
+                    if len(qt_tickers) >= 100:
+                        st.warning(f"⚠️ {len(qt_tickers)}개 종목 — 조회에 수 분 이상 소요될 수 있습니다. {', '.join(qt_tickers[:8])}...")
+                    else:
+                        st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
+            st.session_state['qt_tickers'] = qt_tickers
+            st.caption("💡 이 유니버스는 팩터 백테스트 직원 카드(백테스트 검증팀)에서도 함께 사용됩니다.")
 
         def render_factor_ranking_panel():
+            qt_tickers = st.session_state.get('qt_tickers', [])
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
             qt_sector_neutral = st.checkbox("🏭 섹터 중립화 (섹터 편향 제거)", value=True, key="qt_sector")
             _ef_col, _liq_col = st.columns(2)
@@ -5817,6 +5831,7 @@ def main():
                 st.plotly_chart(fig_radar, width='stretch')
 
         def render_system_signal_panel():
+            qt_tickers = st.session_state.get('qt_tickers', [])
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
 
             sc1, sc2, sc3 = st.columns(3)
@@ -6094,6 +6109,7 @@ def main():
                 st.info("signal_log.json 없음 — 시그널을 생성하면 자동으로 만들어집니다.")
 
         def render_factor_backtest_panel():
+            qt_tickers = st.session_state.get('qt_tickers', [])
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
             st.info(
                 "**⚠️ 생존자 편향 주의** — 현재 선택된 유니버스는 *지금* 살아있는 종목만 포함합니다. "
@@ -7495,22 +7511,14 @@ worksheet_name = "trades"
         st.subheader("🏢 사무실")
         st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면(분석 실행)을 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
 
-        _rooms = []
-        _analyst_employees = office_analyst_employees()
-        if _analyst_employees:
-            _snap_ticker = st.session_state['office_analyst_snapshot']['ticker']
-            _rooms.append(('analyst', f'AI 애널리스트팀 — 최근 분석: {_snap_ticker}', '📈', _analyst_employees))
-        else:
-            st.markdown("""
-<div style="font-size:13px;font-weight:800;color:var(--text-1);margin:18px 0 8px 0;
-            display:flex;align-items:center;gap:8px"><span style="font-size:18px">📈</span> AI 애널리스트팀</div>""",
-                        unsafe_allow_html=True)
-            st.info("아직 종목 분석이 실행되지 않았습니다 — '종목 분석' 탭에서 종목을 먼저 분석하면 이 방이 열립니다.")
-
         def _emp(emp_key, name, fn, panel_fn=None):
             return (emp_key, name, _office_avatar(name), fn, panel_fn)
 
-        _rooms += [
+        def _analyst_roster():
+            return office_analyst_employees() or []
+
+        _rooms = [
+            ('analyst', 'AI 애널리스트팀', '📈', _analyst_roster, render_stock_analysis_panel),
             ('ops', '자동매매 운영팀', '⚙️', [
                 _emp('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
                 _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
@@ -7521,7 +7529,7 @@ worksheet_name = "trades"
                 _emp('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
                 _emp('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
                 _emp('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
-            ]),
+            ], render_universe_picker),
             ('ml', 'ML 시그널팀', '🧠', [
                 _emp('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
             ]),
