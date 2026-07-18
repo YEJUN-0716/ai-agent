@@ -4100,9 +4100,10 @@ def _office_avatar(name):
 
 
 def inject_office_css():
-    """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS를 세션당 한 번만 주입.
-    st.container(key=...)가 만드는 안정적인 st-key-* 클래스를 이용해
-    사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음)."""
+    """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS + 직원 타일 "일하는 중" 애니메이션
+    키프레임을 세션당 한 번만 주입. st.container(key=...)가 만드는 안정적인 st-key-* 클래스를
+    이용해 사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음). 실제 색/애니메이션
+    선택(직원별로 다름)은 render_office_rooms가 매 rerun 별도의 작은 <style> 블록으로 주입한다."""
     if st.session_state.get('_office_css_injected'):
         return
     st.session_state['_office_css_injected'] = True
@@ -4121,9 +4122,48 @@ div[class*="st-key-office_room_"] button {
     padding-top: 10px !important;
     padding-bottom: 10px !important;
     border-radius: 12px !important;
+    transition: transform .15s ease;
+}
+div[class*="st-key-office_room_"] button:hover {
+    transform: translateY(-1px);
+}
+@keyframes office-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--office-glow, rgba(16,185,129,.35)); }
+    50%      { box-shadow: 0 0 0 5px rgba(16,185,129,0); }
+}
+@keyframes office-pulse-fast {
+    0%, 100% { box-shadow: 0 0 0 0 var(--office-glow, rgba(245,158,11,.4)); }
+    50%      { box-shadow: 0 0 0 5px rgba(245,158,11,0); }
+}
+@keyframes office-shake {
+    0%, 100% { transform: translateX(0); }
+    20%      { transform: translateX(-2px); }
+    40%      { transform: translateX(2px); }
+    60%      { transform: translateX(-2px); }
+    80%      { transform: translateX(2px); }
+}
+@keyframes office-sleep {
+    0%, 100% { opacity: .55; }
+    50%      { opacity: .85; }
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+_OFFICE_ANIM = {'정상': 'office-pulse', '주의': 'office-pulse-fast', '경고': 'office-shake', '대기': 'office-sleep'}
+
+
+def _office_tile_style(rep):
+    """직원 타일 테두리 색·애니메이션을 보고서에서 계산 — 클릭 전에도 "지금 뭘 하고 있는지"가
+    보이게 한다(정상=은은한 초록 펄스, 주의=빠른 호박색 펄스, 경고=흔들림, 대기=졸린 깜빡임)."""
+    if 'score' in rep:
+        color = score_color(rep['score'])
+        anim = ('office-pulse' if rep['verdict'] == '매수'
+                else 'office-shake' if rep['verdict'] == '매도' else 'office-sleep')
+    else:
+        color = _OFFICE_STATUS_COLOR.get(rep['status'], '#94a3b8')
+        anim = _OFFICE_ANIM.get(rep['status'], '')
+    return color, anim
 
 
 def _office_normalize(rep):
@@ -4161,10 +4201,15 @@ def render_office_rooms(rooms: List[OfficeRoom]):
     2) 최종 확정된 선택값으로 해당 방의 카드 자리에만 보고서를 채운다.
     한 번의 rerun 안에서 버튼을 st.button()으로 순차 평가하는 Streamlit 특성상,
     방마다 즉시 session_state를 읽어 카드를 그리면 방금 클릭한 방보다 먼저 그려진 방이
-    직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다."""
+    직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다.
+
+    team_panel_fn이 있는 방(입력폼·차트 등 넓은 화면이 필요)은 항상 전체 폭으로,
+    없는 방(버튼만 있는 단순한 방)은 사무실 평면도처럼 2개씩 나란히 배치한다."""
     inject_office_css()
     slots = {}
-    for room in rooms:
+    tile_css = []
+
+    def _render_room_body(room):
         st.markdown(f"""
 <div style="display:inline-flex;align-items:center;gap:8px;margin:18px 0 8px 0;
             background:var(--surface);border:1px solid var(--border);border-left:4px solid #8b6f3e;
@@ -4176,22 +4221,56 @@ def render_office_rooms(rooms: List[OfficeRoom]):
             if room.team_panel_fn is not None:
                 room.team_panel_fn()
             employees = room.employees() if callable(room.employees) else room.employees
+            reports = {}
             if employees:
                 st.caption(f"👥 직원 {len(employees)}명")
                 cols = st.columns(len(employees))
                 for col, emp in zip(cols, employees):
                     with col:
-                        if st.button(f"{emp.avatar} {emp.name}", key=f"office_btn_{room.key}_{emp.key}", use_container_width=True):
+                        rep = emp.report_fn()
+                        reports[emp.key] = rep
+                        color, anim = _office_tile_style(rep)
+                        tile_css.append(
+                            f'.st-key-office_btn_{room.key}_{emp.key} button {{'
+                            f'border:2px solid {color} !important;'
+                            f'--office-glow:{color}59;'
+                            f'animation:{anim} 2.4s ease-in-out infinite;}}')
+                        label = f"{emp.avatar} {emp.name}"
+                        if anim == 'office-sleep':
+                            label = f"😴 {label}"
+                        elif anim == 'office-shake':
+                            label = f"❗ {label}"
+                        if st.button(label, key=f"office_btn_{room.key}_{emp.key}", use_container_width=True):
                             st.session_state['office_view'] = (room.key, emp.key)
-            slots[room.key] = (st.container(), employees)
+            slots[room.key] = (st.container(), employees, reports)
+
+    i = 0
+    while i < len(rooms):
+        room = rooms[i]
+        if room.team_panel_fn is not None:
+            _render_room_body(room)
+            i += 1
+        else:
+            pair = [room]
+            if i + 1 < len(rooms) and rooms[i + 1].team_panel_fn is None:
+                pair.append(rooms[i + 1])
+                i += 2
+            else:
+                i += 1
+            for col, r in zip(st.columns(len(pair)), pair):
+                with col:
+                    _render_room_body(r)
+
+    if tile_css:
+        st.markdown(f"<style>{''.join(tile_css)}</style>", unsafe_allow_html=True)
 
     _sel = st.session_state.get('office_view')
-    for room_key, (slot, employees) in slots.items():
+    for room_key, (slot, employees, reports) in slots.items():
         with slot:
             if employees and _sel and _sel[0] == room_key:
                 emp = next((e for e in employees if e.key == _sel[1]), None)
                 if emp is not None:
-                    render_office_report_card(emp.report_fn())
+                    render_office_report_card(reports.get(emp.key) or emp.report_fn())
                     if emp.panel_fn is not None:
                         st.markdown("")
                         emp.panel_fn()
