@@ -4182,7 +4182,7 @@ def equity_log_employee():
 
 
 # ─────────────────────────────────────────────
-# 시스템/멀티종목 담당팀 — 퀀트탭 서브탭별 담당자 (모니터링·상태 보고 전용)
+# 시스템/멀티종목 담당팀 — 사무실의 팀별 방에 배치되는 직원 (보고서 + 실제 업무 화면)
 # 4팀 7명: 시그널 생성팀(팩터 랭킹·시스템 시그널·섹터 로테이션),
 #          ML 시그널팀(ML 신호), 백테스트 검증팀(팩터 백테스트·종목 백테스팅),
 #          퀀트 리서치/QA팀(고급 분석)
@@ -4200,19 +4200,6 @@ def build_system_report(name, icon, status, reasons):
     """시스템/멀티종목 담당 직원 공통 보고서 포맷 (팀 소속 자동 태깅). status: 정상/주의/경고/대기."""
     return {'name': name, 'icon': icon, 'team': SYSTEM_TEAMS.get(name, ''),
             'status': status, 'reasons': [r for r in reasons if r][:4]}
-
-
-def render_team_badge(rep):
-    """서브탭 상단에 담당 직원 상태를 한 줄 배지로 표시."""
-    _c = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}.get(rep['status'], '#94a3b8')
-    _reason = ' · '.join(rep['reasons']) or '참고할 정보 없음'
-    st.markdown(f"""
-<div style="background:{_c}0d;border:1px solid {_c}40;border-radius:8px;padding:8px 14px;margin-bottom:10px;
-            display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-  <span style="font-size:11px;font-weight:700;color:var(--text-4)">{rep['icon']} {rep['team']} · {rep['name']} 담당</span>
-  <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:{_c}20;color:{_c}">{rep['status']}</span>
-  <span style="font-size:12px;color:var(--text-3)">{_reason}</span>
-</div>""", unsafe_allow_html=True)
 
 
 def factor_ranking_employee():
@@ -4313,7 +4300,7 @@ def advanced_research_employee():
 
 _OFFICE_STATUS_COLOR = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}
 
-# 보고서 카드의 기능성 아이콘(rep['icon'])은 앱 전역(Tab1 카드·퀀트탭 배지)에서 재사용되므로 그대로 두고,
+# 보고서 카드의 기능성 아이콘(rep['icon'])은 Tab1 애널리스트 카드에서도 재사용되므로 그대로 두고,
 # 사무실 방 안의 아바타(클릭 타일)에만 쓸 사람 캐릭터 이모지를 직원 이름 기준으로 별도 매핑한다.
 _OFFICE_AVATARS = {
     '차트+파동+모멘텀': '🧑‍💻', '퀀트+재무': '🧑‍💼', '매크로+금리': '🧑‍🏫',
@@ -4399,20 +4386,24 @@ def render_office_rooms(rooms):
 </div>""", unsafe_allow_html=True)
         with st.container(border=True, key=f"office_room_{room_key}"):
             cols = st.columns(len(employees))
-            for col, (emp_key, name, avatar, _fn) in zip(cols, employees):
+            for col, emp in zip(cols, employees):
+                emp_key, name, avatar = emp[0], emp[1], emp[2]
                 with col:
                     if st.button(f"{avatar} {name}", key=f"office_btn_{room_key}_{emp_key}", use_container_width=True):
                         st.session_state['office_view'] = (room_key, emp_key)
-            slots[room_key] = (st.empty(), employees)
+            slots[room_key] = (st.container(), employees)
 
     _sel = st.session_state.get('office_view')
     for room_key, (slot, employees) in slots.items():
         with slot:
             if _sel and _sel[0] == room_key:
-                _fn = next(fn for k, _, _, fn in employees if k == _sel[1])
-                render_office_report_card(_fn())
+                _emp = next(e for e in employees if e[0] == _sel[1])
+                render_office_report_card(_emp[3]())
+                if len(_emp) > 4 and _emp[4] is not None:
+                    st.markdown("")
+                    _emp[4]()
             else:
-                st.caption("👆 직원을 클릭하면 이 방에서 보고서를 볼 수 있습니다.")
+                st.caption("👆 직원을 클릭하면 이 방에서 보고서와 업무 화면을 볼 수 있습니다.")
 
 
 def office_analyst_employees():
@@ -5699,17 +5690,12 @@ def main():
                     st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
 
         st.caption(
-            "🔍 발굴 (팩터·섹터·ML) &nbsp;→&nbsp; 💼 구성 (최적화) &nbsp;→&nbsp; "
-            "🤖 실행 (시그널) &nbsp;→&nbsp; 📉 검증 (백테스트·고급분석) &nbsp;→&nbsp; 🛡️ 관리 (안전성·세금)"
+            "🔍 발굴·🤖 실행·📉 검증·🛡️ 운영 안전성은 🏢 사무실 탭의 각 팀 직원 카드에서 처리합니다 — "
+            "여기서는 💼 포트폴리오 구성과 💴 세금만 다룹니다."
         )
-        qt_sub1, qt_sub2, qt_sub3, qt_sub4, qt_sub5, qt_sub6, qt_sub7, qt_sub8, qt_sub9, qt_sub10 = st.tabs([
-            "🔍 팩터 랭킹", "💼 포트폴리오 최적화", "🤖 시스템 시그널",
-            "📉 팩터 백테스트", "📉 종목 백테스팅", "🔄 섹터 로테이션", "🧠 ML 신호",
-            "🔬 고급 분석", "🛡️ 운영 안전성", "💴 세금 계산기",
-        ])
+        qt_sub2, qt_sub10 = st.tabs(["💼 포트폴리오 최적화", "💴 세금 계산기"])
 
-        with qt_sub1:
-            render_team_badge(factor_ranking_employee())
+        def render_factor_ranking_panel():
             qt_use_timing = st.checkbox("🕐 팩터 타이밍 자동 적용 (VIX/금리 기반 가중치 조절)", value=True, key="qt_timing")
             qt_sector_neutral = st.checkbox("🏭 섹터 중립화 (섹터 편향 제거)", value=True, key="qt_sector")
             _ef_col, _liq_col = st.columns(2)
@@ -6017,8 +6003,7 @@ def main():
                                                        margin=dict(l=20, r=20, t=40, b=20))
                                 st.plotly_chart(_pa_fig, width='stretch')
 
-        with qt_sub3:
-            render_team_badge(system_signal_employee())
+        def render_system_signal_panel():
             st.caption("팩터 랭킹 + 기술적 필터를 결합한 규칙 기반 매매 시그널")
 
             sc1, sc2, sc3 = st.columns(3)
@@ -6295,8 +6280,7 @@ def main():
             else:
                 st.info("signal_log.json 없음 — 시그널을 생성하면 자동으로 만들어집니다.")
 
-        with qt_sub4:
-            render_team_badge(factor_backtest_employee())
+        def render_factor_backtest_panel():
             st.caption("팩터 전략을 과거 데이터로 검증합니다. 매월 팩터 Top N을 매수하고 리밸런싱한 결과.")
             st.info(
                 "**⚠️ 생존자 편향 주의** — 현재 선택된 유니버스는 *지금* 살아있는 종목만 포함합니다. "
@@ -6318,9 +6302,10 @@ def main():
 
             if st.button("📉 팩터 전략 백테스트 실행", type="primary", key="qt_bt_run"):
                 with st.spinner(f"{len(qt_tickers)}개 종목 × {bt_years}년 백테스트 중... (1~3분 소요)"):
+                    _bt_fw, _ = get_factor_timing_weights()
                     bt_m, bt_eq, bt_log = backtest_factor_strategy(
                         qt_tickers, top_n=bt_topn, years=bt_years,
-                        factor_weights=qt_fw if qt_use_timing else None,
+                        factor_weights=_bt_fw,
                         commission=bt_commission, slippage=bt_slippage)
                 if not bt_m:
                     st.error("데이터 부족 — 종목 수를 늘리거나 기간을 줄여주세요.")
@@ -6500,8 +6485,7 @@ def main():
 
 
 
-        with qt_sub5:
-            render_team_badge(stock_backtest_employee())
+        def render_stock_backtest_panel():
             st.subheader("📉 전략 백테스팅")
             st.caption("사이드바 가중치와 동일한 **종합점수**(차트+재무+매크로) 기반으로 과거 성과를 검증합니다. 수수료·슬리피지 반영.")
 
@@ -7002,9 +6986,8 @@ def main():
                         pm3.metric("MDD",              f"{pf_mdd:.1f}%")
                         pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
 
-        # ── qt_sub6: 섹터 로테이션 ─────────────────────────────
-        with qt_sub6:
-            render_team_badge(sector_rotation_employee())
+        # ── 섹터 로테이션 패널 (시그널 생성팀 직원용) ─────────────
+        def render_sector_rotation_panel():
             st.caption("12개 섹터 ETF 모멘텀 랭킹 — 상위 3~4개 섹터 집중, 하위 회피 전략")
             _sr_c, _sr_btn = st.columns([4, 1])
             with _sr_btn:
@@ -7055,9 +7038,8 @@ def main():
                 st.plotly_chart(_fig_sr2, width='stretch')
                 st.caption("모멘텀 = 1M×50% + 3M×30% + 6M×20% 가중 평균 · 1시간 캐시")
 
-        # ── qt_sub7: ML 신호 ───────────────────────────────────────
-        with qt_sub7:
-            render_team_badge(ml_signal_employee())
+        # ── ML 신호 패널 (ML 시그널팀 직원용) ────────────────────
+        def render_ml_signal_panel():
             st.subheader("🧠 ML 신호 (Purged K-Fold 검증)")
             st.caption(
                 "9개 기술지표 feature → GradientBoosting 분류 → Purged K-Fold AUC 검증. "
@@ -7177,9 +7159,8 @@ def main():
                             else:
                                 st.info(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — 중립 (0.40~0.60)")
 
-        # ── qt_sub8: 고급 분석 ────────────────────────────────────
-        with qt_sub8:
-            render_team_badge(advanced_research_employee())
+        # ── 고급 분석 패널 (퀀트 리서치/QA팀 직원용) ──────────────
+        def render_advanced_research_panel():
             st.subheader("🧪 고급 분석")
 
             # ── 데이터 무결성 ──
@@ -7350,94 +7331,8 @@ def main():
                                                    margin=dict(l=20, r=20, t=40, b=20))
                             st.plotly_chart(_fr_fig, width='stretch')
 
-        # ── qt_sub9: 운영 안전성 ──────────────────────────────────
-        with qt_sub9:
-            st.subheader("🔒 운영 안전성")
-
-            # ── 자동매매 운영팀 리포트 (모니터링 전용) ──────────
-            st.caption("⚙️ 자동매매 운영팀 — 4명이 파이프라인·안전장치 상태만 점검합니다. 주문 실행 로직은 없습니다.")
-            _ops_reports = [
-                execution_mode_employee(),
-                signal_pipeline_employee(),
-                risk_guardrail_employee(),
-                equity_log_employee(),
-            ]
-            _ops_cols = st.columns(4)
-            _ops_status_color = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444'}
-            for _ocol, _orep in zip(_ops_cols, _ops_reports):
-                with _ocol:
-                    _osc = _ops_status_color.get(_orep['status'], '#94a3b8')
-                    _oreason_html = ''.join(f"<li>{r}</li>" for r in _orep['reasons']) or '<li>참고할 정보 없음</li>'
-                    st.markdown(f"""
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
-            box-shadow:0 1px 4px rgba(0,0,0,.06);height:100%">
-  <div style="font-size:12px;font-weight:700;color:var(--text-3)">{_orep['icon']} {_orep['name']}</div>
-  <div style="margin:6px 0">
-    <span style="font-size:11px;font-weight:700;padding:2px 10px;border-radius:12px;background:{_osc}20;color:{_osc}">{_orep['status']}</span>
-  </div>
-  <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:16px;line-height:1.6">{_oreason_html}</ul>
-</div>""", unsafe_allow_html=True)
-            st.divider()
-
-            if not _OPS_SAFETY_AVAILABLE:
-                st.error("modules/ops_safety.py 로드 실패.")
-            else:
-                # 킬스위치
-                with st.expander("🛑 킬스위치 (일일 손실 한도)", expanded=True):
-                    st.caption("당일 손실이 임계치를 초과하면 자동매매 거래 차단. 세션 내에서만 유지됩니다.")
-                    _ks_c1, _ks_c2 = st.columns(2)
-                    _ks_loss_limit = _ks_c1.number_input("일일 최대 손실 한도 (%)", value=3.0, min_value=0.5, max_value=20.0, step=0.5, key="ks_loss_limit")
-                    _ks_max_errors = _ks_c2.number_input("연속 오류 한도 (회)", value=5, min_value=1, max_value=20, key="ks_max_errors")
-
-                    if 'ks_instance' not in st.session_state:
-                        st.session_state['ks_instance'] = _KillSwitch(
-                            max_daily_loss_pct=_ks_loss_limit, max_errors=int(_ks_max_errors))
-
-                    _ks = st.session_state['ks_instance']
-                    _ks_status = _ks.status()
-
-                    if _ks_status['triggered']:
-                        st.error(f"🛑 킬스위치 발동됨: {_ks_status['reason']}")
-                    else:
-                        st.success("✅ 킬스위치 정상 — 거래 허용 상태")
-
-                    _ks_col1, _ks_col2, _ks_col3 = st.columns(3)
-                    _ks_cur_eq = _ks_col1.number_input("현재 자산가치 (원)", value=10_000_000, step=100_000, key="ks_cur_eq")
-                    if _ks_col2.button("📋 손실 한도 체크", key="ks_check"):
-                        _ks.set_day_start_equity(10_000_000)
-                        if _ks.check_daily_loss(_ks_cur_eq):
-                            st.error(f"🛑 손실 한도 초과 → 거래 차단")
-                        else:
-                            st.success("✅ 정상 범위")
-                    if _ks_col3.button("🔄 킬스위치 초기화", key="ks_reset"):
-                        _ks.reset()
-                        st.success("킬스위치 초기화 완료")
-                        st.rerun()
-
-                # 포지션 대사
-                with st.expander("⚖️ 포지션 대사 (의도 vs 실제)", expanded=False):
-                    st.caption("앱이 생각하는 보유 수량과 실제 포지션을 비교해 불일치를 탐지합니다.")
-                    _rec_intended_raw = st.text_area(
-                        "의도 포지션 (JSON, 예: {\"삼성전자.KS\": 10, \"005490.KS\": 5})",
-                        value='{}', key="rec_intended")
-                    if st.button("⚖️ 포지션 대사 실행", key="rec_run"):
-                        try:
-                            import json as _json_rec
-                            _intended = _json_rec.loads(_rec_intended_raw)
-                            if _OPS_SAFETY_AVAILABLE:
-                                _rec_result = _reconcile_pos(_intended, [])
-                                if _rec_result['ok']:
-                                    st.success("✅ 포지션 일치")
-                                else:
-                                    st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
-                                    st.dataframe(pd.DataFrame(_rec_result['mismatches']), width='stretch')
-                            else:
-                                st.info("ops_safety 모듈 없음 — 의도 포지션만 표시합니다.")
-                                st.json(_intended)
-                        except ValueError:
-                            st.error("JSON 파싱 오류")
-
-            # ── 시그널 자동 발송 현황 ──────────────────────────
+        # ── 운영 안전성 패널 (자동매매 운영팀 직원용) ────────────
+        def render_execution_mode_panel():
             with st.expander("📡 시그널 자동 발송 현황", expanded=True):
                 st.markdown(
                     """
@@ -7455,10 +7350,69 @@ def main():
 
 **시그널 적중률 추적:**
 - 매수 시그널은 `signal_log.json`에 자동 기록
-- 퀀트탭 → 시스템 시그널 → '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
+- 사무실 → 시그널 생성팀 → '시스템 시그널' 직원 카드의 '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
 """
                 )
                 st.caption("⚙️ `.github/workflows/signal-alerts.yml` · `signal_worker.py` — 실제 주문 워크플로는 비활성화 상태")
+
+        def render_risk_guardrail_panel():
+            if not _OPS_SAFETY_AVAILABLE:
+                st.error("modules/ops_safety.py 로드 실패.")
+                return
+            # 킬스위치
+            with st.expander("🛑 킬스위치 (일일 손실 한도)", expanded=True):
+                st.caption("당일 손실이 임계치를 초과하면 자동매매 거래 차단. 세션 내에서만 유지됩니다.")
+                _ks_c1, _ks_c2 = st.columns(2)
+                _ks_loss_limit = _ks_c1.number_input("일일 최대 손실 한도 (%)", value=3.0, min_value=0.5, max_value=20.0, step=0.5, key="ks_loss_limit")
+                _ks_max_errors = _ks_c2.number_input("연속 오류 한도 (회)", value=5, min_value=1, max_value=20, key="ks_max_errors")
+
+                if 'ks_instance' not in st.session_state:
+                    st.session_state['ks_instance'] = _KillSwitch(
+                        max_daily_loss_pct=_ks_loss_limit, max_errors=int(_ks_max_errors))
+
+                _ks = st.session_state['ks_instance']
+                _ks_status = _ks.status()
+
+                if _ks_status['triggered']:
+                    st.error(f"🛑 킬스위치 발동됨: {_ks_status['reason']}")
+                else:
+                    st.success("✅ 킬스위치 정상 — 거래 허용 상태")
+
+                _ks_col1, _ks_col2, _ks_col3 = st.columns(3)
+                _ks_cur_eq = _ks_col1.number_input("현재 자산가치 (원)", value=10_000_000, step=100_000, key="ks_cur_eq")
+                if _ks_col2.button("📋 손실 한도 체크", key="ks_check"):
+                    _ks.set_day_start_equity(10_000_000)
+                    if _ks.check_daily_loss(_ks_cur_eq):
+                        st.error(f"🛑 손실 한도 초과 → 거래 차단")
+                    else:
+                        st.success("✅ 정상 범위")
+                if _ks_col3.button("🔄 킬스위치 초기화", key="ks_reset"):
+                    _ks.reset()
+                    st.success("킬스위치 초기화 완료")
+                    st.rerun()
+
+            # 포지션 대사
+            with st.expander("⚖️ 포지션 대사 (의도 vs 실제)", expanded=False):
+                st.caption("앱이 생각하는 보유 수량과 실제 포지션을 비교해 불일치를 탐지합니다.")
+                _rec_intended_raw = st.text_area(
+                    "의도 포지션 (JSON, 예: {\"삼성전자.KS\": 10, \"005490.KS\": 5})",
+                    value='{}', key="rec_intended")
+                if st.button("⚖️ 포지션 대사 실행", key="rec_run"):
+                    try:
+                        import json as _json_rec
+                        _intended = _json_rec.loads(_rec_intended_raw)
+                        if _OPS_SAFETY_AVAILABLE:
+                            _rec_result = _reconcile_pos(_intended, [])
+                            if _rec_result['ok']:
+                                st.success("✅ 포지션 일치")
+                            else:
+                                st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
+                                st.dataframe(pd.DataFrame(_rec_result['mismatches']), width='stretch')
+                        else:
+                            st.info("ops_safety 모듈 없음 — 의도 포지션만 표시합니다.")
+                            st.json(_intended)
+                    except ValueError:
+                        st.error("JSON 파싱 오류")
 
         # ── qt_sub10: 세금 계산기 ─────────────────────────────────
         with qt_sub10:
@@ -7790,7 +7744,7 @@ worksheet_name = "trades"
     # ── Tab: 사무실 ────────────────────────────────
     with tab_office:
         st.subheader("🏢 사무실")
-        st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서를 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
+        st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면(분석 실행)을 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
 
         _rooms = []
         _analyst_employees = office_analyst_employees()
@@ -7804,30 +7758,30 @@ worksheet_name = "trades"
                         unsafe_allow_html=True)
             st.info("아직 종목 분석이 실행되지 않았습니다 — '종목 분석' 탭에서 종목을 먼저 분석하면 이 방이 열립니다.")
 
-        def _emp(emp_key, name, fn):
-            return (emp_key, name, _office_avatar(name), fn)
+        def _emp(emp_key, name, fn, panel_fn=None):
+            return (emp_key, name, _office_avatar(name), fn, panel_fn)
 
         _rooms += [
             ('ops', '자동매매 운영팀', '⚙️', [
-                _emp('exec', '실행 모드', execution_mode_employee),
+                _emp('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
                 _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
-                _emp('risk', '리스크 가드레일', risk_guardrail_employee),
+                _emp('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
                 _emp('eq', '계좌 현황', equity_log_employee),
             ]),
             ('siggen', '시그널 생성팀', '📡', [
-                _emp('rank', '팩터 랭킹', factor_ranking_employee),
-                _emp('sys', '시스템 시그널', system_signal_employee),
-                _emp('sector', '섹터 로테이션', sector_rotation_employee),
+                _emp('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
+                _emp('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
+                _emp('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
             ]),
             ('ml', 'ML 시그널팀', '🧠', [
-                _emp('ml', 'ML 신호', ml_signal_employee),
+                _emp('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
             ]),
             ('bt', '백테스트 검증팀', '📉', [
-                _emp('factor_bt', '팩터 백테스트', factor_backtest_employee),
-                _emp('stock_bt', '종목 백테스팅', stock_backtest_employee),
+                _emp('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
+                _emp('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
             ]),
             ('qa', '퀀트 리서치/QA팀', '🔬', [
-                _emp('adv', '고급 분석', advanced_research_employee),
+                _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
             ]),
         ]
         render_office_rooms(_rooms)
