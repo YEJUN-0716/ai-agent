@@ -4432,9 +4432,15 @@ def office_analyst_employees():
     return employees
 
 
-# 종목 분석 가중치 — 사이드바 제거, 값 하드코딩 (여러 사무실 직원 패널이 공유하는 상수)
-w_tech, w_fund, w_macro = 35, 40, 25
-total_w = 100
+# 종목 분석 가중치 — 사이드바 제거, 값 하드코딩. 유일한 기준값(_DEFAULT_*)에서 파생시켜서
+# 여러 곳에 흩어진 하드코딩이 서로 다른 값으로 갈라지지 않게 한다. render_stock_analysis_panel은
+# 캐시된 스냅샷을 재표시할 때 이 값들을 다시 지역 할당하므로(Python 스코프 규칙상 함수 안에서
+# 이름이 재할당되면 그 이름은 함수 전체에서 지역 변수가 됨) 자기 이름으로 초기화할 수 없어
+# _DEFAULT_* 별도 이름에서 시작값을 가져온다 — w_tech = w_tech 형태는 UnboundLocalError를 낸다.
+_DEFAULT_W_TECH, _DEFAULT_W_FUND, _DEFAULT_W_MACRO = 35, 40, 25
+_DEFAULT_TOTAL_W = 100
+w_tech, w_fund, w_macro = _DEFAULT_W_TECH, _DEFAULT_W_FUND, _DEFAULT_W_MACRO
+total_w = _DEFAULT_TOTAL_W
 
 
 def main():
@@ -4479,9 +4485,10 @@ def main():
 
     # ── AI 애널리스트팀 방 공용 패널: 단일 종목 분석 ──────
     def render_stock_analysis_panel():
-        # 사이드바 제거 — 값 하드코딩 (이 패널 전용)
-        w_tech, w_fund, w_macro = 35, 40, 25
-        total_w          = 100
+        # 사이드바 제거 — 값 하드코딩 (이 패널 전용). 캐시된 스냅샷 재표시 시 아래에서
+        # w_tech 등을 다시 지역 할당하므로 모듈 전역 이름을 직접 못 쓰고 _DEFAULT_*에서 시작한다.
+        w_tech, w_fund, w_macro = _DEFAULT_W_TECH, _DEFAULT_W_FUND, _DEFAULT_W_MACRO
+        total_w          = _DEFAULT_TOTAL_W
         acct_capital     = 10_000_000
         risk_per_trade   = 1.0
         max_position_pct = 20
@@ -5841,11 +5848,10 @@ def main():
 
             if st.button("🤖 시스템 시그널 생성", type="primary", key="qt_sig_run"):
                 fdf = st.session_state.get('qt_factors')
-                qo = st.session_state.get('qt_opt')
-                opt_w = qo['weights'] if qo else None
+                # 포트폴리오 최적화 탭이 제거되어 커스텀 비중 입력 경로가 없음 — 항상 균등 비중.
                 with st.spinner("시그널 생성 중..."):
                     actions, rebal = generate_system_signals(
-                        qt_tickers, factor_df=fdf, weights=opt_w,
+                        qt_tickers, factor_df=fdf, weights=None,
                         top_n=qt_top_n, capital=qt_capital)
                 st.session_state['qt_signals'] = {'actions': actions, 'rebal': rebal}
 
@@ -6129,7 +6135,10 @@ def main():
 
             if st.button("📉 팩터 전략 백테스트 실행", type="primary", key="qt_bt_run"):
                 with st.spinner(f"{len(qt_tickers)}개 종목 × {bt_years}년 백테스트 중... (1~3분 소요)"):
-                    _bt_fw, _ = get_factor_timing_weights()
+                    # '팩터 랭킹' 직원 카드의 체크박스(key="qt_timing")를 그대로 존중한다 — 그
+                    # 카드가 이번 세션에 한 번도 안 열렸다면 체크박스 기본값(True)으로 대체한다.
+                    _bt_use_timing = st.session_state.get('qt_timing', True)
+                    _bt_fw = get_factor_timing_weights()[0] if _bt_use_timing else None
                     bt_m, bt_eq, bt_log = backtest_factor_strategy(
                         qt_tickers, top_n=bt_topn, years=bt_years,
                         factor_weights=_bt_fw,
