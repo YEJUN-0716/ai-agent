@@ -29,19 +29,45 @@ IC_FLOOR       = 0.005   # 팩터 IC가 음수/0일 때 최소 스케일 (완전
 LOOKBACK_YEARS = 5        # 2년 → 5년으로 확장 (더 강건한 IC 추정)
 
 
-def derive_ic_regime_weights(per_factor_ic: dict, base_weights: dict) -> dict:
+def derive_ic_regime_weights(per_factor_ic: dict, base_weights: dict,
+                             unavailable: list = None) -> dict:
     """
     기존 REGIME_WEIGHTS를 per_factor_ic로 스케일링 후 재정규화.
     IC가 낮은 팩터는 가중치 감소, 높은 팩터는 증가.
+
+    unavailable에 든 팩터(IC 미측정, n=0)는 가중치 0으로 제외하고
+    나머지를 재정규화한다. 측정되지 않은 신호에 자본을 배분하지 않기 위함.
+
+    이전 동작에서는 미측정 팩터도 IC_FLOOR로 스케일링되어 살아남았고,
+    IC_FLOOR(0.005)가 mom_3m 실측 IC(0.0202)의 1/4이라 하락장 가중치의
+    31%를 차지했다.
     """
+    unavailable = set(unavailable or [])
     ic_regime_weights = {}
+
     for regime, bw in base_weights.items():
+        usable = {f: b for f, b in bw.items() if f not in unavailable}
+
+        # 전 팩터가 미측정이면 나눌 것이 없다 - 기본 가중치로 후퇴
+        if not usable:
+            total = sum(bw.values()) or 1.0
+            ic_regime_weights[regime] = {f: round(v / total, 4) for f, v in bw.items()}
+            continue
+
         scaled = {}
-        for factor, base in bw.items():
+        for factor, base in usable.items():
             ic_val = max(per_factor_ic.get(factor, {}).get("mean_ic", IC_FLOOR), IC_FLOOR)
             scaled[factor] = base * ic_val
+
         total = sum(scaled.values())
-        ic_regime_weights[regime] = {f: round(v / total, 4) for f, v in scaled.items()}
+        if total <= 0:
+            total = 1.0
+        weights = {f: round(v / total, 4) for f, v in scaled.items()}
+        for f in unavailable:
+            if f in bw:
+                weights[f] = 0.0
+        ic_regime_weights[regime] = weights
+
     return ic_regime_weights
 
 
@@ -79,7 +105,10 @@ def main():
         print(f"  {f:<12} {stats['mean_ic']:>+8.4f} {stats['icir']:>7.3f} "
               f"{stats['pct_positive']:>7.1f}% {stats['n']:>5}  {sign}")
 
-    ic_rw = derive_ic_regime_weights(per_factor, REGIME_WEIGHTS)
+    # n=0인 팩터는 IC를 측정하지 못한 것이므로 가중치에서 제외한다.
+    ic_unavailable = [f for f, s in per_factor.items() if s.get("n", 0) == 0]
+    ic_rw = derive_ic_regime_weights(per_factor, REGIME_WEIGHTS,
+                                     unavailable=ic_unavailable)
     print("\nIC 조정 가중치 (기존 → 신규):")
     for regime in REGIME_WEIGHTS:
         old_w = REGIME_WEIGHTS[regime]
@@ -124,7 +153,6 @@ def main():
         for fail in failures:
             print(f"  [{fail['date']}] {fail['ticker']} — {fail['event']}")
 
-    ic_unavailable = [f for f, s in per_factor.items() if s.get("n", 0) == 0]
     output = {
         "updated":               datetime.now(timezone.utc).isoformat(),
         "universe_size":         len(TICKERS),
@@ -138,7 +166,7 @@ def main():
             "known_failures_in_lookback": failures,
             "ic_data_note": (
                 f"IC 미계산 팩터 {ic_unavailable}: PIT 재무 데이터 미확보 "
-                "→ 기본 REGIME_WEIGHTS 비례 배분 적용중. "
+                "→ 가중치 0으로 제외하고 나머지 팩터를 재정규화했습니다. "
                 "SimFin·EDGAR 연동 시 해결 가능."
             ) if ic_unavailable else "",
         },
