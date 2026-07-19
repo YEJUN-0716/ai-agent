@@ -13,3 +13,7 @@ dart_corp_map.json
 
 # 개인 관심종목 (로컬 전용, 사용자마다 다름 — GH Actions 관리 대상 아님)
 watchlist.json
+
+# 가격 패널 캐시 (GitHub Actions cache로 공유, 커밋 대상 아님)
+data/
+.pytest_cache/
