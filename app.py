@@ -51,7 +51,7 @@ except Exception:
     _DATA_INTEGRITY_AVAILABLE = False
 
 try:
-    from modules.ops_safety import KillSwitch as _KillSwitch, reconcile_positions as _reconcile_pos, AlertDispatcher as _AlertDispatcher
+    from modules.ops_safety import KillSwitch as _KillSwitch, reconcile_positions as _reconcile_pos
     _OPS_SAFETY_AVAILABLE = True
 except Exception:
     _OPS_SAFETY_AVAILABLE = False
@@ -59,25 +59,25 @@ except Exception:
 _PT_TRACKER_AVAILABLE = False
 
 try:
-    from modules.alpha_decay_monitor import detect_alpha_decay as _detect_alpha_decay, rolling_performance_vs_baseline as _rolling_perf_vs_bt, cusum_change_detection as _cusum_detect
+    from modules.alpha_decay_monitor import detect_alpha_decay as _detect_alpha_decay, rolling_performance_vs_baseline as _rolling_perf_vs_bt
     _ALPHA_DECAY_AVAILABLE = True
 except Exception:
     _ALPHA_DECAY_AVAILABLE = False
 
 try:
-    from modules.stress_test import replay_historical_scenario as _replay_scenario, run_all_scenarios as _run_all_scenarios, synthetic_shock_test as _synthetic_shock, KNOWN_STRESS_PERIODS as _STRESS_PERIODS
+    from modules.stress_test import replay_historical_scenario as _replay_scenario, KNOWN_STRESS_PERIODS as _STRESS_PERIODS
     _STRESS_TEST_AVAILABLE = True
 except Exception:
     _STRESS_TEST_AVAILABLE = False
 
 try:
-    from modules.signal_decay_analysis import full_decay_analysis as _signal_decay_full, compute_signal_ic_decay as _signal_ic_decay
+    from modules.signal_decay_analysis import compute_signal_ic_decay as _signal_ic_decay
     _SIGNAL_DECAY_AVAILABLE = True
 except Exception:
     _SIGNAL_DECAY_AVAILABLE = False
 
 try:
-    from modules.factor_risk_model import regression_style_analysis as _style_analysis, rolling_market_beta as _rolling_beta, sector_concentration_report as _sector_conc
+    from modules.factor_risk_model import regression_style_analysis as _style_analysis, rolling_market_beta as _rolling_beta
     _FACTOR_RISK_AVAILABLE = True
 except Exception:
     _FACTOR_RISK_AVAILABLE = False
@@ -860,11 +860,11 @@ def detect_trading_signals(df, t_det):
     elif net >= 3:
         conf = ('🟢', f'강한 매수 합류 ({bull}:{bear})', f'{bull}개 매수 신호 동시 발생 — 높은 신뢰도')
     elif net >= 2:
-        conf = ('🟢', f'매수 우세 ({bull}:{bear})', f'매수 신호 우세 — 보통 신뢰도')
+        conf = ('🟢', f'매수 우세 ({bull}:{bear})', '매수 신호 우세 — 보통 신뢰도')
     elif net <= -3:
         conf = ('🔴', f'강한 매도 합류 ({bear}:{bull})', f'{bear}개 매도 신호 동시 발생 — 높은 신뢰도')
     elif net <= -2:
-        conf = ('🔴', f'매도 우세 ({bear}:{bull})', f'매도 신호 우세 — 보통 신뢰도')
+        conf = ('🔴', f'매도 우세 ({bear}:{bull})', '매도 신호 우세 — 보통 신뢰도')
     else:
         conf = ('🟡', f'혼조세 ({bull}:{bear})', '매수/매도 엇갈림 — 관망 권장')
 
@@ -2160,8 +2160,6 @@ def detect_chart_pattern(ticker, period='6mo'):
 
     # ── 일봉 기본 분석 ─────────────────────────
     close = df['Close'].values.astype(float)
-    high  = df['High'].values.astype(float)
-    low   = df['Low'].values.astype(float)
     vol   = df['Volume'].values.astype(float)
     c_s   = pd.Series(close)
     cur   = float(close[-1])
@@ -2203,7 +2201,6 @@ def detect_chart_pattern(ticker, period='6mo'):
     weekly_signal = 'unknown'
     if df_w is not None and len(df_w) >= 20:
         wc = df_w['Close'].values.astype(float)
-        wh = df_w['High'].values.astype(float)
         wc_s = pd.Series(wc)
         wma20 = float(wc_s.rolling(20).mean().iloc[-1])
         bull_w = float(wc[-1]) > wma20 and not np.isnan(wma20)
@@ -2580,7 +2577,6 @@ def calc_trade_levels(df, total_score):
     _tr = pd.concat([(h-l), (h-_prev_c).abs(), (l-_prev_c).abs()], axis=1).max(axis=1)
     atr = float(_tr.rolling(14).mean().iloc[-1])
 
-    ma5   = float(p.rolling(5).mean().iloc[-1])
     ma10  = float(p.rolling(10).mean().iloc[-1])
     ma20  = float(p.rolling(20).mean().iloc[-1])
     ma60  = float(p.rolling(60).mean().iloc[-1])
@@ -3445,7 +3441,6 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
         cost = equity * turnover * round_trip_cost
         equity -= cost
 
-        month_end_idx = price_df.index[price_df.index >= month_start]
         if mi + 1 < len(months):
             next_month = months[mi+1]
             period_idx = price_df.index[(price_df.index >= month_start) & (price_df.index < next_month)]
@@ -4426,7 +4421,6 @@ def main():
         # 사이드바 제거 — 값 하드코딩 (이 패널 전용). 캐시된 스냅샷 재표시 시 아래에서
         # w_tech 등을 다시 지역 할당하므로 모듈 전역 이름을 직접 못 쓰고 _DEFAULT_*에서 시작한다.
         w_tech, w_fund, w_macro = _DEFAULT_W_TECH, _DEFAULT_W_FUND, _DEFAULT_W_MACRO
-        total_w          = _DEFAULT_TOTAL_W
         acct_capital     = 10_000_000
         risk_per_trade   = 1.0
         max_position_pct = 20
@@ -4626,26 +4620,23 @@ def main():
             f_score   = _a['f_score']; f_det = _a['f_det']
             m_score   = _a['m_score']; m_det = _a['m_det']; m_data = _a['m_data']
             total     = _a['total']; mtf_scores = _a['mtf_scores']
-            dcf_val   = _a['dcf_val']; dcf_det = _a['dcf_det']
+            dcf_det   = _a['dcf_det']
             risk_data = _a['risk_data']
             news_score = _a['news_score']; news_articles = _a['news_articles']
-            regime    = _a['regime']; regime_diff = _a['regime_diff']
-            t_score_adj = _a['t_score_adj']; total_adj = _a['total_adj']
+            regime    = _a['regime']
+            total_adj = _a['total_adj']
             info      = _a['info']; name = _a['name']
             is_krw    = _a['is_krw']; cp = _a['cp']; pp = _a['pp']
             live_price = _a.get('live_price', cp)
             live_label = _a.get('live_label', '현재가')
             pre_price = _a.get('pre_price'); pre_chg = _a.get('pre_chg')
             post_price = _a.get('post_price'); post_chg = _a.get('post_chg')
-            score_method = _a.get('score_method', '')
             earn_str  = _a['earn_str']
             w_tech    = _a['w_tech']; w_fund = _a['w_fund']; w_macro = _a['w_macro']
 
             fmt_p  = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
-            chg = (cp-pp)/pp*100 if pp else 0
 
             regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}.get(regime, '➡️ 중립장')
-            regime_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#b2b5be'}.get(regime, '#b2b5be')
 
             # ── 종목 헤더 카드 ──────────────────────────────
             live_chg = (live_price - pp) / pp * 100 if pp > 0 else 0
@@ -5299,7 +5290,6 @@ def main():
                         col_mtf.metric(lbl, "N/A")
 
                 if signals:
-                    consensus = sum(signals) / len(signals)
                     bull_cnt  = sum(1 for s in signals if s >= 65)
                     bear_cnt  = sum(1 for s in signals if s < 50)
                     if bull_cnt == len(signals):
@@ -5784,8 +5774,8 @@ def main():
             qt_top_n = sc1.slider("매수 후보 수 (Top N)", 3, 10, 5, key="qt_top_n")
             qt_capital = sc2.number_input("가상 투자금 $ (시뮬레이션 전용, 실거래 없음)",
                                           min_value=1000, value=100000, step=10000, key="qt_capital")
-            qt_rebal = sc3.selectbox("리밸런싱 주기", ["월간 (20일)", "격주 (10일)", "주간 (5일)"],
-                                      key="qt_rebal")
+            sc3.selectbox("리밸런싱 주기", ["월간 (20일)", "격주 (10일)", "주간 (5일)"],
+                          key="qt_rebal")
 
             if st.button("🤖 시스템 시그널 생성", type="primary", key="qt_sig_run"):
                 fdf = st.session_state.get('qt_factors')
@@ -5840,8 +5830,8 @@ def main():
                                   '🟠 비중축소':'#ff9800','🟡 조건부 매수':'#ff9800',
                                   '🟡 대기':'#ffeb3b','⚪ 관망':'#999999'}
                     ac = act_colors.get(a['action'], '#999999')
-                    pri_badge = (f"<span style='background:#ef535022;color:#ef5350;padding:1px 6px;"
-                                 f"border-radius:3px;font-size:10px;margin-left:4px'>HIGH</span>"
+                    pri_badge = ("<span style='background:#ef535022;color:#ef5350;padding:1px 6px;"
+                                 "border-radius:3px;font-size:10px;margin-left:4px'>HIGH</span>"
                                  if a['priority'] == 'HIGH' else '')
                     price_str = a.get('price', '')
                     alloc_str = a.get('alloc', '')
@@ -6099,7 +6089,6 @@ def main():
                     st.warning(f"⚠️ {bt_m['pit_note']}", icon="⚠️")
 
                 mc1, mc2, mc3, mc4 = st.columns(4)
-                alpha_c = '#26a69a' if bt_m['alpha'] >= 0 else '#ef5350'
                 mc1.metric("전략 수익률", f"{bt_m['total_return']:+.1f}%",
                           f"CAGR {bt_m['cagr']:+.1f}%")
                 mc2.metric("SPY 수익률", f"{bt_m['spy_return']:+.1f}%")
@@ -7162,7 +7151,7 @@ def main():
                 if _ks_col2.button("📋 손실 한도 체크", key="ks_check"):
                     _ks.set_day_start_equity(10_000_000)
                     if _ks.check_daily_loss(_ks_cur_eq):
-                        st.error(f"🛑 손실 한도 초과 → 거래 차단")
+                        st.error("🛑 손실 한도 초과 → 거래 차단")
                     else:
                         st.success("✅ 정상 범위")
                 if _ks_col3.button("🔄 킬스위치 초기화", key="ks_reset"):

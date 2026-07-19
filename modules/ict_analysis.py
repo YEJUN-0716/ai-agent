@@ -513,7 +513,7 @@ def plot_channel_chart(df: pd.DataFrame, n_candles: int = 80,
         fig.add_trace(go.Scatter(
             x=ch["lower"]["x"], y=ch["lower"]["y"],
             mode="lines", line=dict(color=dir_col, width=1.5, dash="dash"),
-            name=f"채널 하단", showlegend=True,
+            name="채널 하단", showlegend=True,
         ))
         # 상단선 (fill to lower)
         fig.add_trace(go.Scatter(
@@ -550,12 +550,12 @@ def plot_channel_chart(df: pd.DataFrame, n_candles: int = 80,
         last_x = ch["upper"]["x"][-1]
         fig.add_annotation(
             x=last_x, y=ch["upper"]["y"][-1],
-            text=f"상단", showarrow=False,
+            text="상단", showarrow=False,
             font=dict(size=9, color=dir_col), xanchor="left", xshift=5,
         )
         fig.add_annotation(
             x=last_x, y=ch["lower"]["y"][-1],
-            text=f"하단", showarrow=False,
+            text="하단", showarrow=False,
             font=dict(size=9, color=dir_col), xanchor="left", xshift=5,
         )
 

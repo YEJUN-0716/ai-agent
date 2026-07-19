@@ -8,7 +8,6 @@
 2. reconcile_positions — 의도 포지션 vs 브로커 실제 포지션 불일치 탐지
 3. AlertDispatcher — 텔레그램/슬랙 메시지 발송 + 최근 알림 내역 보관
 """
-import json
 from collections import deque
 from datetime import date, datetime, timezone
 

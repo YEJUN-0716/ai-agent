@@ -8,7 +8,6 @@ OAuth2 Client Credentials Grant / Bearer 토큰 방식
 토큰은 client당 1개만 유효 (재발급 시 이전 토큰 즉시 무효화).
 """
 import math
-import os
 import threading
 import time
 

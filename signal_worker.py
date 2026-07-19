@@ -9,7 +9,7 @@ generate_system_signals()를 그대로 호출해 매수/매도 후보를 알려�
 import json
 import os
 import sys
-from datetime import datetime, date
+from datetime import date
 
 import app as core
 

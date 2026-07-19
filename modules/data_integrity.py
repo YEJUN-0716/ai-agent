@@ -4,7 +4,6 @@
 백테스트가 아무리 로직이 맞아도 입력 데이터가 틀리면 결과 전체가 무의미하다.
 이 모듈은 OHLCV 데이터를 넣으면 흔한 데이터 오류 패턴을 자동으로 잡아낸다.
 """
-import numpy as np
 import pandas as pd
 
 

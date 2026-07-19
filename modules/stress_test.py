@@ -5,7 +5,6 @@
 이 모듈은 과거 주요 급락 이벤트 구간만 잘라서 전략을 돌려보거나
 (역사적 시나리오), 가상으로 -20% 충격을 equity curve에 가해본다.
 """
-import numpy as np
 import pandas as pd
 
 
