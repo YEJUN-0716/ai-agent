@@ -16,6 +16,11 @@ CHUNK_SIZE       = 100
 MIN_TRADING_DAYS = 80
 FIELDS           = ["Open", "High", "Low", "Close", "Volume"]
 
+# 캐시 최종일이 요청 종료일보다 이만큼 뒤처져도 재다운로드하지 않는다.
+# 주말(2일)에 연휴가 붙으면 거래 공백이 4일까지 벌어지므로 5일로 둔다.
+# 주간 IC 배치 기준값이다. 일간 신호에 쓰려면 더 좁혀야 한다.
+MAX_STALE_DAYS   = 5
+
 _last_coverage = {"requested": 0, "resolved": 0, "failed": []}
 
 
@@ -41,7 +46,7 @@ def _download_chunked(tickers: list, start, end) -> pd.DataFrame:
         if raw is None or raw.empty:
             continue
         if not isinstance(raw.columns, pd.MultiIndex):
-            # 티커 1개일 때 yfinance는 평면 컬럼을 준다 — MultiIndex로 승격
+            # 티커 1개일 때 yfinance는 평면 컬럼을 준다 - MultiIndex로 승격
             raw.columns = pd.MultiIndex.from_product([raw.columns, chunk])
         frames.append(raw)
     if not frames:
@@ -78,12 +83,12 @@ def _read_cache(path: str) -> pd.DataFrame:
     try:
         df = pd.read_parquet(path)
         if not isinstance(df.columns, pd.MultiIndex) or df.empty:
-            print(f"[price_panel] 캐시 스키마 불일치 — 재구축: {path}")
+            print(f"[price_panel] 캐시 스키마 불일치 - 재구축: {path}")
             return pd.DataFrame()
         df.index = pd.to_datetime(df.index)
         return df.sort_index()
     except Exception as e:
-        print(f"[price_panel] 캐시 손상 — 재구축: {e}")
+        print(f"[price_panel] 캐시 손상 - 재구축: {e}")
         return pd.DataFrame()
 
 
@@ -114,11 +119,18 @@ def _missing_tickers(cached: pd.DataFrame, tickers: list,
     have    = set(cached.columns.get_level_values(1))
     missing = [t for t in tickers if t not in have]
 
-    # yfinance는 거래일만 준다. 달력일 기준 여유 3일을 둔다.
-    tol = pd.Timedelta(days=3)
+    # 캐시 인덱스는 거래일 자정이고 호출자는 datetime.now()(시각 포함)를
+    # 넘기는 경우가 많다. 시각을 떼고 날짜끼리 비교하지 않으면 같은 날에도
+    # 낡은 것으로 오판한다.
+    cache_last  = cached.index.max().normalize()
+    cache_first = cached.index.min().normalize()
+    want_last   = pd.Timestamp(end_ts).normalize()
+    want_first  = pd.Timestamp(start_ts).normalize()
+
+    tol = pd.Timedelta(days=MAX_STALE_DAYS)
     needs_extension = (
-        cached.index.max() < end_ts - tol
-        or cached.index.min() > start_ts + tol
+        cache_last < want_last - tol
+        or cache_first > want_first + tol
     )
     return missing, needs_extension
 
@@ -163,7 +175,7 @@ def load_panel(tickers: list, start, end, cache_path: str = None) -> tuple:
         cached = _merge_panels(cached, fresh)
         _write_cache(cached, cache_path)
     else:
-        print(f"[price_panel] 캐시 히트 — 다운로드 없음 ({len(tickers)}종목)")
+        print(f"[price_panel] 캐시 히트 - 다운로드 없음 ({len(tickers)}종목)")
 
     window = cached.loc[(cached.index >= start_ts) & (cached.index <= end_ts)] \
         if not cached.empty else cached

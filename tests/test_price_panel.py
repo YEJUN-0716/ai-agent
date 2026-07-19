@@ -151,3 +151,29 @@ def test_extended_end_date_refetches(tmp_path, monkeypatch):
                            end="2026-06-01", cache_path=cache)
 
     assert len(calls) == 2, "날짜가 연장됐는데 다운로드가 없었다"
+
+
+def test_weekend_gap_is_still_a_cache_hit(tmp_path, monkeypatch):
+    """
+    호출자가 datetime.now()(시각 포함)를 end로 넘기고 직전 거래일이
+    금요일이면, 주말 때문에 캐시가 항상 낡은 것으로 오판되어 매번
+    재다운로드가 일어났다. 거래 공백은 캐시 미스가 아니다.
+    """
+    cache = str(tmp_path / "p.parquet")
+    calls = []
+
+    def fake_download(tickers, **kwargs):
+        calls.append(list(tickers))
+        full = _fake_ohlcv(list(tickers), n_days=600)
+        return full.loc[full.index <= pd.Timestamp(kwargs["end"])]
+
+    monkeypatch.setattr(price_panel.yf, "download", fake_download)
+
+    price_panel.load_panel(["AAPL", "MSFT"], start="2025-01-01",
+                           end="2025-10-03", cache_path=cache)
+    assert len(calls) == 1
+
+    # 주말이 지난 월요일 오전에 다시 호출 — 새 거래일 데이터는 아직 없다
+    price_panel.load_panel(["AAPL", "MSFT"], start="2025-01-01",
+                           end=pd.Timestamp("2025-10-06 09:30"), cache_path=cache)
+    assert len(calls) == 1, "주말 공백을 캐시 미스로 오판했다"

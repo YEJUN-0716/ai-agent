@@ -27,6 +27,7 @@ from modules.factor_engine import (
     fetch_shares_history                 as _fetch_shares_hist,
     point_in_time_fundamentals           as _pit_fundamentals,
 )
+from modules.price_panel import load_panel
 
 try:
     from modules.ict_analysis import ict_factor_score as _ict_factor_score
@@ -166,21 +167,11 @@ def run_ic_analysis(
     end   = datetime.now()
     start = end - timedelta(days=lookback_years * 365 + 90)
 
-    prices_dict = {}
-    ohlcv_dict  = {}
-    for i, tk in enumerate(tickers):
-        if progress_cb:
-            progress_cb(i / len(tickers) * 0.40)
-        try:
-            raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw = raw.xs(tk, axis=1, level=1) if tk in raw.columns.get_level_values(1) else raw
-                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
-            if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
-                prices_dict[tk] = raw["Close"].dropna()
-                ohlcv_dict[tk]  = raw.dropna(subset=["Close"])
-        except Exception:
-            pass
+    if progress_cb:
+        progress_cb(0.10)
+    prices_dict, ohlcv_dict = load_panel(tickers, start, end)
+    if progress_cb:
+        progress_cb(0.40)
 
     if len(prices_dict) < 5:
         return pd.DataFrame(), {}, {}, pd.Series(dtype=float)
@@ -383,21 +374,11 @@ def run_per_factor_ic_analysis(
     end   = datetime.now()
     start = end - timedelta(days=lookback_years * 365 + 90)
 
-    prices_dict = {}
-    ohlcv_dict  = {}
-    for i, tk in enumerate(tickers):
-        if progress_cb:
-            progress_cb(i / len(tickers) * 0.40)
-        try:
-            raw = yf.download(tk, start=start, end=end, progress=False, auto_adjust=True)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw = raw.xs(tk, axis=1, level=1) if tk in raw.columns.get_level_values(1) else raw
-                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
-            if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
-                prices_dict[tk] = raw["Close"].dropna()
-                ohlcv_dict[tk]  = raw.dropna(subset=["Close"])
-        except Exception:
-            pass
+    if progress_cb:
+        progress_cb(0.10)
+    prices_dict, ohlcv_dict = load_panel(tickers, start, end)
+    if progress_cb:
+        progress_cb(0.40)
 
     if len(prices_dict) < 5:
         return {}
@@ -510,22 +491,9 @@ def run_out_of_sample_validation(
     if progress_cb:
         progress_cb(0.05)
 
-    prices_dict = {}
-    ohlcv_dict  = {}
-    for i, tk in enumerate(tickers):
-        if progress_cb:
-            progress_cb(0.05 + i / len(tickers) * 0.30)
-        try:
-            raw = yf.download(tk, start=train_start_str, end=test_end_str,
-                              progress=False, auto_adjust=True)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw = raw.xs(tk, axis=1, level=1) if tk in raw.columns.get_level_values(1) else raw
-                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
-            if not raw.empty and "Close" in raw.columns and len(raw) >= 80:
-                prices_dict[tk] = raw["Close"].dropna()
-                ohlcv_dict[tk]  = raw.dropna(subset=["Close"])
-        except Exception:
-            pass
+    prices_dict, ohlcv_dict = load_panel(tickers, train_start_str, test_end_str)
+    if progress_cb:
+        progress_cb(0.35)
 
     if len(prices_dict) < 5:
         return {}
