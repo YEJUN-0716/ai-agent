@@ -74,3 +74,40 @@ def test_coverage_is_recorded(tmp_path, monkeypatch):
     assert cov["requested"] == 6
     assert cov["resolved"] == 5
     assert cov["failed"] == ["DEAD"]
+
+
+def test_cache_hit_skips_download(tmp_path, monkeypatch):
+    """같은 요청을 두 번 하면 두 번째는 네트워크를 타지 않는다."""
+    cache = str(tmp_path / "p.parquet")
+    calls = []
+
+    def fake_download(tickers, **kwargs):
+        calls.append(list(tickers))
+        return _fake_ohlcv(list(tickers))
+
+    monkeypatch.setattr(price_panel.yf, "download", fake_download)
+
+    args = dict(start="2025-01-01", end="2025-10-01", cache_path=cache)
+    price_panel.load_panel(["AAPL", "MSFT"], **args)
+    assert len(calls) == 1
+
+    prices, ohlcv = price_panel.load_panel(["AAPL", "MSFT"], **args)
+    assert len(calls) == 1, "캐시 히트인데 다운로드가 발생했다"
+    assert set(prices) == {"AAPL", "MSFT"}
+
+
+def test_corrupt_cache_rebuilds(tmp_path, monkeypatch):
+    """손상된 캐시 파일은 예외 없이 재구축된다."""
+    cache = tmp_path / "p.parquet"
+    cache.write_bytes(b"this is not parquet")
+
+    monkeypatch.setattr(
+        price_panel.yf, "download",
+        lambda tickers, **kw: _fake_ohlcv(list(tickers)),
+    )
+
+    prices, _ = price_panel.load_panel(
+        ["AAPL", "MSFT"], start="2025-01-01", end="2025-10-01",
+        cache_path=str(cache),
+    )
+    assert set(prices) == {"AAPL", "MSFT"}

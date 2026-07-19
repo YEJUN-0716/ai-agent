@@ -71,6 +71,51 @@ def _split_panel(panel: pd.DataFrame, tickers: list) -> tuple:
     return prices_dict, ohlcv_dict
 
 
+def _read_cache(path: str) -> pd.DataFrame:
+    """캐시를 읽는다. 없거나 손상됐으면 빈 DataFrame을 돌려주고 경고만 남긴다."""
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(path)
+        if not isinstance(df.columns, pd.MultiIndex) or df.empty:
+            print(f"[price_panel] 캐시 스키마 불일치 — 재구축: {path}")
+            return pd.DataFrame()
+        df.index = pd.to_datetime(df.index)
+        return df.sort_index()
+    except Exception as e:
+        print(f"[price_panel] 캐시 손상 — 재구축: {e}")
+        return pd.DataFrame()
+
+
+def _write_cache(panel: pd.DataFrame, path: str) -> None:
+    """원자적으로 캐시를 기록한다 (tmp 파일에 쓴 뒤 교체)."""
+    if panel.empty:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp"
+    panel.to_parquet(tmp)
+    os.replace(tmp, path)
+
+
+def _missing_tickers(cached: pd.DataFrame, tickers: list,
+                     start_ts, end_ts) -> list:
+    """캐시로 충족되지 않는 티커 목록. 지금은 티커 단위로만 판별한다."""
+    if cached.empty:
+        return list(tickers)
+    have = set(cached.columns.get_level_values(1))
+    return [t for t in tickers if t not in have]
+
+
+def _merge_panels(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    """기존 패널에 신규 패널을 덮어쓰며 합친다. 겹치는 셀은 new 우선."""
+    if old.empty:
+        return new
+    if new.empty:
+        return old
+    merged = new.combine_first(old)
+    return merged.sort_index()
+
+
 def load_panel(tickers: list, start, end, cache_path: str = None) -> tuple:
     """
     tickers의 OHLCV를 반환한다.
@@ -90,8 +135,21 @@ def load_panel(tickers: list, start, end, cache_path: str = None) -> tuple:
     cache_path = cache_path or CACHE_PATH
     tickers    = list(dict.fromkeys(tickers))  # 중복 제거, 순서 유지
 
-    panel = _download_chunked(tickers, start, end)
-    prices_dict, ohlcv_dict = _split_panel(panel, tickers)
+    start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+
+    cached  = _read_cache(cache_path)
+    missing = _missing_tickers(cached, tickers, start_ts, end_ts)
+
+    if missing:
+        fresh = _download_chunked(missing, start, end)
+        cached = _merge_panels(cached, fresh)
+        _write_cache(cached, cache_path)
+    else:
+        print(f"[price_panel] 캐시 히트 — 다운로드 없음 ({len(tickers)}종목)")
+
+    window = cached.loc[(cached.index >= start_ts) & (cached.index <= end_ts)] \
+        if not cached.empty else cached
+    prices_dict, ohlcv_dict = _split_panel(window, tickers)
 
     failed = [t for t in tickers if t not in prices_dict]
     _last_coverage = {
