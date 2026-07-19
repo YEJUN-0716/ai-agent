@@ -4101,12 +4101,13 @@ def _office_avatar(name):
 
 def inject_office_css():
     """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS + 직원 타일 "일하는 중" 애니메이션
-    키프레임을 세션당 한 번만 주입. st.container(key=...)가 만드는 안정적인 st-key-* 클래스를
-    이용해 사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음). 실제 색/애니메이션
-    선택(직원별로 다름)은 render_office_rooms가 매 rerun 별도의 작은 <style> 블록으로 주입한다."""
-    if st.session_state.get('_office_css_injected'):
-        return
-    st.session_state['_office_css_injected'] = True
+    키프레임을 주입. st.container(key=...)가 만드는 안정적인 st-key-* 클래스를 이용해
+    사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음). 실제 색/애니메이션
+    선택(직원별로 다름)은 render_office_rooms가 매 rerun 별도의 작은 <style> 블록으로 주입한다.
+
+    주의: 세션당 1회 주입(session_state 게이트)은 금물 — Streamlit은 rerun마다 화면을
+    새로 그리므로 두 번째 rerun부터 <style>이 DOM에서 사라져 사무실 스타일이 전부 풀린다.
+    매 rerun 호출돼야 하며, 중복 호출 방지는 호출부(render_office_rooms 한 곳)가 담당한다."""
     st.markdown("""
 <style>
 /* ── 사무실 바닥재: 원목 파케이 플로어링 느낌의 마루 패턴 ── */
@@ -4431,7 +4432,6 @@ def main():
         max_position_pct = 20
         min_rr           = 1.5
 
-        inject_office_css()
         with st.container(key="office_ticker_board"):
             st.markdown("""
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
@@ -4470,7 +4470,6 @@ def main():
             run = True
 
         if run:
-            inject_office_css()
             walk_ph = st.empty()
             office_walk_strip_show(walk_ph)
             prog = st.progress(0); msg = st.empty()
@@ -7194,7 +7193,6 @@ def main():
                     except ValueError:
                         st.error("JSON 파싱 오류")
 
-    inject_office_css()
     st.markdown("""
 <div style="display:flex;align-items:center;gap:14px;margin:6px 0 16px 0;padding:16px 22px;
             background:linear-gradient(135deg,#1a2332 0%,#0f1622 100%);
