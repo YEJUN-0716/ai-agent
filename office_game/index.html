@@ -124,6 +124,9 @@ function mergeChars(placedRooms) {
   for (const id of chars.keys()) if (!seen.has(id)) chars.delete(id);
 }
 
+let reportPending = false;  // 총괄 보고 씬 예약됨 (성공할 때까지 유지)
+let reportTimer = 0;        // 축하가 끝난 뒤 보고하러 가기까지의 지연
+
 function onModeChange() {
   for (const ch of chars.values()) {
     ch.bubble = null;
@@ -135,6 +138,8 @@ function onModeChange() {
       ch.state = "celebrate"; ch.stateT = 0; ch.celebT = rand(1.2, 2.4);
     }
   }
+  if (!working && lastResult) { reportPending = true; reportTimer = 3.2; }  // 축하 후 총괄 보고 씬 예약
+  if (working) reportPending = false;
 }
 
 /* ── 사장(사용자) 캐릭터: 클릭 불가, 사무실을 순찰하며 감독 ── */
@@ -183,6 +188,8 @@ function drawBoss(t) {
   ctx.fillStyle = dark ? "#f5d878" : "#3b2f1d";
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText(label, boss.x, boss.y - 33.5);
+  if (boss.bubble && boss.bubble.until > performance.now() / 1000)
+    drawBubble(boss.x, boss.y - 56, boss.bubble.txt);
 }
 
 /* ── 잡담 대사 ── */
@@ -260,6 +267,27 @@ function updateChar(ch, dt, t, now) {
       particles.push({ x: ch.x + rand(-14, 14), y: ch.y - 24, vy: -22, life: 1.3,
                        txt: Math.random() < 0.5 ? "🎉" : "✨", size: 12 });
     if (ch.stateT > (ch.celebT || 1.8)) { ch.state = "at_desk"; ch.stateT = -rand(0.3, 3.0); }
+    return;
+  }
+
+  if (ch.state === "report_walk") {             // 총괄: 사장님께 결과 보고하러 이동
+    const side = ch.x < boss.x ? -26 : 26;
+    if (moveToward(ch, boss.x + side, boss.y, WALK_SPD + 25, dt)) {
+      ch.state = "report_talk"; ch.stateT = 0;
+      const r = lastResult;
+      ch.bubble = { txt: r ? `${r.ticker} ${r.score}점 · ${r.verdict} 보고드립니다!` : "보고드립니다!",
+                    until: now + 3.6 };
+      boss.state = "pause"; boss.pauseT = 6; boss.stateT = 0;
+      boss.facing = ch.x < boss.x ? -1 : 1;
+    }
+    return;
+  }
+  if (ch.state === "report_talk") {
+    if (ch.stateT > 3.8) {
+      ch.state = "roam_pause"; ch.pauseT = 1; ch.stateT = 0; ch.bubble = null;
+      boss.bubble = { txt: "수고했어요 👍", until: now + 2.2 };
+      boss.state = "pause"; boss.pauseT = 2.4; boss.stateT = 0;
+    }
     return;
   }
 
@@ -346,13 +374,19 @@ function drawTopBar(t) {
     ctx.fillStyle = lastResult.color || "#f59e0b"; ctx.font = "800 14px sans-serif";
     ctx.fillText(lastResult.score + "점 · " + lastResult.verdict, 185, TOP_BAR_H / 2);
     ctx.fillStyle = p.boardSub; ctx.font = "600 12px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText("사장님의 다음 지시를 기다리는 중 — 시세판에 종목을 입력하세요", LOGICAL_W - 26, TOP_BAR_H / 2);
+    ctx.fillText("사장님의 다음 지시를 기다리는 중 — 시세판에 종목을 입력하세요", LOGICAL_W - 82, TOP_BAR_H / 2);
   } else {
     ctx.fillStyle = p.boardText; ctx.font = "700 13px sans-serif"; ctx.textAlign = "left";
     ctx.fillText("🏢 대기 중", 24, TOP_BAR_H / 2);
     ctx.fillStyle = p.boardSub; ctx.font = "600 12px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText("사장님의 지시를 기다리는 중 — 아래 시세판에 종목을 입력하면 전 직원이 분석을 시작합니다", LOGICAL_W - 26, TOP_BAR_H / 2);
+    ctx.fillText("사장님의 지시를 기다리는 중 — 아래 시세판에 종목을 입력하면 전 직원이 분석을 시작합니다", LOGICAL_W - 82, TOP_BAR_H / 2);
   }
+
+  // 벽시계 (실시간)
+  const nowD = new Date();
+  const hhmm = String(nowD.getHours()).padStart(2, "0") + ":" + String(nowD.getMinutes()).padStart(2, "0");
+  ctx.fillStyle = "#7ee6b8"; ctx.font = "800 13px 'JetBrains Mono', monospace"; ctx.textAlign = "right";
+  ctx.fillText(hhmm, LOGICAL_W - 26, TOP_BAR_H / 2);
 }
 
 function drawRoom(room, t) {
@@ -447,21 +481,23 @@ function drawChar(ch, t) {
   ctx.fillStyle = p.label; ctx.textAlign = "left"; ctx.textBaseline = "middle";
   ctx.fillText(ch.name, ch.x - nameW / 2 + 3, ch.y - 29);
 
-  // 말풍선 (잡담 대사)
-  if (ch.bubble && ch.bubble.until > performance.now() / 1000) {
-    ctx.font = "600 9.5px sans-serif";
-    const bw = ctx.measureText(ch.bubble.txt).width;
-    const bx = ch.x, by = ch.y - 52;
-    ctx.fillStyle = dark ? "rgba(232,238,248,.95)" : "rgba(255,255,255,.97)";
-    ctx.strokeStyle = dark ? "#8fa3c4" : "#9aa7ba";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect(bx - bw / 2 - 8, by - 8, bw + 16, 17, 8); ctx.fill(); ctx.stroke();
-    ctx.beginPath();                                   // 꼬리
-    ctx.moveTo(bx - 3, by + 9); ctx.lineTo(bx + 3, by + 9); ctx.lineTo(bx, by + 14);
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "#26314a"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(ch.bubble.txt, bx, by + 1);
-  }
+  // 말풍선 (잡담·보고 대사)
+  if (ch.bubble && ch.bubble.until > performance.now() / 1000)
+    drawBubble(ch.x, ch.y - 52, ch.bubble.txt);
+}
+
+function drawBubble(bx, by, txt) {
+  ctx.font = "600 9.5px sans-serif";
+  const bw = ctx.measureText(txt).width;
+  ctx.fillStyle = dark ? "rgba(232,238,248,.95)" : "rgba(255,255,255,.97)";
+  ctx.strokeStyle = dark ? "#8fa3c4" : "#9aa7ba";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(bx - bw / 2 - 8, by - 8, bw + 16, 17, 8); ctx.fill(); ctx.stroke();
+  ctx.beginPath();                                   // 꼬리
+  ctx.moveTo(bx - 3, by + 9); ctx.lineTo(bx + 3, by + 9); ctx.lineTo(bx, by + 14);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#26314a"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(txt, bx, by + 1);
 }
 
 function drawParticles(dt) {
@@ -486,6 +522,18 @@ function frame(nowMs) {
   ctx.clearRect(0, 0, LOGICAL_W, canvasH);
   drawTopBar(t);
   rooms.forEach(r => drawRoom(r, t));
+  // 총괄 보고 씬 트리거 — 총괄이 입장·축하를 마칠 때까지 매 프레임 재시도
+  if (reportPending && !working) {
+    reportTimer -= dt;
+    if (reportTimer <= 0) {
+      const mgr = [...chars.values()].find(c => c.emp === "총괄");
+      if (mgr && !["enter", "rush", "celebrate"].includes(mgr.state)) {
+        mgr.state = "report_walk"; mgr.stateT = 0; mgr.chatWith = null; mgr.bubble = null;
+        reportPending = false;
+      }
+    }
+  }
+
   const list = [...chars.values()].sort((a, b) => a.y - b.y);
   list.forEach(ch => updateChar(ch, dt, t, now));
   list.forEach(ch => drawChar(ch, t));
@@ -506,11 +554,14 @@ function charAt(x, y) {
     if (Math.hypot(ch.x - x, ch.y - y + 6) < CHAR_R) return ch;
   return null;
 }
+function bossAt(x, y) {
+  return Math.hypot(boss.x - x, boss.y - y + 6) < CHAR_R + 3;
+}
 canvas.addEventListener("mousemove", ev => {
   const q = logicalXY(ev);
   const ch = charAt(q.x, q.y);
   hoverId = ch ? ch.id : null;
-  canvas.classList.toggle("hoverable", !!ch);
+  canvas.classList.toggle("hoverable", !!ch || bossAt(q.x, q.y));
 });
 canvas.addEventListener("click", ev => {
   const q = logicalXY(ev);
@@ -518,6 +569,9 @@ canvas.addEventListener("click", ev => {
   if (ch) {
     selectedId = ch.id;
     setComponentValue({ room: ch.room, emp: ch.emp, nonce: Date.now() });
+  } else if (bossAt(q.x, q.y)) {
+    selectedId = null;
+    setComponentValue({ boss: true, nonce: Date.now() });
   }
 });
 

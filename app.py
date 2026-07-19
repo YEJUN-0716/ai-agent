@@ -4258,6 +4258,38 @@ def office_walk_strip_show(placeholder, label="직원들이 자리로 뛰어가�
 </div>""", unsafe_allow_html=True)
 
 
+def render_company_summary():
+    """전사 종합 보고 배너 — 페이지 하단 상시 표시 + 게임에서 사장 클릭 시 상세 영역에도 표시."""
+    status_fns = [
+        execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
+        factor_ranking_employee, system_signal_employee, sector_rotation_employee,
+        ml_signal_employee, factor_backtest_employee, stock_backtest_employee, advanced_research_employee,
+    ]
+    statuses = [fn()['status'] for fn in status_fns]
+    warn_n, caution_n = statuses.count('경고'), statuses.count('주의')
+    ok_n, wait_n = statuses.count('정상'), statuses.count('대기')
+    if warn_n:
+        color, headline = '#ef4444', f"⚠️ 경고 {warn_n}건 — 확인 필요"
+    elif caution_n:
+        color, headline = '#f59e0b', f"🟡 주의 {caution_n}건"
+    else:
+        color, headline = '#10b981', "✅ 전체 정상 운영 중"
+
+    analyst_line = ''
+    snap = st.session_state.get('office_analyst_snapshot')
+    if snap:
+        m = snap['manager']
+        analyst_line = (f"<div style='margin-top:6px'>📈 {snap['ticker']} 분석: "
+                        f"<b style='color:{score_color(m['total_score'])}'>{m['total_score']:.1f}점 · {m['consensus']}</b></div>")
+
+    st.markdown(f"""
+<div style="background:{color}0d;border:1px solid {color}40;border-radius:12px;padding:16px 20px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 총괄 트레이더 — 전사 종합 보고</div>
+  <div style="font-size:1.3rem;font-weight:800;color:{color};margin:6px 0">{headline}</div>
+  <div style="font-size:12px;color:var(--text-3)">정상 {ok_n} · 주의 {caution_n} · 경고 {warn_n} · 대기 {wait_n} (운영·시스템팀 {len(statuses)}명 기준){analyst_line}</div>
+</div>""", unsafe_allow_html=True)
+
+
 def collect_office_game_data(rooms: List[OfficeRoom]):
     """게임 씬(office_game 컴포넌트)에 넘길 방·캐릭터 데이터를 수집.
     직원별 보고서를 평가해 상태색·애니메이션(behavior)을 뽑는다 — report_fn들은
@@ -7310,7 +7342,10 @@ def main():
             key="office_game_scene", default=None)
         if _clicked and _clicked.get('nonce') != st.session_state.get('_office_game_nonce'):
             st.session_state['_office_game_nonce'] = _clicked['nonce']
-            st.session_state['office_view'] = (_clicked['room'], _clicked['emp'])
+            if _clicked.get('boss'):
+                st.session_state['office_view'] = ('boss', 'summary')
+            else:
+                st.session_state['office_view'] = (_clicked['room'], _clicked['emp'])
         st.caption("🖱️ 캐릭터를 클릭하면 바로 아래에 보고서와 업무 화면이 열립니다 · "
                    "상태에 따라 일하고(타이핑) · 산책하고(🚰) · 졸고(💤) · 뛰어다니는(❗) 모습이 달라집니다")
 
@@ -7321,8 +7356,13 @@ def main():
             _sel_emps = (_sel_room.employees() if callable(_sel_room.employees)
                          else _sel_room.employees) if _sel_room else []
             _sel_emp = next((e for e in (_sel_emps or []) if e.key == _sel[1]), None) if _sel else None
-            if _sel_emp is None:
-                st.caption("👆 사무실에서 직원 캐릭터를 클릭하면 이 자리에 보고서가 열립니다.")
+            if _sel == ('boss', 'summary'):
+                st.markdown(
+                    "<div style='font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:2px'>"
+                    "🤵 사장실 &nbsp;›&nbsp; 전사 종합 보고</div>", unsafe_allow_html=True)
+                render_company_summary()
+            elif _sel_emp is None:
+                st.caption("👆 사무실에서 직원(또는 사장님) 캐릭터를 클릭하면 이 자리에 보고서가 열립니다.")
             else:
                 st.markdown(
                     f"<div style='font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:2px'>"
@@ -7353,34 +7393,7 @@ def main():
 
     # ── 총괄 트레이더 최종 보고 ──────────────
     st.markdown("---")
-    _status_fns = [
-        execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
-        factor_ranking_employee, system_signal_employee, sector_rotation_employee,
-        ml_signal_employee, factor_backtest_employee, stock_backtest_employee, advanced_research_employee,
-    ]
-    _statuses = [fn()['status'] for fn in _status_fns]
-    _warn_n, _caution_n = _statuses.count('경고'), _statuses.count('주의')
-    _ok_n, _wait_n = _statuses.count('정상'), _statuses.count('대기')
-    if _warn_n:
-        _final_color, _final_headline = '#ef4444', f"⚠️ 경고 {_warn_n}건 — 확인 필요"
-    elif _caution_n:
-        _final_color, _final_headline = '#f59e0b', f"🟡 주의 {_caution_n}건"
-    else:
-        _final_color, _final_headline = '#10b981', "✅ 전체 정상 운영 중"
-
-    _analyst_line = ''
-    _snap = st.session_state.get('office_analyst_snapshot')
-    if _snap:
-        _m = _snap['manager']
-        _analyst_line = (f"<div style='margin-top:6px'>📈 {_snap['ticker']} 분석: "
-                          f"<b style='color:{score_color(_m['total_score'])}'>{_m['total_score']:.1f}점 · {_m['consensus']}</b></div>")
-
-    st.markdown(f"""
-<div style="background:{_final_color}0d;border:1px solid {_final_color}40;border-radius:12px;padding:16px 20px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 총괄 트레이더 — 전사 종합 보고</div>
-  <div style="font-size:1.3rem;font-weight:800;color:{_final_color};margin:6px 0">{_final_headline}</div>
-  <div style="font-size:12px;color:var(--text-3)">정상 {_ok_n} · 주의 {_caution_n} · 경고 {_warn_n} · 대기 {_wait_n} (운영·시스템팀 {len(_statuses)}명 기준){_analyst_line}</div>
-</div>""", unsafe_allow_html=True)
+    render_company_summary()
 
     # 분석이 방금 끝났으면 한 번 더 rerun — 게임 씬 상단이 이번 rerun에선 아직
     # working=True로 그려져 있으므로, 결과가 저장된 상태에서 다시 그려 대기 모드로 되돌린다.
