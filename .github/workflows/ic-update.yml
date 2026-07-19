@@ -17,7 +17,7 @@ permissions:
 jobs:
   update-ic-weights:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # IC 계산은 10~60분 소요 (5년 룩백 적용)
+    timeout-minutes: 120  # 캐시 미스 시 첫 실행이 오래 걸린다 (276종목 전량 다운로드)
 
     steps:
       - name: 저장소 체크아웃
@@ -31,6 +31,17 @@ jobs:
 
       - name: 의존성 설치
         run: pip install -r requirements.txt
+
+      - name: 가격 패널 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: data/
+          # 캐시 키는 불변이라 덮어쓸 수 없다. run_id로 매번 새로 저장하고
+          # restore-keys 접두사로 직전 캐시를 복원하는 표준 패턴.
+          # v1은 패널 스키마 버전 - 구조 변경 시 올려서 전량 재구축을 강제한다.
+          key: price-panel-v1-${{ github.run_id }}
+          restore-keys: |
+            price-panel-v1-
 
       - name: IC 가중치 계산 및 저장
         run: python ic_weight_updater.py
