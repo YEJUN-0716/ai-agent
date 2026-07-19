@@ -4109,24 +4109,37 @@ def inject_office_css():
     st.session_state['_office_css_injected'] = True
     st.markdown("""
 <style>
+/* ── 사무실 바닥재: 원목 파케이 플로어링 느낌의 마루 패턴 ── */
 div[class*="st-key-office_room_"] {
     background:
-        radial-gradient(circle at 14px 14px, rgba(0,0,0,.05) 1.6px, transparent 1.6px) 0 0/28px 28px,
-        linear-gradient(180deg, rgba(120,100,60,.06) 0%, rgba(120,100,60,.06) 100%);
+        repeating-linear-gradient(90deg, rgba(120,90,40,.05) 0 2px, transparent 2px 34px),
+        repeating-linear-gradient(0deg, rgba(120,90,40,.045) 0 2px, transparent 2px 34px),
+        linear-gradient(180deg, rgba(120,100,60,.05) 0%, rgba(120,100,60,.05) 100%);
     border-radius: 14px !important;
     border: 1px solid var(--border) !important;
-    padding: 16px 14px 12px 14px !important;
+    border-top: 3px solid #8b6f3e !important;
+    padding: 16px 14px 14px 14px !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 1px 3px rgba(0,0,0,.05) !important;
 }
+/* ── 직원 = 책상 앞에 선 캐릭터 타일 (기존 알약 버튼보다 훨씬 큼직하게) ── */
 div[class*="st-key-office_room_"] button {
-    font-size: 1.1rem !important;
-    padding-top: 10px !important;
-    padding-bottom: 10px !important;
-    border-radius: 12px !important;
-    transition: transform .15s ease;
+    font-size: 1.65rem !important;
+    line-height: 1.35 !important;
+    min-height: 88px !important;
+    padding: 10px 8px 14px 8px !important;
+    border-radius: 12px 12px 6px 6px !important;
+    background: var(--surface) !important;
+    border-bottom: 5px solid var(--border2, #cbd5e1) !important;
+    white-space: pre-line !important;
+    transition: transform .15s ease, box-shadow .15s ease;
 }
+div[class*="st-key-office_room_"] button p { font-size: 1.65rem !important; line-height: 1.3 !important; }
 div[class*="st-key-office_room_"] button:hover {
-    transform: translateY(-1px);
+    transform: translateY(-3px);
+    box-shadow: 0 6px 14px rgba(0,0,0,.12) !important;
 }
+div[class*="st-key-office_room_"] button:active { transform: translateY(-1px) scale(.98); }
+
 @keyframes office-pulse {
     0%, 100% { box-shadow: 0 0 0 0 var(--office-glow, rgba(16,185,129,.35)); }
     50%      { box-shadow: 0 0 0 5px rgba(16,185,129,0); }
@@ -4146,6 +4159,48 @@ div[class*="st-key-office_room_"] button:hover {
     0%, 100% { opacity: .55; }
     50%      { opacity: .85; }
 }
+
+/* ── 직원들이 자리로 뛰어가는 애니메이션 (분석 실행 중에만 표시) ── */
+@keyframes office-walk-bounce {
+    0%, 100% { transform: translateY(0) scaleX(1); }
+    25%      { transform: translateY(-9px) scaleX(.94); }
+    50%      { transform: translateY(0) scaleX(1.05); }
+    75%      { transform: translateY(-5px) scaleX(.97); }
+}
+.office-walk-strip {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--surface2); border: 1px dashed var(--border2, #cbd5e1);
+    border-radius: 10px; padding: 10px 16px; margin: 4px 0 12px 0;
+}
+.office-walk-strip .office-walk-char {
+    font-size: 1.6rem; display: inline-block;
+    animation: office-walk-bounce 0.7s ease-in-out infinite;
+}
+.office-walk-strip .office-walk-label {
+    font-size: 12.5px; font-weight: 600; color: var(--text-3);
+}
+
+/* ── 시세판(칠판/전광판 스타일) 종목 입력 패널 — 라이트/다크 무관하게 항상 짙은 보드 ── */
+div[class*="st-key-office_ticker_board"] {
+    background:
+        radial-gradient(ellipse at top left, rgba(16,185,129,.10), transparent 60%),
+        repeating-linear-gradient(180deg, rgba(255,255,255,.015) 0 1px, transparent 1px 3px),
+        linear-gradient(155deg, #0b1220 0%, #111a2c 55%, #0b1220 100%);
+    border: 1px solid #24314d !important;
+    border-radius: 14px !important;
+    padding: 18px 20px 16px 20px !important;
+    box-shadow: inset 0 0 40px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.18) !important;
+}
+div[class*="st-key-office_ticker_board"] label,
+div[class*="st-key-office_ticker_board"] p { color: #d6dee8 !important; }
+div[class*="st-key-office_ticker_board"] input,
+div[class*="st-key-office_ticker_board"] [data-baseweb="select"] > div {
+    background: #0f1829 !important;
+    border: 1px solid #2c3b5c !important;
+    color: #7ee6b8 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+div[class*="st-key-office_ticker_board"] input::placeholder { color: #4c5f80 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -4181,6 +4236,22 @@ def _reasons_to_html(reasons, empty_msg='참고할 정보 없음'):
     return ''.join(f"<li>{r}</li>" for r in reasons) or f'<li>{empty_msg}</li>'
 
 
+_OFFICE_WALK_CHARS = ['🧑‍💻', '🧑‍💼', '🕵️', '🧑‍🔬', '👮', '🧑‍✈️']
+
+
+def office_walk_strip_show(placeholder, label="직원들이 자리로 뛰어가는 중..."):
+    """분석 시작 시 직원들이 책상으로 뛰어가는 모습을 흉내내는 애니메이션 띠를 표시.
+    placeholder(st.empty())에 그려서, 분석이 끝나면 호출부에서 placeholder.empty()로 지운다."""
+    chars_html = "".join(
+        f'<span class="office-walk-char" style="animation-delay:{i*0.12:.2f}s">{c}</span>'
+        for i, c in enumerate(_OFFICE_WALK_CHARS))
+    placeholder.markdown(f"""
+<div class="office-walk-strip">
+  {chars_html}
+  <span class="office-walk-label">🏃 {label}</span>
+</div>""", unsafe_allow_html=True)
+
+
 def render_office_report_card(rep):
     """선택된 직원의 보고서 카드를 표시."""
     n = _office_normalize(rep)
@@ -4211,11 +4282,13 @@ def render_office_rooms(rooms: List[OfficeRoom]):
 
     def _render_room_body(room):
         st.markdown(f"""
-<div style="display:inline-flex;align-items:center;gap:8px;margin:18px 0 8px 0;
-            background:var(--surface);border:1px solid var(--border);border-left:4px solid #8b6f3e;
-            border-radius:0 8px 8px 0;padding:5px 14px 5px 10px;box-shadow:0 1px 3px rgba(0,0,0,.08)">
-  <span style="font-size:18px">{room.icon}</span>
-  <span style="font-size:13px;font-weight:800;color:var(--text-1)">{room.name}</span>
+<div style="display:inline-flex;align-items:center;gap:9px;margin:18px 0 8px 0;
+            background:linear-gradient(180deg,#8b6f3e 0%,#6f5730 100%);
+            border-radius:6px 6px 3px 3px;padding:7px 16px 7px 12px;
+            box-shadow:0 3px 6px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.15)">
+  <span style="font-size:17px">{room.icon}</span>
+  <span style="font-size:12.5px;font-weight:800;color:#fdf6e3;letter-spacing:.4px;
+               text-transform:uppercase">{room.name}</span>
 </div>""", unsafe_allow_html=True)
         with st.container(border=True, key=f"office_room_{room.key}"):
             if room.team_panel_fn is not None:
@@ -4235,11 +4308,12 @@ def render_office_rooms(rooms: List[OfficeRoom]):
                             f'border:2px solid {color} !important;'
                             f'--office-glow:{color}59;'
                             f'animation:{anim} 2.4s ease-in-out infinite;}}')
-                        label = f"{emp.avatar} {emp.name}"
+                        _name_line = emp.name
                         if anim == 'office-sleep':
-                            label = f"😴 {label}"
+                            _name_line = f"😴 {_name_line}"
                         elif anim == 'office-shake':
-                            label = f"❗ {label}"
+                            _name_line = f"❗ {_name_line}"
+                        label = f"{emp.avatar}\n{_name_line}"
                         if st.button(label, key=f"office_btn_{room.key}_{emp.key}", use_container_width=True):
                             st.session_state['office_view'] = (room.key, emp.key)
             slots[room.key] = (st.container(), employees, reports)
@@ -4357,43 +4431,48 @@ def main():
         max_position_pct = 20
         min_rr           = 1.5
 
-        st.markdown("""
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;
-            padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 4px rgba(0,0,0,.06)">
-  <div style="font-size:11px;font-weight:700;color:var(--text-3);
-              text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px">
-    종목 검색
-  </div>
+        inject_office_css()
+        with st.container(key="office_ticker_board"):
+            st.markdown("""
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+  <span style="width:8px;height:8px;border-radius:50%;background:#ef4444;
+               box-shadow:0 0 8px #ef4444;animation:office-pulse-fast 1.6s infinite"></span>
+  <span style="font-size:11px;font-weight:800;color:#ef4444;letter-spacing:1.5px">LIVE</span>
+  <span style="font-size:12px;font-weight:700;color:#9fb3d1;letter-spacing:2px;
+               text-transform:uppercase;margin-left:4px">시세 입력 · 종목 검색</span>
+</div>
 """, unsafe_allow_html=True)
-        c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
-        with c_mkt:
-            market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"],
-                                  label_visibility="collapsed")
-        with c_tkr:
-            if market == "한국 (KRX)":
-                ca, cb = st.columns([2,1])
-                ticker_raw = ca.text_input("종목코드", placeholder="005930",
-                                           label_visibility="collapsed")
-                sfx = ".KS" if "KS" in cb.radio("거래소", [".KS",".KQ"], horizontal=True,
-                                                   label_visibility="collapsed") else ".KQ"
-                ticker = (ticker_raw.strip()+sfx).upper() if ticker_raw else ""
-            elif market == "미국 (NYSE/NASDAQ)":
-                ticker = st.text_input("티커", placeholder="AAPL  /  NVDA  /  TSLA",
-                                       label_visibility="collapsed").strip().upper()
-            else:
-                ticker = st.text_input("ETF 티커", placeholder="SPY  /  QQQ  /  GLD",
-                                       label_visibility="collapsed").strip().upper()
-        with c_btn1:
-            run = st.button("분석 시작", type="primary", disabled=(not ticker), use_container_width=True)
-        with c_btn2:
-            refresh = st.button("새로고침", disabled=('tab1' not in st.session_state), use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
+            with c_mkt:
+                market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"],
+                                      label_visibility="collapsed")
+            with c_tkr:
+                if market == "한국 (KRX)":
+                    ca, cb = st.columns([2,1])
+                    ticker_raw = ca.text_input("종목코드", placeholder="005930",
+                                               label_visibility="collapsed")
+                    sfx = ".KS" if "KS" in cb.radio("거래소", [".KS",".KQ"], horizontal=True,
+                                                       label_visibility="collapsed") else ".KQ"
+                    ticker = (ticker_raw.strip()+sfx).upper() if ticker_raw else ""
+                elif market == "미국 (NYSE/NASDAQ)":
+                    ticker = st.text_input("티커", placeholder="AAPL  /  NVDA  /  TSLA",
+                                           label_visibility="collapsed").strip().upper()
+                else:
+                    ticker = st.text_input("ETF 티커", placeholder="SPY  /  QQQ  /  GLD",
+                                           label_visibility="collapsed").strip().upper()
+            with c_btn1:
+                run = st.button("분석 시작", type="primary", disabled=(not ticker), use_container_width=True)
+            with c_btn2:
+                refresh = st.button("새로고침", disabled=('tab1' not in st.session_state), use_container_width=True)
         if refresh:
             if 'tab1' in st.session_state:
                 del st.session_state['tab1']
             run = True
 
         if run:
+            inject_office_css()
+            walk_ph = st.empty()
+            office_walk_strip_show(walk_ph)
             prog = st.progress(0); msg = st.empty()
             msg.text("📥 데이터 다운로드 중...")
             prog.progress(5)
@@ -4404,12 +4483,12 @@ def main():
 
             if _df.empty:
                 st.error(f"'{ticker}' 데이터를 찾을 수 없습니다.")
-                prog.empty(); msg.empty()
+                prog.empty(); msg.empty(); walk_ph.empty()
             else:
                 _df = _df.dropna(subset=['Close'])
                 if len(_df) < 30:
                     st.error("데이터 부족 (30일 미만).")
-                    prog.empty(); msg.empty()
+                    prog.empty(); msg.empty(); walk_ph.empty()
                 else:
                     prog.progress(15); msg.text("📈 차트·파동 분석 중...")
                     _t_score, _t_det  = technical_score(_df)
@@ -4514,7 +4593,7 @@ def main():
                     except Exception:
                         pass
 
-                    prog.progress(100); prog.empty(); msg.empty()
+                    prog.progress(100); prog.empty(); msg.empty(); walk_ph.empty()
 
                     st.session_state['tab1'] = {
                         'ticker': ticker, 'df': _df, 'end_dt': end_dt,
@@ -7115,8 +7194,21 @@ def main():
                     except ValueError:
                         st.error("JSON 파싱 오류")
 
-    st.subheader("🏢 사무실")
-    st.caption("팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면(분석 실행)을 확인하세요. 마지막엔 총괄 트레이더가 전체를 종합 보고합니다.")
+    inject_office_css()
+    st.markdown("""
+<div style="display:flex;align-items:center;gap:14px;margin:6px 0 16px 0;padding:16px 22px;
+            background:linear-gradient(135deg,#1a2332 0%,#0f1622 100%);
+            border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.16)">
+  <div style="width:46px;height:46px;border-radius:8px;background:rgba(255,255,255,.08);
+              display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;
+              border:1px solid rgba(255,255,255,.12)">🏢</div>
+  <div>
+    <div style="font-size:1.1rem;font-weight:800;color:#f5f0e2;letter-spacing:.3px">퀀트 증권 트레이딩 데스크</div>
+    <div style="font-size:12px;color:#9fb3d1;margin-top:2px">
+      팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면을 확인하세요 · 마지막엔 총괄 트레이더가 전체를 종합 보고합니다
+    </div>
+  </div>
+</div>""", unsafe_allow_html=True)
 
     def _emp(emp_key, name, fn, panel_fn=None):
         return OfficeEmployee(emp_key, name, _office_avatar(name), fn, panel_fn)
