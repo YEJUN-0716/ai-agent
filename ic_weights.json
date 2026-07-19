@@ -1,27 +1,27 @@
 {
-  "updated": "2026-07-12T14:49:28.650086+00:00",
+  "updated": "2026-07-19T14:49:50.787808+00:00",
   "universe_size": 37,
   "lookback_years": 5,
   "per_factor_ic": {
     "mom_3m": {
-      "mean_ic": 0.0164,
-      "std_ic": 0.2633,
-      "icir": 0.062,
+      "mean_ic": 0.0202,
+      "std_ic": 0.2617,
+      "icir": 0.077,
       "pct_positive": 55.2,
       "n": 58
     },
     "mom_1m": {
-      "mean_ic": 0.0007,
-      "std_ic": 0.2453,
-      "icir": 0.003,
-      "pct_positive": 53.4,
+      "mean_ic": 0.0056,
+      "std_ic": 0.2323,
+      "icir": 0.024,
+      "pct_positive": 51.7,
       "n": 58
     },
     "low_vol": {
-      "mean_ic": -0.0663,
-      "std_ic": 0.3339,
-      "icir": -0.199,
-      "pct_positive": 32.8,
+      "mean_ic": -0.0692,
+      "std_ic": 0.3289,
+      "icir": -0.21,
+      "pct_positive": 41.4,
       "n": 58
     },
     "value": {
@@ -39,68 +39,72 @@
       "n": 0
     },
     "ict": {
-      "mean_ic": 0.0093,
-      "std_ic": 0.2125,
-      "icir": 0.044,
-      "pct_positive": 55.2,
+      "mean_ic": 0.0054,
+      "std_ic": 0.1947,
+      "icir": 0.028,
+      "pct_positive": 53.4,
       "n": 58
     }
   },
+  "ic_unavailable_factors": [
+    "value",
+    "quality"
+  ],
   "regime_weights": {
     "bull": {
-      "mom_3m": 0.5727,
-      "mom_1m": 0.1247,
-      "low_vol": 0.0748,
-      "value": 0.0748,
-      "quality": 0.0499,
-      "ict": 0.1031
+      "mom_3m": 0.6387,
+      "mom_1m": 0.1265,
+      "low_vol": 0.0678,
+      "value": 0.0678,
+      "quality": 0.0452,
+      "ict": 0.0542
     },
     "neutral": {
-      "mom_3m": 0.4615,
-      "mom_1m": 0.1126,
-      "low_vol": 0.1126,
-      "value": 0.1126,
-      "quality": 0.0844,
-      "ict": 0.1163
+      "mom_3m": 0.5305,
+      "mom_1m": 0.1176,
+      "low_vol": 0.105,
+      "value": 0.105,
+      "quality": 0.0788,
+      "ict": 0.063
     },
     "bear": {
-      "mom_3m": 0.2286,
-      "mom_1m": 0.0349,
-      "low_vol": 0.2788,
-      "value": 0.1743,
-      "quality": 0.1394,
-      "ict": 0.1441
+      "mom_3m": 0.2825,
+      "mom_1m": 0.0392,
+      "low_vol": 0.2797,
+      "value": 0.1748,
+      "quality": 0.1399,
+      "ict": 0.0839
     }
   },
   "out_of_sample_validation": {
     "train_period": {
-      "start": "2021-04-14",
-      "end": "2025-03-21"
+      "start": "2021-04-21",
+      "end": "2025-03-28"
     },
     "test_period": {
-      "start": "2025-03-22",
-      "end": "2026-07-12"
+      "start": "2025-03-29",
+      "end": "2026-07-19"
     },
     "train_factor_ic": {
       "mom_3m": {
-        "mean_ic": 0.0025,
-        "std_ic": 0.2641,
-        "icir": 0.009,
-        "pct_positive": 51.2,
+        "mean_ic": 0.0059,
+        "std_ic": 0.2779,
+        "icir": 0.021,
+        "pct_positive": 53.5,
         "n": 43
       },
       "mom_1m": {
-        "mean_ic": -0.0172,
-        "std_ic": 0.2471,
-        "icir": -0.07,
-        "pct_positive": 51.2,
+        "mean_ic": -0.0096,
+        "std_ic": 0.2287,
+        "icir": -0.042,
+        "pct_positive": 48.8,
         "n": 43
       },
       "low_vol": {
-        "mean_ic": -0.025,
-        "std_ic": 0.3476,
-        "icir": -0.072,
-        "pct_positive": 37.2,
+        "mean_ic": -0.0268,
+        "std_ic": 0.324,
+        "icir": -0.083,
+        "pct_positive": 46.5,
         "n": 43
       },
       "value": {
@@ -118,23 +122,23 @@
         "n": 0
       },
       "ict": {
-        "mean_ic": -0.0106,
-        "std_ic": 0.2151,
-        "icir": -0.049,
-        "pct_positive": 46.5,
+        "mean_ic": -0.0048,
+        "std_ic": 0.2163,
+        "icir": -0.022,
+        "pct_positive": 51.2,
         "n": 43
       }
     },
     "derived_test_weights": {
-      "mom_3m": 0.1667,
-      "mom_1m": 0.1667,
-      "low_vol": 0.1667,
-      "value": 0.1667,
-      "quality": 0.1667,
-      "ict": 0.1667
+      "mom_3m": 0.1909,
+      "mom_1m": 0.1618,
+      "low_vol": 0.1618,
+      "value": 0.1618,
+      "quality": 0.1618,
+      "ict": 0.1618
     },
-    "test_composite_ic": 0.021,
-    "train_composite_ic": -0.0084,
+    "test_composite_ic": 0.0269,
+    "train_composite_ic": -0.0055,
     "overfitting_flag": false
   },
   "caveats": {
@@ -175,6 +179,7 @@
         "date": "2023-04-23",
         "note": "소매업 몰락 — 밈주식 거품 이후 파산"
       }
-    ]
+    ],
+    "ic_data_note": "IC 미계산 팩터 ['value', 'quality']: PIT 재무 데이터 미확보 → 기본 REGIME_WEIGHTS 비례 배분 적용중. SimFin·EDGAR 연동 시 해결 가능."
   }
 }
