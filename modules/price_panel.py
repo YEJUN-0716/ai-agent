@@ -98,12 +98,29 @@ def _write_cache(panel: pd.DataFrame, path: str) -> None:
 
 
 def _missing_tickers(cached: pd.DataFrame, tickers: list,
-                     start_ts, end_ts) -> list:
-    """캐시로 충족되지 않는 티커 목록. 지금은 티커 단위로만 판별한다."""
+                     start_ts, end_ts) -> tuple:
+    """
+    캐시로 충족되지 않는 부분을 판별한다.
+
+    Returns
+    -------
+    (missing, needs_extension)
+        missing         : 캐시에 아예 없는 티커 (전 기간 다운로드 필요)
+        needs_extension : 캐시 날짜 범위가 요청을 못 덮음 (전 티커 재요청 필요)
+    """
     if cached.empty:
-        return list(tickers)
-    have = set(cached.columns.get_level_values(1))
-    return [t for t in tickers if t not in have]
+        return list(tickers), False
+
+    have    = set(cached.columns.get_level_values(1))
+    missing = [t for t in tickers if t not in have]
+
+    # yfinance는 거래일만 준다. 달력일 기준 여유 3일을 둔다.
+    tol = pd.Timedelta(days=3)
+    needs_extension = (
+        cached.index.max() < end_ts - tol
+        or cached.index.min() > start_ts + tol
+    )
+    return missing, needs_extension
 
 
 def _merge_panels(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
@@ -138,10 +155,11 @@ def load_panel(tickers: list, start, end, cache_path: str = None) -> tuple:
     start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
 
     cached  = _read_cache(cache_path)
-    missing = _missing_tickers(cached, tickers, start_ts, end_ts)
+    missing, needs_extension = _missing_tickers(cached, tickers, start_ts, end_ts)
 
-    if missing:
-        fresh = _download_chunked(missing, start, end)
+    to_fetch = tickers if needs_extension else missing
+    if to_fetch:
+        fresh = _download_chunked(to_fetch, start, end)
         cached = _merge_panels(cached, fresh)
         _write_cache(cached, cache_path)
     else:

@@ -111,3 +111,43 @@ def test_corrupt_cache_rebuilds(tmp_path, monkeypatch):
         cache_path=str(cache),
     )
     assert set(prices) == {"AAPL", "MSFT"}
+
+
+def test_new_ticker_downloads_only_that_ticker(tmp_path, monkeypatch):
+    """티커를 추가하면 신규 종목만 요청한다."""
+    cache = str(tmp_path / "p.parquet")
+    calls = []
+
+    def fake_download(tickers, **kwargs):
+        calls.append(sorted(tickers))
+        return _fake_ohlcv(list(tickers))
+
+    monkeypatch.setattr(price_panel.yf, "download", fake_download)
+    args = dict(start="2025-01-01", end="2025-10-01", cache_path=cache)
+
+    price_panel.load_panel(["AAPL", "MSFT"], **args)
+    price_panel.load_panel(["AAPL", "MSFT", "NVDA"], **args)
+
+    assert calls[1] == ["NVDA"], f"신규 종목만 받아야 하는데 {calls[1]}"
+
+
+def test_extended_end_date_refetches(tmp_path, monkeypatch):
+    """요청 종료일이 캐시 최종일보다 뒤면 다시 받는다."""
+    cache = str(tmp_path / "p.parquet")
+    calls = []
+
+    def fake_download(tickers, **kwargs):
+        # 실제 yfinance처럼 요청된 end까지만 돌려준다.
+        # 요청 범위를 넘겨 반환하면 캐시가 과도하게 채워져 테스트가 무의미해진다.
+        calls.append(kwargs.get("end"))
+        full = _fake_ohlcv(list(tickers), n_days=600)
+        return full.loc[full.index <= pd.Timestamp(kwargs["end"])]
+
+    monkeypatch.setattr(price_panel.yf, "download", fake_download)
+
+    price_panel.load_panel(["AAPL", "MSFT"], start="2025-01-01",
+                           end="2025-06-01", cache_path=cache)
+    price_panel.load_panel(["AAPL", "MSFT"], start="2025-01-01",
+                           end="2026-06-01", cache_path=cache)
+
+    assert len(calls) == 2, "날짜가 연장됐는데 다운로드가 없었다"
