@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
+  #scene { display:block; width:100%; }
+  #scene.hoverable { cursor:pointer; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<script>
+"use strict";
+/* ─────────────────────────────────────────────────────────
+   퀀트 증권 사무실 — 게임 씬 (vanilla JS Streamlit 컴포넌트)
+   Python이 넘겨주는 rooms/chars 데이터로 사무실 평면을 그리고,
+   직원 캐릭터가 실제 좌표를 갖고 걸어다닌다. 캐릭터 클릭 시
+   setComponentValue로 (room, emp) 키를 Python에 돌려준다.
+   ───────────────────────────────────────────────────────── */
+
+/* ── Streamlit 컴포넌트 프로토콜 (수동 구현) ── */
+function _send(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+function setComponentValue(v) { _send("streamlit:setComponentValue", { value: v, dataType: "json" }); }
+function setFrameHeight(h)    { _send("streamlit:setFrameHeight", { height: h }); }
+
+/* ── 상수 ── */
+const LOGICAL_W = 1240;
+const ROOM_H    = 168;
+const ROW_GAP   = 14;
+const SLOT_W    = 64;
+const DESK_DY   = 104;              // 방 상단 → 책상 y
+const CHAR_R    = 20;               // 히트 반경
+const WALK_SPD  = 55;               // px/s
+const RUN_SPD   = 110;
+
+/* ── 전역 상태 ── */
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d");
+let dark = false;
+let rooms = [];                     // 레이아웃 계산된 방
+let chars = new Map();              // id → char (rerun 간 위치 유지)
+let particles = [];
+let selectedId = null;
+let hoverId = null;
+let canvasH = 200;
+let dpr = window.devicePixelRatio || 1;
+let lastT = performance.now();
+
+const PALETTE = {
+  light: { floor:"#e7d7b4", plank:"#d9c393", border:"#b8935c", zone:"rgba(139,111,62,.14)",
+           label:"#3b2f1d", labelBg:"rgba(255,251,240,.85)", desk:"#8b6f3e", deskTop:"#a5854e",
+           monitor:"#2b3242", shadow:"rgba(0,0,0,.18)" },
+  dark:  { floor:"#242b3a", plank:"#1d2331", border:"#3d4356", zone:"rgba(139,111,62,.18)",
+           label:"#e8e2d2", labelBg:"rgba(15,22,34,.85)", desk:"#57431f", deskTop:"#6f5730",
+           monitor:"#101624", shadow:"rgba(0,0,0,.45)" },
+};
+function pal() { return dark ? PALETTE.dark : PALETTE.light; }
+
+/* ── 레이아웃: 방을 좌→우로 배치, 넘치면 다음 줄 ── */
+function layoutRooms(roomData) {
+  const placed = [];
+  let x = 8, y = 8, rowMax = 0;
+  for (const r of roomData) {
+    const w = Math.max(150, 40 + r.chars.length * SLOT_W);
+    if (x + w > LOGICAL_W - 8 && x > 8) { x = 8; y += ROOM_H + ROW_GAP; }
+    placed.push(Object.assign({}, r, { x: x, y: y, w: w, h: ROOM_H }));
+    x += w + 12;
+    rowMax = Math.max(rowMax, y + ROOM_H);
+  }
+  canvasH = rowMax + 10;
+  return placed;
+}
+
+function deskPos(room, i) {
+  return { x: room.x + 40 + i * SLOT_W + SLOT_W / 2 - 12, y: room.y + DESK_DY };
+}
+
+/* ── 캐릭터 상태 머신 ── */
+const BEHAVIOR = { "office-pulse": "work", "office-pulse-fast": "caution",
+                   "office-shake": "alert", "office-sleep": "sleep", "": "work" };
+
+function mergeChars(placedRooms) {
+  const seen = new Set();
+  placedRooms.forEach(room => {
+    room.chars.forEach((c, i) => {
+      const id = room.key + "|" + c.key;
+      seen.add(id);
+      const desk = deskPos(room, i);
+      const behavior = BEHAVIOR[c.anim] || "work";
+      let ch = chars.get(id);
+      if (!ch) {
+        ch = { id: id, room: room.key, emp: c.key,
+               x: -30 - Math.random() * 260, y: desk.y,     // 화면 밖 왼쪽에서 출근
+               state: "enter", stateT: Math.random() * 2, phase: Math.random() * 6.28 };
+        chars.set(id, ch);
+      }
+      ch.name = c.name; ch.avatar = c.avatar; ch.color = c.color;
+      ch.headline = c.headline || "";
+      ch.behavior = behavior;
+      ch.deskX = desk.x; ch.deskY = desk.y;
+      ch.roomBounds = { x1: room.x + 16, x2: room.x + room.w - 16, y1: room.y + 66, y2: room.y + ROOM_H - 18 };
+    });
+  });
+  for (const id of chars.keys()) if (!seen.has(id)) chars.delete(id);
+}
+
+function moveToward(ch, tx, ty, spd, dt) {
+  const dx = tx - ch.x, dy = ty - ch.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 2) { ch.x = tx; ch.y = ty; return true; }
+  const step = Math.min(d, spd * dt);
+  ch.x += dx / d * step; ch.y += dy / d * step;
+  ch.facing = dx < 0 ? -1 : 1;
+  return false;
+}
+
+function updateChar(ch, dt, t) {
+  ch.stateT += dt;
+  const b = ch.behavior;
+  switch (ch.state) {
+    case "enter":
+      // 먼 방 직원도 4초 안에 도착하도록 출근 속도를 거리 비례로 (최소 걷기 속도 보장)
+      if (!ch.enterSpd)
+        ch.enterSpd = Math.max(WALK_SPD + 25, Math.hypot(ch.deskX - ch.x, ch.deskY - ch.y) / 3.5);
+      if (moveToward(ch, ch.deskX, ch.deskY, ch.enterSpd, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
+      break;
+    case "at_desk":
+      ch.x = ch.deskX; ch.y = ch.deskY;
+      if (b === "alert") { ch.state = "panic"; ch.stateT = 0; ch.panicDir = 1; }
+      else if (b !== "sleep" && ch.stateT > 7 + Math.random() * 10 && Math.random() < 0.008) {
+        // 가끔 정수기(방 오른쪽 위 코너)로 산책
+        ch.state = "wander";
+        ch.tx = ch.roomBounds.x2 - 14; ch.ty = ch.roomBounds.y1 + 8; ch.stateT = 0;
+      }
+      if (b === "sleep" && Math.random() < 0.012)
+        particles.push({ x: ch.x + 10, y: ch.y - 26, vy: -14, life: 2.2, txt: "💤", size: 11 });
+      if (b === "work" && Math.random() < 0.02)
+        particles.push({ x: ch.x + (Math.random() * 16 - 8), y: ch.y - 4, vy: -9, life: 0.55,
+                         txt: "·", size: 9, color: ch.color });
+      break;
+    case "wander":
+      if (moveToward(ch, ch.tx, ch.ty, WALK_SPD, dt) && ch.stateT > 1.2) { ch.state = "return"; ch.stateT = 0; }
+      break;
+    case "return":
+      if (moveToward(ch, ch.deskX, ch.deskY, WALK_SPD, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
+      break;
+    case "panic": {
+      // 경고: 자리 주변을 다급하게 좌우로 뛰어다님
+      const span = 30;
+      const tx = ch.deskX + ch.panicDir * span;
+      if (moveToward(ch, tx, ch.deskY, RUN_SPD, dt)) ch.panicDir *= -1;
+      if (b !== "alert") { ch.state = "return"; ch.stateT = 0; }
+      if (Math.random() < 0.02)
+        particles.push({ x: ch.x, y: ch.y - 30, vy: -16, life: 1.0, txt: "❗", size: 12 });
+      break;
+    }
+  }
+}
+
+/* ── 그리기 ── */
+function drawRoom(room) {
+  const p = pal();
+  // 바닥 (마루 널빤지)
+  ctx.fillStyle = p.floor;
+  ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.fill();
+  ctx.save(); ctx.clip();
+  ctx.strokeStyle = p.plank; ctx.lineWidth = 1;
+  for (let yy = room.y + 12; yy < room.y + room.h; yy += 14) {
+    ctx.beginPath(); ctx.moveTo(room.x, yy); ctx.lineTo(room.x + room.w, yy); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = p.border; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.stroke();
+
+  // 문패
+  ctx.fillStyle = dark ? "#6f5730" : "#8b6f3e";
+  ctx.beginPath(); ctx.roundRect(room.x + 8, room.y + 8, Math.min(room.w - 16, 168), 24, 5); ctx.fill();
+  ctx.fillStyle = "#fdf6e3"; ctx.font = "700 11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText(room.icon + " " + room.name, room.x + 15, room.y + 21, Math.min(room.w - 30, 156));
+
+  // 소품: 정수기 · 화분
+  ctx.font = "15px serif"; ctx.textAlign = "center";
+  ctx.fillText("🚰", room.x + room.w - 16, room.y + 74);
+  ctx.fillText("🪴", room.x + 14, room.y + room.h - 14);
+
+  // 책상 + 모니터
+  room.chars.forEach((c, i) => {
+    const d = deskPos(room, i);
+    ctx.fillStyle = p.desk;
+    ctx.beginPath(); ctx.roundRect(d.x - 22, d.y + 12, 46, 15, 3); ctx.fill();
+    ctx.fillStyle = p.deskTop;
+    ctx.fillRect(d.x - 22, d.y + 12, 46, 4);
+    ctx.fillStyle = p.monitor;
+    ctx.beginPath(); ctx.roundRect(d.x - 9, d.y - 3, 20, 14, 2); ctx.fill();
+    const ch = chars.get(room.key + "|" + c.key);
+    ctx.fillStyle = (ch && ch.state !== "enter") ? c.color : "#333";
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(d.x - 7, d.y - 1, 16, 10);
+    ctx.globalAlpha = 1;
+  });
+}
+
+function drawChar(ch, t) {
+  const p = pal();
+  const walking = ch.state === "enter" || ch.state === "wander" || ch.state === "return" || ch.state === "panic";
+  let bob = 0, tilt = 0;
+  if (walking)                bob = Math.abs(Math.sin(t * 9 + ch.phase)) * 3.5;
+  else if (ch.behavior === "work")    bob = Math.sin(t * 5 + ch.phase) * 1.3;
+  else if (ch.behavior === "caution") bob = Math.sin(t * 8 + ch.phase) * 1.8;
+  else if (ch.behavior === "sleep")   tilt = 0.35;
+
+  // 그림자
+  ctx.fillStyle = p.shadow;
+  ctx.beginPath(); ctx.ellipse(ch.x, ch.y + 13, 12, 3.5, 0, 0, 6.29); ctx.fill();
+
+  // 선택/호버 링
+  if (ch.id === selectedId || ch.id === hoverId) {
+    ctx.strokeStyle = ch.id === selectedId ? "#f5b301" : ch.color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(ch.id === hoverId && ch.id !== selectedId ? [4, 3] : []);
+    ctx.beginPath(); ctx.arc(ch.x, ch.y - 4, 19, 0, 6.29); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 몸(이모지)
+  ctx.save();
+  ctx.translate(ch.x, ch.y - bob);
+  if (tilt) ctx.rotate(tilt);
+  if (ch.facing === -1) ctx.scale(-1, 1);
+  ctx.font = "26px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(ch.avatar, 0, -2);
+  ctx.restore();
+
+  // 이름표 + 상태점
+  ctx.font = "600 9.5px sans-serif";
+  const nameW = ctx.measureText(ch.name).width;
+  ctx.fillStyle = p.labelBg;
+  ctx.beginPath(); ctx.roundRect(ch.x - nameW / 2 - 8, ch.y - 36, nameW + 16, 13, 6); ctx.fill();
+  ctx.fillStyle = ch.color;
+  ctx.beginPath(); ctx.arc(ch.x - nameW / 2 - 2, ch.y - 29.5, 2.5, 0, 6.29); ctx.fill();
+  ctx.fillStyle = p.label; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText(ch.name, ch.x - nameW / 2 + 3, ch.y - 29);
+}
+
+function drawParticles(dt) {
+  particles = particles.filter(pt => (pt.life -= dt) > 0);
+  particles.forEach(pt => {
+    pt.y += pt.vy * dt;
+    ctx.globalAlpha = Math.min(1, pt.life);
+    ctx.fillStyle = pt.color || (dark ? "#cbd5e1" : "#475569");
+    ctx.font = pt.size + "px serif"; ctx.textAlign = "center";
+    ctx.fillText(pt.txt, pt.x, pt.y);
+    ctx.globalAlpha = 1;
+  });
+}
+
+/* ── 메인 루프 ── */
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+  const t = now / 1000;
+
+  ctx.clearRect(0, 0, LOGICAL_W, canvasH);
+  rooms.forEach(drawRoom);
+  const list = [...chars.values()].sort((a, b) => a.y - b.y);
+  list.forEach(ch => updateChar(ch, dt, t));
+  list.forEach(ch => drawChar(ch, t));
+  drawParticles(dt);
+  requestAnimationFrame(frame);
+}
+
+/* ── 입력 ── */
+function logicalXY(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) * (LOGICAL_W / r.width),
+           y: (ev.clientY - r.top) * (canvasH / r.height) };
+}
+function charAt(x, y) {
+  for (const ch of chars.values())
+    if (Math.hypot(ch.x - x, ch.y - y + 6) < CHAR_R) return ch;
+  return null;
+}
+canvas.addEventListener("mousemove", ev => {
+  const q = logicalXY(ev);
+  const ch = charAt(q.x, q.y);
+  hoverId = ch ? ch.id : null;
+  canvas.classList.toggle("hoverable", !!ch);
+});
+canvas.addEventListener("click", ev => {
+  const q = logicalXY(ev);
+  const ch = charAt(q.x, q.y);
+  if (ch) {
+    selectedId = ch.id;
+    setComponentValue({ room: ch.room, emp: ch.emp, nonce: Date.now() });
+  }
+});
+
+/* ── 렌더 수신 ── */
+function applyRender(args) {
+  dark = !!args.dark;
+  rooms = layoutRooms(args.rooms || []);
+  mergeChars(rooms);
+  if (args.selected) selectedId = args.selected;
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = LOGICAL_W * dpr;
+  canvas.height = canvasH * dpr;
+  canvas.style.height = "auto";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  setFrameHeight(Math.ceil(canvasH * (canvas.getBoundingClientRect().width / LOGICAL_W)) + 4);
+}
+
+window.addEventListener("message", ev => {
+  const m = ev.data;
+  if (m && m.type === "streamlit:render") applyRender(m.args || {});
+});
+window.addEventListener("resize", () => {
+  if (rooms.length) setFrameHeight(Math.ceil(canvasH * (canvas.getBoundingClientRect().width / LOGICAL_W)) + 4);
+});
+
+window.chars = chars;   // 디버그/테스트용 노출 (Playwright에서 캐릭터 좌표 검사)
+_send("streamlit:componentReady", { apiVersion: 1 });
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

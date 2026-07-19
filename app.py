@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as _st_components
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -11,6 +12,15 @@ import os
 import json
 import warnings
 warnings.filterwarnings('ignore')
+
+# ── 사무실 게임 씬 컴포넌트 (office_game/index.html) ──────────────
+# 캔버스 위에서 직원 캐릭터가 실제로 걸어다니고, 클릭하면 (room, emp)를 반환한다.
+try:
+    _office_game_component = _st_components.declare_component(
+        "office_game", path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "office_game"))
+    _OFFICE_GAME_AVAILABLE = True
+except Exception:
+    _OFFICE_GAME_AVAILABLE = False
 
 # ── 퀀트 모듈 ──────────────────────────────────────────────────
 try:
@@ -4248,6 +4258,26 @@ def office_walk_strip_show(placeholder, label="직원들이 자리로 뛰어가�
 </div>""", unsafe_allow_html=True)
 
 
+def collect_office_game_data(rooms: List[OfficeRoom]):
+    """게임 씬(office_game 컴포넌트)에 넘길 방·캐릭터 데이터를 수집.
+    직원별 보고서를 평가해 상태색·애니메이션(behavior)을 뽑는다 — report_fn들은
+    로컬 파일/세션만 읽는 가벼운 함수라 render_office_rooms와 중복 호출해도 부담 없다."""
+    game_rooms = []
+    for room in rooms:
+        employees = room.employees() if callable(room.employees) else room.employees
+        if not employees:
+            continue
+        chars = []
+        for emp in employees:
+            rep = emp.report_fn()
+            color, anim = _office_tile_style(rep)
+            n = _office_normalize(rep)
+            chars.append({'key': emp.key, 'name': emp.name, 'avatar': emp.avatar,
+                          'color': color, 'anim': anim, 'headline': n['headline']})
+        game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon, 'chars': chars})
+    return game_rooms
+
+
 def render_office_report_card(rep):
     """선택된 직원의 보고서 카드를 표시."""
     n = _office_normalize(rep)
@@ -7227,6 +7257,23 @@ def main():
             _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
         ]),
     ]
+
+    # ── 게임 씬: 캐릭터가 실제로 걸어다니는 사무실 평면 ──────
+    # 클릭 → (room, emp) 반환 → 아래 방에서 보고서가 열린다. 같은 클릭이 버튼 선택을
+    # 계속 덮어쓰지 않도록 nonce 변화가 있을 때만 반영한다.
+    if _OFFICE_GAME_AVAILABLE:
+        _game_rooms = collect_office_game_data(_rooms)
+        _sel_now = st.session_state.get('office_view')
+        _clicked = _office_game_component(
+            rooms=_game_rooms, dark=_dark_mode,
+            selected=(f"{_sel_now[0]}|{_sel_now[1]}" if _sel_now else None),
+            key="office_game_scene", default=None)
+        if _clicked and _clicked.get('nonce') != st.session_state.get('_office_game_nonce'):
+            st.session_state['_office_game_nonce'] = _clicked['nonce']
+            st.session_state['office_view'] = (_clicked['room'], _clicked['emp'])
+        st.caption("🖱️ 캐릭터를 클릭하면 아래 해당 팀 방에서 보고서가 열립니다 · "
+                   "상태에 따라 일하고(타이핑) · 산책하고(🚰) · 졸고(💤) · 뛰어다니는(❗) 모습이 달라집니다")
+
     render_office_rooms(_rooms)
 
     # ── 총괄 트레이더 최종 보고 ──────────────
