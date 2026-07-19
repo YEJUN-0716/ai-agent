@@ -4493,7 +4493,22 @@ def main():
                 del st.session_state['tab1']
             run = True
 
-        if run:
+        # ── 분석은 "예약 → rerun → 실행" 2단계 ──────────────────
+        # 예약된 rerun에서 위 게임 씬이 먼저 working=True로 렌더돼 전 직원이 자리로
+        # 뛰어가고, 그 다음 여기서 실제 분석(블로킹)이 돈다 — 그동안 iframe은
+        # 클라이언트에서 독립적으로 계속 움직인다. 분석 종료 후 main 끝의 flip
+        # rerun이 게임을 대기 모드로 되돌린다.
+        if run and ticker:
+            st.session_state['pending_analysis'] = ticker
+            st.rerun()
+
+        _err_prev = st.session_state.pop('office_analysis_error', None)
+        if _err_prev:
+            st.error(_err_prev)
+
+        run_ticker = st.session_state.pop('pending_analysis', None)
+        if run_ticker:
+            ticker = run_ticker
             walk_ph = st.empty()
             office_walk_strip_show(walk_ph)
             prog = st.progress(0); msg = st.empty()
@@ -4505,12 +4520,14 @@ def main():
             _df = download_stock(ticker, start=start_dt, end=end_dt)
 
             if _df.empty:
-                st.error(f"'{ticker}' 데이터를 찾을 수 없습니다.")
+                st.session_state['office_analysis_error'] = f"'{ticker}' 데이터를 찾을 수 없습니다."
+                st.session_state['_analysis_done_flip'] = True
                 prog.empty(); msg.empty(); walk_ph.empty()
             else:
                 _df = _df.dropna(subset=['Close'])
                 if len(_df) < 30:
-                    st.error("데이터 부족 (30일 미만).")
+                    st.session_state['office_analysis_error'] = "데이터 부족 (30일 미만)."
+                    st.session_state['_analysis_done_flip'] = True
                     prog.empty(); msg.empty(); walk_ph.empty()
                 else:
                     prog.progress(15); msg.text("📈 차트·파동 분석 중...")
@@ -4638,6 +4655,9 @@ def main():
                         'score_method': _score_method, 'earn_str': _earn_str,
                         'w_tech': w_tech, 'w_fund': w_fund, 'w_macro': w_macro,
                     }
+                    # 분석 완료 — 이 rerun은 결과·스냅샷까지 렌더한 뒤 main 끝에서
+                    # 한 번 더 rerun해 게임 씬을 대기 모드로 되돌린다.
+                    st.session_state['_analysis_done_flip'] = True
 
         if 'tab1' not in st.session_state:
             st.info("티커를 입력하고 **분석 시작** 버튼을 눌러주세요.\n\n"
@@ -7266,9 +7286,22 @@ def main():
         inject_office_css()   # 게임 모드에선 render_office_rooms를 안 거치므로 여기서 직접 주입
         _game_rooms = collect_office_game_data(_rooms)
         _sel_now = st.session_state.get('office_view')
+        # 작업 모드: 분석이 예약돼 있으면(pending) 게임 속 전 직원이 자리로 뛰어가 일한다.
+        # 이 rerun에서 아래 시세판 패널이 실제 분석(블로킹)을 실행하는 동안에도
+        # iframe 애니메이션은 클라이언트에서 독립적으로 계속 돈다.
+        _pending_tk = st.session_state.get('pending_analysis')
+        _snap_board = st.session_state.get('office_analyst_snapshot')
+        _result_arg = None
+        if _snap_board:
+            _mb = _snap_board['manager']
+            _result_arg = {'ticker': _snap_board['ticker'],
+                           'score': round(_mb['total_score'], 1),
+                           'verdict': _mb['verdict'],
+                           'color': score_color(_mb['total_score'])}
         _clicked = _office_game_component(
             rooms=_game_rooms, dark=_dark_mode,
             selected=(f"{_sel_now[0]}|{_sel_now[1]}" if _sel_now else None),
+            working=bool(_pending_tk), ticker=_pending_tk, result=_result_arg,
             key="office_game_scene", default=None)
         if _clicked and _clicked.get('nonce') != st.session_state.get('_office_game_nonce'):
             st.session_state['_office_game_nonce'] = _clicked['nonce']
@@ -7344,6 +7377,10 @@ def main():
   <div style="font-size:12px;color:var(--text-3)">정상 {_ok_n} · 주의 {_caution_n} · 경고 {_warn_n} · 대기 {_wait_n} (운영·시스템팀 {len(_statuses)}명 기준){_analyst_line}</div>
 </div>""", unsafe_allow_html=True)
 
+    # 분석이 방금 끝났으면 한 번 더 rerun — 게임 씬 상단이 이번 rerun에선 아직
+    # working=True로 그려져 있으므로, 결과가 저장된 상태에서 다시 그려 대기 모드로 되돌린다.
+    if st.session_state.pop('_analysis_done_flip', False):
+        st.rerun()
 
 
 if __name__ == "__main__":
