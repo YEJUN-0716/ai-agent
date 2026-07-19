@@ -7259,9 +7259,11 @@ def main():
     ]
 
     # ── 게임 씬: 캐릭터가 실제로 걸어다니는 사무실 평면 ──────
-    # 클릭 → (room, emp) 반환 → 아래 방에서 보고서가 열린다. 같은 클릭이 버튼 선택을
-    # 계속 덮어쓰지 않도록 nonce 변화가 있을 때만 반영한다.
+    # 사무실이 유일한 내비게이션 — 캐릭터 클릭 → (room, emp) 반환 → 바로 아래에
+    # 보고서·업무 화면이 열린다. 같은 클릭이 이후 선택을 계속 덮어쓰지 않도록
+    # nonce 변화가 있을 때만 반영한다. 컴포넌트 로드 실패 시에만 기존 방 UI로 폴백.
     if _OFFICE_GAME_AVAILABLE:
+        inject_office_css()   # 게임 모드에선 render_office_rooms를 안 거치므로 여기서 직접 주입
         _game_rooms = collect_office_game_data(_rooms)
         _sel_now = st.session_state.get('office_view')
         _clicked = _office_game_component(
@@ -7271,10 +7273,45 @@ def main():
         if _clicked and _clicked.get('nonce') != st.session_state.get('_office_game_nonce'):
             st.session_state['_office_game_nonce'] = _clicked['nonce']
             st.session_state['office_view'] = (_clicked['room'], _clicked['emp'])
-        st.caption("🖱️ 캐릭터를 클릭하면 아래 해당 팀 방에서 보고서가 열립니다 · "
+        st.caption("🖱️ 캐릭터를 클릭하면 바로 아래에 보고서와 업무 화면이 열립니다 · "
                    "상태에 따라 일하고(타이핑) · 산책하고(🚰) · 졸고(💤) · 뛰어다니는(❗) 모습이 달라집니다")
 
-    render_office_rooms(_rooms)
+        # ── 클릭한 직원의 보고서 + 업무 화면 ──────────────
+        _sel = st.session_state.get('office_view')
+        with st.container(border=True, key="office_selected_view"):
+            _sel_room = next((r for r in _rooms if _sel and r.key == _sel[0]), None)
+            _sel_emps = (_sel_room.employees() if callable(_sel_room.employees)
+                         else _sel_room.employees) if _sel_room else []
+            _sel_emp = next((e for e in (_sel_emps or []) if e.key == _sel[1]), None) if _sel else None
+            if _sel_emp is None:
+                st.caption("👆 사무실에서 직원 캐릭터를 클릭하면 이 자리에 보고서가 열립니다.")
+            else:
+                st.markdown(
+                    f"<div style='font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:2px'>"
+                    f"{_sel_room.icon} {_sel_room.name} &nbsp;›&nbsp; "
+                    f"{_sel_emp.avatar} {_sel_emp.name}</div>", unsafe_allow_html=True)
+                # 시그널 생성팀·백테스트 검증팀 직원은 종목 유니버스 입력이 선행돼야 한다
+                if _sel_room.key in ('siggen', 'bt'):
+                    render_universe_picker()
+                render_office_report_card(_sel_emp.report_fn())
+                if _sel_emp.panel_fn is not None:
+                    st.markdown("")
+                    _sel_emp.panel_fn()
+
+        # ── 시세판 · 종목 분석 (항상 표시 — 여기서 분석해야 애널리스트팀이 출근한다) ──
+        st.markdown("""
+<div style="display:inline-flex;align-items:center;gap:9px;margin:18px 0 8px 0;
+            background:linear-gradient(180deg,#8b6f3e 0%,#6f5730 100%);
+            border-radius:6px 6px 3px 3px;padding:7px 16px 7px 12px;
+            box-shadow:0 3px 6px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.15)">
+  <span style="font-size:17px">📈</span>
+  <span style="font-size:12.5px;font-weight:800;color:#fdf6e3;letter-spacing:.4px;
+               text-transform:uppercase">AI 애널리스트팀 · 시세판</span>
+</div>""", unsafe_allow_html=True)
+        with st.container(border=True, key="office_room_analyst_board"):
+            render_stock_analysis_panel()
+    else:
+        render_office_rooms(_rooms)
 
     # ── 총괄 트레이더 최종 보고 ──────────────
     st.markdown("---")
