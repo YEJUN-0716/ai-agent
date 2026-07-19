@@ -13,7 +13,7 @@
 - `ic_weight_updater.py:20` — 티커 37개 하드코딩.
 - `modules/factor_validator.py:175, 392, 519` — 동일한 다운로드 루프 3벌 중복, 티커를 1개씩 순차 다운로드. 37종목에 30~60분(≈1분/종목).
 - `modules/factor_engine.py:197` — 펀더멘털도 종목당 `yf.Ticker().quarterly_financials` 1회 호출.
-- `yf.Ticker('AAPL').quarterly_financials`는 **5개 분기(약 15개월)만** 반환. 5년 IC 스터디에서 밸류·퀄리티 팩터는 기간의 약 80%가 결측이며, `<= as_of_date` 필터를 통과하는 데이터가 없다.
+- `yf.Ticker('AAPL').quarterly_financials`는 **5개 분기(약 15개월)만** 반환. 5년 IC 스터디에서 밸류·퀄리티 팩터는 기간의 약 80%가 결측이며, 그 결과 `n: 0`으로 IC가 아예 측정되지 않는다. 그럼에도 하락장 가중치의 31%를 배분받고 있다 (아래 "펀더멘털 팩터 처리" 참조).
 - `app.py:3124`의 'S&P 500 전체' 프리셋은 오늘 기준 하드코딩이라 사멸 티커(ATVI, FISV, PXD, KSU 등)를 포함한다.
 
 37종목이라는 표본으로는 팩터의 크로스섹션 분산이 부족해 IC 통계 자체가 의미를 갖기 어렵다. 티커 목록만 늘리면 500종목 × 1분 = 8시간이 되어 GitHub Actions 6시간 제한을 초과한다. 따라서 **데이터 계층부터 손봐야 한다.**
@@ -90,9 +90,44 @@ load_panel(tickers: list[str], start, end) -> tuple[dict, dict]
 
 ## 펀더멘털 팩터 처리
 
-밸류·퀄리티 팩터를 5년 IC 스터디의 **계산 대상에서 제외**하고, `ic_weights.json`에 `"status": "insufficient_data"`로 기록한다.
+### 현황 (실측)
 
-현재는 결측을 중립값으로 메워 존재하지 않는 IC를 0.0x로 리포트하고 있고, 그 숫자가 가중치에 반영된다. 없는 데이터로 만든 가중치보다 "모른다"가 낫다.
+IC 계산 자체는 이미 정직하다. `ic_weights.json`을 보면:
+
+- `per_factor_ic.value` / `.quality` → `n: 0`, `mean_ic: 0.0`
+- `ic_unavailable_factors: ["value", "quality"]` 필드 존재
+- `caveats.ic_data_note`에 "PIT 재무 데이터 미확보" 명시
+
+`_calc_per_factor_zscores`가 결측 시 0.0을 반환하고, 전 종목이 상수 0.0이면 `spearmanr`가 NaN을 내어 해당 리밸런싱 시점이 스킵된다. 그래서 `n: 0`이 정확히 기록된다.
+
+### 실제 문제
+
+IC가 측정되지 않은 팩터에 **여전히 실질 가중치가 배분된다.**
+
+```
+bear:    mom_3m 0.2825 | low_vol 0.2797 | value 0.1748 | quality 0.1399 | mom_1m 0.0392 | ict 0.0839
+neutral: mom_3m 0.5305 | low_vol 0.1050 | value 0.1050 | quality 0.0788 | mom_1m 0.1176 | ict 0.0630
+bull:    mom_3m 0.6387 | low_vol 0.0678 | value 0.0678 | quality 0.0452 | mom_1m 0.1265 | ict 0.0542
+```
+
+하락장에서 측정 예측력이 0인 두 팩터가 가중치의 **31%**를 차지한다.
+
+원인은 `ic_weight_updater.py:41`:
+
+```python
+ic_val = max(per_factor_ic.get(factor, {}).get("mean_ic", IC_FLOOR), IC_FLOOR)
+scaled[factor] = base * ic_val
+```
+
+`IC_FLOOR = 0.005`가 `mom_3m`의 실측 IC `0.0202`의 약 1/4이라, 바닥값으로 눌러도 무시할 수 없는 크기로 살아남는다. `caveats.ic_data_note`는 이 동작을 "기본 REGIME_WEIGHTS 비례 배분"이라고 설명하지만 코드는 그렇게 하지 않는다 — 문서와 구현이 어긋나 있다.
+
+### 결정
+
+`ic_unavailable_factors`에 속한 팩터는 `derive_ic_regime_weights`에서 **가중치 0으로 제외하고 나머지를 재정규화**한다.
+
+이는 실거래 시그널을 바꾸는 변경이다. 하락장 종목 선정이 눈에 띄게 달라진다. 그럼에도 측정되지 않은 신호에 자본의 31%를 배분하는 현 상태보다는 낫다.
+
+`ic_data_note` 문구도 실제 동작에 맞게 고친다.
 
 최근 15개월 구간의 참고용 IC는 만들지 않는다. 신뢰할 수 없는 숫자를 하나 더 두면 결국 쓰이게 된다.
 
@@ -102,7 +137,9 @@ load_panel(tickers: list[str], start, end) -> tuple[dict, dict]
 
 오늘 살아있는 500종목으로 과거 5년을 측정하는 구조라 IC가 실제보다 낙관적으로 나온다. 시점별 구성종목 복원은 이번 범위에 넣지 않으므로, **제거하지 않고 명시**한다.
 
-`ic_weights.json`의 기존 `survivorship_warning` 필드를 실제 유니버스 크기 기준으로 채우고 앱에 노출한다.
+`ic_weights.json`의 기존 `caveats.survivorship_bias_warning`은 이미 `len(TICKERS)` 기준으로 생성되므로, 유니버스를 500으로 늘리면 자동으로 갱신된다. 별도 작업은 필요 없다.
+
+앱 노출은 하지 않는다 — `app.py`를 건드리지 않는다는 이 스펙의 결정과 충돌한다. 후속 작업으로 남긴다.
 
 ## 오류 처리
 
