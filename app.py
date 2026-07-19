@@ -4266,6 +4266,11 @@ def collect_office_game_data(rooms: List[OfficeRoom]):
     for room in rooms:
         employees = room.employees() if callable(room.employees) else room.employees
         if not employees:
+            if room.key == 'analyst':
+                # 분석 전에도 애널리스트팀 방과 빈 책상들을 보여준다 —
+                # "종목을 입력하면 출근한다"는 게임 서사를 시각적으로 예고
+                game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon,
+                                   'chars': [], 'ghost': len(TEAM_WEIGHTS) + 1})  # 7명 + 총괄
             continue
         chars = []
         for emp in employees:

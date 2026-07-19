@@ -79,7 +79,8 @@ function layoutRooms(roomData) {
   const placed = [];
   let x = 8, y = TOP_BAR_H + 8, rowMax = 0;
   for (const r of roomData) {
-    const w = Math.max(150, 40 + r.chars.length * SLOT_W);
+    const seats = Math.max(r.chars.length, r.ghost || 0);
+    const w = Math.max(150, 40 + seats * SLOT_W);
     if (x + w > LOGICAL_W - 8 && x > 8) { x = 8; y += ROOM_H + ROW_GAP; }
     placed.push(Object.assign({}, r, { x: x, y: y, w: w, h: ROOM_H }));
     x += w + 12;
@@ -125,10 +126,69 @@ function mergeChars(placedRooms) {
 
 function onModeChange() {
   for (const ch of chars.values()) {
+    ch.bubble = null;
     if (working) { ch.state = "rush"; ch.chatWith = null; }
-    else         { ch.state = "at_desk"; ch.stateT = -rand(0.5, 3.5); }  // 시차 두고 일어남
+    else if (ch.state !== "enter") {
+      // 일 끝! 잠깐 자리에서 만세 🎉 후 시차를 두고 흩어진다.
+      // (이번 렌더에 새로 합류해 아직 입장 중인 캐릭터는 제외 — 화면 밖에서
+      //  축하하다 책상으로 순간이동하는 결함 방지, 그냥 걸어 들어오게 둔다)
+      ch.state = "celebrate"; ch.stateT = 0; ch.celebT = rand(1.2, 2.4);
+    }
   }
 }
+
+/* ── 사장(사용자) 캐릭터: 클릭 불가, 사무실을 순찰하며 감독 ── */
+const boss = { x: LOGICAL_W / 2, y: TOP_BAR_H + 100, tx: 0, ty: 0,
+               state: "pause", stateT: 0, pauseT: 1.5, facing: 1, phase: 0 };
+function updateBoss(dt) {
+  boss.stateT += dt;
+  const spd = working ? 62 : 30;                 // 작업 중엔 더 바쁘게 순찰
+  if (boss.state === "pause") {
+    if (boss.stateT > boss.pauseT) {
+      const fb = floorBounds();
+      boss.tx = rand(fb.x1 + 20, fb.x2 - 20);
+      boss.ty = rand(fb.y1, fb.y2);
+      boss.state = "walk"; boss.stateT = 0;
+    }
+  } else if (moveTowardObj(boss, boss.tx, boss.ty, spd, dt)) {
+    boss.state = "pause"; boss.pauseT = working ? rand(0.6, 1.6) : rand(2, 5); boss.stateT = 0;
+  }
+}
+function moveTowardObj(o, tx, ty, spd, dt) {
+  const dx = tx - o.x, dy = ty - o.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 2.5) { o.x = tx; o.y = ty; return true; }
+  const step = Math.min(d, spd * dt);
+  o.x += dx / d * step; o.y += dy / d * step;
+  if (Math.abs(dx) > 1) o.facing = dx < 0 ? -1 : 1;
+  return false;
+}
+function drawBoss(t) {
+  const p = pal();
+  const walking = boss.state === "walk";
+  const bob = walking ? Math.abs(Math.sin(t * 8)) * 3 : Math.sin(t * 2.5) * 0.8;
+  ctx.fillStyle = p.shadow;
+  ctx.beginPath(); ctx.ellipse(boss.x, boss.y + 15, 13, 4, 0, 0, 6.29); ctx.fill();
+  ctx.save();
+  ctx.translate(boss.x, boss.y - bob);
+  if (boss.facing === -1) ctx.scale(-1, 1);
+  ctx.font = "30px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("🤵", 0, -3);
+  ctx.restore();
+  ctx.font = "700 9.5px sans-serif";
+  const label = "사장님 (나)";
+  const w = ctx.measureText(label).width;
+  ctx.fillStyle = dark ? "rgba(80,62,20,.92)" : "rgba(245,179,1,.92)";
+  ctx.beginPath(); ctx.roundRect(boss.x - w / 2 - 8, boss.y - 40, w + 16, 13, 6); ctx.fill();
+  ctx.fillStyle = dark ? "#f5d878" : "#3b2f1d";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(label, boss.x, boss.y - 33.5);
+}
+
+/* ── 잡담 대사 ── */
+const QUIPS = ["오늘 장 어때요?", "커피 한 잔?", "AAPL 갈까요?", "점심 뭐 먹죠",
+               "시그널 떴어요!", "백테스트 돌려봤어요?", "MDD 조심해요",
+               "리밸런싱 언제 하죠?", "존버는 승리한다", "사장님 오신다!"];
 
 function moveToward(ch, tx, ty, spd, dt) {
   const dx = tx - ch.x, dy = ty - ch.y;
@@ -195,6 +255,14 @@ function updateChar(ch, dt, t, now) {
   /* ── 대기 모드 ── */
   const b = ch.behavior;
 
+  if (ch.state === "celebrate") {               // 분석 완료 직후 만세 (전원, 조는 직원 포함)
+    if (Math.random() < 0.045)
+      particles.push({ x: ch.x + rand(-14, 14), y: ch.y - 24, vy: -22, life: 1.3,
+                       txt: Math.random() < 0.5 ? "🎉" : "✨", size: 12 });
+    if (ch.stateT > (ch.celebT || 1.8)) { ch.state = "at_desk"; ch.stateT = -rand(0.3, 3.0); }
+    return;
+  }
+
   if (b === "sleep") {                       // 대기 상태 직원: 자리에서 낮잠
     if (ch.state !== "at_desk") {
       if (moveToward(ch, ch.deskX, ch.deskY, WALK_SPD, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
@@ -232,11 +300,13 @@ function updateChar(ch, dt, t, now) {
       break;
     case "chat": {
       const partner = ch.chatWith ? chars.get(ch.chatWith) : null;
-      if (Math.random() < 0.016)
-        particles.push({ x: ch.x + ch.facing * 12, y: ch.y - 30, vy: -8, life: 1.2, txt: "💬", size: 11 });
+      // 실제 대사 말풍선 — 번갈아가며 한 마디씩
+      if ((!ch.bubble || now > ch.bubble.until) && Math.random() < 0.02) {
+        ch.bubble = { txt: QUIPS[(Math.random() * QUIPS.length) | 0], until: now + rand(1.4, 2.2) };
+      }
       if (ch.stateT > (ch.chatDur || 3) || !partner || partner.state !== "chat") {
         ch.state = "roam_pause"; ch.pauseT = rand(0.5, 2); ch.stateT = 0;
-        ch.chatWith = null; ch.chatCool = now + 9;
+        ch.chatWith = null; ch.chatCool = now + 9; ch.bubble = null;
       }
       break;
     }
@@ -307,28 +377,42 @@ function drawRoom(room, t) {
   ctx.fillText("🚰", room.x + room.w - 16, room.y + 74);
   ctx.fillText("🪴", room.x + 14, room.y + room.h - 14);
 
-  room.chars.forEach((c, i) => {
+  const seats = Math.max(room.chars.length, room.ghost || 0);
+  for (let i = 0; i < seats; i++) {
+    const c = room.chars[i];
     const d = deskPos(room, i);
+    const ghost = !c;
+    ctx.globalAlpha = ghost ? 0.45 : 1;
     ctx.fillStyle = p.desk;
     ctx.beginPath(); ctx.roundRect(d.x - 22, d.y + 12, 46, 15, 3); ctx.fill();
     ctx.fillStyle = p.deskTop;
     ctx.fillRect(d.x - 22, d.y + 12, 46, 4);
     ctx.fillStyle = p.monitor;
     ctx.beginPath(); ctx.roundRect(d.x - 9, d.y - 3, 20, 14, 2); ctx.fill();
-    const ch = chars.get(room.key + "|" + c.key);
-    const seated = ch && ch.state === "at_desk";
-    ctx.fillStyle = seated ? c.color : (dark ? "#1c2434" : "#3a4152");
-    ctx.globalAlpha = (working && seated) ? 0.65 + 0.35 * Math.abs(Math.sin(t * 9 + i)) : 0.85;
-    ctx.fillRect(d.x - 7, d.y - 1, 16, 10);
+    if (!ghost) {
+      const ch = chars.get(room.key + "|" + c.key);
+      const seated = ch && ch.state === "at_desk";
+      ctx.fillStyle = seated ? c.color : (dark ? "#1c2434" : "#3a4152");
+      ctx.globalAlpha = (working && seated) ? 0.65 + 0.35 * Math.abs(Math.sin(t * 9 + i)) : 0.85;
+      ctx.fillRect(d.x - 7, d.y - 1, 16, 10);
+    }
     ctx.globalAlpha = 1;
-  });
+  }
+  if (room.ghost && room.chars.length === 0) {
+    ctx.fillStyle = pal().label; ctx.globalAlpha = 0.55;
+    ctx.font = "600 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("📈 시세판에 종목을 입력하면 애널리스트팀이 출근합니다",
+                 room.x + room.w / 2, room.y + 52);
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawChar(ch, t) {
   const p = pal();
   const walking = ["enter", "rush", "roam_walk", "panic"].includes(ch.state);
   let bob = 0, tilt = 0;
-  if (walking)                          bob = Math.abs(Math.sin(t * (ch.state === "roam_walk" ? 7 : 11) + ch.phase)) * 3.5;
+  if (ch.state === "celebrate")         bob = Math.abs(Math.sin(t * 12 + ch.phase)) * 7;
+  else if (walking)                     bob = Math.abs(Math.sin(t * (ch.state === "roam_walk" ? 7 : 11) + ch.phase)) * 3.5;
   else if (ch.state === "at_desk") {
     if (working)                        bob = Math.sin(t * 10 + ch.phase) * 2.0;
     else if (ch.behavior === "sleep")   tilt = 0.35;
@@ -362,6 +446,22 @@ function drawChar(ch, t) {
   ctx.beginPath(); ctx.arc(ch.x - nameW / 2 - 2, ch.y - 29.5, 2.5, 0, 6.29); ctx.fill();
   ctx.fillStyle = p.label; ctx.textAlign = "left"; ctx.textBaseline = "middle";
   ctx.fillText(ch.name, ch.x - nameW / 2 + 3, ch.y - 29);
+
+  // 말풍선 (잡담 대사)
+  if (ch.bubble && ch.bubble.until > performance.now() / 1000) {
+    ctx.font = "600 9.5px sans-serif";
+    const bw = ctx.measureText(ch.bubble.txt).width;
+    const bx = ch.x, by = ch.y - 52;
+    ctx.fillStyle = dark ? "rgba(232,238,248,.95)" : "rgba(255,255,255,.97)";
+    ctx.strokeStyle = dark ? "#8fa3c4" : "#9aa7ba";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(bx - bw / 2 - 8, by - 8, bw + 16, 17, 8); ctx.fill(); ctx.stroke();
+    ctx.beginPath();                                   // 꼬리
+    ctx.moveTo(bx - 3, by + 9); ctx.lineTo(bx + 3, by + 9); ctx.lineTo(bx, by + 14);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#26314a"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(ch.bubble.txt, bx, by + 1);
+  }
 }
 
 function drawParticles(dt) {
@@ -389,6 +489,8 @@ function frame(nowMs) {
   const list = [...chars.values()].sort((a, b) => a.y - b.y);
   list.forEach(ch => updateChar(ch, dt, t, now));
   list.forEach(ch => drawChar(ch, t));
+  updateBoss(dt);
+  drawBoss(t);
   drawParticles(dt);
   requestAnimationFrame(frame);
 }
@@ -447,6 +549,7 @@ window.addEventListener("resize", () => {
 });
 
 window.chars = chars;   // 디버그/테스트용 노출
+window.boss = boss;
 window.getMode = () => ({ working: working, ticker: boardTicker });
 _send("streamlit:componentReady", { apiVersion: 1 });
 requestAnimationFrame(frame);
