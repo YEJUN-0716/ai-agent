@@ -15,14 +15,12 @@ from datetime import datetime, timezone, timedelta
 from modules.factor_engine import REGIME_WEIGHTS
 from modules.factor_validator import run_per_factor_ic_analysis, run_out_of_sample_validation
 from modules.survivorship_check import survivorship_bias_warning, known_failures_in_period
+from modules.universe import SP500
+from modules import price_panel
 
-# 대표 유니버스 (다양한 섹터 포함)
-TICKERS = [
-    "AAPL","MSFT","GOOGL","AMZN","NVDA","META","TSLA","JPM","V","JNJ",
-    "UNH","XOM","PG","HD","MA","ABBV","MRK","KO","PEP","COST",
-    "AVGO","LLY","WMT","MCD","CRM","ADBE","CSCO","ACN","TMO",
-    "AMD","INTC","QCOM","NFLX","AMAT","MU","TXN","KLAC",
-]
+# 분석 유니버스 - S&P 500 기반 276종목.
+# 기존 37종목으로는 팩터의 크로스섹션 분산이 부족해 IC 통계가 의미를 갖기 어려웠다.
+TICKERS = SP500
 
 IC_WEIGHT_FILE = "ic_weights.json"
 IC_FLOOR       = 0.005   # 팩터 IC가 음수/0일 때 최소 스케일 (완전 배제 방지)
@@ -156,6 +154,7 @@ def main():
     output = {
         "updated":               datetime.now(timezone.utc).isoformat(),
         "universe_size":         len(TICKERS),
+        "coverage":              price_panel.last_coverage(),
         "lookback_years":        LOOKBACK_YEARS,
         "per_factor_ic":         per_factor,
         "ic_unavailable_factors": ic_unavailable,
@@ -171,7 +170,9 @@ def main():
             ) if ic_unavailable else "",
         },
     }
-    with open(IC_WEIGHT_FILE, "w") as f:
+    # encoding 미지정 시 Windows에서 cp949로 열려 경고문의 ⚠ 등에서 죽는다.
+    # ensure_ascii=False를 쓰는 이상 인코딩을 명시해야 한다.
+    with open(IC_WEIGHT_FILE, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     print(f"\n✅ {IC_WEIGHT_FILE} 저장 완료.")
 
