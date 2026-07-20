@@ -17,3 +17,6 @@ watchlist.json
 # 가격 패널 캐시 (GitHub Actions cache로 공유, 커밋 대상 아님)
 data/
 .pytest_cache/
+
+# 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다
+pit_fundamentals.db
