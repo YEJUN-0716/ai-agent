@@ -12,6 +12,15 @@ import json
 import sys
 from datetime import datetime, timezone, timedelta
 
+# 이 스크립트는 진행률 바(█░)와 이모지(✅⚠️❌📊)를 출력한다. Windows 콘솔의
+# 기본 코드페이지(cp949)는 이들을 인코딩하지 못해 UnicodeEncodeError로 죽는다.
+# 인코딩은 그대로 두고 에러 처리만 바꾼다 - cp949는 한글을 지원하므로 본문은
+# 정상 출력되고 기호만 '?'로 대체된다. UTF-8 환경(GitHub Actions)에서는
+# 모든 문자가 인코딩되므로 아무 영향이 없다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 from modules.factor_engine import REGIME_WEIGHTS
 from modules.factor_validator import run_per_factor_ic_analysis, run_out_of_sample_validation
 from modules.survivorship_check import survivorship_bias_warning, known_failures_in_period
