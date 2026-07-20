@@ -1,27 +1,32 @@
 {
-  "updated": "2026-07-19T14:49:50.787808+00:00",
-  "universe_size": 37,
+  "updated": "2026-07-19T20:33:53.818228+00:00",
+  "universe_size": 276,
+  "coverage": {
+    "requested": 276,
+    "resolved": 276,
+    "failed": []
+  },
   "lookback_years": 5,
   "per_factor_ic": {
     "mom_3m": {
-      "mean_ic": 0.0202,
-      "std_ic": 0.2617,
-      "icir": 0.077,
-      "pct_positive": 55.2,
+      "mean_ic": -0.0136,
+      "std_ic": 0.1449,
+      "icir": -0.094,
+      "pct_positive": 44.8,
       "n": 58
     },
     "mom_1m": {
-      "mean_ic": 0.0056,
-      "std_ic": 0.2323,
+      "mean_ic": 0.0036,
+      "std_ic": 0.1537,
       "icir": 0.024,
-      "pct_positive": 51.7,
+      "pct_positive": 50.0,
       "n": 58
     },
     "low_vol": {
-      "mean_ic": -0.0692,
-      "std_ic": 0.3289,
-      "icir": -0.21,
-      "pct_positive": 41.4,
+      "mean_ic": -0.0234,
+      "std_ic": 0.2381,
+      "icir": -0.098,
+      "pct_positive": 44.8,
       "n": 58
     },
     "value": {
@@ -39,10 +44,10 @@
       "n": 0
     },
     "ict": {
-      "mean_ic": 0.0054,
-      "std_ic": 0.1947,
-      "icir": 0.028,
-      "pct_positive": 53.4,
+      "mean_ic": -0.0025,
+      "std_ic": 0.1275,
+      "icir": -0.02,
+      "pct_positive": 48.3,
       "n": 58
     }
   },
@@ -52,60 +57,60 @@
   ],
   "regime_weights": {
     "bull": {
-      "mom_3m": 0.6387,
-      "mom_1m": 0.1265,
-      "low_vol": 0.0678,
-      "value": 0.0678,
-      "quality": 0.0452,
-      "ict": 0.0542
+      "mom_3m": 0.4065,
+      "mom_1m": 0.2903,
+      "low_vol": 0.1742,
+      "ict": 0.129,
+      "quality": 0.0,
+      "value": 0.0
     },
     "neutral": {
-      "mom_3m": 0.5305,
-      "mom_1m": 0.1176,
-      "low_vol": 0.105,
-      "value": 0.105,
-      "quality": 0.0788,
-      "ict": 0.063
+      "mom_3m": 0.3285,
+      "mom_1m": 0.2628,
+      "low_vol": 0.2628,
+      "ict": 0.146,
+      "quality": 0.0,
+      "value": 0.0
     },
     "bear": {
-      "mom_3m": 0.2825,
-      "mom_1m": 0.0392,
-      "low_vol": 0.2797,
-      "value": 0.1748,
-      "quality": 0.1399,
-      "ict": 0.0839
+      "mom_3m": 0.1513,
+      "mom_1m": 0.0756,
+      "low_vol": 0.605,
+      "ict": 0.1681,
+      "quality": 0.0,
+      "value": 0.0
     }
   },
   "out_of_sample_validation": {
     "train_period": {
-      "start": "2021-04-21",
-      "end": "2025-03-28"
+      "start": "2021-04-22",
+      "end": "2025-03-29"
     },
     "test_period": {
-      "start": "2025-03-29",
-      "end": "2026-07-19"
+      "start": "2025-03-30",
+      "end": "2026-07-20"
     },
     "train_factor_ic": {
       "mom_3m": {
-        "mean_ic": 0.0059,
-        "std_ic": 0.2779,
-        "icir": 0.021,
-        "pct_positive": 53.5,
-        "n": 43
+        "mean_ic": -0.0197,
+        "std_ic": 0.1343,
+        "icir": -0.146,
+        "pct_positive": 45.2,
+        "n": 42
       },
       "mom_1m": {
-        "mean_ic": -0.0096,
-        "std_ic": 0.2287,
-        "icir": -0.042,
-        "pct_positive": 48.8,
-        "n": 43
+        "mean_ic": -0.0178,
+        "std_ic": 0.1646,
+        "icir": -0.108,
+        "pct_positive": 42.9,
+        "n": 42
       },
       "low_vol": {
-        "mean_ic": -0.0268,
-        "std_ic": 0.324,
-        "icir": -0.083,
-        "pct_positive": 46.5,
-        "n": 43
+        "mean_ic": 0.0007,
+        "std_ic": 0.227,
+        "icir": 0.003,
+        "pct_positive": 47.6,
+        "n": 42
       },
       "value": {
         "mean_ic": 0.0,
@@ -122,27 +127,27 @@
         "n": 0
       },
       "ict": {
-        "mean_ic": -0.0048,
-        "std_ic": 0.2163,
-        "icir": -0.022,
-        "pct_positive": 51.2,
-        "n": 43
+        "mean_ic": -0.006,
+        "std_ic": 0.1323,
+        "icir": -0.045,
+        "pct_positive": 50.0,
+        "n": 42
       }
     },
     "derived_test_weights": {
-      "mom_3m": 0.1909,
-      "mom_1m": 0.1618,
-      "low_vol": 0.1618,
-      "value": 0.1618,
-      "quality": 0.1618,
-      "ict": 0.1618
+      "mom_3m": 0.1667,
+      "mom_1m": 0.1667,
+      "low_vol": 0.1667,
+      "value": 0.1667,
+      "quality": 0.1667,
+      "ict": 0.1667
     },
-    "test_composite_ic": 0.0269,
-    "train_composite_ic": -0.0055,
+    "test_composite_ic": 0.0122,
+    "train_composite_ic": -0.0071,
     "overfitting_flag": false
   },
   "caveats": {
-    "survivorship_bias_warning": "⚠️  생존자 편향(Survivorship Bias) 주의\n이 IC 분석은 *현재 상장된* 종목만을 대상으로 합니다.\n과거에 파산하거나 상장폐지된 종목은 제외되어 IC가 과대 추정될 수 있습니다.\n분석 유니버스: 37개 (현재 상장 종목만 포함)\n알려진 상장폐지/구제금융 대형주 사례: 14건 (목록 참고)",
+    "survivorship_bias_warning": "⚠️  생존자 편향(Survivorship Bias) 주의\n이 IC 분석은 *현재 상장된* 종목만을 대상으로 합니다.\n과거에 파산하거나 상장폐지된 종목은 제외되어 IC가 과대 추정될 수 있습니다.\n분석 유니버스: 276개 (현재 상장 종목만 포함)\n알려진 상장폐지/구제금융 대형주 사례: 14건 (목록 참고)",
     "known_failures_in_lookback": [
       {
         "ticker": "FRC",
@@ -180,6 +185,6 @@
         "note": "소매업 몰락 — 밈주식 거품 이후 파산"
       }
     ],
-    "ic_data_note": "IC 미계산 팩터 ['value', 'quality']: PIT 재무 데이터 미확보 → 기본 REGIME_WEIGHTS 비례 배분 적용중. SimFin·EDGAR 연동 시 해결 가능."
+    "ic_data_note": "IC 미계산 팩터 ['value', 'quality']: PIT 재무 데이터 미확보 → 가중치 0으로 제외하고 나머지 팩터를 재정규화했습니다. SimFin·EDGAR 연동 시 해결 가능."
   }
 }

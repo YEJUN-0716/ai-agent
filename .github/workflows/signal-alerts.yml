@@ -1,10 +1,21 @@
 name: 퀀트 시그널 알림 (수동매매용)
 
 on:
-  schedule:
-    # 미국 장마감 후 — paper-trade-us(21:30 UTC) 완료 여유 두고 22:30 UTC 실행
-    # 夏(EDT): 22:30 UTC = 18:30 EDT / 冬(EST): 22:30 UTC = 17:30 EST
-    - cron: "30 22 * * 1-5"
+  # ⚠️ 크론 스케줄 비활성화 (2026-07-20) — 팩터에 측정 가능한 알파가 없음
+  #
+  # 유니버스를 37 → 276종목으로 확대해 5년 walk-forward IC를 재측정한 결과,
+  # 전 팩터가 |ICIR| < 0.1 이었다. mom_3m은 37종목 기준 +0.077에서
+  # 276종목 기준 -0.094로 부호가 뒤집혔다 — 기존 수치는 표본이 작아
+  # 생긴 잡음이었다. 근거: ic_weights.json, docs/superpowers/specs/
+  #
+  # 예측력이 확인되지 않은 신호를 매일 매수 알림으로 보내지 않기 위해
+  # 자동 발송을 멈춘다. 신호원을 다시 찾은 뒤 재활성화할 것.
+  # 수동 실행(workflow_dispatch)은 그대로 가능하다.
+  #
+  # 미국 장마감 후 — paper-trade-us(21:30 UTC) 완료 여유 두고 22:30 UTC 실행
+  # 夏(EDT): 22:30 UTC = 18:30 EDT / 冬(EST): 22:30 UTC = 17:30 EST
+  # schedule:
+  #   - cron: "30 22 * * 1-5"
   workflow_dispatch:
     inputs:
       universe:
