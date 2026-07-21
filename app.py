@@ -46,6 +46,12 @@ except Exception:
     _ANALYST_WEIGHTS_AVAILABLE = False
     _DIRECTIONAL_ANALYSTS = ('차트+파동+모멘텀', '퀀트+재무', 'ICT+CRT')
 
+try:
+    from modules.macro_indicators import real_macro_score as _real_macro_score
+    _REAL_MACRO_AVAILABLE = True
+except Exception:
+    _REAL_MACRO_AVAILABLE = False
+
 
 def _dart_fallback_batch(tickers):
     """KRX(.KS/.KQ) 종목만 골라 DART 재무를 일괄 조회 (yfinance가 KRX 재무를 못 주는 문제 보완).
@@ -3873,11 +3879,30 @@ def quant_fundamental_analyst(f_score, f_det, dcf_det=None):
     return build_analyst_report('퀀트+재무', '💼', f_score, reasons, f_det)
 
 
+@st.cache_data(ttl=3600)
+def get_real_macro():
+    """FRED 실물 경제지표(CPI·실업률·산업생산·수익률곡선). 키 없으면 available=False."""
+    if not _REAL_MACRO_AVAILABLE:
+        return {'available': False, 'score': 50.0, 'detail': {}, 'data': {}, 'reason': ''}
+    return _real_macro_score()
+
+
 def macro_rate_analyst(m_score, m_det):
-    """매크로+금리 직원: macro_score(장단기금리차·VIX·환율 등) 기반.
-    역할=레짐 맥락(context) — 방향성 점수 블렌드에는 포함되지 않는다."""
-    reasons = [f"{k}: {v}" for k, v in list(m_det.items())[:4] if not isinstance(v, dict)]
-    return build_analyst_report('매크로+금리', '🌍', m_score, reasons, m_det, role='context')
+    """매크로+금리 직원: 시장프록시 macro_score(금리·VIX·환율 등)에 FRED 실물
+    경제지표(CPI·실업률·산업생산)를 결합. 역할=레짐 맥락(context) — 방향성
+    점수 블렌드에는 포함되지 않는다."""
+    reasons = [f"{k}: {v}" for k, v in list(m_det.items())[:3] if not isinstance(v, dict)]
+    detail = dict(m_det)
+    score = m_score
+    real = get_real_macro()
+    if real.get('available'):
+        # 시장프록시 70% + 실물지표 30% (실물은 월간·지연 데이터라 비중 축소)
+        score = m_score * 0.7 + real['score'] * 0.3
+        for k, v in list(real['data'].items())[:3]:
+            reasons.append(f"{k}: {v}")
+        detail['_실물경제'] = real['detail']
+        detail['_실물경제_data'] = real['data']
+    return build_analyst_report('매크로+금리', '🌍', score, reasons, detail, role='context')
 
 
 def geopolitical_analyst(g_score, g_det):
