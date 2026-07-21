@@ -1,5 +1,5 @@
 {
-  "updated": "2026-07-19T20:33:53.818228+00:00",
+  "updated": "2026-07-21T15:28:44.705365+00:00",
   "universe_size": 276,
   "coverage": {
     "requested": 276,
@@ -9,141 +9,138 @@
   "lookback_years": 5,
   "per_factor_ic": {
     "mom_3m": {
-      "mean_ic": -0.0136,
-      "std_ic": 0.1449,
-      "icir": -0.094,
-      "pct_positive": 44.8,
+      "mean_ic": -0.0134,
+      "std_ic": 0.1653,
+      "icir": -0.081,
+      "pct_positive": 48.3,
       "n": 58
     },
     "mom_1m": {
-      "mean_ic": 0.0036,
-      "std_ic": 0.1537,
-      "icir": 0.024,
-      "pct_positive": 50.0,
+      "mean_ic": 0.0001,
+      "std_ic": 0.1573,
+      "icir": 0.001,
+      "pct_positive": 51.7,
       "n": 58
     },
     "low_vol": {
-      "mean_ic": -0.0234,
-      "std_ic": 0.2381,
-      "icir": -0.098,
-      "pct_positive": 44.8,
+      "mean_ic": -0.0236,
+      "std_ic": 0.2287,
+      "icir": -0.103,
+      "pct_positive": 41.4,
       "n": 58
     },
     "value": {
-      "mean_ic": 0.0,
-      "std_ic": 0.0,
-      "icir": 0.0,
-      "pct_positive": 0.0,
-      "n": 0
+      "mean_ic": 0.0178,
+      "std_ic": 0.1318,
+      "icir": 0.135,
+      "pct_positive": 44.8,
+      "n": 58
     },
     "quality": {
-      "mean_ic": 0.0,
-      "std_ic": 0.0,
-      "icir": 0.0,
-      "pct_positive": 0.0,
-      "n": 0
+      "mean_ic": 0.0148,
+      "std_ic": 0.0864,
+      "icir": 0.172,
+      "pct_positive": 56.9,
+      "n": 58
     },
     "ict": {
-      "mean_ic": -0.0025,
-      "std_ic": 0.1275,
-      "icir": -0.02,
-      "pct_positive": 48.3,
+      "mean_ic": 0.0051,
+      "std_ic": 0.1465,
+      "icir": 0.035,
+      "pct_positive": 55.2,
       "n": 58
     }
   },
-  "ic_unavailable_factors": [
-    "value",
-    "quality"
-  ],
+  "ic_unavailable_factors": [],
   "regime_weights": {
     "bull": {
-      "mom_3m": 0.4065,
-      "mom_1m": 0.2903,
-      "low_vol": 0.1742,
-      "ict": 0.129,
-      "quality": 0.0,
-      "value": 0.0
+      "mom_3m": 0.2067,
+      "mom_1m": 0.1476,
+      "low_vol": 0.0886,
+      "value": 0.3154,
+      "quality": 0.1748,
+      "ict": 0.0669
     },
     "neutral": {
-      "mom_3m": 0.3285,
-      "mom_1m": 0.2628,
-      "low_vol": 0.2628,
-      "ict": 0.146,
-      "quality": 0.0,
-      "value": 0.0
+      "mom_3m": 0.1303,
+      "mom_1m": 0.1042,
+      "low_vol": 0.1042,
+      "value": 0.371,
+      "quality": 0.2313,
+      "ict": 0.059
     },
     "bear": {
-      "mom_3m": 0.1513,
-      "mom_1m": 0.0756,
-      "low_vol": 0.605,
-      "ict": 0.1681,
-      "quality": 0.0,
-      "value": 0.0
+      "mom_3m": 0.0466,
+      "mom_1m": 0.0233,
+      "low_vol": 0.1865,
+      "value": 0.4149,
+      "quality": 0.2759,
+      "ict": 0.0528
     }
   },
   "out_of_sample_validation": {
     "train_period": {
-      "start": "2021-04-22",
-      "end": "2025-03-29"
+      "start": "2021-04-24",
+      "end": "2025-03-31"
     },
     "test_period": {
-      "start": "2025-03-30",
-      "end": "2026-07-20"
+      "start": "2025-04-01",
+      "end": "2026-07-22"
     },
     "train_factor_ic": {
       "mom_3m": {
-        "mean_ic": -0.0197,
-        "std_ic": 0.1343,
-        "icir": -0.146,
-        "pct_positive": 45.2,
-        "n": 42
-      },
-      "mom_1m": {
-        "mean_ic": -0.0178,
-        "std_ic": 0.1646,
-        "icir": -0.108,
+        "mean_ic": -0.0283,
+        "std_ic": 0.162,
+        "icir": -0.174,
         "pct_positive": 42.9,
         "n": 42
       },
+      "mom_1m": {
+        "mean_ic": -0.0213,
+        "std_ic": 0.1552,
+        "icir": -0.137,
+        "pct_positive": 45.2,
+        "n": 42
+      },
       "low_vol": {
-        "mean_ic": 0.0007,
-        "std_ic": 0.227,
-        "icir": 0.003,
+        "mean_ic": 0.0038,
+        "std_ic": 0.232,
+        "icir": 0.016,
         "pct_positive": 47.6,
         "n": 42
       },
       "value": {
-        "mean_ic": 0.0,
-        "std_ic": 0.0,
-        "icir": 0.0,
-        "pct_positive": 0.0,
-        "n": 0
+        "mean_ic": 0.0062,
+        "std_ic": 0.1303,
+        "icir": 0.048,
+        "pct_positive": 40.5,
+        "n": 42
       },
       "quality": {
-        "mean_ic": 0.0,
-        "std_ic": 0.0,
-        "icir": 0.0,
-        "pct_positive": 0.0,
-        "n": 0
+        "mean_ic": 0.0159,
+        "std_ic": 0.0922,
+        "icir": 0.172,
+        "pct_positive": 59.5,
+        "n": 42
       },
       "ict": {
-        "mean_ic": -0.006,
-        "std_ic": 0.1323,
-        "icir": -0.045,
-        "pct_positive": 50.0,
+        "mean_ic": -0.0034,
+        "std_ic": 0.1444,
+        "icir": -0.023,
+        "pct_positive": 52.4,
         "n": 42
       }
     },
     "derived_test_weights": {
-      "mom_3m": 0.1667,
-      "mom_1m": 0.1667,
-      "low_vol": 0.1667,
-      "value": 0.1667,
-      "quality": 0.1667,
-      "ict": 0.1667
+      "mom_3m": 0.1188,
+      "mom_1m": 0.1188,
+      "low_vol": 0.1188,
+      "value": 0.1473,
+      "quality": 0.3777,
+      "ict": 0.1188
     },
-    "test_composite_ic": 0.0122,
-    "train_composite_ic": -0.0071,
+    "test_composite_ic": 0.0215,
+    "train_composite_ic": 0.0011,
     "overfitting_flag": false
   },
   "caveats": {
@@ -185,6 +182,6 @@
         "note": "소매업 몰락 — 밈주식 거품 이후 파산"
       }
     ],
-    "ic_data_note": "IC 미계산 팩터 ['value', 'quality']: PIT 재무 데이터 미확보 → 가중치 0으로 제외하고 나머지 팩터를 재정규화했습니다. SimFin·EDGAR 연동 시 해결 가능."
+    "ic_data_note": ""
   }
 }

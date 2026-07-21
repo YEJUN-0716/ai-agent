@@ -43,6 +43,18 @@ jobs:
           restore-keys: |
             price-panel-v1-
 
+      - name: EDGAR 원본 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: data/edgar_raw/
+          # 원본 JSON은 크고(약 1.4GB) 재수집이 비싸다. run_id로 저장,
+          # restore-keys로 직전 것 복원. 주간 실행이라 7일 경계에서
+          # 만료될 수 있으나, 만료 시 edgar_fundamentals가 재수집하므로
+          # 실패하지 않고 느려질 뿐이다.
+          key: edgar-raw-v1-${{ github.run_id }}
+          restore-keys: |
+            edgar-raw-v1-
+
       - name: IC 가중치 계산 및 저장
         run: python ic_weight_updater.py
 
