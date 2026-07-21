@@ -1446,6 +1446,76 @@ def macro_score():
     except Exception as e:
         return 50.0, {'오류': str(e)}, {}
 
+
+@st.cache_data(ttl=3600)
+def geopolitical_risk_score():
+    """지정학 안정도 점수 (시장가격 프록시, 0~100 — 높을수록 안정/저위험).
+
+    macro_score와 같은 프록시 방식이지만 (1) 지정학 충격은 급성이라 1개월 창을
+    쓰고 (2) 유가·방산주·유가변동성 등 macro_score가 안 보는 자산에 집중한다.
+    실물 뉴스/사건이 아니라 시장이 반영한 지정학 스트레스의 간접 측정이며,
+    데이터 결측 시 항목별 50(중립)으로 graceful degradation.
+    """
+    det, data = {}, {}
+    end = datetime.now(); start = end - timedelta(days=120)
+    try:
+        oil = yf.download('CL=F',  start=start, end=end, progress=False)  # WTI 원유 (공급 충격)
+        gold = yf.download('GC=F', start=start, end=end, progress=False)  # 금 (안전자산 도피)
+        vix = yf.download('^VIX',  start=start, end=end, progress=False)  # 공포지수
+        ita = yf.download('ITA',   start=start, end=end, progress=False)  # 방산 ETF
+        spy = yf.download('SPY',   start=start, end=end, progress=False)  # 상대강도 기준
+        ovx = yf.download('^OVX',  start=start, end=end, progress=False)  # 원유 변동성지수
+        for d in [oil, gold, vix, ita, spy, ovx]:
+            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+            d.dropna(subset=['Close'], inplace=True)
+
+        def _mom_1m(s):
+            return (float(s['Close'].iloc[-1]) - float(s['Close'].iloc[-21])) / float(s['Close'].iloc[-21]) * 100
+
+        # ── 유가 급등 (25%) — 공급 충격/분쟁 시 급등 → 위험 ──
+        if len(oil) >= 21:
+            oc = _mom_1m(oil); data['유가변화(1M)'] = round(oc, 1)
+            det['유가'] = 80 if oc < -5 else (65 if oc < 0 else (50 if oc < 8 else (32 if oc < 18 else 18)))
+        else: det['유가'] = 50.0
+
+        # ── 금 안전자산 수요 (20%) — 급등 = 도피 심리 → 위험 ──
+        if len(gold) >= 21:
+            gc = _mom_1m(gold); data['금변화(1M)'] = round(gc, 1)
+            det['금'] = 72 if gc < 0 else (60 if gc < 4 else (48 if gc < 8 else (32 if gc < 15 else 20)))
+        else: det['금'] = 50.0
+
+        # ── VIX 절대수준 (20%) ──
+        if len(vix) >= 1:
+            cv = float(vix['Close'].iloc[-1]); data['VIX'] = round(cv, 1)
+            det['VIX'] = 80 if cv < 15 else (68 if cv < 20 else (52 if cv < 27 else (34 if cv < 38 else 18)))
+        else: det['VIX'] = 50.0
+
+        # ── 방산주 상대강도 (15%) — 방산이 시장 초과 = 분쟁 프라이싱 → 위험 ──
+        if len(ita) >= 21 and len(spy) >= 21:
+            rs = _mom_1m(ita) - _mom_1m(spy); data['방산상대강도(1M)'] = round(rs, 1)
+            det['방산상대강도'] = 70 if rs < -2 else (58 if rs < 1 else (45 if rs < 4 else (32 if rs < 8 else 20)))
+        else: det['방산상대강도'] = 50.0
+
+        # ── 원유 변동성 OVX (10%) — 에너지 불확실성 ──
+        if len(ovx) >= 1:
+            co = float(ovx['Close'].iloc[-1]); data['OVX'] = round(co, 1)
+            det['원유변동성'] = 75 if co < 30 else (60 if co < 40 else (45 if co < 55 else 28))
+        else: det['원유변동성'] = 50.0
+
+        # ── 금 변동성 대용 — 위 항목으로 충분, 잔여 10%는 VIX 급변으로 흡수 ──
+        if len(vix) >= 6:
+            v_now = float(vix['Close'].iloc[-1]); v_5 = float(vix['Close'].iloc[-6])
+            v_spike = (v_now - v_5) / (v_5 + 1e-9) * 100; data['VIX급변(5D)'] = round(v_spike, 1)
+            det['VIX급변'] = 70 if v_spike < -10 else (55 if v_spike < 10 else (38 if v_spike < 30 else 20))
+        else: det['VIX급변'] = 50.0
+
+        # 가중치: 유가25 금20 VIX20 방산15 원유변동성10 VIX급변10
+        total = (det['유가']*0.25 + det['금']*0.20 + det['VIX']*0.20 +
+                 det['방산상대강도']*0.15 + det['원유변동성']*0.10 + det['VIX급변']*0.10)
+        return float(total), det, data
+    except Exception as e:
+        return 50.0, {'오류': str(e)}, {}
+
 # ─────────────────────────────────────────────
 # SCREENER
 # ─────────────────────────────────────────────
@@ -3810,6 +3880,14 @@ def macro_rate_analyst(m_score, m_det):
     return build_analyst_report('매크로+금리', '🌍', m_score, reasons, m_det, role='context')
 
 
+def geopolitical_analyst(g_score, g_det):
+    """지정학 직원: geopolitical_risk_score(유가·금·방산·VIX 프록시) 기반.
+    역할=리스크 맥락(context) — 종목 방향성이 아니라 시장 전반의 지정학 스트레스를
+    나타내므로 방향성 블렌드에 포함되지 않는다. 점수 높을수록 안정/저위험."""
+    reasons = [f"{k}: {v}" for k, v in list(g_det.items())[:4] if not isinstance(v, dict)]
+    return build_analyst_report('지정학', '🌐', g_score, reasons, g_det, role='context')
+
+
 def _parse_pct(s):
     """'63.4%' / '+2.1%' 같은 포맷된 문자열을 float로 역파싱."""
     try:
@@ -3921,9 +3999,10 @@ def manager_consolidate(reports):
     weakest_agree = min(directional, key=lambda r: 0 if r['verdict'] == _team_verdict(weighted_score) else 1)
 
     # 참고 정보 — 방향성 블렌드에는 안 들어가지만 총괄 보고서에 함께 표시
-    context = next((r for r in reports if r.get('role') == 'context'), None)
+    contexts = [r for r in reports if r.get('role') == 'context']
     confidence = next((r for r in reports if r.get('role') == 'confidence'), None)
-    macro_note = f"{context['icon']} {context['name']} {context['score']:.0f}점({context['verdict']}) — 레짐 맥락 참고" if context else None
+    macro_note = (' · '.join(f"{c['icon']} {c['name']} {c['score']:.0f}점({c['verdict']})" for c in contexts) + ' — 리스크 맥락 참고'
+                  if contexts else None)
     confidence_note = None
     if confidence:
         conf_level = '높음' if confidence['score'] >= 60 else ('보통' if confidence['score'] >= 45 else '낮음')
@@ -4690,6 +4769,7 @@ def main():
                     _f_score, _f_det  = fundamental_score(ticker, _df)
                     prog.progress(52); msg.text("🌍 매크로·금리 분석 중...")
                     _m_score, _m_det, _m_data = macro_score()
+                    _g_score, _g_det, _g_data = geopolitical_risk_score()
                     _regime, _regime_diff = get_market_regime()
                     prog.progress(63); msg.text("🕐 멀티 타임프레임 분석 중...")
                     _mtf_scores      = technical_score_multi(ticker)
@@ -4818,6 +4898,7 @@ def main():
                         'mom_data': _mom_data, 'ic_data': _ic_data,
                         'f_score': _f_score, 'f_det': _f_det,
                         'm_score': _m_score, 'm_det': _m_det, 'm_data': _m_data,
+                        'g_score': _g_score, 'g_det': _g_det, 'g_data': _g_data,
                         'total': _total, 'mtf_scores': _mtf_scores,
                         'dcf_val': _dcf_val, 'dcf_det': _dcf_det,
                         'risk_data': _risk_data,
@@ -4846,6 +4927,7 @@ def main():
             mom_data  = _a['mom_data']; ic_data = _a['ic_data']
             f_score   = _a['f_score']; f_det = _a['f_det']
             m_score   = _a['m_score']; m_det = _a['m_det']; m_data = _a['m_data']
+            g_score   = _a.get('g_score', 50.0); g_det = _a.get('g_det', {})
             total     = _a['total']; mtf_scores = _a['mtf_scores']
             dcf_det   = _a['dcf_det']
             risk_data = _a['risk_data']
@@ -4998,7 +5080,7 @@ def main():
 </div>""", unsafe_allow_html=True)
 
             # ── AI 애널리스트 팀 리포트 ──────────────────────
-            with st.expander("🏢 AI 애널리스트 팀 리포트 — 6개 부서 → 총괄 → 매수/매도 라인", expanded=False):
+            with st.expander("🏢 AI 애널리스트 팀 리포트 — 7개 부서 → 총괄 → 매수/매도 라인", expanded=False):
                 with st.spinner("팀 리포트 작성 중 (백테스트·리스크 분석 포함)..."):
                     _bt_rep = backtest_analyst(df)
                     _team_reports = [
@@ -5008,6 +5090,7 @@ def main():
                         ict_crt_analyst(df),
                         _bt_rep,
                         risk_analyst(ticker, _bt_rep),
+                        geopolitical_analyst(g_score, g_det),
                     ]
 
                 def _render_report_card(_rep):
@@ -5024,14 +5107,12 @@ def main():
   <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:16px;line-height:1.6">{_reason_html}</ul>
 </div>""", unsafe_allow_html=True)
 
-                _tr1 = st.columns(3)
-                for _tcol, _rep in zip(_tr1, _team_reports[:3]):
-                    with _tcol:
-                        _render_report_card(_rep)
-                _tr2 = st.columns(3)
-                for _tcol, _rep in zip(_tr2, _team_reports[3:]):
-                    with _tcol:
-                        _render_report_card(_rep)
+                for _row_start in range(0, len(_team_reports), 3):
+                    _row_reports = _team_reports[_row_start:_row_start + 3]
+                    _tcols = st.columns(3)
+                    for _tcol, _rep in zip(_tcols, _row_reports):
+                        with _tcol:
+                            _render_report_card(_rep)
 
                 st.markdown("")
                 _mgr = manager_consolidate(_team_reports)
