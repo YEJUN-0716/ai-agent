@@ -171,12 +171,29 @@ def fetch_fundamentals(tickers: list) -> dict:
                     margin_raw = info.get("profitMargins")
                 margin = float(margin_raw) * 100 if margin_raw is not None else np.nan
 
-            result[tk] = {"pe": pe, "pb": pb, "margin": margin}
+            # ROE (app.py calc_factor_scores와 동일 소스: yfinance returnOnEquity)
+            roe_raw = info.get("returnOnEquity")
+            roe = round(float(roe_raw) * 100, 2) if roe_raw is not None else np.nan
+
+            # FCF 수익률 + 발생액 품질 (app.py calc_factor_scores의 P3-A/P3-B와 동일 공식)
+            fcf  = info.get("freeCashflow")
+            mcap = info.get("marketCap")
+            ni_v = info.get("netIncomeToCommon")
+            fcf_yield = fcf / mcap * 100 if fcf is not None and mcap else np.nan
+            if fcf is not None and ni_v is not None and ni_v > 0 and fcf > 0:
+                accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
+            elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
+                accrual_q = 0.0  # GAAP 흑자 + 현금 소각 → 최저 품질
+            else:
+                accrual_q = np.nan
+
+            result[tk] = {"pe": pe, "pb": pb, "margin": margin,
+                          "roe": roe, "fcf_yield": fcf_yield, "accrual_q": accrual_q}
         except Exception:
             result[tk] = {
-                "pe":     np.nan,
-                "pb":     np.nan,
+                "pe": np.nan, "pb": np.nan,
                 "margin": float(dart_margin) if dart_margin is not None else np.nan,
+                "roe": np.nan, "fcf_yield": np.nan, "accrual_q": np.nan,
             }
     return result
 
@@ -320,9 +337,12 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
 
     print("  기초체력 데이터 수집 중...")
     fund = fetch_fundamentals([r["ticker"] for r in rows])
-    df["pe"]     = df["ticker"].map(lambda t: fund.get(t, {}).get("pe",     np.nan))
-    df["pb"]     = df["ticker"].map(lambda t: fund.get(t, {}).get("pb",     np.nan))
-    df["margin"] = df["ticker"].map(lambda t: fund.get(t, {}).get("margin", np.nan))
+    df["pe"]        = df["ticker"].map(lambda t: fund.get(t, {}).get("pe",        np.nan))
+    df["pb"]        = df["ticker"].map(lambda t: fund.get(t, {}).get("pb",        np.nan))
+    df["margin"]    = df["ticker"].map(lambda t: fund.get(t, {}).get("margin",    np.nan))
+    df["roe"]       = df["ticker"].map(lambda t: fund.get(t, {}).get("roe",       np.nan))
+    df["fcf_yield"] = df["ticker"].map(lambda t: fund.get(t, {}).get("fcf_yield", np.nan))
+    df["accrual_q"] = df["ticker"].map(lambda t: fund.get(t, {}).get("accrual_q", np.nan))
 
     for col in ("mom_3m", "mom_1m"):
         mu, sigma = df[col].mean(), df[col].std()
@@ -334,32 +354,23 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     mu_i, sigma_i = df["ict_raw"].mean(), df["ict_raw"].std()
     df["z_ict"] = (df["ict_raw"] - mu_i) / (sigma_i + 1e-9)
 
-    # 가치 팩터: P/E 우선, 없으면 P/B로 대체 (한국 주식은 P/B가 더 많이 제공됨)
-    pe_valid = df["pe"].dropna()
-    pb_valid = df["pb"].dropna()
-    if len(pe_valid) >= 3:
-        mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
-        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(np.nan)
-        # P/E 없는 종목은 P/B로 보완
-        if len(pb_valid) >= 3:
-            mu_pb, sigma_pb = pb_valid.mean(), pb_valid.std()
-            z_pb = -(df["pb"] - mu_pb) / (sigma_pb + 1e-9)
-            df["z_value"] = df["z_value"].fillna(z_pb).fillna(0.0)
-        else:
-            df["z_value"] = df["z_value"].fillna(0.0)
-    elif len(pb_valid) >= 3:
-        # P/E가 거의 없는 시장(한국 등): P/B만으로 가치 팩터 구성
-        mu_pb, sigma_pb = pb_valid.mean(), pb_valid.std()
-        df["z_value"] = (-(df["pb"] - mu_pb) / (sigma_pb + 1e-9)).fillna(0.0)
-    else:
-        df["z_value"] = 0.0
+    # 가치 팩터: EP(1/PE) 40% + BP(1/PB) 30% + FCF수익률 30%
+    # (app.py::calc_factor_scores의 P3-A 배합과 동일 — 두 엔진 드리프트 해소)
+    ep = df["pe"].apply(lambda x: 100.0 / x if pd.notna(x) and x > 0 else 0.0)
+    bp = df["pb"].apply(lambda x: 100.0 / x if pd.notna(x) and x > 0 else 0.0)
+    fcf_y = df["fcf_yield"].fillna(0.0)
+    df["value_raw"] = ep * 0.40 + bp * 0.30 + fcf_y * 0.30
+    mu_val, sigma_val = df["value_raw"].mean(), df["value_raw"].std()
+    df["z_value"] = (df["value_raw"] - mu_val) / (sigma_val + 1e-9)
 
-    m_valid = df["margin"].dropna()
-    if len(m_valid) >= 3:
-        mu_m, sigma_m = m_valid.mean(), m_valid.std()
-        df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
-    else:
-        df["z_quality"] = 0.0
+    # 퀄리티 팩터: ROE 45% + 이익률 35% + 발생액 품질 20%
+    # (app.py::calc_factor_scores의 P3-B 배합과 동일 — 두 엔진 드리프트 해소)
+    roe_v     = df["roe"].fillna(0.0)
+    margin_v  = df["margin"].fillna(0.0)
+    accrual_v = df["accrual_q"].fillna(50.0)
+    df["quality_raw"] = roe_v * 0.45 + margin_v * 0.35 + accrual_v * 0.20
+    mu_q, sigma_q = df["quality_raw"].mean(), df["quality_raw"].std()
+    df["z_quality"] = (df["quality_raw"] - mu_q) / (sigma_q + 1e-9)
 
     df["composite_z"] = (
         df["z_mom_3m"]  * W["mom_3m"]
