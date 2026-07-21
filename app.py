@@ -36,6 +36,16 @@ try:
 except Exception:
     _DART_AVAILABLE = False
 
+try:
+    from modules.analyst_weights import (
+        load_analyst_weights as _load_analyst_weights,
+        DIRECTIONAL_ANALYSTS as _DIRECTIONAL_ANALYSTS,
+    )
+    _ANALYST_WEIGHTS_AVAILABLE = True
+except Exception:
+    _ANALYST_WEIGHTS_AVAILABLE = False
+    _DIRECTIONAL_ANALYSTS = ('차트+파동+모멘텀', '퀀트+재무', 'ICT+CRT')
+
 
 def _dart_fallback_batch(tickers):
     """KRX(.KS/.KQ) 종목만 골라 DART 재무를 일괄 조회 (yfinance가 KRX 재무를 못 주는 문제 보완).
@@ -3709,11 +3719,37 @@ def _team_verdict(score):
     return '매수' if score >= 65 else ('매도' if score <= 40 else '중립')
 
 
-def build_analyst_report(name, icon, score, reasons, detail=None):
-    """4개 부서 직원 공통 보고서 포맷."""
+def _current_analyst_weights():
+    """방향성 3인(차트+파동+모멘텀·퀀트+재무·ICT+CRT)의 표시/블렌드 가중치(%, 합 100).
+
+    ic_weights.json의 팩터 ICIR이 있으면 그 비율로, 없거나 측정 불가(전부 0)면
+    TEAM_WEIGHTS의 3인분 비율로 폴백한다 — analyst-team-feedback-loop 승인 설계.
+    """
+    if _ANALYST_WEIGHTS_AVAILABLE:
+        try:
+            regime, _ = get_market_regime()
+        except Exception:
+            regime = 'neutral'
+        w = _load_analyst_weights(regime)
+        if w:
+            return {k: round(v * 100, 1) for k, v in w.items()}
+    _fallback_total = sum(TEAM_WEIGHTS[k] for k in _DIRECTIONAL_ANALYSTS) or 1
+    return {k: round(TEAM_WEIGHTS[k] / _fallback_total * 100, 1) for k in _DIRECTIONAL_ANALYSTS}
+
+
+def build_analyst_report(name, icon, score, reasons, detail=None, role='directional'):
+    """6개 부서 직원 공통 보고서 포맷.
+
+    role: 'directional'(방향성 블렌드 대상 — IC가중치 적용) |
+          'context'(매크로, 레짐 맥락 참고용) |
+          'confidence'(백테스트, 신뢰도 플래그) |
+          'sizing'(리스크, Kelly 사이징 전용 — 이미 트레이더 단계에서 별도 소비).
+    방향성 3인 외에는 방향성 점수 블렌드에 들어가지 않는다(manager_consolidate 참고).
+    """
+    weight = _current_analyst_weights().get(name, 33.3) if role == 'directional' else TEAM_WEIGHTS.get(name, 15)
     return {
         'name': name, 'icon': icon, 'score': round(float(score), 1),
-        'weight': TEAM_WEIGHTS.get(name, 25),
+        'weight': weight, 'role': role,
         'verdict': _team_verdict(score),
         'reasons': [r for r in reasons if r][:4],
         'detail': detail or {},
@@ -3765,9 +3801,10 @@ def quant_fundamental_analyst(f_score, f_det, dcf_det=None):
 
 
 def macro_rate_analyst(m_score, m_det):
-    """매크로+금리 직원: macro_score(장단기금리차·VIX·환율 등) 기반."""
+    """매크로+금리 직원: macro_score(장단기금리차·VIX·환율 등) 기반.
+    역할=레짐 맥락(context) — 방향성 점수 블렌드에는 포함되지 않는다."""
     reasons = [f"{k}: {v}" for k, v in list(m_det.items())[:4] if not isinstance(v, dict)]
-    return build_analyst_report('매크로+금리', '🌍', m_score, reasons, m_det)
+    return build_analyst_report('매크로+금리', '🌍', m_score, reasons, m_det, role='context')
 
 
 def _parse_pct(s):
@@ -3802,9 +3839,9 @@ def backtest_analyst(df):
             '_avg_win_raw': _parse_pct(metrics.get('평균 수익')),
             '_avg_loss_raw': _parse_pct(metrics.get('평균 손실')),
         }
-        return build_analyst_report('백테스팅팀', '📉', score, reasons, detail)
+        return build_analyst_report('백테스팅팀', '📉', score, reasons, detail, role='confidence')
     except Exception as e:
-        return build_analyst_report('백테스팅팀', '📉', 50.0, [f'백테스트 실패: {e}'])
+        return build_analyst_report('백테스팅팀', '📉', 50.0, [f'백테스트 실패: {e}'], role='confidence')
 
 
 def risk_analyst(ticker, backtest_report=None):
@@ -3813,7 +3850,7 @@ def risk_analyst(ticker, backtest_report=None):
     try:
         rm = calc_risk_metrics(ticker)
         if not rm:
-            return build_analyst_report('리스크팀', '🛡️', 50.0, ['리스크 데이터 부족 — 데이터 이력 짧음'])
+            return build_analyst_report('리스크팀', '🛡️', 50.0, ['리스크 데이터 부족 — 데이터 이력 짧음'], role='sizing')
 
         vol = _parse_pct(rm.get('연간 변동성'))
         var95 = _parse_pct(rm.get('VaR 95% (1일)'))
@@ -3840,18 +3877,29 @@ def risk_analyst(ticker, backtest_report=None):
                 kelly = kelly_fraction(wr / 100, aw, al)
                 reasons.append(f"권장 비중(Half-Kelly): 총자본의 {kelly*100:.1f}%")
 
-        return build_analyst_report('리스크팀', '🛡️', score, reasons, rm)
+        return build_analyst_report('리스크팀', '🛡️', score, reasons, rm, role='sizing')
     except Exception as e:
-        return build_analyst_report('리스크팀', '🛡️', 50.0, [f'리스크 분석 실패: {e}'])
+        return build_analyst_report('리스크팀', '🛡️', 50.0, [f'리스크 분석 실패: {e}'], role='sizing')
 
 
 def manager_consolidate(reports):
-    """총괄 직원: 4개 부서 보고서를 규칙 기반으로 종합 — 가중합 + 합의율."""
-    total_w = sum(r['weight'] for r in reports) or 1
-    weighted_score = sum(r['score'] * r['weight'] for r in reports) / total_w
-    verdicts = [r['verdict'] for r in reports]
+    """총괄 직원: 방향성 3명(차트+파동+모멘텀·퀀트+재무·ICT+CRT)의 IC가중 블렌드로
+    매수/매도를 판정 — 가중합 + 합의율.
+
+    매크로(레짐 맥락)·백테스트(신뢰도 플래그)·리스크(Kelly 사이징)는 역할이
+    다르므로 방향성 점수·합의율 계산에서 제외한다(analyst-team-feedback-loop
+    승인 설계 — 6명 전부를 매수/매도 "투표"에 섞으면 방향성 정확도가 흐려진다).
+    role 태그가 없는 구버전 reports가 들어오면 방어적으로 전원을 방향성으로 취급한다.
+    """
+    directional = [r for r in reports if r.get('role', 'directional') == 'directional']
+    if not directional:
+        directional = reports
+
+    total_w = sum(r['weight'] for r in directional) or 1
+    weighted_score = sum(r['score'] * r['weight'] for r in directional) / total_w
+    verdicts = [r['verdict'] for r in directional]
     buy_n, sell_n, neu_n = verdicts.count('매수'), verdicts.count('매도'), verdicts.count('중립')
-    n = len(reports)
+    n = len(directional)
     majority = n * 0.6  # 60% 이상 동의 시 "우세"로 판정
 
     if buy_n >= majority:
@@ -3866,8 +3914,17 @@ def manager_consolidate(reports):
         consensus = f'의견 분산 — 관망 권고 ({buy_n}매수·{sell_n}매도·{neu_n}중립)'
 
     agreement = round(max(buy_n, sell_n, neu_n) / n * 100)
-    strongest = max(reports, key=lambda r: abs(r['score'] - 50))
-    weakest_agree = min(reports, key=lambda r: 0 if r['verdict'] == _team_verdict(weighted_score) else 1)
+    strongest = max(directional, key=lambda r: abs(r['score'] - 50))
+    weakest_agree = min(directional, key=lambda r: 0 if r['verdict'] == _team_verdict(weighted_score) else 1)
+
+    # 참고 정보 — 방향성 블렌드에는 안 들어가지만 총괄 보고서에 함께 표시
+    context = next((r for r in reports if r.get('role') == 'context'), None)
+    confidence = next((r for r in reports if r.get('role') == 'confidence'), None)
+    macro_note = f"{context['icon']} {context['name']} {context['score']:.0f}점({context['verdict']}) — 레짐 맥락 참고" if context else None
+    confidence_note = None
+    if confidence:
+        conf_level = '높음' if confidence['score'] >= 60 else ('보통' if confidence['score'] >= 45 else '낮음')
+        confidence_note = f"{confidence['icon']} 백테스트 신뢰도 {conf_level} ({confidence['score']:.0f}점)"
 
     return {
         'total_score': round(weighted_score, 1),
@@ -3878,6 +3935,8 @@ def manager_consolidate(reports):
         'strongest_opinion': f"{strongest['icon']} {strongest['name']} ({strongest['score']:.0f}점, {strongest['verdict']})",
         'dissent': (f"{weakest_agree['icon']} {weakest_agree['name']}만 {weakest_agree['verdict']} 의견"
                     if weakest_agree['verdict'] != _team_verdict(weighted_score) else None),
+        'macro_note': macro_note,
+        'confidence_note': confidence_note,
     }
 
 
@@ -4949,15 +5008,19 @@ def main():
                 _mgr = manager_consolidate(_team_reports)
                 _mc  = score_color(_mgr['total_score'])
                 _dissent_html = f"<br>⚠️ {_mgr['dissent']}" if _mgr['dissent'] else ''
+                _context_bits = ' · '.join(x for x in (_mgr.get('macro_note'), _mgr.get('confidence_note')) if x)
+                _context_html = (f"<div style='font-size:11px;color:var(--text-4);margin-top:6px'>{_context_bits}</div>"
+                                 if _context_bits else '')
                 st.markdown(f"""
 <div style="background:{_mc}0d;border:1px solid {_mc}40;border-radius:10px;padding:14px 18px;margin-top:4px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">🧑‍💼 총괄 직원 종합 보고서</div>
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">🧑‍💼 총괄 직원 종합 보고서 <span style="text-transform:none;font-weight:500">— 방향성 3인 IC가중 블렌드</span></div>
   <div style="display:flex;align-items:baseline;gap:12px;margin:6px 0;flex-wrap:wrap">
     <span style="font-size:2rem;font-weight:800;color:{_mc};font-family:'JetBrains Mono',monospace">{_mgr['total_score']:.1f}</span>
     <span style="font-size:13px;font-weight:700;color:{_mc}">{_mgr['consensus']}</span>
     <span style="font-size:11px;color:var(--text-4)">팀 합의율 {_mgr['agreement']}%</span>
   </div>
   <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {_mgr['strongest_opinion']}{_dissent_html}</div>
+  {_context_html}
 </div>""", unsafe_allow_html=True)
 
                 _risk_rep = next(r for r in _team_reports if r['name'] == '리스크팀')
