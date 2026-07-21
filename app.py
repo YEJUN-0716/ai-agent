@@ -73,7 +73,10 @@ except Exception:
 _PT_AVAILABLE = False
 
 try:
-    from modules.ml_signals import train_and_validate_ml_signal as _ml_train
+    from modules.ml_signals import (
+        train_and_validate_ml_signal as _ml_train,
+        predict_current_ml_signal as _ml_predict,
+    )
     _ML_AVAILABLE = True
 except Exception:
     _ML_AVAILABLE = False
@@ -4748,6 +4751,22 @@ def main():
                         _total = float(np.clip(_total + _news_bonus, 0, 100))
                         _total_adj = float(np.clip(_total_adj + _news_bonus, 0, 100))
                         _score_method += f" + 뉴스({_news_bonus:+.0f})"
+
+                    # ML 신호 틸트: 이 종목 과거에서 out-of-fold AUC가 게이트(0.55)를
+                    # 넘을 때만(has_edge) ±4점 반영. 예측력 미검증이면 0 — 검증 안 된
+                    # 신호를 스코어에 섞지 않는 저장소 원칙과 동일. (없으면 조용히 skip)
+                    _ml_info = None
+                    _ml_bonus = 0.0
+                    if _ML_AVAILABLE:
+                        try:
+                            _ml_info = _ml_predict(_df)
+                            if _ml_info.get('has_edge') and _ml_info.get('prob') is not None:
+                                _ml_bonus = float(np.clip((_ml_info['prob'] - 0.5) / 0.5 * 4, -4, 4))
+                                _total = float(np.clip(_total + _ml_bonus, 0, 100))
+                                _total_adj = float(np.clip(_total_adj + _ml_bonus, 0, 100))
+                                _score_method += f" + ML({_ml_bonus:+.0f})"
+                        except Exception:
+                            _ml_info = None
 
                     try:
                         _info = yf.Ticker(ticker).info

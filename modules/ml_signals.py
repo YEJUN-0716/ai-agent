@@ -172,3 +172,80 @@ def train_and_validate_ml_signal(df: pd.DataFrame, horizon: int = 20,
             "0.55~0.60도 금융에서는 의미 있는 edge일 수 있음."
         ),
     }
+
+
+def predict_current_ml_signal(df: pd.DataFrame, horizon: int = 20,
+                               n_splits: int = 5, embargo_frac: float = 0.02,
+                               auc_gate: float = 0.55) -> dict:
+    """
+    현재 봉(오늘) 기준 상승확률 + 그 신호의 out-of-fold AUC를 함께 반환.
+
+    핵심: AUC를 '게이트'로 함께 돌려준다. 이 종목 과거에서 예측력이 확인되지
+    않은(mean_auc < auc_gate) 모델은 호출부가 매수/매도 판단에 반영하지 않도록
+    has_edge=False로 표시한다 — 검증 안 된 신호를 스코어에 섞지 않는다는
+    저장소 원칙(signal-alerts 비활성화 사유)과 동일한 규율.
+
+    반환: {
+        'prob': float | None,      # 최신 봉의 상승확률 0~1 (edge 없거나 실패 시 None)
+        'mean_auc': float,         # out-of-fold 평균 AUC (게이트 판정 근거)
+        'std_auc': float,
+        'has_edge': bool,          # mean_auc >= auc_gate
+        'n': int,                  # 학습에 쓴 샘플 수
+        'reason': str,
+    }
+    """
+    fail = {'prob': None, 'mean_auc': 0.0, 'std_auc': 0.0,
+            'has_edge': False, 'n': 0, 'reason': ''}
+    if not SKLEARN_AVAILABLE:
+        return {**fail, 'reason': 'scikit-learn 미설치'}
+
+    try:
+        features = build_features_from_df(df)
+        labels   = make_labels(df['Close'], horizon)
+        data = pd.concat([features, labels.rename('label')], axis=1).dropna()
+        if len(data) < n_splits * 30:
+            return {**fail, 'reason': f'데이터 부족 (n={len(data)})'}
+
+        X, y = data.drop(columns=['label']), data['label']
+        if y.nunique() < 2:
+            return {**fail, 'reason': '라벨이 한 쪽으로만 존재'}
+
+        # out-of-fold AUC (게이트 근거) — train_and_validate와 동일 로직
+        pkf = PurgedKFold(n_splits=n_splits, embargo_frac=embargo_frac,
+                           label_horizon=horizon)
+        fold_aucs = []
+        for tr, te in pkf.split(X):
+            ytr, yte = y.iloc[tr], y.iloc[te]
+            if ytr.nunique() < 2 or yte.nunique() < 2:
+                continue
+            m = GradientBoostingClassifier(n_estimators=100, max_depth=3, random_state=42)
+            m.fit(X.iloc[tr], ytr)
+            fold_aucs.append(roc_auc_score(yte, m.predict_proba(X.iloc[te])[:, 1]))
+        if not fold_aucs:
+            return {**fail, 'reason': '유효 fold 없음'}
+
+        mean_auc = float(np.mean(fold_aucs))
+        std_auc  = float(np.std(fold_aucs))
+        has_edge = mean_auc >= auc_gate
+
+        # 최신 봉 예측: 라벨이 없는(NaN) 최근 구간도 포함해 feature만 최신 행 사용
+        latest_feat = features.dropna()
+        if latest_feat.empty:
+            return {**fail, 'mean_auc': round(mean_auc, 4), 'std_auc': round(std_auc, 4),
+                    'has_edge': has_edge, 'n': len(data), 'reason': '최신 피처 없음'}
+
+        final_model = GradientBoostingClassifier(n_estimators=100, max_depth=3, random_state=42)
+        final_model.fit(X, y)
+        prob = float(final_model.predict_proba(latest_feat.iloc[[-1]])[:, 1][0])
+
+        return {
+            'prob': prob if has_edge else None,
+            'mean_auc': round(mean_auc, 4),
+            'std_auc': round(std_auc, 4),
+            'has_edge': has_edge,
+            'n': len(data),
+            'reason': (f'상승확률 {prob*100:.0f}% (AUC {mean_auc:.2f})' if has_edge
+                       else f'예측력 부족 (AUC {mean_auc:.2f} < {auc_gate}) — 반영 제외'),
+        }
+    except Exception as e:
+        return {**fail, 'reason': f'ML 예측 실패: {e}'}
