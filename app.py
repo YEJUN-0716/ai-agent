@@ -31,6 +31,26 @@ except Exception:
     _PIT_AVAILABLE = False
 
 try:
+    from modules.dart_fundamentals import fetch_krx_fundamentals as _fetch_dart_fundamentals
+    _DART_AVAILABLE = True
+except Exception:
+    _DART_AVAILABLE = False
+
+
+def _dart_fallback_batch(tickers):
+    """KRX(.KS/.KQ) 종목만 골라 DART 재무를 일괄 조회 (yfinance가 KRX 재무를 못 주는 문제 보완).
+    DART_API_KEY 미설정·모듈 미탑재 시 빈 dict — 호출부는 전부 yfinance로 폴백된다."""
+    if not _DART_AVAILABLE:
+        return {}
+    krx = [tk for tk in tickers if tk.endswith(('.KS', '.KQ'))]
+    if not krx:
+        return {}
+    try:
+        return _fetch_dart_fundamentals(krx)
+    except Exception:
+        return {}
+
+try:
     from modules.stat_validation import (
         deflated_sharpe_ratio as _dsr,
         block_bootstrap_sharpe_ci as _bb_ci,
@@ -1246,6 +1266,16 @@ def fundamental_score(ticker, df=None):
         roe = info.get('returnOnEquity')
         roa = info.get('returnOnAssets')
         pm  = info.get('profitMargins')
+        # DART 폴백 (KRX 종목은 yfinance에 ROE/순이익률이 비어있는 경우가 많음)
+        if ticker.endswith(('.KS', '.KQ')) and (roe is None or pm is None):
+            _dd = _dart_fallback_batch([ticker]).get(ticker, {})
+            if roe is None and _dd.get('net_income') and _dd.get('equity'):
+                try:
+                    roe = _dd['net_income'] / _dd['equity']
+                except ZeroDivisionError:
+                    pass
+            if pm is None and _dd.get('margin') is not None:
+                pm = _dd['margin'] / 100  # DART는 영업이익률 — 순이익률 미제공이라 근사치로만 사용
         pm_s = 50
         if pm is not None:   # 0.0도 의미 있는 값 — if pm: 쓰면 0% 기업이 중립 처리됨
             pp = pm*100
@@ -2919,6 +2949,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
     failed = []
+    _dart_data = _dart_fallback_batch(tickers)
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
@@ -2966,6 +2997,16 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                     accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
                 elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
                     accrual_q = 0.0  # GAAP흑자+현금소각 → 최저 품질
+                # DART 폴백 (KRX 종목은 yfinance ROE/이익률이 비어있는 경우가 많음)
+                if tk.endswith(('.KS', '.KQ')) and (not roe_v or not pm_v):
+                    _dd = _dart_data.get(tk, {})
+                    if not roe_v and _dd.get('net_income') and _dd.get('equity'):
+                        try:
+                            roe_v = round(_dd['net_income'] / _dd['equity'] * 100, 2)
+                        except ZeroDivisionError:
+                            pass
+                    if not pm_v and _dd.get('margin') is not None:
+                        pm_v = _dd['margin']  # DART는 영업이익률 — 순이익률 근사치로만 사용
             except Exception:
                 pass
 
@@ -3265,6 +3306,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
         factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
+    _dart_data = _dart_fallback_batch(tickers)
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
@@ -3303,6 +3345,16 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
                     accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
                 elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
                     accrual_q = 0.0
+                # DART 폴백 (KRX 종목은 yfinance ROE/이익률이 비어있는 경우가 많음)
+                if tk.endswith(('.KS', '.KQ')) and (not roe_v or not pm_v):
+                    _dd = _dart_data.get(tk, {})
+                    if not roe_v and _dd.get('net_income') and _dd.get('equity'):
+                        try:
+                            roe_v = round(_dd['net_income'] / _dd['equity'] * 100, 2)
+                        except ZeroDivisionError:
+                            pass
+                    if not pm_v and _dd.get('margin') is not None:
+                        pm_v = _dd['margin']  # DART는 영업이익률 — 순이익률 근사치로만 사용
             except Exception:
                 pass
 
