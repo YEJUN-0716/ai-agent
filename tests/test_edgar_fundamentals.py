@@ -162,3 +162,37 @@ def test_assemble_shares_no_q4_derivation():
     s = ef.assemble_shares(ug)
     assert list(s.values) == [1000, 1010]
     assert s.index.is_monotonic_increasing
+
+
+def test_public_api_uses_disk_cache_once(monkeypatch):
+    """두 공개 함수가 load_raw를 통해 종목당 한 번만 원본을 읽는다."""
+    ug = _income_ug()
+    ug["WeightedAverageNumberOfDilutedSharesOutstanding"] = {"units": {"shares": [
+        _fact("2020-01-01", "2020-03-31", 1000, "2020-05-01"),
+    ]}}
+    seen = []
+
+    def fake_load_raw(tk, cache_dir=None):
+        seen.append(tk)
+        return ug if tk == "AAPL" else None
+
+    monkeypatch.setattr(ef, "load_raw", fake_load_raw)
+
+    fin = ef.fetch_quarterly_fundamentals_history(["AAPL", "DEAD"])
+    assert not fin["AAPL"].empty
+    assert fin["DEAD"].empty
+    cov = ef.last_coverage()
+    assert cov["requested"] == 2
+    assert cov["resolved"] == 1
+    assert cov["failed"] == ["DEAD"]
+    assert 0.0 <= cov["metric_coverage"]["net_income"] <= 1.0
+
+
+def test_fetch_shares_history_returns_series(monkeypatch):
+    ug = {"WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [
+        _fact("2020-01-01", "2020-03-31", 1000, "2020-05-01"),
+    ]}}}
+    monkeypatch.setattr(ef, "load_raw", lambda tk, cache_dir=None: ug)
+    out = ef.fetch_shares_history(["AAPL"])
+    assert isinstance(out["AAPL"], pd.Series)
+    assert out["AAPL"].iloc[-1] == 1000

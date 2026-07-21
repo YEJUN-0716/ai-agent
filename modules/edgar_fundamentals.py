@@ -222,3 +222,63 @@ def assemble_shares(us_gaap: dict) -> pd.Series:
     for f in sorted(quarters, key=lambda f: f["filed"]):
         data[pd.Timestamp(f["filed"])] = float(f["val"])
     return pd.Series(data).sort_index()
+
+
+_last_coverage = {"requested": 0, "resolved": 0, "failed": [], "metric_coverage": {}}
+
+
+def last_coverage() -> dict:
+    """직전 fetch_quarterly_fundamentals_history의 커버리지."""
+    return dict(_last_coverage)
+
+
+def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None) -> dict:
+    """
+    분기 손익 이력. 반환 {ticker: DataFrame(index=filed, cols=[revenue,operating_income,net_income])}.
+    reporting_lag_days는 기존 시그니처 호환용 — EDGAR는 실제 filed를 주므로 무시.
+    """
+    global _last_coverage
+    result, failed = {}, []
+    metric_hit = {m: 0 for m in TAG_CHAINS}
+
+    for tk in tickers:
+        ug = load_raw(tk)
+        if ug is None:
+            failed.append(tk)
+            result[tk] = pd.DataFrame()
+            continue
+        df = assemble_income(ug)
+        result[tk] = df
+        if df.empty:
+            failed.append(tk)
+        else:
+            for m in TAG_CHAINS:
+                if m in df.columns and df[m].notna().any():
+                    metric_hit[m] += 1
+
+    n = len(tickers) or 1
+    _last_coverage = {
+        "requested": len(tickers),
+        "resolved":  len(tickers) - len(failed),
+        "failed":    failed,
+        "metric_coverage": {m: round(c / n, 3) for m, c in metric_hit.items()},
+    }
+
+    print(f"[edgar] 확보 {_last_coverage['resolved']}/{len(tickers)}종목")
+    if failed:
+        print(f"[edgar] 실패 {len(failed)}종목: {', '.join(failed[:20])}"
+              + (" ..." if len(failed) > 20 else ""))
+    for m, frac in _last_coverage["metric_coverage"].items():
+        flag = "  <-- 70% 미만, 편향 위험" if frac < MIN_COVERAGE else ""
+        print(f"[edgar] {m} 커버리지 {frac:.0%}{flag}")
+
+    return result
+
+
+def fetch_shares_history(tickers: list, start=None) -> dict:
+    """희석주식수 이력. 반환 {ticker: Series(index=filed)}. start는 호환용, 무시."""
+    result = {}
+    for tk in tickers:
+        ug = load_raw(tk)
+        result[tk] = assemble_shares(ug) if ug is not None else pd.Series(dtype=float)
+    return result
