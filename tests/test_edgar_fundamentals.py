@@ -51,15 +51,46 @@ def _fact(start, end, val, filed, form="10-Q"):
     return {"start": start, "end": end, "val": val, "filed": filed, "form": form}
 
 
-def test_facts_for_chain_uses_first_present_tag():
-    """대체 목록에서 먼저 존재하는 태그를 쓴다."""
+def test_facts_for_chain_single_tag():
+    """태그 하나만 있으면 그 팩트를 반환한다."""
     ug = {"Revenues": {"units": {"USD": [_fact("2020-01-01", "2020-03-31", 5, "2020-05-01")]}}}
     got = ef._facts_for_chain(ug, ef.TAG_CHAINS["revenue"], "USD")
     assert len(got) == 1 and got[0]["val"] == 5
 
 
+def test_facts_for_chain_merges_across_tags():
+    """
+    발행사가 연도별로 태그를 바꾸면(구 SalesRevenueNet → 신 RevenueFromContract...)
+    두 태그를 병합해야 과거 이력이 잘리지 않는다.
+    """
+    ug = {
+        "SalesRevenueNet": {"units": {"USD": [
+            _fact("2015-01-01", "2015-03-31", 10, "2015-05-01"),  # 구 태그, 과거
+        ]}},
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            _fact("2020-01-01", "2020-03-31", 20, "2020-05-01"),  # 신 태그, 최근
+        ]}},
+    }
+    got = ef._facts_for_chain(ug, ef.TAG_CHAINS["revenue"], "USD")
+    vals = sorted(f["val"] for f in got)
+    assert vals == [10, 20], "구·신 태그가 모두 병합돼야 한다"
+
+
 def test_facts_for_chain_empty_when_no_tag():
     assert ef._facts_for_chain({}, ["Nope"], "USD") == []
+
+
+def test_fetch_companyfacts_survives_network_error(monkeypatch):
+    """
+    네트워크 예외(timeout/DNS/연결 리셋)에 전체가 죽지 않고 재시도 후 None.
+    276개 순차 요청 중 하나만 터져도 IC 전체가 중단되던 버그 방지.
+    """
+    def boom(url, **kw):
+        raise ef.requests.exceptions.ConnectionError("reset")
+
+    monkeypatch.setattr(ef.requests, "get", boom)
+    monkeypatch.setattr(ef.time, "sleep", lambda *_: None)
+    assert ef._fetch_companyfacts(320193) is None
 
 
 def test_quarter_and_annual_classification():
@@ -186,6 +217,39 @@ def test_public_api_uses_disk_cache_once(monkeypatch):
     assert cov["resolved"] == 1
     assert cov["failed"] == ["DEAD"]
     assert 0.0 <= cov["metric_coverage"]["net_income"] <= 1.0
+
+
+def test_low_coverage_metric_is_dropped(monkeypatch):
+    """
+    한 지표의 커버리지가 MIN_COVERAGE 미만이면 그 지표를 전 종목에서 제외한다.
+    편향된 부분집합으로 IC를 계산하지 않고, 해당 팩터를 n=0(미측정)으로
+    떨어뜨려 ic_weight_updater가 unavailable로 처리하게 한다.
+    """
+    good = _income_ug()  # revenue/operating_income/net_income 모두 있음
+
+    def only_net_income(base):
+        return {"units": {"USD": [
+            _fact("2020-01-01", "2020-03-31", base + 1, "2020-05-01"),
+            _fact("2020-04-01", "2020-06-30", base + 2, "2020-08-01"),
+            _fact("2020-07-01", "2020-09-30", base + 3, "2020-11-01"),
+            _fact("2020-01-01", "2020-12-31", base + 10, "2021-02-01", form="10-K"),
+        ]}}
+    # revenue/operating_income가 없는 종목 (net_income만)
+    partial = {"NetIncomeLoss": only_net_income(0)}
+
+    ugs = {"AAPL": good, "MSFT": partial, "NVDA": partial, "GOOGL": partial}
+    monkeypatch.setattr(ef, "load_raw", lambda tk, cache_dir=None: ugs.get(tk))
+
+    fin = ef.fetch_quarterly_fundamentals_history(["AAPL", "MSFT", "NVDA", "GOOGL"])
+    cov = ef.last_coverage()
+    # revenue 커버리지 1/4 = 25% < 70% → 전 종목에서 제외
+    assert cov["metric_coverage"]["revenue"] < ef.MIN_COVERAGE
+    for tk in ugs:
+        df = fin[tk]
+        if not df.empty:
+            assert df["revenue"].isna().all(), f"{tk}: 커버리지 미달 revenue가 제외돼야 한다"
+    # net_income은 4/4 = 100% → 유지
+    assert not fin["AAPL"]["net_income"].isna().all()
 
 
 def test_fetch_shares_history_returns_series(monkeypatch):

@@ -57,10 +57,18 @@ def get_cik(ticker: str):
 
 
 def _fetch_companyfacts(cik: int):
-    """companyfacts JSON. 429/503은 지수 백오프 3회 재시도. 실패 시 None."""
+    """
+    companyfacts JSON. 429/503과 네트워크 예외는 지수 백오프 3회 재시도.
+    최종 실패 시 None을 반환해 호출자가 그 종목만 제외하도록 한다
+    (276개 순차 요청 중 하나의 예외로 IC 전체가 죽지 않게).
+    """
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
     for attempt in range(3):
-        r = requests.get(url, headers=SEC_HEADERS, timeout=60)
+        try:
+            r = requests.get(url, headers=SEC_HEADERS, timeout=60)
+        except requests.RequestException:
+            time.sleep(2 ** attempt)
+            continue
         if r.status_code == 200:
             return r.json()
         if r.status_code in (429, 503):
@@ -116,12 +124,19 @@ def _duration_days(fact: dict) -> int:
 
 
 def _facts_for_chain(us_gaap: dict, tag_chain: list, unit: str) -> list:
-    """대체 목록에서 먼저 존재하는 태그의 팩트 리스트를 반환."""
+    """
+    대체 목록의 모든 태그를 병합해 반환한다.
+    발행사가 연도별로 태그를 바꾸는 경우(구 SalesRevenueNet/Revenues →
+    신 RevenueFromContractWithCustomerExcludingAssessedTax, 2017~2018 전환)가
+    많아, 첫 태그만 쓰면 과거 이력이 조용히 잘린다. 겹치는 (start,end)는
+    상위 _dedup_earliest가 최초 공시 기준으로 정리한다.
+    """
+    merged = []
     for tag in tag_chain:
         node = us_gaap.get(tag)
         if node and unit in node.get("units", {}):
-            return node["units"][unit]
-    return []
+            merged.extend(node["units"][unit])
+    return merged
 
 
 def _quarter_facts(raw: list) -> list:
@@ -257,20 +272,33 @@ def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None)
                     metric_hit[m] += 1
 
     n = len(tickers) or 1
+    metric_coverage = {m: round(c / n, 3) for m, c in metric_hit.items()}
     _last_coverage = {
         "requested": len(tickers),
         "resolved":  len(tickers) - len(failed),
         "failed":    failed,
-        "metric_coverage": {m: round(c / n, 3) for m, c in metric_hit.items()},
+        "metric_coverage": metric_coverage,
     }
 
     print(f"[edgar] 확보 {_last_coverage['resolved']}/{len(tickers)}종목")
     if failed:
         print(f"[edgar] 실패 {len(failed)}종목: {', '.join(failed[:20])}"
               + (" ..." if len(failed) > 20 else ""))
-    for m, frac in _last_coverage["metric_coverage"].items():
-        flag = "  <-- 70% 미만, 편향 위험" if frac < MIN_COVERAGE else ""
+    for m, frac in metric_coverage.items():
+        flag = "  <-- 70% 미만, 제외" if frac < MIN_COVERAGE else ""
         print(f"[edgar] {m} 커버리지 {frac:.0%}{flag}")
+
+    # 커버리지 미달 지표는 전 종목에서 제외한다. 편향된 부분집합으로 IC를
+    # 계산하지 않고 해당 팩터를 n=0(미측정)으로 떨어뜨려, ic_weight_updater가
+    # unavailable로 처리하게 한다 (부분 표본으로 자신 있게 틀리느니 "모른다").
+    low = [m for m, frac in metric_coverage.items() if frac < MIN_COVERAGE]
+    if low:
+        print(f"[edgar] 커버리지 미달 지표 IC 제외: {low}")
+        for df in result.values():
+            if not df.empty:
+                for m in low:
+                    if m in df.columns:
+                        df[m] = np.nan
 
     return result
 
