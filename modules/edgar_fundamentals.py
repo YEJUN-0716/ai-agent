@@ -106,3 +106,31 @@ def load_raw(ticker: str, cache_dir: str = None):
         json.dump(ug, f)
     os.replace(tmp, path)
     return ug
+
+
+def _duration_days(fact: dict) -> int:
+    """팩트의 기간 길이(일). 시점 데이터(start 없음)는 -1."""
+    if "start" not in fact:
+        return -1
+    return (date.fromisoformat(fact["end"]) - date.fromisoformat(fact["start"])).days
+
+
+def _facts_for_chain(us_gaap: dict, tag_chain: list, unit: str) -> list:
+    """대체 목록에서 먼저 존재하는 태그의 팩트 리스트를 반환."""
+    for tag in tag_chain:
+        node = us_gaap.get(tag)
+        if node and unit in node.get("units", {}):
+            return node["units"][unit]
+    return []
+
+
+def _quarter_facts(raw: list) -> list:
+    """기간 80~100일인 팩트만 (진짜 분기)."""
+    return [f for f in raw
+            if QUARTER_MIN_DAYS <= _duration_days(f) <= QUARTER_MAX_DAYS]
+
+
+def _annual_facts(raw: list) -> list:
+    """기간 350~380일인 팩트만 (연간)."""
+    return [f for f in raw
+            if ANNUAL_MIN_DAYS <= _duration_days(f) <= ANNUAL_MAX_DAYS]
