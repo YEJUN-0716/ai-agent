@@ -4739,6 +4739,16 @@ def main():
                     prog.progress(93); msg.text("📰 뉴스 감성 분석 중...")
                     _news_score, _news_articles = get_news_sentiment(ticker)
 
+                    # 뉴스 감성 틸트: 검증된(IC 측정) 팩터가 아니므로 ±4점으로 제한
+                    # (_mtf_bonus와 동일한 bounded-tilt 패턴 — LLM 오독이 신호를 뒤집지
+                    #  못하게 상한). 실제 헤드라인이 있을 때만 반영, 중립(50)·무뉴스는 0.
+                    _news_bonus = 0.0
+                    if _news_articles:
+                        _news_bonus = float(np.clip((_news_score - 50) / 50 * 4, -4, 4))
+                        _total = float(np.clip(_total + _news_bonus, 0, 100))
+                        _total_adj = float(np.clip(_total_adj + _news_bonus, 0, 100))
+                        _score_method += f" + 뉴스({_news_bonus:+.0f})"
+
                     try:
                         _info = yf.Ticker(ticker).info
                         _pit_snapshot(ticker, _info)
