@@ -54,6 +54,12 @@ from modules.toss_trading import (
     get_positions      as _pt_get_positions,
 )
 
+try:
+    from modules.ops_safety import KillSwitch as _KillSwitch
+    _KILL_SWITCH_AVAILABLE = True
+except Exception:
+    _KILL_SWITCH_AVAILABLE = False
+
 warnings.filterwarnings("ignore")
 
 # ── 설정 ──────────────────────────────────────────────────────────────
@@ -81,6 +87,10 @@ TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))
 BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))
 PORTFOLIO_DD_STOP_PCT = float(os.environ.get("PORTFOLIO_DD_STOP_PCT", "15"))
 MAX_SECTOR_POSITIONS  = int(os.environ.get("MAX_SECTOR_POSITIONS", "2"))
+# 킬스위치 임계치 — 전일 대비 일일손실 / 연속 브로커오류 / 단일주문 크기상한
+KS_MAX_DAILY_LOSS_PCT   = float(os.environ.get("KS_MAX_DAILY_LOSS_PCT", "8"))
+KS_MAX_ERRORS           = int(os.environ.get("KS_MAX_ERRORS", "3"))
+KS_MAX_SINGLE_ORDER_PCT = float(os.environ.get("KS_MAX_SINGLE_ORDER_PCT", "20"))
 # 상관관계 기반 포지션 사이징 방식: "vol_corr"(기본) 또는 "risk_parity"
 SIZING_METHOD = os.environ.get("SIZING_METHOD", "vol_corr")
 
@@ -659,6 +669,19 @@ def main():
                 f"(한도: -{PORTFOLIO_DD_STOP_PCT:.0f}%) → 신규 매수 중단")
         print(warn); send_tg(warn)
 
+    # 1-1b. 킬스위치 — DD stop과 별개로 (a)전일 대비 일일손실 (b)연속 브로커오류
+    #        (c)단일주문 크기상한을 감시. DD stop이 고점 대비라면 이건 급락 하루를 잡는다.
+    kill = _KillSwitch(max_daily_loss_pct=KS_MAX_DAILY_LOSS_PCT,
+                       max_errors=KS_MAX_ERRORS,
+                       max_single_order_pct=KS_MAX_SINGLE_ORDER_PCT) if _KILL_SWITCH_AVAILABLE else None
+    if kill is not None and equity_log:
+        # 전일(직전 레코드) 자산을 당일 기준가로 삼아 하루 급락을 감지
+        kill.set_day_start_equity(float(equity_log[-1].get("equity", equity_now)))
+        if kill.check_daily_loss(equity_now):
+            ks_warn = (f"🛑 킬스위치 발동: {kill.status()['reason']} → 신규 매수 전면 중단")
+            print(ks_warn); send_tg(ks_warn)
+            dd_blocked = True  # 기존 매수 차단 경로 재사용
+
     # 1-2. SPY 현재가 수집 (성과 추적용)
     spy_price = None
     try:
@@ -805,6 +828,9 @@ def main():
         if dd_blocked:
             print(f"  [드로다운 스톱] 신규 매수 전면 중단 (dd={dd_pct:.1f}%)")
             break
+        if kill is not None and kill.is_active():
+            print(f"  [킬스위치] {kill.status()['reason']} → 신규 매수 중단")
+            break
 
         sym  = _to_broker_sym(sig["ticker"])
         _mkt = ticker_market(sig["ticker"])          # "KRX" or "US" (접미사 있는 원본 티커 기준)
@@ -855,6 +881,12 @@ def main():
             skipped_price.append(f"{sym}({_sig_price:,.0f}{_unit})")
             continue
 
+        # 킬스위치: 단일 주문이 계좌 대비 과도하면 스킵 (사이징 버그·급변 방어)
+        if kill is not None and equity_now > 0 and kill.check_order_size(_size_krw, equity_now):
+            print(f"  [킬스위치] {sym} 주문 {_size_krw:,.0f}원이 계좌 {equity_now:,.0f}원의 "
+                  f"{KS_MAX_SINGLE_ORDER_PCT:.0f}% 초과 → 스킵")
+            continue
+
         _ict     = ict_data.get(sig["ticker"], {})
         _ict_adj = _ict.get("adjustment", 0)
         _ict_sig = " / ".join(_ict.get("signals", [])[:2])
@@ -890,9 +922,14 @@ def main():
                 buying_power -= _size_krw
                 n_bought += 1
                 bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
+            if kill is not None:
+                kill.record_success()
         except Exception as e:
             print(f"  [매수 오류] {sym}: {e}")
             buy_results.append({"symbol": sym, "error": str(e)})
+            # 연속 브로커 오류가 임계치에 도달하면 킬스위치가 다음 반복에서 매수를 중단
+            if kill is not None:
+                kill.record_error()
 
     # 8. 사후 처리
     if not DRY_RUN:
