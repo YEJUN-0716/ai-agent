@@ -134,3 +134,91 @@ def _annual_facts(raw: list) -> list:
     """기간 350~380일인 팩트만 (연간)."""
     return [f for f in raw
             if ANNUAL_MIN_DAYS <= _duration_days(f) <= ANNUAL_MAX_DAYS]
+
+
+def _dedup_earliest(facts: list, key) -> list:
+    """key가 같은 팩트 중 가장 이른 filed만 남긴다 (최초 공시 기준)."""
+    best = {}
+    for f in facts:
+        k = key(f)
+        if k not in best or f["filed"] < best[k]["filed"]:
+            best[k] = f
+    return list(best.values())
+
+
+def _derive_q4(quarters: list, annuals: list) -> list:
+    """
+    연간 팩트마다 그 안에 든 분기가 정확히 3개이고 Q4가 없으면
+    Q4 = 연간 - (3개 분기 합)으로 유도한다.
+    Q4.start = 셋 중 가장 늦은 end, Q4.end = 연간 end, Q4.filed = 연간 filed.
+    3개가 아니거나 Q4가 이미 있으면 유도하지 않는다 (추측 금지).
+    """
+    tol = timedelta(days=CONTAINMENT_TOL_DAYS)
+    derived = []
+    for a in annuals:
+        As = date.fromisoformat(a["start"])
+        Ae = date.fromisoformat(a["end"])
+        inside = [q for q in quarters
+                  if date.fromisoformat(q["start"]) >= As - tol
+                  and date.fromisoformat(q["end"]) <= Ae + tol]
+        if any(abs((date.fromisoformat(q["end"]) - Ae).days) <= CONTAINMENT_TOL_DAYS
+               for q in inside):
+            continue  # Q4 이미 존재
+        if len(inside) == 3:
+            q4_start = max(date.fromisoformat(q["end"]) for q in inside)
+            derived.append({
+                "start": q4_start.isoformat(),
+                "end":   a["end"],
+                "filed": a["filed"],
+                "val":   a["val"] - sum(q["val"] for q in inside),
+                "form":  "DERIVED",
+            })
+    return quarters + derived
+
+
+def _assemble_tag(us_gaap: dict, tag_chain: list) -> dict:
+    """한 손익 태그를 {end_str: (filed_str, val)}로 조립. 분기 + 유도 Q4."""
+    raw = _facts_for_chain(us_gaap, tag_chain, "USD")
+    if not raw:
+        return {}
+    quarters = _dedup_earliest(_quarter_facts(raw), key=lambda f: (f["start"], f["end"]))
+    annuals  = _dedup_earliest(_annual_facts(raw),  key=lambda f: (f["start"], f["end"]))
+    allq = _derive_q4(quarters, annuals)
+    out = {}
+    for f in sorted(allq, key=lambda f: f["filed"]):
+        out[f["end"]] = (f["filed"], float(f["val"]))  # dedup으로 end는 이미 유일
+    return out
+
+
+def assemble_income(us_gaap: dict) -> pd.DataFrame:
+    """
+    us-gaap → 분기 손익 DataFrame (index=filed, cols=[revenue, operating_income, net_income]).
+    같은 분기의 세 태그는 같은 공시(filed)에서 오므로 end 기준으로 정렬한다.
+    """
+    cols = {name: _assemble_tag(us_gaap, chain) for name, chain in TAG_CHAINS.items()}
+    ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
+    if not ends:
+        return pd.DataFrame()
+
+    rows = []
+    for end in ends:
+        fileds = [cols[n][end][0] for n in cols if end in cols[n]]
+        row = {"filed": pd.Timestamp(min(fileds))}
+        for n in cols:
+            row[n] = cols[n][end][1] if end in cols[n] else np.nan
+        rows.append(row)
+
+    df = pd.DataFrame(rows).set_index("filed").sort_index()
+    return df[["revenue", "operating_income", "net_income"]].dropna(how="all")
+
+
+def assemble_shares(us_gaap: dict) -> pd.Series:
+    """us-gaap → 희석주식수 Series (index=filed). 분기 팩트만, Q4 유도 없음."""
+    raw = _facts_for_chain(us_gaap, SHARES_TAGS, "shares")
+    if not raw:
+        return pd.Series(dtype=float)
+    quarters = _dedup_earliest(_quarter_facts(raw), key=lambda f: (f["start"], f["end"]))
+    data = {}
+    for f in sorted(quarters, key=lambda f: f["filed"]):
+        data[pd.Timestamp(f["filed"])] = float(f["val"])
+    return pd.Series(data).sort_index()

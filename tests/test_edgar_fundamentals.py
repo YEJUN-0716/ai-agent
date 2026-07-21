@@ -73,3 +73,92 @@ def test_quarter_and_annual_classification():
     a = ef._annual_facts(raw)
     assert [f["val"] for f in q] == [1]
     assert [f["val"] for f in a] == [4]
+
+
+def test_dedup_keeps_earliest_filed():
+    """같은 (start,end)가 여러 filed로 오면 가장 이른 것만 남긴다."""
+    facts = [
+        _fact("2020-01-01", "2020-03-31", 10, "2020-05-01"),
+        _fact("2020-01-01", "2020-03-31", 11, "2021-05-01"),  # 이듬해 비교 재게시
+    ]
+    out = ef._dedup_earliest(facts, key=lambda f: (f["start"], f["end"]))
+    assert len(out) == 1 and out[0]["filed"] == "2020-05-01"
+
+
+def test_derive_q4_when_absent():
+    """Q1~Q3 분기 + 연간이 있고 Q4가 없으면 Q4 = FY - (Q1+Q2+Q3)."""
+    quarters = [
+        _fact("2020-01-01", "2020-03-31", 1, "2020-05-01"),
+        _fact("2020-04-01", "2020-06-30", 2, "2020-08-01"),
+        _fact("2020-07-01", "2020-09-30", 3, "2020-11-01"),
+    ]
+    annuals = [_fact("2020-01-01", "2020-12-31", 10, "2021-02-01", form="10-K")]
+    out = ef._derive_q4(quarters, annuals)
+    q4 = [f for f in out if f["end"] == "2020-12-31"]
+    assert len(q4) == 1
+    assert q4[0]["val"] == 10 - (1 + 2 + 3)   # 4
+    assert q4[0]["filed"] == "2021-02-01"
+
+
+def test_no_derive_when_q4_already_present():
+    """Q4가 이미 3개월 팩트로 있으면 유도하지 않는다."""
+    quarters = [
+        _fact("2020-01-01", "2020-03-31", 1, "2020-05-01"),
+        _fact("2020-04-01", "2020-06-30", 2, "2020-08-01"),
+        _fact("2020-07-01", "2020-09-30", 3, "2020-11-01"),
+        _fact("2020-10-01", "2020-12-31", 4, "2021-02-01"),
+    ]
+    annuals = [_fact("2020-01-01", "2020-12-31", 10, "2021-02-01", form="10-K")]
+    out = ef._derive_q4(quarters, annuals)
+    q4 = [f for f in out if f["end"] == "2020-12-31"]
+    assert len(q4) == 1 and q4[0]["val"] == 4   # 원본 유지, 유도 안 함
+
+
+def test_no_derive_when_quarter_missing():
+    """Q1~Q3 중 하나라도 없으면 Q4를 만들지 않는다 — 추측 금지."""
+    quarters = [
+        _fact("2020-01-01", "2020-03-31", 1, "2020-05-01"),
+        _fact("2020-07-01", "2020-09-30", 3, "2020-11-01"),
+    ]
+    annuals = [_fact("2020-01-01", "2020-12-31", 10, "2021-02-01", form="10-K")]
+    out = ef._derive_q4(quarters, annuals)
+    assert not [f for f in out if f["end"] == "2020-12-31"]
+
+
+def _income_ug():
+    """Q1~Q3 분기 + 연간을 세 손익 태그 모두에 담은 us-gaap 목."""
+    def series(base):
+        return {"units": {"USD": [
+            _fact("2020-01-01", "2020-03-31", base + 1, "2020-05-01"),
+            _fact("2020-04-01", "2020-06-30", base + 2, "2020-08-01"),
+            _fact("2020-07-01", "2020-09-30", base + 3, "2020-11-01"),
+            _fact("2020-01-01", "2020-12-31", base + 10, "2021-02-01", form="10-K"),
+        ]}}
+    return {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": series(100),
+        "OperatingIncomeLoss": series(10),
+        "NetIncomeLoss": series(0),
+    }
+
+
+def test_assemble_income_contract():
+    """조립 결과가 '분기당 1행' 계약을 지킨다."""
+    df = ef.assemble_income(_income_ug())
+    # 4개 분기(Q1~Q3 + 유도 Q4)
+    assert len(df) == 4
+    assert list(df.columns) == ["revenue", "operating_income", "net_income"]
+    # 인덱스(filed) 단조 비감소
+    assert df.index.is_monotonic_increasing
+    # net_income TTM = 1+2+3+4(유도) = 10
+    assert df["net_income"].sum() == 0 + 1 + 2 + 3 + (10 - 6)
+
+
+def test_assemble_shares_no_q4_derivation():
+    """주식수는 분기 팩트만 쓰고 Q4를 유도하지 않는다 (합산 대상이 아님)."""
+    ug = {"WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [
+        _fact("2020-01-01", "2020-03-31", 1000, "2020-05-01"),
+        _fact("2020-04-01", "2020-06-30", 1010, "2020-08-01"),
+    ]}}}
+    s = ef.assemble_shares(ug)
+    assert list(s.values) == [1000, 1010]
+    assert s.index.is_monotonic_increasing
