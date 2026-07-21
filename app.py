@@ -7191,15 +7191,19 @@ def main():
             with st.expander("📡 시그널 자동 발송 현황", expanded=True):
                 st.markdown(
                     """
-**⚠️ 현재 모드: 시그널 발송 전용 — 실제 주문 없음**
+**🛑 현재 모드: 자동 발송 중단 — 수동 실행만 가능**
 
-매일 장마감 후 퀀트 시스템이 자동으로 시그널을 스캔해 **텔레그램**으로 발송합니다.
-시그널을 받은 후 직접 판단해서 수동으로 매매하세요.
+`signal-alerts.yml`의 크론 스케줄은 **2026-07-20부로 비활성화**되어 있습니다.
+유니버스를 37 → 276종목으로 확대해 5년 walk-forward IC를 재측정한 결과 전 팩터가
+`|ICIR| < 0.1`로 나와, 예측력이 확인되지 않은 신호를 매일 알림으로 보내지 않기
+위해 멈춘 상태입니다 (근거: `ic_weights.json`, `docs/superpowers/specs/`).
+신호원을 다시 찾기 전까지는 재개하지 않습니다.
 
-**자동 스캔 일정:**
-- 미국 장마감 후 UTC 22:30 (월~금) — `signal-alerts.yml`
+**지금 시그널이 필요하면:**
+- GitHub Actions → `signal-alerts.yml` → *Run workflow*(수동 실행)로만 가능합니다.
+- 실제 주문 워크플로(`paper-trade-us.yml`)도 마찬가지로 비활성화 상태입니다.
 
-**텔레그램으로 수신되는 내용:**
+**텔레그램으로 수신되는 내용 (수동 실행 시):**
 - 매수 / 조건부 매수 / 매도 / 관망 시그널
 - 종목별 현재가 · 가상 투자금 배분 · 수량 · 근거
 
@@ -7208,7 +7212,7 @@ def main():
 - 사무실 → 시그널 생성팀 → '시스템 시그널' 직원 카드의 '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
 """
                 )
-                st.caption("⚙️ `.github/workflows/signal-alerts.yml` · `signal_worker.py` — 실제 주문 워크플로는 비활성화 상태")
+                st.caption("⚙️ `.github/workflows/signal-alerts.yml` · `signal_worker.py` — 크론 비활성화, 수동(workflow_dispatch) 실행만 가능. 주문 워크플로도 비활성화 상태")
 
         def render_risk_guardrail_panel():
             if not _OPS_SAFETY_AVAILABLE:
