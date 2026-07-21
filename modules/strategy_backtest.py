@@ -6,6 +6,11 @@ paper_trade_runner.py 와 동일한 매매 규칙을 과거 데이터로 시뮬�
 
 IC 분석(factor_validator.py)과 달리 실제 포지션 진입·청산을 시뮬레이션하여
 더 현실적인 성과 지표를 제공합니다.
+
+체결 타이밍: 모든 매매 판단(팩터 점수, 트레일링 스톱 트리거)은 당일 종가
+기준으로 내리되, 실제 체결은 다음 거래일 시가로 미룬다(D+1 시가 체결).
+modules/risk_management.py::run_backtest_sized와 동일한 규칙 — 판단에 쓴
+바로 그 종가로 같은 날 체결하면 룩어헤드가 된다.
 """
 import numpy as np
 import pandas as pd
@@ -165,38 +170,26 @@ def run_strategy_backtest(
     trades      = []
     peak_equity = float(initial_capital)
     dd_blocked  = False
+    # D+1 시가체결 큐: 전일 종가로 내린 판단을 다음 거래일 시가로 미뤄서 체결
+    pending_sells = []   # [(ticker, reason)]
+    pending_buys  = []   # [(ticker, ann_vol)]
 
     for day_idx, today in enumerate(dates):
         if day_idx < min_idx:
             equity_log[today] = capital
             continue
 
-        port_value = capital
-        for tk, pos in positions.items():
-            cs = ohlcv_dict[tk]["Close"]
-            avail = cs[cs.index <= today]
-            if not avail.empty:
-                port_value += pos["shares"] * float(avail.iloc[-1])
-
-        peak_equity = max(peak_equity, port_value)
-        dd_pct      = (port_value / peak_equity - 1) * 100
-        dd_blocked  = portfolio_dd_stop_pct > 0 and dd_pct < -portfolio_dd_stop_pct
-        equity_log[today] = port_value
-
-        # 트레일링 스톱 (매일 점검)
-        to_sell = []
-        for tk, pos in list(positions.items()):
-            cs = ohlcv_dict[tk]["Close"]
-            avail = cs[cs.index <= today]
-            if avail.empty:
+        # ── 전일 판단분 체결: 오늘 시가로 실행 (룩어헤드 방지) ──
+        still_pending_sells = []
+        for tk, reason in pending_sells:
+            if tk not in positions:
                 continue
-            cur_price  = float(avail.iloc[-1])
-            pos["peak"] = max(pos["peak"], cur_price)
-            trail_line = pos["peak"] * (1 - trail_stop_pct / 100)
-            if cur_price < trail_line:
-                to_sell.append((tk, "trail_stop", cur_price))
-
-        for tk, reason, sell_price in to_sell:
+            op    = ohlcv_dict[tk]["Open"]
+            avail_open = op[op.index <= today]
+            if avail_open.empty or avail_open.index[-1] != today:
+                still_pending_sells.append((tk, reason))
+                continue
+            sell_price = float(avail_open.iloc[-1])
             pos      = positions.pop(tk)
             cost     = pos["shares"] * sell_price * (cost_bps / 10000)
             capital += pos["shares"] * sell_price - cost
@@ -210,6 +203,59 @@ def run_strategy_backtest(
                 "hold_days":   (today - pos["entry_date"]).days,
                 "reason":      reason,
             })
+        pending_sells = still_pending_sells
+
+        still_pending_buys = []
+        for tk, ann_vol in pending_buys:
+            if tk in positions:
+                continue
+            op    = ohlcv_dict[tk]["Open"]
+            avail_open = op[op.index <= today]
+            if avail_open.empty or avail_open.index[-1] != today:
+                still_pending_buys.append((tk, ann_vol))
+                continue
+            entry_price = float(avail_open.iloc[-1])
+            if entry_price <= 0:
+                continue
+            notional = capital * (target_vol_pct / ann_vol) / max_positions
+            notional = max(capital * 0.01, min(capital * 0.20, notional))
+            if capital < notional * 1.05:
+                continue
+            cost    = notional * (cost_bps / 10000 / 2)
+            shares  = (notional - cost) / entry_price
+            capital -= notional
+            positions[tk] = {
+                "shares":      shares,
+                "entry_price": entry_price,
+                "peak":        entry_price,
+                "entry_date":  today,
+            }
+        pending_buys = still_pending_buys
+
+        # ── 평가액 계산 (오늘 종가 기준 마킹 — 체결가와 무관, 룩어헤드 아님) ──
+        port_value = capital
+        for tk, pos in positions.items():
+            cs = ohlcv_dict[tk]["Close"]
+            avail = cs[cs.index <= today]
+            if not avail.empty:
+                port_value += pos["shares"] * float(avail.iloc[-1])
+
+        peak_equity = max(peak_equity, port_value)
+        dd_pct      = (port_value / peak_equity - 1) * 100
+        dd_blocked  = portfolio_dd_stop_pct > 0 and dd_pct < -portfolio_dd_stop_pct
+        equity_log[today] = port_value
+
+        # 트레일링 스톱 (매일 점검, 오늘 종가로 판단 → 체결은 다음 거래일 시가로 예약)
+        for tk, pos in list(positions.items()):
+            cs = ohlcv_dict[tk]["Close"]
+            avail = cs[cs.index <= today]
+            if avail.empty:
+                continue
+            cur_price  = float(avail.iloc[-1])
+            pos["peak"] = max(pos["peak"], cur_price)
+            trail_line = pos["peak"] * (1 - trail_stop_pct / 100)
+            if cur_price < trail_line and not any(t == tk for t, _ in pending_sells):
+                pending_sells.append((tk, "trail_stop"))
 
         # 리밸런싱 주기 체크
         if day_idx % rebal_days != 0:
@@ -226,61 +272,27 @@ def run_strategy_backtest(
         score_vals = sorted(scores.values())
         threshold  = score_vals[int(len(score_vals) * buy_score_min_pctile)]
 
-        # 매도: 순위 이탈 종목
+        # 매도 예약: 순위 이탈 종목 (오늘 종가로 판단 → 체결은 다음 거래일 시가)
         for tk in list(positions.keys()):
             if tk in buy_set:
                 continue
-            cs    = ohlcv_dict[tk]["Close"]
-            avail = cs[cs.index <= today]
-            if avail.empty:
-                continue
-            sell_price = float(avail.iloc[-1])
-            pos        = positions.pop(tk)
-            cost       = pos["shares"] * sell_price * (cost_bps / 10000)
-            capital   += pos["shares"] * sell_price - cost
-            trades.append({
-                "ticker":      tk,
-                "entry_date":  str(pos["entry_date"].date()),
-                "exit_date":   str(today.date()),
-                "entry_price": round(pos["entry_price"], 4),
-                "exit_price":  round(sell_price, 4),
-                "return_pct":  round((sell_price / pos["entry_price"] - 1) * 100, 2),
-                "hold_days":   (today - pos["entry_date"]).days,
-                "reason":      "rebal_sell",
-            })
+            if any(t == tk for t, _ in pending_sells):
+                continue  # 이미 트레일링 스톱으로 매도 예약됨
+            pending_sells.append((tk, "rebal_sell"))
 
-        # 매수
-        n_slots = max_positions - len(positions)
+        # 매수 예약: 오늘 종가 기준 팩터 점수로 후보 선정 → 체결은 다음 거래일 시가
+        n_slots = max_positions - len(positions) - len(pending_buys)
         for tk in sorted_tks[:top_n]:
             if n_slots <= 0:
                 break
             if tk in positions or scores.get(tk, 0) < threshold:
                 continue
-            cs    = ohlcv_dict[tk]["Close"]
-            avail = cs[cs.index <= today]
-            if avail.empty:
+            if any(t == tk for t, _ in pending_buys):
                 continue
-            entry_price = float(avail.iloc[-1])
-            if entry_price <= 0:
-                continue
-
+            cs      = ohlcv_dict[tk]["Close"]
             ret_s   = cs[cs.index <= today].pct_change().dropna().tail(21)
             ann_vol = max(float(ret_s.std() * np.sqrt(252)) if len(ret_s) >= 5 else 0.20, 0.05)
-            notional = capital * (target_vol_pct / ann_vol) / max_positions
-            notional = max(capital * 0.01, min(capital * 0.20, notional))
-
-            if capital < notional * 1.05:
-                continue
-
-            cost    = notional * (cost_bps / 10000 / 2)
-            shares  = (notional - cost) / entry_price
-            capital -= notional
-            positions[tk] = {
-                "shares":      shares,
-                "entry_price": entry_price,
-                "peak":        entry_price,
-                "entry_date":  today,
-            }
+            pending_buys.append((tk, ann_vol))
             n_slots -= 1
 
     # 잔여 포지션 청산
