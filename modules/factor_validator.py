@@ -11,9 +11,9 @@ IC (Information Coefficient) / ICIR / 퀸타일 분석
 PIT(Point-in-Time) 재무 데이터:
   walk-forward IC 분석에서 look-ahead bias 방지를 위해
   as_of_date 기준으로 알 수 있는 재무 데이터만 사용.
-  fetch_quarterly_fundamentals_history()의 인덱스는 이미
-  분기말 + 45일 (발표 추정일)로 조정되어 있어 <= as_of_date
-  필터만으로 미래 데이터를 차단할 수 있다.
+  edgar_fundamentals.fetch_quarterly_fundamentals_history()의 인덱스는
+  EDGAR의 실제 공시일(filed)이라 <= as_of_date 필터만으로
+  미래 데이터를 차단할 수 있다.
 """
 
 import numpy as np
@@ -22,10 +22,10 @@ from datetime import datetime, timedelta
 from scipy.stats import spearmanr
 import yfinance as yf
 
-from modules.factor_engine import (
+from modules.factor_engine import point_in_time_fundamentals as _pit_fundamentals
+from modules.edgar_fundamentals import (
     fetch_quarterly_fundamentals_history as _fetch_fin_hist,
     fetch_shares_history                 as _fetch_shares_hist,
-    point_in_time_fundamentals           as _pit_fundamentals,
 )
 from modules.price_panel import load_panel
 

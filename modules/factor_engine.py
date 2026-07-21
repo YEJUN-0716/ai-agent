@@ -181,73 +181,16 @@ def fetch_fundamentals(tickers: list) -> dict:
     return result
 
 
-def fetch_quarterly_fundamentals_history(tickers: list,
-                                          reporting_lag_days: int = 45) -> dict:
-    """
-    분기 재무제표 이력 수집 (look-ahead bias 제거용).
-    실제 발표 추정일 = 회계 분기말 + reporting_lag_days (기본 45일).
-
-    반환: {ticker: pd.DataFrame(index=발표추정일, columns=[revenue, operating_income, net_income])}
-    인덱스가 이미 발표 추정일로 조정되어 있어
-    `<= as_of_date` 필터만으로 미래 데이터를 차단할 수 있습니다.
-    """
-    result = {}
-    for tk in tickers:
-        try:
-            fin = yf.Ticker(tk).quarterly_financials
-            if fin is None or fin.empty:
-                result[tk] = pd.DataFrame()
-                continue
-            fin = fin.T.copy()
-            fin.index = pd.to_datetime(fin.index)
-            fin.sort_index(inplace=True)
-            fin.index = fin.index + pd.Timedelta(days=reporting_lag_days)
-            df = pd.DataFrame(index=fin.index)
-            for col_name, alternatives in [
-                ("revenue",          ["Total Revenue"]),
-                ("operating_income", ["Operating Income", "EBIT"]),
-                ("net_income",       ["Net Income", "Net Income Common Stockholders"]),
-            ]:
-                for alt in alternatives:
-                    if alt in fin.columns:
-                        df[col_name] = pd.to_numeric(fin[alt], errors="coerce")
-                        break
-                else:
-                    df[col_name] = np.nan
-            result[tk] = df.dropna(how="all")
-        except Exception:
-            result[tk] = pd.DataFrame()
-    return result
-
-
-def fetch_shares_history(tickers: list, start: str = "2015-01-01") -> dict:
-    """
-    발행주식수 이력 수집 (EPS 계산용).
-    반환: {ticker: pd.Series(index=날짜, values=주식수)}
-    """
-    result = {}
-    for tk in tickers:
-        try:
-            shares = yf.Ticker(tk).get_shares_full(start=start)
-            if shares is not None and len(shares) > 0:
-                result[tk] = shares.astype(float)
-            else:
-                info = yf.Ticker(tk).info
-                n = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
-                result[tk] = (pd.Series(dtype=float) if n is None
-                              else pd.Series([float(n)],
-                                             index=[pd.Timestamp.now().normalize()]))
-        except Exception:
-            result[tk] = pd.Series(dtype=float)
-    return result
-
-
 def point_in_time_fundamentals(tk: str, as_of_date, price: float,
                                  fin_hist: dict, shares_hist: dict) -> dict:
     """
     as_of_date 기준 look-ahead-free 재무 지표 계산.
-    fin_hist[tk] 인덱스는 이미 발표 추정일(분기말 + lag)이므로
-    `<= as_of_date` 필터만으로 미래 데이터를 차단합니다.
+
+    전제 계약 (edgar_fundamentals.assemble_income이 보장):
+      - fin_hist[tk]는 분기당 정확히 1행 (중복 기간 없음)
+      - 인덱스는 실제 공시일(filed), 단조 비감소
+      - 따라서 tail(4)가 서로 다른 4개 분기 = TTM으로 유효하다
+    이 계약이 깨지면 (예: 중복 분기, 연간 행 혼입) TTM이 조용히 부풀려진다.
 
     반환: {"pe": float, "margin": float}
     """
