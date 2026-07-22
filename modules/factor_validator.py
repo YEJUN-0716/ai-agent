@@ -67,6 +67,13 @@ except Exception:
     _ict_factor_score = None
     _ICT_AVAILABLE = False
 
+try:
+    from modules.bulls_signals import bulls_raw_score as _bulls_score
+    _BULLS_AVAILABLE = True
+except Exception:
+    _bulls_score = None
+    _BULLS_AVAILABLE = False
+
 # 6-팩터 고정 가중치 (IC 검증용, 레짐 미분류)
 _IC_WEIGHTS = {
     "mom_3m":  0.27,
@@ -90,6 +97,35 @@ def _ict_raw_score(ohlcv_dict: dict, tk: str, as_of_date) -> float:
         return float(_ict_factor_score(sub))
     except Exception:
         return 50.0
+
+
+def _rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
+    """Wilder RSI 시계열 (다이버전스 입력용)."""
+    delta = close.astype(float).diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
+
+
+def _bulls_raw_score(ohlcv_dict: dict, tk: str, as_of_date) -> float:
+    """불스해적단 공용 백본 팩터 원점수 — look-ahead 없이 as_of_date 이전만 사용.
+
+    ★ 측정 전용. 라이브 composite/가중치에 편입되지 않으며 IC 검증 목적으로만 계산.
+    """
+    if not _BULLS_AVAILABLE or tk not in ohlcv_dict:
+        return 0.0
+    try:
+        sub = ohlcv_dict[tk]
+        sub = sub[sub.index <= pd.Timestamp(as_of_date)]
+        if len(sub) < 60:
+            return 0.0
+        rsi = _rsi_series(sub["Close"])
+        return float(_bulls_score(sub, rsi=rsi))
+    except Exception:
+        return 0.0
 
 
 def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
@@ -330,6 +366,7 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
             fund = {}
 
         ict_score = _ict_raw_score(ohlcv_dict or {}, tk, as_of_date)
+        bulls_score = _bulls_raw_score(ohlcv_dict or {}, tk, as_of_date)
 
         rows.append({
             "ticker": tk,
@@ -340,6 +377,7 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
             "fcf_yield": fund.get("fcf_yield", np.nan),
             "accrual_q": fund.get("accrual_q", np.nan),
             "ict":    ict_score,
+            "bulls":  bulls_score,
         })
 
     if len(rows) < 5:
@@ -359,6 +397,9 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
     mu_i, sigma_i = df["ict"].mean(), df["ict"].std()
     df["z_ict"] = (df["ict"] - mu_i) / (sigma_i + 1e-9)
 
+    mu_b, sigma_b = df["bulls"].mean(), df["bulls"].std()
+    df["z_bulls"] = (df["bulls"] - mu_b) / (sigma_b + 1e-9)
+
     result = {}
     for tk in df.index:
         result[tk] = {
@@ -368,6 +409,7 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
             "value":   float(df.loc[tk, "z_value"]),
             "quality": float(df.loc[tk, "z_quality"]),
             "ict":     float(df.loc[tk, "z_ict"]),
+            "bulls":   float(df.loc[tk, "z_bulls"]),
         }
     return result
 
@@ -413,7 +455,7 @@ def run_per_factor_ic_analysis(
     if not rebal_indices:
         return {}
 
-    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict"]
+    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict", "bulls"]
     factor_ics = {f: [] for f in FACTORS}
 
     for step_i, idx in enumerate(rebal_indices):
