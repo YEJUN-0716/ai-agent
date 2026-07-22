@@ -13,7 +13,7 @@ There is **no server deployment**. GitHub Actions *is* the production runtime: c
 
 ## Commands
 
-Python **3.12** (`.python-version`, `runtime.txt`). Note the CI workflows are inconsistent — `ic-update.yml` uses 3.12, the others still pin 3.11.
+Python **3.12** (`.python-version`, `runtime.txt`). All CI workflows and the devcontainer pin 3.12.
 
 ```bash
 pip install -r requirements.txt
