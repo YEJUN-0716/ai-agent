@@ -198,8 +198,16 @@ def fetch_fundamentals(tickers: list) -> dict:
     return result
 
 
+def _ttm(recent_q, col):
+    """recent_q(분기 4행)에서 col의 TTM 합. 컬럼 없거나 전부 NaN이면 NaN."""
+    if col in recent_q.columns and recent_q[col].notna().any():
+        return float(recent_q[col].sum())
+    return np.nan
+
+
 def point_in_time_fundamentals(tk: str, as_of_date, price: float,
-                                 fin_hist: dict, shares_hist: dict) -> dict:
+                                 fin_hist: dict, shares_hist: dict,
+                                 equity_hist: dict = None) -> dict:
     """
     as_of_date 기준 look-ahead-free 재무 지표 계산.
 
@@ -209,27 +217,26 @@ def point_in_time_fundamentals(tk: str, as_of_date, price: float,
       - 따라서 tail(4)가 서로 다른 4개 분기 = TTM으로 유효하다
     이 계약이 깨지면 (예: 중복 분기, 연간 행 혼입) TTM이 조용히 부풀려진다.
 
-    반환: {"pe": float, "margin": float}
+    equity_hist(선택): 자본총계 Series(index=filed). 있으면 ROE를 계산한다.
+
+    반환: {"pe", "margin", "roe", "fcf_yield", "accrual_q"} (미측정은 NaN)
     """
-    pe, margin = np.nan, np.nan
+    out = {"pe": np.nan, "margin": np.nan, "roe": np.nan,
+           "fcf_yield": np.nan, "accrual_q": np.nan}
     try:
         df = fin_hist.get(tk, pd.DataFrame())
         if df.empty:
-            return {"pe": pe, "margin": margin}
+            return out
         past = df[df.index <= pd.Timestamp(as_of_date)]
         if past.empty:
-            return {"pe": pe, "margin": margin}
+            return out
 
         recent_q = past.tail(4)
-        net_ttm  = (float(recent_q["net_income"].sum())
-                    if "net_income" in recent_q.columns
-                    and recent_q["net_income"].notna().any() else np.nan)
-        rev_ttm  = (float(recent_q["revenue"].sum())
-                    if "revenue" in recent_q.columns
-                    and recent_q["revenue"].notna().any() else np.nan)
-        op_ttm   = (float(recent_q["operating_income"].sum())
-                    if "operating_income" in recent_q.columns
-                    and recent_q["operating_income"].notna().any() else np.nan)
+        net_ttm   = _ttm(recent_q, "net_income")
+        rev_ttm   = _ttm(recent_q, "revenue")
+        op_ttm    = _ttm(recent_q, "operating_income")
+        ocf_ttm   = _ttm(recent_q, "operating_cash_flow")
+        capex_ttm = _ttm(recent_q, "capex")
 
         sh = shares_hist.get(tk, pd.Series(dtype=float))
         if not sh.empty:
@@ -238,16 +245,40 @@ def point_in_time_fundamentals(tk: str, as_of_date, price: float,
         else:
             n_shares = np.nan
 
+        # PER (EPS>0일 때만)
         if pd.notna(n_shares) and n_shares > 0 and pd.notna(net_ttm) and price > 0:
             eps = net_ttm / n_shares
             if eps > 0:
-                pe = min(price / eps, 200.0)
+                out["pe"] = min(price / eps, 200.0)
 
+        # 영업이익률
         if pd.notna(rev_ttm) and rev_ttm > 0 and pd.notna(op_ttm):
-            margin = (op_ttm / rev_ttm) * 100
+            out["margin"] = (op_ttm / rev_ttm) * 100
+
+        # ROE = net_ttm / 자본총계 (as_of 이전 최신 공시)
+        if equity_hist is not None:
+            eq = equity_hist.get(tk, pd.Series(dtype=float))
+            if not eq.empty:
+                eq_past = eq[eq.index <= pd.Timestamp(as_of_date)]
+                equity_v = float(eq_past.iloc[-1]) if not eq_past.empty else np.nan
+                if pd.notna(equity_v) and equity_v > 0 and pd.notna(net_ttm):
+                    out["roe"] = (net_ttm / equity_v) * 100
+
+        # FCF = OCF - CapEx (CapEx는 지출이라 양수 보고 → 차감)
+        if pd.notna(ocf_ttm) and pd.notna(capex_ttm):
+            fcf_ttm = ocf_ttm - capex_ttm
+            # FCF 수익률 = FCF_TTM / 시가총액 (시총 = price × 주식수)
+            if pd.notna(n_shares) and n_shares > 0 and price > 0:
+                mcap = price * n_shares
+                if mcap > 0:
+                    out["fcf_yield"] = fcf_ttm / mcap * 100
+            # 발생액 품질 (app.py 라이브 경로와 동일 공식)
+            if pd.notna(net_ttm) and net_ttm > 0:
+                out["accrual_q"] = (float(np.clip((fcf_ttm / net_ttm) * 50, 0, 100))
+                                    if fcf_ttm > 0 else 0.0)
     except Exception:
         pass
-    return {"pe": pe, "margin": margin}
+    return out
 
 
 _IC_WEIGHT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ic_weights.json")

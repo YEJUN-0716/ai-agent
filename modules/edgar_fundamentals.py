@@ -26,14 +26,27 @@ ANNUAL_MIN_DAYS,  ANNUAL_MAX_DAYS  = 350, 380
 CONTAINMENT_TOL_DAYS = 10
 MIN_COVERAGE  = 0.70
 
+# 손익·현금흐름 태그 — 전부 duration(기간) 팩트. 분기 필터 + Q4 유도 기계를 공유한다.
 TAG_CHAINS = {
     "revenue":          ["RevenueFromContractWithCustomerExcludingAssessedTax",
                          "Revenues", "SalesRevenueNet"],
     "operating_income": ["OperatingIncomeLoss"],
     "net_income":       ["NetIncomeLoss"],
+    # 영업현금흐름 — FCF = OCF - CapEx 계산용
+    "operating_cash_flow": ["NetCashProvidedByUsedInOperatingActivities",
+                            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
+    # 설비투자(CapEx) — 지출이라 양수로 보고됨 → FCF에서 차감
+    "capex":            ["PaymentsToAcquirePropertyPlantAndEquipment",
+                         "PaymentsForCapitalImprovements"],
 }
+_INCOME_COLS = ["revenue", "operating_income", "net_income",
+                "operating_cash_flow", "capex"]
 SHARES_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding",
                "WeightedAverageNumberOfSharesOutstandingBasic"]
+# 자본총계 — ROE = net_income_TTM / equity 계산용. instant(시점) 팩트라
+# duration 필터에 안 걸리므로 별도 조립기(assemble_equity)를 쓴다.
+EQUITY_TAGS = ["StockholdersEquity",
+               "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
 
 # company_tickers.json이 잘못된 CIK를 주는 종목의 수동 교정.
 # XOM은 2115436(수수료신고 ffd만)이 아니라 34088(us-gaap 438태그)이다.
@@ -207,8 +220,10 @@ def _assemble_tag(us_gaap: dict, tag_chain: list) -> dict:
 
 def assemble_income(us_gaap: dict) -> pd.DataFrame:
     """
-    us-gaap → 분기 손익 DataFrame (index=filed, cols=[revenue, operating_income, net_income]).
-    같은 분기의 세 태그는 같은 공시(filed)에서 오므로 end 기준으로 정렬한다.
+    us-gaap → 분기 손익·현금흐름 DataFrame
+    (index=filed, cols=[revenue, operating_income, net_income, operating_cash_flow, capex]).
+    같은 분기의 태그들은 같은 공시(filed)에서 오므로 end 기준으로 정렬한다.
+    현금흐름 태그도 duration 팩트라 손익과 동일한 분기+Q4유도 기계를 통과한다.
     """
     cols = {name: _assemble_tag(us_gaap, chain) for name, chain in TAG_CHAINS.items()}
     ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
@@ -224,7 +239,28 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
         rows.append(row)
 
     df = pd.DataFrame(rows).set_index("filed").sort_index()
-    return df[["revenue", "operating_income", "net_income"]].dropna(how="all")
+    return df[_INCOME_COLS].dropna(how="all")
+
+
+def _instant_facts(raw: list) -> list:
+    """시점(instant) 팩트만 — start가 없는 대차대조표 항목(자본총계 등)."""
+    return [f for f in raw if "start" not in f and "end" in f]
+
+
+def assemble_equity(us_gaap: dict) -> pd.Series:
+    """
+    us-gaap → 자본총계 Series (index=filed). 대차대조표는 instant 팩트라
+    duration 필터가 아니라 _instant_facts로 뽑고, 같은 시점(end)은 최초 공시만 남긴다.
+    filed 인덱스라 <= as_of 필터로 look-ahead 없이 소비할 수 있다.
+    """
+    raw = _facts_for_chain(us_gaap, EQUITY_TAGS, "USD")
+    instants = _dedup_earliest(_instant_facts(raw), key=lambda f: f["end"])
+    if not instants:
+        return pd.Series(dtype=float)
+    data = {}
+    for f in sorted(instants, key=lambda f: f["filed"]):
+        data[pd.Timestamp(f["filed"])] = float(f["val"])
+    return pd.Series(data).sort_index()
 
 
 def assemble_shares(us_gaap: dict) -> pd.Series:
@@ -309,4 +345,14 @@ def fetch_shares_history(tickers: list, start=None) -> dict:
     for tk in tickers:
         ug = load_raw(tk)
         result[tk] = assemble_shares(ug) if ug is not None else pd.Series(dtype=float)
+    return result
+
+
+def fetch_equity_history(tickers: list, start=None) -> dict:
+    """자본총계 이력. 반환 {ticker: Series(index=filed)}. start는 호환용, 무시.
+    ROE = net_income_TTM / equity 계산에 point_in_time_fundamentals가 사용."""
+    result = {}
+    for tk in tickers:
+        ug = load_raw(tk)
+        result[tk] = assemble_equity(ug) if ug is not None else pd.Series(dtype=float)
     return result

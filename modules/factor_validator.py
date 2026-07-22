@@ -25,7 +25,39 @@ from modules.factor_engine import point_in_time_fundamentals as _pit_fundamental
 from modules.edgar_fundamentals import (
     fetch_quarterly_fundamentals_history as _fetch_fin_hist,
     fetch_shares_history                 as _fetch_shares_hist,
+    fetch_equity_history                 as _fetch_equity_hist,
 )
+
+
+def _zscore_col(df, col, sign=1.0):
+    """col의 z-score(부호 적용). 유효값 3개 미만이면 전부 0(팩터 기여 없음)."""
+    if col not in df.columns:
+        return pd.Series(0.0, index=df.index)
+    valid = df[col].dropna()
+    if len(valid) < 3:
+        return pd.Series(0.0, index=df.index)
+    mu, sigma = valid.mean(), valid.std()
+    return (sign * (df[col] - mu) / (sigma + 1e-9)).fillna(0.0)
+
+
+def _add_value_quality_z(df):
+    """value/quality 팩터 z-score를 app.py 라이브 배합과 동일 비율로 블렌드.
+
+    value  = 저PER(EP) + FCF수익률  (라이브 EP0.40/BP0.30/FCF0.30에서 PIT에 없는
+             BP를 빼고 EP0.571/FCF0.429로 재정규화)
+    quality = ROE0.45 + 영업이익률0.35 + 발생액0.20
+    커버리지 미달로 특정 지표가 전부 NaN이면 그 성분 z=0 → 나머지로 랭킹.
+    IC는 rank 기반이라 성분별 상수 스케일은 팩터 자체 IC에 영향 없음.
+    """
+    z_ep  = _zscore_col(df, "pe", sign=-1.0)       # 낮은 PER = 높은 value
+    z_fcf = _zscore_col(df, "fcf_yield", sign=1.0)
+    df["z_value"] = z_ep * 0.571 + z_fcf * 0.429
+
+    z_roe = _zscore_col(df, "roe", sign=1.0)
+    z_mgn = _zscore_col(df, "margin", sign=1.0)
+    z_acc = _zscore_col(df, "accrual_q", sign=1.0)
+    df["z_quality"] = z_roe * 0.45 + z_mgn * 0.35 + z_acc * 0.20
+    return df
 from modules.price_panel import load_panel
 
 try:
@@ -63,7 +95,8 @@ def _ict_raw_score(ohlcv_dict: dict, tk: str, as_of_date) -> float:
 def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
                                ohlcv_dict: dict = None,
                                fin_hist: dict = None,
-                               shares_hist: dict = None) -> dict:
+                               shares_hist: dict = None,
+                               equity_hist: dict = None) -> dict:
     """
     as_of_date 기준으로 각 티커의 6-팩터 점수 계산.
     look-ahead bias 없음 (가격·재무 데이터는 as_of_date 이전만 사용).
@@ -82,7 +115,7 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
 
         if fin_hist is not None:
             fund = _pit_fundamentals(tk, as_of_date, cur_price,
-                                     fin_hist, shares_hist or {})
+                                     fin_hist, shares_hist or {}, equity_hist)
         else:
             fund = {}
 
@@ -91,8 +124,11 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
         rows.append({
             "ticker": tk,
             "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21,
-            "pe":     fund.get("pe", np.nan),
-            "margin": fund.get("margin", np.nan),
+            "pe":        fund.get("pe", np.nan),
+            "margin":    fund.get("margin", np.nan),
+            "roe":       fund.get("roe", np.nan),
+            "fcf_yield": fund.get("fcf_yield", np.nan),
+            "accrual_q": fund.get("accrual_q", np.nan),
             "ict":    ict_score,
         })
 
@@ -107,19 +143,7 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
     mu, sigma = df["vol"].mean(), df["vol"].std()
     df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)
 
-    pe_valid = df["pe"].dropna()
-    if len(pe_valid) >= 3:
-        mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
-        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(0.0)
-    else:
-        df["z_value"] = 0.0
-
-    m_valid = df["margin"].dropna()
-    if len(m_valid) >= 3:
-        mu_m, sigma_m = m_valid.mean(), m_valid.std()
-        df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
-    else:
-        df["z_quality"] = 0.0
+    _add_value_quality_z(df)
 
     mu_i, sigma_i = df["ict"].mean(), df["ict"].std()
     df["z_ict"] = (df["ict"] - mu_i) / (sigma_i + 1e-9)
@@ -179,6 +203,7 @@ def run_ic_analysis(
         progress_cb(0.45)
     fin_hist    = _fetch_fin_hist(list(prices_dict.keys()))
     shares_hist = _fetch_shares_hist(list(prices_dict.keys()))
+    equity_hist = _fetch_equity_hist(list(prices_dict.keys()))
 
     all_closes    = pd.DataFrame(prices_dict).dropna(how="all")
     dates         = all_closes.index
@@ -200,6 +225,7 @@ def run_ic_analysis(
             ohlcv_dict=ohlcv_dict,
             fin_hist=fin_hist,
             shares_hist=shares_hist,
+            equity_hist=equity_hist,
         )
         if len(scores) < 5:
             continue
@@ -279,7 +305,8 @@ def run_ic_analysis(
 def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
                               ohlcv_dict: dict = None,
                               fin_hist: dict = None,
-                              shares_hist: dict = None) -> dict:
+                              shares_hist: dict = None,
+                              equity_hist: dict = None) -> dict:
     """
     as_of_date 기준 각 티커의 팩터별 z-score (6-팩터).
 
@@ -298,7 +325,7 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
 
         if fin_hist is not None:
             fund = _pit_fundamentals(tk, as_of_date, cur_price,
-                                     fin_hist, shares_hist or {})
+                                     fin_hist, shares_hist or {}, equity_hist)
         else:
             fund = {}
 
@@ -307,8 +334,11 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
         rows.append({
             "ticker": tk,
             "mom_3m": mom_3m, "mom_1m": mom_1m, "vol": vol_21,
-            "pe":     fund.get("pe", np.nan),
-            "margin": fund.get("margin", np.nan),
+            "pe":        fund.get("pe", np.nan),
+            "margin":    fund.get("margin", np.nan),
+            "roe":       fund.get("roe", np.nan),
+            "fcf_yield": fund.get("fcf_yield", np.nan),
+            "accrual_q": fund.get("accrual_q", np.nan),
             "ict":    ict_score,
         })
 
@@ -324,19 +354,7 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
     mu, sigma = df["vol"].mean(), df["vol"].std()
     df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)
 
-    pe_valid = df["pe"].dropna()
-    if len(pe_valid) >= 3:
-        mu_pe, sigma_pe = pe_valid.mean(), pe_valid.std()
-        df["z_value"] = (-(df["pe"] - mu_pe) / (sigma_pe + 1e-9)).fillna(0.0)
-    else:
-        df["z_value"] = 0.0
-
-    m_valid = df["margin"].dropna()
-    if len(m_valid) >= 3:
-        mu_m, sigma_m = m_valid.mean(), m_valid.std()
-        df["z_quality"] = ((df["margin"] - mu_m) / (sigma_m + 1e-9)).fillna(0.0)
-    else:
-        df["z_quality"] = 0.0
+    _add_value_quality_z(df)
 
     mu_i, sigma_i = df["ict"].mean(), df["ict"].std()
     df["z_ict"] = (df["ict"] - mu_i) / (sigma_i + 1e-9)
@@ -386,6 +404,7 @@ def run_per_factor_ic_analysis(
         progress_cb(0.45)
     fin_hist    = _fetch_fin_hist(list(prices_dict.keys()))
     shares_hist = _fetch_shares_hist(list(prices_dict.keys()))
+    equity_hist = _fetch_equity_hist(list(prices_dict.keys()))
 
     all_closes    = pd.DataFrame(prices_dict).dropna(how="all")
     dates         = all_closes.index
@@ -407,6 +426,7 @@ def run_per_factor_ic_analysis(
             ohlcv_dict=ohlcv_dict,
             fin_hist=fin_hist,
             shares_hist=shares_hist,
+            equity_hist=equity_hist,
         )
         if len(factor_scores) < 5:
             continue
@@ -501,6 +521,7 @@ def run_out_of_sample_validation(
         progress_cb(0.35)
     fin_hist    = _fetch_fin_hist(list(prices_dict.keys()))
     shares_hist = _fetch_shares_hist(list(prices_dict.keys()))
+    equity_hist = _fetch_equity_hist(list(prices_dict.keys()))
 
     all_closes = pd.DataFrame(prices_dict).dropna(how="all")
     dates      = all_closes.index
@@ -522,6 +543,7 @@ def run_out_of_sample_validation(
                 ohlcv_dict=ohlcv_dict,
                 fin_hist=fin_hist,
                 shares_hist=shares_hist,
+                equity_hist=equity_hist,
             )
             if len(factor_scores) < 5:
                 continue

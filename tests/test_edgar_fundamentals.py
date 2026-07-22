@@ -175,7 +175,8 @@ def test_assemble_income_contract():
     df = ef.assemble_income(_income_ug())
     # 4개 분기(Q1~Q3 + 유도 Q4)
     assert len(df) == 4
-    assert list(df.columns) == ["revenue", "operating_income", "net_income"]
+    assert list(df.columns) == ["revenue", "operating_income", "net_income",
+                                "operating_cash_flow", "capex"]
     # 인덱스(filed) 단조 비감소
     assert df.index.is_monotonic_increasing
     # net_income TTM = 1+2+3+4(유도) = 10
