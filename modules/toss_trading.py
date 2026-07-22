@@ -16,6 +16,50 @@ import requests
 # ── 기본 설정 ──────────────────────────────────────────────────────────
 _BASE = "https://openapi.tossinvest.com"
 
+# 재시도 대상 HTTP 상태 (일시적 오류만) — 429 rate limit, 5xx 서버 오류
+_RETRY_STATUS  = {429, 500, 502, 503, 504}
+_MAX_RETRIES   = 3
+_BACKOFF_BASE  = 1.5   # 초; 지수 백오프 (1.5, 3.0, 6.0 ...)
+
+
+def _request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
+    """네트워크/일시적 오류에 지수 백오프로 재시도하는 requests 래퍼.
+
+    - 연결 오류·타임아웃·429·5xx만 재시도(멱등하지 않은 주문 POST도 '전송 전
+      실패'는 재시도 안전 — 서버가 응답을 준 4xx는 재시도하지 않는다).
+    - 4xx(429 제외)는 즉시 반환 → 호출부 raise_for_status가 처리.
+    - 마지막 시도까지 실패하면 마지막 예외/응답을 raise/반환.
+    """
+    last_exc = None
+    resp = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.request(method, url, **kwargs)
+            if resp.status_code in _RETRY_STATUS and attempt < _MAX_RETRIES - 1:
+                wait = _BACKOFF_BASE * (2 ** attempt)
+                # 429면 서버가 준 Retry-After 우선
+                ra = resp.headers.get("Retry-After")
+                if ra:
+                    try:
+                        wait = max(wait, float(ra))
+                    except ValueError:
+                        pass
+                print(f"  [toss] {resp.status_code} → {wait:.1f}s 후 재시도 ({attempt+1}/{_MAX_RETRIES})")
+                time.sleep(wait)
+                continue
+            return resp
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+            if attempt < _MAX_RETRIES - 1:
+                wait = _BACKOFF_BASE * (2 ** attempt)
+                print(f"  [toss] 네트워크 오류({type(e).__name__}) → {wait:.1f}s 후 재시도 ({attempt+1}/{_MAX_RETRIES})")
+                time.sleep(wait)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    return resp  # 마지막 재시도 응답(여전히 4xx/5xx일 수 있음 — 호출부 raise_for_status가 처리)
+
 # ── OAuth2 토큰 캐싱 ───────────────────────────────────────────────────
 _token_lock  = threading.Lock()
 # client_id를 키로 하여 여러 credentials 동시 사용 시 토큰 오염 방지
@@ -30,7 +74,8 @@ def _get_token(client_id: str, client_secret: str) -> str:
         if entry.get("token") and entry.get("expires_at", 0) > now + 60:
             return str(entry["token"])
 
-        resp = requests.post(
+        resp = _request_with_retry(
+            "POST",
             f"{_BASE}/oauth2/token",
             data={
                 "grant_type":    "client_credentials",
@@ -70,7 +115,8 @@ def _auth_only_headers(client_id: str, client_secret: str) -> dict:
 def _get_price(symbol: str, client_id: str, client_secret: str) -> float:
     """GET /api/v1/prices 로 현재가(lastPrice) 조회. 실패 시 0.0 반환."""
     try:
-        resp = requests.get(
+        resp = _request_with_retry(
+            "GET",
             f"{_BASE}/api/v1/prices",
             headers=_auth_only_headers(client_id, client_secret),
             params={"symbols": symbol},
@@ -104,7 +150,7 @@ def get_account(client_id: str, client_secret: str, account_seq: str) -> dict:
     # 1) 보유 주식 평가금액
     stock_value = 0.0
     try:
-        resp = requests.get(f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
+        resp = _request_with_retry("GET", f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
         resp.raise_for_status()
         result = resp.json().get("result", {})
         krw_val = result.get("marketValue", {}).get("amount", {}).get("krw", "0")
@@ -115,7 +161,8 @@ def get_account(client_id: str, client_secret: str, account_seq: str) -> dict:
     # 2) 매수 가능 금액 (현금) — GET /api/v1/buying-power?currency=KRW
     buying_power = 0.0
     try:
-        resp = requests.get(
+        resp = _request_with_retry(
+            "GET",
             f"{_BASE}/api/v1/buying-power",
             headers=hdrs,
             params={"currency": "KRW"},
@@ -156,7 +203,7 @@ def get_positions(client_id: str, client_secret: str, account_seq: str) -> list:
       }
     """
     hdrs = _headers(client_id, client_secret, account_seq)
-    resp = requests.get(f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
+    resp = _request_with_retry("GET", f"{_BASE}/api/v1/holdings", headers=hdrs, timeout=15)
     resp.raise_for_status()
     items = resp.json().get("result", {}).get("items", [])
 
@@ -328,4 +375,9 @@ def wait_for_fill(
 
         time.sleep(_FILL_POLL_SEC)
 
-    return {"status": "timeout", "order_id": order_id}
+    # 타임아웃: 주문이 아직 체결/취소 등 종결 상태에 도달하지 않음.
+    # 이 시점의 체결 여부는 '알 수 없음' — 호출부는 이를 '매수 성공'으로
+    # 간주하면 안 되고(포지션·매수여력 오기록), 미체결로 보수적 처리해야 한다.
+    # filled_avg_price/filled_qty를 None으로 명시해 오해를 차단한다.
+    return {"status": "timeout", "order_id": order_id,
+            "filled_avg_price": None, "filled_qty": None}

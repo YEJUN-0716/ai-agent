@@ -918,8 +918,17 @@ def main():
                     buy_rec["ok"] = False
 
             buy_results.append(buy_rec)
-            if buy_rec.get("fill_status") not in {"canceled", "rejected", "replaced", "cancel_rejected", "replace_rejected"}:
+            _definitive_fail = {"canceled", "rejected", "replaced", "cancel_rejected", "replace_rejected"}
+            _fill_status = buy_rec.get("fill_status")
+            # 자본 예약: 명백한 실패(취소/거부)만 제외. timeout은 체결됐을 수 있어
+            # 보수적으로 매수여력을 예약한다(다음 종목 과다매수 방지). 실제 미체결이면
+            # 다음 실행의 포지션 대사에서 브로커 실보유와 맞춰진다.
+            if _fill_status not in _definitive_fail:
                 buying_power -= _size_krw
+            # 매수 '확정' 카운트: DRY_RUN이거나 체결 확인(ok=True)된 경우만.
+            # timeout은 체결 미확정이라 ok=False → 신규 매수로 세지 않고 시그널 로그에도
+            # 기록하지 않는다(과거엔 timeout을 매수 성공으로 오기록하던 버그).
+            if buy_rec.get("ok"):
                 n_bought += 1
                 bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
             if kill is not None:
