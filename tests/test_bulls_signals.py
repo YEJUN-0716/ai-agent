@@ -141,3 +141,17 @@ def test_bulls_raw_score_returns_float_and_handles_short_data():
 def test_bulls_raw_score_missing_columns_returns_zero():
     df = pd.DataFrame({"Close": [1, 2, 3]})
     assert bs.bulls_raw_score(df) == 0.0
+
+
+# ── 하위팩터 분리 ───────────────────────────────────────────────
+def test_bulls_subfactors_keys_and_short_data():
+    sf = bs.bulls_subfactors(_mk_df([1, 2, 3]))
+    assert set(sf) == {"breakout", "trend", "reversion"}
+    assert sf == {"breakout": 0.0, "trend": 0.0, "reversion": 0.0}
+
+
+def test_reversion_positive_near_lower_band():
+    # 하단 밴드 근처(하락 후 저가권)면 reversion > 0 (반등 기대)
+    close = list(np.linspace(130, 100, 40))     # 지속 하락 → %B 낮음
+    sf = bs.bulls_subfactors(_mk_df(close))
+    assert sf["reversion"] > 0

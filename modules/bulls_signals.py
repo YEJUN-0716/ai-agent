@@ -65,6 +65,58 @@ def _f(x) -> float | None:
         return None
 
 
+def _safe(x, default: float) -> float:
+    try:
+        v = float(x)
+        return v if np.isfinite(v) else default
+    except (TypeError, ValueError):
+        return default
+
+
+# ── 8. 연속형 하위팩터 (IC 재측정용, 레짐 상쇄 방지) ─────────────
+def range_position(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """최근 window일 고저 대비 종가 위치 [0,1]. 0=저가권, 1=고가권."""
+    _require_cols(df, ("High", "Low", "Close"))
+    hi = df["High"].astype(float).rolling(window, min_periods=window).max()
+    lo = df["Low"].astype(float).rolling(window, min_periods=window).min()
+    return (df["Close"].astype(float) - lo) / (hi - lo).replace(0, np.nan)
+
+
+def bulls_subfactors(df: pd.DataFrame, window: int = 20) -> dict:
+    """불스 신호를 상쇄 없이 3개 연속형 하위팩터로 분리 (마지막 봉 기준).
+
+    bulls_raw_score 가 추세추종+평균회귀를 한 스칼라로 섞어 IC가 상쇄·역전됐던
+    문제를 풀기 위해, 각 성향을 독립 스칼라로 낸다. Spearman IC 는 스케일 불변이라
+    개별 측정엔 z-score 불필요(합성 시에만 횡단면 z 후 합산).
+
+      breakout  : (종가 고저위치-0.5) × 거래량배수  — 고가권 + 거래량 = 강세 (1강)
+      trend     : 추세방향 × (%B-0.5) × min(ADX/50,1) — 추세방향 밴드 라이딩 (7·11강)
+      reversion : (0.5 - %B)                          — 하단권 = 반등 기대 (11강 평균회귀)
+    """
+    out = {"breakout": 0.0, "trend": 0.0, "reversion": 0.0}
+    try:
+        _require_cols(df, OHLCV_COLS)
+    except ValueError:
+        return out
+    if len(df) < max(30, window + 5):
+        return out
+
+    boll = bollinger_features(df, window=window)
+    pctb = _safe(boll["pctB"], 0.5)
+    vr = _safe(volume_ratio(df, window).iloc[-1], 1.0)
+    a = adx(df)
+    adx_last = _safe(a["adx"].iloc[-1], 0.0)
+    pdi = _safe(a["plus_di"].iloc[-1], np.nan)
+    mdi = _safe(a["minus_di"].iloc[-1], np.nan)
+    direction = float(np.sign(pdi - mdi)) if np.isfinite(pdi - mdi) else 0.0
+    pos = _safe(range_position(df, window).iloc[-1], 0.5)
+
+    out["breakout"] = (pos - 0.5) * float(np.clip(vr, 0.0, 3.0))
+    out["trend"] = direction * (pctb - 0.5) * min(adx_last / 50.0, 1.0)
+    out["reversion"] = 0.5 - pctb
+    return out
+
+
 # ── 1. 거래량 필터 (8-4, 전 강의 공통) ───────────────────────────
 def volume_ratio(df: pd.DataFrame, window: int = 20) -> pd.Series:
     """당일 거래량 / 거래량 window일 이동평균. 값 > 1 = 평균 이상."""
