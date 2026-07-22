@@ -28,7 +28,7 @@ python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
 ```
 
-**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~84 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_ic_weights`, `test_price_panel`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~132 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_ic_weights`, `test_price_panel`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to av
 
 ### Two factor engines exist — parallel, but the raw blends are now shared
 
-- `app.py`'s `calc_factor_scores` / `calc_factor_scores_sectoral` power the UI and `signal_worker.py`.
+- `app.py`'s `calc_factor_scores` / `calc_factor_scores_sectoral` power the UI and `signal_worker.py`. `calc_factor_scores` has **three** network seams, and the third is easy to miss: `download_stock(tk, …)`, `yf.Ticker(tk).info`, and `_load_ic_factor_weights_4f()` — which calls `get_market_regime()`, which downloads SPY. Any test or offline caller must stub all three; `tests/test_factor_scores.py`'s `patch_market` fixture is the reference for how.
 - `modules/factor_engine.py` is a **standalone, Streamlit-free** reimplementation (pure pandas/numpy: 5 factors + ICT + regime detection) used by the paper-trade runners and `factor_validator.py`.
 
 These remain parallel implementations — different factor sets (app: skip-1M momentum + optional analyst/short/EPS-surprise extras; engine: mom_3m/mom_1m + regime weights) and different normalization (app: `_zscore_to_score`; engine: z-score → 10–90 min-max). One does not call the other, so momentum / low-vol / weighting changes still need applying in both places.
