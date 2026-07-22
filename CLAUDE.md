@@ -34,7 +34,9 @@ python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to av
 
 ### `app.py` is both the UI and the shared core library
 
-`app.py` (~7,650 lines) is a monolith. Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
+`app.py` (~7,590 lines) is a monolith, now being incrementally unwound. **The extraction pattern:** move the logic to a Streamlit-free `modules/` file that takes its price-fetching and indicator functions as injected arguments (`app.py` imports `modules/`, so the reverse would be circular), then leave a thin delegating wrapper in `app.py` keeping the original signature so headless callers don't change. `generate_system_signals` → `modules/signal_engine.py` was the first one done this way; pin behavior with tests *before* extracting, then verify the tests pass unchanged.
+
+ Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
 
 ### Two factor engines exist — parallel, but the raw blends are now shared
 
