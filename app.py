@@ -49,6 +49,9 @@ except Exception:
 # 가치·퀄리티 원점수 배합의 단일 진실 공급원. modules/factor_engine.py 도 같은
 # 함수를 쓴다 — 계수를 바꾸려면 factor_formulas.py 에서만 바꿀 것.
 # 의존성 없는 순수 산술 모듈이라 방어적 import 대상이 아니다 (없으면 즉시 실패해야 한다).
+# 신호 판정 규칙의 소유자. app.py 가 import 하는 방향이므로 signal_engine 은
+# app 을 import 하지 않는다 — 가격 조회·지표 함수를 주입받는다.
+from modules import signal_engine as _signal_engine
 from modules.factor_formulas import (
     ACCRUAL_NEUTRAL as _ACCRUAL_NEUTRAL,
     accrual_quality as _accrual_quality,
@@ -3148,95 +3151,27 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
 
 
 def generate_system_signals(tickers, factor_df=None, weights=None, top_n=5, capital=10000):
-    """시스템 트레이딩 엔진: 규칙 기반 매수/매도/리밸런싱 시그널."""
-    actions = []
-    end = datetime.now()
-    if factor_df is not None and not factor_df.empty:
-        buy_candidates = factor_df.head(top_n)['ticker'].tolist()
-        sell_candidates = factor_df.tail(max(len(factor_df)//3, 1))['ticker'].tolist()
-    else:
-        buy_candidates = tickers[:top_n]; sell_candidates = []
+    """시스템 트레이딩 엔진: 규칙 기반 매수/매도/리밸런싱 시그널.
 
-    for tk in tickers:
-        try:
-            df = download_stock(tk, start=end - timedelta(days=120), end=end)
-            if df.empty or len(df) < 30: continue
-            df = df.dropna(subset=['Close']); p = df['Close']; cp = float(p.iloc[-1])
-            rsi = float(calc_rsi(p).iloc[-1])
-            ma20 = float(p.rolling(20).mean().iloc[-1])
-            ma60 = float(p.rolling(60).mean().iloc[-1])
-            mom = calc_momentum(df); mom_3m = mom.get('3M', 0) or 0
-            in_buy = tk in buy_candidates; in_sell = tk in sell_candidates
-            trend_up = cp > ma20 > ma60; trend_dn = cp < ma20 < ma60
-            # 거래량 확인 (평균 대비 80% 미만이면 신호 신뢰도 낮음)
-            vr = float(df['Volume'].iloc[-1]) / (float(df['Volume'].rolling(20).mean().iloc[-1]) + 1e-9)
-            vol_confirm = vr >= 0.8
-            # 강한 상승추세 판단 (ADX > 25 + pdi > ndi)
-            _adx_s, _pdi_s, _ndi_s = calc_adx(df['High'], df['Low'], p)
-            _adx_v = float(_adx_s.iloc[-1]) if not np.isnan(float(_adx_s.iloc[-1])) else 20
-            strong_trend_up = trend_up and _adx_v > 25 and float(_pdi_s.iloc[-1]) > float(_ndi_s.iloc[-1])
-            # 강한 추세에서 과매수 임계 완화 (모멘텀 종목 과도 차단 방지)
-            overbought_th = 80 if strong_trend_up else 70
-            oversold = rsi < 35; overbought = rsi > overbought_th
-            target_w = weights.get(tk, 0) if weights else (1.0/top_n if in_buy else 0)
+    판정 로직은 modules/signal_engine.py 가 소유한다. 여기서는 app.py 쪽
+    가격 조회·지표 함수를 주입해 넘기기만 한다 — signal_worker.py 가
+    `core.generate_system_signals(...)` 로 부르는 진입점이라 시그니처는 유지한다.
 
-            f_score_v = 0
-            if factor_df is not None and not factor_df.empty:
-                f_row = factor_df[factor_df['ticker'] == tk]
-                if not f_row.empty:
-                    f_score_v = float(f_row['composite'].iloc[0])
-
-            is_top_factor = f_score_v >= 75
-            is_strong_factor = f_score_v >= 50
-            is_krx = tk.endswith('.KS') or tk.endswith('.KQ')
-            fp = f"₩{cp:,.0f}" if is_krx else f"${cp:.2f}"
-
-            def _make_action(action, tw, reason, priority):
-                alloc = capital * tw
-                qty = alloc / cp if cp > 0 else 0
-                qty_str = f"{qty:,.0f}주" if is_krx else f"{qty:,.2f}주"
-                alloc_str = f"₩{alloc:,.0f}" if is_krx else f"${alloc:,.0f}"
-                return {'ticker': tk, 'action': action, 'weight': f"{tw*100:.1f}%",
-                        'price': fp, 'alloc': alloc_str, 'qty': qty_str,
-                        'reason': reason, 'priority': priority, 'mom': f"{mom_3m:+.1f}%"}
-
-            if in_buy and is_top_factor and not overbought and vol_confirm:
-                actions.append(_make_action('🟢 매수', target_w,
-                    f"팩터 {f_score_v:.0f}점 (최상위) — 거래량 확인 (RSI {rsi:.0f})", 'HIGH'))
-            elif in_buy and is_top_factor and not overbought and not vol_confirm:
-                actions.append(_make_action('🟡 조건부 매수', target_w * 0.7,
-                    f"팩터 {f_score_v:.0f}점 (최상위) — 거래량 부족({vr:.1f}×), 소량 선진입", 'NORMAL'))
-            elif in_buy and (trend_up or oversold) and not overbought:
-                vol_note = '' if vol_confirm else f' | 거래량 주의({vr:.1f}×)'
-                actions.append(_make_action('🟢 매수', target_w,
-                    f"팩터 {f_score_v:.0f}점 + {'과매도 반등' if oversold else '상승추세'} (RSI {rsi:.0f}){vol_note}",
-                    'HIGH' if oversold else 'NORMAL'))
-            elif in_buy and is_strong_factor and not overbought:
-                actions.append(_make_action('🟡 조건부 매수', target_w * 0.7,
-                    f"팩터 {f_score_v:.0f}점 — 추세 확인 시 비중 확대 (RSI {rsi:.0f})", 'NORMAL'))
-            elif in_buy:
-                actions.append(_make_action('🟡 대기', target_w,
-                    f"팩터 {f_score_v:.0f}점, 추세·팩터 모두 약함 (RSI {rsi:.0f})", 'LOW'))
-            elif in_sell or (trend_dn and overbought):
-                actions.append(_make_action('🔴 매도', 0,
-                    f"팩터 {f_score_v:.0f}점 하위{'+ 하락추세' if trend_dn else ''} (RSI {rsi:.0f})", 'HIGH'))
-            elif trend_dn:
-                actions.append(_make_action('🟠 비중축소', target_w * 0.5,
-                    f"하락추세 (RSI {rsi:.0f})", 'NORMAL'))
-            else:
-                actions.append(_make_action('⚪ 관망', target_w,
-                    f"팩터 {f_score_v:.0f}점 — 뚜렷한 방향 없음 (RSI {rsi:.0f})", 'LOW'))
-        except Exception:
-            continue
-
-    rebal_days = (20 - datetime.now().timetuple().tm_yday % 20) % 20
-    rebal_info = {
-        'next_rebal': '오늘 리밸런싱' if rebal_days == 0 else f"{rebal_days}일 후",
-        'buy_count': sum(1 for a in actions if '매수' in a['action']),
-        'sell_count': sum(1 for a in actions if '매도' in a['action'] or '축소' in a['action']),
-        'hold_count': sum(1 for a in actions if '관망' in a['action'] or '대기' in a['action']),
-    }
-    return actions, rebal_info
+    download_stock 을 lambda 로 감싸는 이유: 이름을 호출 시점에 app 모듈
+    전역에서 다시 찾게 해, 테스트가 app.download_stock 을 monkeypatch 하면
+    그대로 반영되게 하려는 것이다.
+    """
+    return _signal_engine.generate_system_signals(
+        tickers,
+        fetch_prices=lambda tk, start, end: download_stock(tk, start=start, end=end),
+        calc_rsi=calc_rsi,
+        calc_momentum=calc_momentum,
+        calc_adx=calc_adx,
+        factor_df=factor_df,
+        weights=weights,
+        top_n=top_n,
+        capital=capital,
+    )
 
 
 UNIVERSE_PRESETS = {
