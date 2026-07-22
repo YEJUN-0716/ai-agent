@@ -52,6 +52,8 @@ except Exception:
 # 신호 판정 규칙의 소유자. app.py 가 import 하는 방향이므로 signal_engine 은
 # app 을 import 하지 않는다 — 가격 조회·지표 함수를 주입받는다.
 from modules import signal_engine as _signal_engine
+# 팩터 점수의 순수 계산부. 여기(app.py)에는 조회 루프만 남긴다.
+from modules import factor_scoring as _scoring
 from modules.factor_formulas import (
     ACCRUAL_NEUTRAL as _ACCRUAL_NEUTRAL,
     accrual_quality as _accrual_quality,
@@ -554,27 +556,21 @@ def _get_market_regime():
 # ─────────────────────────────────────────────
 
 def _fetch_extra_factors(ticker, info):
-    """애널리스트 추천·공매도 비율·EPS 서프라이즈 팩터 수집."""
+    """애널리스트 추천·공매도 비율·EPS 서프라이즈 팩터 수집.
+
+    스케일 변환 규칙은 factor_scoring 소유. 여기서는 조회만 한다.
+    """
     out = {}
-    # ① 애널리스트 추천 (1=강력매수~5=강력매도 → 인버트)
-    rec = info.get('recommendationMean')
-    if rec and 1 <= rec <= 5:
-        out['analyst_raw'] = round((5 - rec) / 4 * 100, 1)
-    # ② 공매도 비율 (낮을수록 좋음 → 인버트)
-    sr = info.get('shortRatio')
-    if sr is not None and sr >= 0:
-        out['short_raw'] = round(max(0, 100 - min(sr * 8, 100)), 1)
-    # ③ EPS 서프라이즈 (최근 4분기 평균)
+    # ① 애널리스트 추천, ② 공매도 비율 — 둘 다 info 에 이미 들어 있다
+    for key, score in (('analyst_raw', _scoring.analyst_score(info.get('recommendationMean'))),
+                       ('short_raw', _scoring.short_ratio_score(info.get('shortRatio')))):
+        if score is not None:
+            out[key] = score
+    # ③ EPS 서프라이즈 — 별도 조회가 필요하다
     try:
-        eh = yf.Ticker(ticker).earnings_history
-        if eh is not None and not eh.empty:
-            need = {'epsEstimate', 'epsActual'}
-            if need.issubset(eh.columns):
-                recent = eh.dropna(subset=list(need)).tail(4)
-                if not recent.empty:
-                    surp = ((recent['epsActual'] - recent['epsEstimate']) /
-                            recent['epsEstimate'].abs().clip(lower=0.01) * 100)
-                    out['eps_surprise_raw'] = round(float(surp.mean()), 1)
+        surprise = _scoring.eps_surprise_score(yf.Ticker(ticker).earnings_history)
+        if surprise is not None:
+            out['eps_surprise_raw'] = surprise
     except Exception:
         pass
     return out
@@ -2992,15 +2988,8 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 # QUANT ENGINE
 # ─────────────────────────────────────────────
 
-def _zscore_to_score(series):
-    """Z-score를 20~80 범위의 점수로 변환. 평균=50, ±2σ가 20/80. 1~99% 윈저라이징 적용."""
-    lo, hi = series.quantile(0.01), series.quantile(0.99)
-    series = series.clip(lo, hi)
-    m = series.mean(); s = series.std()
-    if pd.isna(s) or s < 1e-9:
-        return pd.Series(50.0, index=series.index)
-    z = (series - m) / s
-    return (z * 15 + 50).clip(20, 80).fillna(50.0)
+# 정규화 규칙은 factor_scoring 소유. calc_factor_scores_sectoral 도 이 이름을 쓴다.
+_zscore_to_score = _scoring.zscore_to_score
 
 def _load_ic_factor_weights_4f(regime=None):
     """ic_weights.json의 6팩터 레짐 가중치를 4팩터(momentum/value/quality/low_vol)로 매핑."""
@@ -3029,7 +3018,15 @@ def _load_ic_factor_weights_4f(regime=None):
 
 def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                        extra_factors=False, min_avg_volume=0, factor_weights=None):
-    """멀티팩터 랭킹: 4팩터 + 선택적 3추가팩터(애널·공매도·EPS서프라이즈)."""
+    """멀티팩터 랭킹: 4팩터 + 선택적 3추가팩터(애널·공매도·EPS서프라이즈).
+
+    점수 공식·정규화·가중 합성은 modules/factor_scoring.py 가 소유한다.
+    여기 남은 것은 조회 루프뿐이다 — 종목별 다운로드, yfinance 재무 조회,
+    레이트리밋 슬립, 진행률 표시.
+
+    signal_worker.py 가 `core.calc_factor_scores(...)` 로 부르는 진입점이라
+    시그니처와 반환 스키마는 그대로 유지한다.
+    """
     import time
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
@@ -3039,70 +3036,20 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
         try:
-            df = download_stock(tk, start=start, end=end)
-            if df is None or df.empty:
+            df = _scoring.clean_price_frame(download_stock(tk, start=start, end=end),
+                                            min_avg_volume=min_avg_volume)
+            if df is None:
                 failed.append(tk); continue
-            df = df.dropna(subset=['Close'])
-            if len(df) < 30:
-                failed.append(tk); continue
-            cp = float(df['Close'].iloc[-1])
-            # 유동성 필터
-            if min_avg_volume > 0:
-                avg_vol = float(df['Volume'].tail(20).mean()) if 'Volume' in df.columns else 0
-                if avg_vol < min_avg_volume:
-                    failed.append(tk); continue
-            # P1-A: skip-1M 모멘텀 (2~12개월 누적, 단기 역전 제거)
-            mom_skip1m = ((float(df['Close'].iloc[-21]) / float(df['Close'].iloc[-252]) - 1) * 100
-                          if len(df) >= 252 else 0)
-            daily_ret = df['Close'].pct_change().dropna()
-            # P2-A: trailing 252일 변동성 (전체 기간 사용 시 과거 급등락 오염 방지)
-            annual_vol = float(daily_ret.tail(252).std()) * np.sqrt(252) * 100
 
-            per, pbr, roe_v, pm_v, name = None, None, 0, 0, tk
-            fcf_yield_pct, accrual_q = 0.0, _ACCRUAL_NEUTRAL
-            info = {}
+            # 재무 조회는 실패해도 스캔을 멈추지 않는다 — 가격 팩터는 살아 있다.
             try:
                 info = yf.Ticker(tk).info or {}
-                per = info.get('trailingPE') or info.get('forwardPE')
-                pbr = info.get('priceToBook')
-                roe = info.get('returnOnEquity')
-                roe_v = round(roe * 100, 2) if roe is not None else 0
-                pm = info.get('profitMargins')
-                pm_v = (pm*100 if pm else 0)
-                name = info.get('shortName', tk)[:20]
-                # P3-A: FCF 수익률 (밸류 팩터 보완)
-                fcf  = info.get('freeCashflow')
-                mcap = info.get('marketCap')
-                ni_v = info.get('netIncomeToCommon')
-                if fcf is not None and mcap and mcap > 0:
-                    fcf_yield_pct = fcf / mcap * 100  # 음수 FCF도 반영 (현금 소각 패널티)
-                # P3-B: 발생액 품질 — 판정 규칙은 factor_formulas.accrual_quality 소유
-                accrual_q = _accrual_quality(fcf, ni_v)
-                # DART 폴백 (KRX 종목은 yfinance ROE/이익률이 비어있는 경우가 많음)
-                if tk.endswith(('.KS', '.KQ')) and (not roe_v or not pm_v):
-                    _dd = _dart_data.get(tk, {})
-                    if not roe_v and _dd.get('net_income') and _dd.get('equity'):
-                        try:
-                            roe_v = round(_dd['net_income'] / _dd['equity'] * 100, 2)
-                        except ZeroDivisionError:
-                            pass
-                    if not pm_v and _dd.get('margin') is not None:
-                        pm_v = _dd['margin']  # DART는 영업이익률 — 순이익률 근사치로만 사용
             except Exception:
-                pass
+                info = {}
 
-            ep = _earnings_yield(per)
-            bp = _book_yield(pbr)
-            row = {
-                'ticker': tk, 'name': name, 'price': cp,
-                # P1-A: skip-1M 공식
-                'momentum_raw': round(mom_skip1m, 2),
-                # P3-A/P3-B 배합은 factor_formulas 가 소유 (factor_engine.py 와 공유)
-                'value_raw': round(_value_raw(ep, bp, fcf_yield_pct), 2),
-                'quality_raw': round(_quality_raw(roe_v, pm_v, accrual_q), 2),
-                'low_vol_raw': round(max(100-annual_vol, 0), 2),
-                'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
-            }
+            row = {'ticker': tk}
+            row.update(_scoring.price_factors(df))
+            row.update(_scoring.fundamental_factors(tk, info, _dart_data.get(tk)))
             if extra_factors:
                 row.update(_fetch_extra_factors(tk, info))
                 try:
@@ -3116,35 +3063,11 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
         except Exception:
             failed.append(tk)
     if not results: return pd.DataFrame()
-    rdf = pd.DataFrame(results)
-    for col in ['momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw']:
-        rdf[col.replace('_raw', '')] = _zscore_to_score(rdf[col])
-    # 추가 팩터 정규화
-    extra_cols, extra_w = [], []
-    for col, w in [('analyst_raw', 0.10), ('short_raw', 0.05), ('eps_surprise_raw', 0.10), ('ict_raw', 0.10)]:
-        if col in rdf.columns:
-            fname = col.replace('_raw', '')
-            rdf[fname] = _zscore_to_score(rdf[col])
-            extra_cols.append(fname)
-            extra_w.append(w)
-    base_w = 1 - sum(extra_w)
-    # P1-B: low_vol 기본값 축소 (IC ICIR=-0.199 반영), P2-C: IC가중치 블렌딩
-    _default_fw = {'momentum': 0.35, 'value': 0.25, 'quality': 0.32, 'low_vol': 0.08}
-    if factor_weights is None:
-        _ic_fw = _load_ic_factor_weights_4f()
-        _fw = ({k: _default_fw[k] * 0.5 + _ic_fw.get(k, _default_fw[k]) * 0.5 for k in _default_fw}
-               if _ic_fw else _default_fw)
-    else:
-        _fw = factor_weights
-    _fw_sum = sum(_fw.values()) or 1.0
-    rdf['composite'] = (rdf['momentum'] * _fw.get('momentum', 0.35) / _fw_sum * base_w +
-                        rdf['value']    * _fw.get('value',    0.25) / _fw_sum * base_w +
-                        rdf['quality']  * _fw.get('quality',  0.32) / _fw_sum * base_w +
-                        rdf['low_vol']  * _fw.get('low_vol',  0.08) / _fw_sum * base_w)
-    for fname, w in zip(extra_cols, extra_w):
-        rdf['composite'] += rdf[fname] * w
-    rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
-    rdf['rank'] = range(1, len(rdf)+1)
+    rdf = _scoring.rank_by_composite(
+        results,
+        factor_weights=factor_weights,
+        ic_weights=_load_ic_factor_weights_4f() if factor_weights is None else None,
+    )
     if failed:
         rdf.attrs['failed'] = failed
     return rdf
