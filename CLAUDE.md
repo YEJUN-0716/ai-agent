@@ -28,13 +28,13 @@ python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
 ```
 
-**No unit-test framework is configured.** "Testing" here means statistical validation of the strategy, not pytest — it lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~57 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_ic_weights`, `test_price_panel`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
 ### `app.py` is both the UI and the shared core library
 
-`app.py` (~3,800 lines) is a monolith. Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
+`app.py` (~7,650 lines) is a monolith. Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
 
 ### Two factor engines exist — keep them in sync deliberately
 
@@ -59,4 +59,4 @@ Runtime **state lives in version-controlled files** that the workflows `git comm
 
 ### GitHub Actions workflows (`.github/workflows/`)
 
-Daily cron sequence (UTC, weekdays): `signal-alerts.yml` (22:30) scans and alerts, `daily-report.yml` (23:30 → KST 08:30) sends the Toss P&L brief. `ic-update.yml` runs Sundays. **`paper-trade-us.yml`'s cron is intentionally disabled — the system currently runs in signal-only mode (alerts, no automated orders); `signal-alerts.yml` is the active scanner.** Workflows that produce state use `concurrency` groups and `git pull --rebase` before pushing to avoid clobbering each other's commits.
+**Currently active crons:** `daily-report.yml` (23:30 UTC weekdays → KST 08:30, Toss P&L brief) and `ic-update.yml` (Sundays 14:00 UTC, weekly IC weights). `ci.yml` runs ruff+pytest on every push to `main` and PR. **Both `signal-alerts.yml` (scanner, was 22:30) and `paper-trade-us.yml` (orders, was 21:30) have their `schedule:` cron commented out — so the repo currently runs NO automated scan or trade on a timer; trigger them manually via `workflow_dispatch` when needed.** This is the intentional signal-only / no-live-order pause (see also `DRY_RUN=true` default). Note the asymmetry: `daily-report` still fires on cron while the scanner does not, so the daily brief can reflect stale/empty signals until `signal-alerts` is re-enabled. Workflows that produce state use `concurrency` groups and `git pull --rebase` before pushing to avoid clobbering each other's commits.
