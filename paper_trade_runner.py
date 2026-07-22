@@ -28,7 +28,7 @@ import os
 import sys
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -36,7 +36,7 @@ import requests
 import yfinance as yf
 
 from modules.factor_engine import (
-    REGIME_WEIGHTS, TARGET_VOL_PCT,
+    TARGET_VOL_PCT,
     get_market_regime, calc_factor_scores, generate_signals,
     fetch_returns_matrix,
 )
@@ -699,7 +699,7 @@ def main():
             continue
 
         if buying_power < CAPITAL_USD * 0.5:
-            print(f"  [매수 스킵] 매수여력 부족")
+            print("  [매수 스킵] 매수여력 부족")
             break
 
         # 변동성 기반 포지션 사이징

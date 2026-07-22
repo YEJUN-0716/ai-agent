@@ -1,7 +1,5 @@
 """edgar_fundamentals 테스트. 네트워크를 타지 않고 requests를 목으로 대체한다."""
-import json
 import pandas as pd
-import pytest
 
 from modules import edgar_fundamentals as ef
 

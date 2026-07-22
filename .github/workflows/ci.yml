@@ -1,0 +1,36 @@
+name: CI (lint · test)
+
+# main으로의 push와 모든 PR에서 ruff 린트 + pytest를 실행하는 품질 게이트.
+# 기존 cron 워크플로(신호·리포트·IC)와 달리 시크릿·네트워크가 필요 없다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 3.12 설정
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: Ruff 린트 (pyproject.toml의 F·E9 규칙)
+        run: python -m ruff check .
+
+      - name: Pytest
+        run: python -m pytest tests/ -q

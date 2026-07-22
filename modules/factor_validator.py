@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from scipy.stats import spearmanr
-import yfinance as yf
 
 from modules.factor_engine import point_in_time_fundamentals as _pit_fundamentals
 from modules.edgar_fundamentals import (

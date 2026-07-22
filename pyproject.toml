@@ -1,0 +1,13 @@
+# Ruff 린트 설정 — CI 게이트(.github/workflows/ci.yml)가 이 설정으로 검사한다.
+#
+# 이 코드베이스는 `if x: return y` 같은 한 줄 다중문(E701/E702)을 관용적으로
+# 쓰므로 스타일 규칙은 게이트에서 제외하고, 실제 버그를 잡는 규칙만 강제한다:
+#   F  = pyflakes (미정의 이름, 미사용 import, f-string 오용 등 진짜 오류)
+#   E9 = 구문 오류(IndentationError, SyntaxError 등)
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+exclude = [".ruff_cache", "office_game", "docs"]
+
+[tool.ruff.lint]
+select = ["F", "E9"]

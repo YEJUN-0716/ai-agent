@@ -1,5 +1,4 @@
 """pytest가 이 레포에서 동작하는지 확인하는 최소 테스트."""
-import pyarrow
 import pandas as pd
 
 
