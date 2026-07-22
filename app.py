@@ -76,8 +76,6 @@ try:
 except Exception:
     _STAT_AVAILABLE = False
 
-_PT_AVAILABLE = False
-
 try:
     from modules.ml_signals import (
         train_and_validate_ml_signal as _ml_train,
@@ -104,8 +102,6 @@ try:
     _OPS_SAFETY_AVAILABLE = True
 except Exception:
     _OPS_SAFETY_AVAILABLE = False
-
-_PT_TRACKER_AVAILABLE = False
 
 try:
     from modules.alpha_decay_monitor import detect_alpha_decay as _detect_alpha_decay, rolling_performance_vs_baseline as _rolling_perf_vs_bt

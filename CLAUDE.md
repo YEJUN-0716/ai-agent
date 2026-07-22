@@ -26,7 +26,6 @@ python signal_worker.py            # scan universe → Telegram alert → append
 python ic_weight_updater.py        # weekly: recompute IC factor weights → ic_weights.json (~10-60 min)
 python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
-python paper_trade_runner.py       # legacy Alpaca path (superseded by the Toss runner)
 ```
 
 **No unit-test framework is configured.** "Testing" here means statistical validation of the strategy, not pytest — it lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end.
@@ -46,7 +45,7 @@ These are parallel implementations, not one calling the other. A scoring change 
 
 ### `modules/` — optional quant library loaded defensively
 
-`app.py` imports every module inside `try/except`, setting `_*_AVAILABLE` flags (e.g. `_ML_AVAILABLE`, `_PIT_AVAILABLE`, `_TAX_KR_AVAILABLE`). The app degrades gracefully when a module or its dependency is missing, so features are guarded by these flags. Key modules: `factor_engine`, `factor_validator`, `ict_analysis`, `ml_signals`, `risk_management`, `portfolio_allocator`, `ops_safety` (kill switch / reconciliation), `pit_data_logger` (point-in-time fundamentals DB), `tax_kr`, `toss_trading` (current broker), `paper_trading` (legacy Alpaca).
+`app.py` imports every module inside `try/except`, setting `_*_AVAILABLE` flags (e.g. `_ML_AVAILABLE`, `_PIT_AVAILABLE`, `_TAX_KR_AVAILABLE`). The app degrades gracefully when a module or its dependency is missing, so features are guarded by these flags. Key modules: `factor_engine`, `factor_validator`, `ict_analysis`, `ml_signals`, `risk_management`, `portfolio_allocator`, `ops_safety` (kill switch / reconciliation), `pit_data_logger` (point-in-time fundamentals DB), `tax_kr`, `toss_trading` (current broker).
 
 ### The weekly IC feedback loop
 
