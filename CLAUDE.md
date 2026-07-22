@@ -34,7 +34,12 @@ python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to av
 
 ### `app.py` is both the UI and the shared core library
 
-`app.py` (~7,590 lines) is a monolith, now being incrementally unwound. **The extraction pattern:** move the logic to a Streamlit-free `modules/` file that takes its price-fetching and indicator functions as injected arguments (`app.py` imports `modules/`, so the reverse would be circular), then leave a thin delegating wrapper in `app.py` keeping the original signature so headless callers don't change. `generate_system_signals` → `modules/signal_engine.py` was the first one done this way; pin behavior with tests *before* extracting, then verify the tests pass unchanged.
+`app.py` (~7,510 lines) is a monolith, now being incrementally unwound. **The extraction pattern:** pin behavior with network-free tests *before* extracting, move the logic to a Streamlit-free `modules/` file (`app.py` imports `modules/`, so the reverse would be circular), keep the original signature in `app.py` so headless callers don't change, then verify the tests pass **unchanged** — that is the proof behavior was preserved. Two extractions done so far, and they drew the boundary differently on purpose:
+
+- `generate_system_signals` → `modules/signal_engine.py`. Body was pure decision logic, so the *whole* loop moved and the module takes its price-fetch and indicator functions as **injected arguments**. `app.py` keeps a thin delegating wrapper. Note it wraps `download_stock` in a `lambda` so the name resolves from `app`'s globals at call time — otherwise `monkeypatch.setattr(app, "download_stock", …)` in tests would not take effect.
+- `calc_factor_scores` → `modules/factor_scoring.py`. Body was an I/O loop (sequential downloads, rate-limit sleep, Streamlit progress bars) wrapped around scoring math. Injecting five callables would have relocated the mess rather than removed it, so **only the math moved**; `app.py` keeps the loop and calls `clean_price_frame` / `price_factors` / `fundamental_factors` / `rank_by_composite`. The module is genuinely dependency-free — no injection needed.
+
+Rule of thumb: inject when the loop body is the logic; split when the loop is I/O and the logic is inside it.
 
  Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
 
@@ -44,6 +49,8 @@ python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to av
 - `modules/factor_engine.py` is a **standalone, Streamlit-free** reimplementation (pure pandas/numpy: 5 factors + ICT + regime detection) used by the paper-trade runners and `factor_validator.py`.
 
 These remain parallel implementations — different factor sets (app: skip-1M momentum + optional analyst/short/EPS-surprise extras; engine: mom_3m/mom_1m + regime weights) and different normalization (app: `_zscore_to_score`; engine: z-score → 10–90 min-max). One does not call the other, so momentum / low-vol / weighting changes still need applying in both places.
+
+`calc_factor_scores`'s scoring math now lives in `modules/factor_scoring.py` (thresholds, `DEFAULT_FACTOR_WEIGHTS`, z-score normalization, the 50:50 IC blend, extra-factor scales). `calc_factor_scores_sectoral` still has its own copy of the loop and only shares `zscore_to_score` (via the `app._zscore_to_score` alias) — porting it is the next step, and it needs its own behavior tests first.
 
 **What is no longer duplicated:** the value and quality *raw blends* (EP 40 / BP 30 / FCF 30; ROE 45 / margin 35 / accrual 20), the PER/PBR→yield conversion, and the accrual-quality rule now live only in `modules/factor_formulas.py` — a dependency-free pure-arithmetic module that works on scalars and Series alike. All three former copies (`calc_factor_scores`, `calc_factor_scores_sectoral`, `factor_engine.calc_factor_scores`) import it. Change a coefficient **there and only there**. `tests/test_factor_formulas.py` pins the coefficients and fails CI if either engine reintroduces an inline copy.
 
