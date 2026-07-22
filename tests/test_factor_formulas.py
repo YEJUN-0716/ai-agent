@@ -4,8 +4,10 @@ factor_formulas 계수 고정 + 세 엔진 드리프트 방지 테스트.
 목적이 두 가지다:
   1. 가치·퀄리티 배합 계수를 못 박는다. 계수를 바꾸면 여기가 깨지므로,
      "왜 바꿨는지" 없이는 IC 히스토리와 백테스트 결과가 조용히 무효화되지 않는다.
-  2. app.py / factor_engine.py 가 실제로 이 모듈을 쓰고 있는지(= 복붙 사본이
-     되살아나지 않았는지) 소스 레벨에서 확인한다.
+  2. 배합을 계산하는 모듈들(factor_scoring.py / factor_engine.py)이 실제로 이
+     모듈을 쓰고 있는지(= 복붙 사본이 되살아나지 않았는지) 소스에서 확인한다.
+     인라인 사본 금지는 app.py 까지 넓게 건다 — 계산이 거기로 되돌아오는 것
+     자체를 막는 게 목적이다.
 """
 import re
 from pathlib import Path
@@ -121,7 +123,14 @@ def test_blend_functions_work_on_series():
 
 # ── 5. 드리프트 방지 — 복붙 사본이 되살아났는지 소스에서 확인 ──────
 
-DRIFT_GUARD_TARGETS = ["app.py", "modules/factor_engine.py"]
+# 배합을 실제로 계산하는 모듈들 — 반드시 공유 모듈을 import 해야 한다.
+# app.py 는 여기 없다. 점수 계산이 factor_scoring.py 로 넘어가면서 app.py 는
+# 배합을 더 이상 직접 다루지 않기 때문이다 (조회 루프만 남았다).
+IMPORT_GUARD_TARGETS = ["modules/factor_scoring.py", "modules/factor_engine.py"]
+
+# 인라인 사본 금지는 app.py 까지 포함해 더 넓게 건다 — 계산이 app.py 로
+# 되돌아오는 것 자체를 막는 것이 이 가드의 목적이다.
+INLINE_GUARD_TARGETS = ["app.py"] + IMPORT_GUARD_TARGETS
 
 # 과거 세 곳에 복붙돼 있던 배합 리터럴. 다시 나타나면 = 공유 모듈 우회.
 # value_raw / quality_raw 대입문 안에 계수가 직접 박힌 경우만 잡는다 —
@@ -130,7 +139,7 @@ LEGACY_VALUE_BLEND = re.compile(r"""value_raw["']?\s*[:=][^\n]*0\.40""")
 LEGACY_QUALITY_BLEND = re.compile(r"""quality_raw["']?\s*[:=][^\n]*0\.45""")
 
 
-@pytest.mark.parametrize("relpath", DRIFT_GUARD_TARGETS)
+@pytest.mark.parametrize("relpath", IMPORT_GUARD_TARGETS)
 def test_engines_import_shared_formulas(relpath):
     source = (REPO_ROOT / relpath).read_text(encoding="utf-8")
     assert "from modules.factor_formulas import" in source, (
@@ -138,7 +147,7 @@ def test_engines_import_shared_formulas(relpath):
     )
 
 
-@pytest.mark.parametrize("relpath", DRIFT_GUARD_TARGETS)
+@pytest.mark.parametrize("relpath", INLINE_GUARD_TARGETS)
 def test_no_inline_blend_literals_remain(relpath):
     """배합 계수를 인라인으로 다시 써 넣으면 실패시킨다."""
     source = (REPO_ROOT / relpath).read_text(encoding="utf-8")

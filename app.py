@@ -54,14 +54,6 @@ except Exception:
 from modules import signal_engine as _signal_engine
 # 팩터 점수의 순수 계산부. 여기(app.py)에는 조회 루프만 남긴다.
 from modules import factor_scoring as _scoring
-from modules.factor_formulas import (
-    ACCRUAL_NEUTRAL as _ACCRUAL_NEUTRAL,
-    accrual_quality as _accrual_quality,
-    book_yield as _book_yield,
-    earnings_yield as _earnings_yield,
-    quality_raw as _quality_raw,
-    value_raw as _value_raw,
-)
 
 
 def _dart_fallback_batch(tickers):
@@ -3246,10 +3238,15 @@ def get_factor_timing_weights():
 
 
 def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, prog_text=None):
-    """섹터 중립 멀티팩터 랭킹. 섹터 내 Z-score 정규화로 섹터 편향 제거."""
+    """섹터 중립 멀티팩터 랭킹. 섹터 내 Z-score 정규화로 섹터 편향 제거.
+
+    점수 공식·정규화·합성은 modules/factor_scoring.py 가 소유한다.
+    여기 남은 것은 조회 루프뿐 — calc_factor_scores 와 같은 구조다.
+
+    signal_worker.py 가 SECTOR_NEUTRAL 기본값(true)으로 부르는 진입점이라
+    시그니처와 반환 스키마는 그대로 유지한다.
+    """
     import time
-    if factor_weights is None:
-        factor_weights = {'momentum': 0.30, 'value': 0.25, 'quality': 0.30, 'low_vol': 0.15}
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
     _dart_data = _dart_fallback_batch(tickers)
@@ -3257,79 +3254,28 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
         try:
-            df = download_stock(tk, start=start, end=end)
-            if df is None or df.empty: continue
-            df = df.dropna(subset=['Close'])
-            if len(df) < 30: continue
-            cp = float(df['Close'].iloc[-1])
-            daily_ret = df['Close'].pct_change().dropna()
-            # P2-A: trailing 252일 변동성
-            annual_vol = float(daily_ret.tail(252).std()) * np.sqrt(252) * 100
-            # P1-A: skip-1M 모멘텀 (2~12개월 누적)
-            mom_skip1m = ((float(df['Close'].iloc[-21]) / float(df['Close'].iloc[-252]) - 1) * 100
-                          if len(df) >= 252 else 0)
+            df = _scoring.clean_price_frame(download_stock(tk, start=start, end=end))
+            if df is None:
+                continue
 
-            sector, per, pbr, roe_v, pm_v, name = 'Unknown', None, None, 0, 0, tk
-            fcf_yield_pct, accrual_q = 0.0, _ACCRUAL_NEUTRAL
+            # 재무 조회가 실패해도 가격 팩터로 랭킹은 계속한다.
             try:
                 info = yf.Ticker(tk).info or {}
-                sector = info.get('sector', 'Unknown')
-                per = info.get('trailingPE') or info.get('forwardPE')
-                pbr = info.get('priceToBook')
-                roe = info.get('returnOnEquity')
-                roe_v = round(roe * 100, 2) if roe is not None else 0
-                pm = info.get('profitMargins')
-                pm_v = (pm*100 if pm else 0)
-                name = info.get('shortName', tk)[:20]
-                # P3-A: FCF 수익률 (밸류 팩터 보완)
-                fcf  = info.get('freeCashflow')
-                mcap = info.get('marketCap')
-                ni_v = info.get('netIncomeToCommon')
-                if fcf is not None and mcap and mcap > 0:
-                    fcf_yield_pct = fcf / mcap * 100
-                accrual_q = _accrual_quality(fcf, ni_v)
-                # DART 폴백 (KRX 종목은 yfinance ROE/이익률이 비어있는 경우가 많음)
-                if tk.endswith(('.KS', '.KQ')) and (not roe_v or not pm_v):
-                    _dd = _dart_data.get(tk, {})
-                    if not roe_v and _dd.get('net_income') and _dd.get('equity'):
-                        try:
-                            roe_v = round(_dd['net_income'] / _dd['equity'] * 100, 2)
-                        except ZeroDivisionError:
-                            pass
-                    if not pm_v and _dd.get('margin') is not None:
-                        pm_v = _dd['margin']  # DART는 영업이익률 — 순이익률 근사치로만 사용
             except Exception:
-                pass
+                info = {}
 
-            ep = _earnings_yield(per)
-            bp = _book_yield(pbr)
-            results.append({
-                'ticker': tk, 'name': name, 'price': cp, 'sector': sector,
-                'momentum_raw': mom_skip1m,
-                'value_raw': _value_raw(ep, bp, fcf_yield_pct),
-                'quality_raw': _quality_raw(roe_v, pm_v, accrual_q),
-                'low_vol_raw': max(100-annual_vol, 0),
-                'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
-            })
+            row = {'ticker': tk, 'sector': info.get('sector', _scoring.UNKNOWN_SECTOR)}
+            # 이쪽 경로는 원점수를 반올림하지 않는다 (round_raw=None).
+            row.update(_scoring.price_factors(df, round_raw=None))
+            row.update(_scoring.fundamental_factors(tk, info, _dart_data.get(tk),
+                                                    round_raw=None))
+            results.append(row)
             if i < len(tickers) - 1:
                 time.sleep(0.3)
         except Exception:
             continue
     if not results: return pd.DataFrame()
-    rdf = pd.DataFrame(results)
-    for col in ['momentum_raw','value_raw','quality_raw','low_vol_raw']:
-        fname = col.replace('_raw','')
-        rdf[f'{fname}_global'] = _zscore_to_score(rdf[col])
-        def _sector_zscore(g):
-            if len(g) < 3: return pd.Series(np.nan, index=g.index)
-            return _zscore_to_score(g)
-        rdf[fname] = rdf.groupby('sector')[col].transform(_sector_zscore)
-        rdf[fname] = rdf[fname].fillna(rdf[f'{fname}_global'])
-
-    rdf['composite'] = sum(rdf[k] * v for k, v in factor_weights.items())
-    rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
-    rdf['rank'] = range(1, len(rdf)+1)
-    return rdf
+    return _scoring.rank_by_sector_neutral_composite(results, factor_weights)
 
 
 def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,

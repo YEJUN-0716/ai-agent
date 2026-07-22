@@ -81,6 +81,23 @@ KRX_SUFFIXES = ('.KS', '.KQ')
 
 BASE_RAW_COLUMNS = ('momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw')
 
+# ── 섹터 중립 랭킹 ─────────────────────────────────────────────────
+# 섹터 안에서 Z-score 를 내려면 표본이 최소한 이만큼은 있어야 한다.
+# 미달이면 섹터 통계가 잡음이라 전체 기준 점수로 되돌린다.
+MIN_SECTOR_MEMBERS = 3
+UNKNOWN_SECTOR = 'Unknown'
+
+# 섹터 경로의 기본 가중치. calc_factor_scores 기본값과 **다르다** —
+# low_vol 이 0.15 로 P1-B 축소가 반영돼 있지 않다. 평소에는
+# get_factor_timing_weights() 결과가 넘어와 가려지지만, FACTOR_TIMING=false 면
+# 이 값이 그대로 나간다. 맞추는 것은 전략 변경이라 별도로 다룬다.
+DEFAULT_SECTORAL_WEIGHTS = {
+    'momentum': 0.30,
+    'value': 0.25,
+    'quality': 0.30,
+    'low_vol': 0.15,
+}
+
 
 # ── 정규화 ──────────────────────────────────────────────────────────
 
@@ -120,7 +137,18 @@ def clean_price_frame(df, min_avg_volume=0):
     return df
 
 
-def price_factors(df):
+def _maybe_round(value, ndigits):
+    """ndigits 가 None 이면 반올림하지 않는다.
+
+    두 스캐너의 기존 동작이 다르다 — calc_factor_scores 는 원점수를 2자리로
+    반올림하고, calc_factor_scores_sectoral 은 그대로 둔다. 정규화 전 값이라
+    표시용도 아닌데 어긋나 있다. 맞추면 두 경로의 점수가 미세하게 달라지므로
+    일단 각자의 동작을 보존한다.
+    """
+    return value if ndigits is None else round(value, ndigits)
+
+
+def price_factors(df, round_raw=2):
     """clean_price_frame 을 통과한 프레임 → 가격 기반 원점수."""
     close = df['Close']
     if len(df) >= MOMENTUM_LOOKBACK_DAYS:
@@ -135,9 +163,9 @@ def price_factors(df):
                   * np.sqrt(TRADING_DAYS_PER_YEAR) * 100)
     return {
         'price': float(close.iloc[-1]),
-        'momentum_raw': round(momentum, 2),
-        'low_vol_raw': round(max(LOW_VOL_BASE - annual_vol, 0), 2),
-        'vol': round(annual_vol, 1),
+        'momentum_raw': _maybe_round(momentum, round_raw),
+        'low_vol_raw': _maybe_round(max(LOW_VOL_BASE - annual_vol, 0), round_raw),
+        'vol': round(annual_vol, 1),   # 표시용 — 양쪽 경로 모두 1자리
     }
 
 
@@ -162,7 +190,7 @@ def _dart_filled(ticker, roe_v, pm_v, dart_row):
     return roe_v, pm_v
 
 
-def fundamental_factors(ticker, info, dart_row=None):
+def fundamental_factors(ticker, info, dart_row=None, round_raw=2):
     """재무 dict → 밸류·퀄리티 원점수. info 가 비어도 예외 없이 0점 계열을 돌려준다.
 
     배합 계수는 factor_formulas 소유다 (factor_engine.py 와 공유).
@@ -194,9 +222,9 @@ def fundamental_factors(ticker, info, dart_row=None):
         'per': per,
         'pbr': pbr,
         'roe': roe_v,
-        'value_raw': round(value_raw(earnings_yield(per), book_yield(pbr),
-                                     fcf_yield_pct), 2),
-        'quality_raw': round(quality_raw(roe_v, pm_v, accrual_q), 2),
+        'value_raw': _maybe_round(
+            value_raw(earnings_yield(per), book_yield(pbr), fcf_yield_pct), round_raw),
+        'quality_raw': _maybe_round(quality_raw(roe_v, pm_v, accrual_q), round_raw),
     }
 
 
@@ -272,6 +300,40 @@ def rank_by_composite(rows, factor_weights=None, ic_weights=None):
     for fname, w in zip(extra_cols, extra_w):
         rdf['composite'] += rdf[fname] * w
 
+    rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
+    rdf['rank'] = range(1, len(rdf) + 1)
+    return rdf
+
+
+def _sector_zscore(group):
+    """섹터 내 정규화. 표본이 모자라면 NaN 을 돌려 호출부가 폴백하게 한다."""
+    if len(group) < MIN_SECTOR_MEMBERS:
+        return pd.Series(np.nan, index=group.index)
+    return zscore_to_score(group)
+
+
+def rank_by_sector_neutral_composite(rows, factor_weights=None):
+    """섹터 중립 랭킹. 각 팩터를 섹터 **안에서** Z-score 정규화한다.
+
+    "기술주는 통째로 모멘텀이 높다" 같은 섹터 편향이 랭킹을 독점하지 못하게
+    하는 것이 목적이다. 3종목 미만 섹터는 통계가 무의미하므로 전체 기준
+    점수(`*_global`)로 되돌린다 — 그 열을 결과에 남겨 두는 이유이기도 하다.
+
+    rank_by_composite 와 두 가지가 다르다. 의도한 차이는 아니고 각자 자란
+    결과지만, 지금 맞추면 랭킹이 바뀌므로 동작을 보존한다:
+      - 가중치 합으로 나누지 않는다 (합이 1이 아니면 점수 스케일이 따라 움직인다)
+      - 추가 팩터(analyst/short/ict)를 지원하지 않는다
+    """
+    rdf = pd.DataFrame(rows)
+    fw = factor_weights if factor_weights is not None else DEFAULT_SECTORAL_WEIGHTS
+
+    for col in BASE_RAW_COLUMNS:
+        fname = col.replace('_raw', '')
+        rdf[f'{fname}_global'] = zscore_to_score(rdf[col])
+        rdf[fname] = rdf.groupby('sector')[col].transform(_sector_zscore)
+        rdf[fname] = rdf[fname].fillna(rdf[f'{fname}_global'])
+
+    rdf['composite'] = sum(rdf[k] * v for k, v in fw.items())
     rdf = rdf.sort_values('composite', ascending=False).reset_index(drop=True)
     rdf['rank'] = range(1, len(rdf) + 1)
     return rdf
