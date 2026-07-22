@@ -28,7 +28,7 @@ python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
 ```
 
-**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~132 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_ic_weights`, `test_price_panel`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~170 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
@@ -41,7 +41,7 @@ python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to av
 
 Rule of thumb: inject when the loop body is the logic; split when the loop is I/O and the logic is inside it.
 
- Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
+ Headless scripts import it as the core library via `import app as core`. **The production contract is exactly six names** — `UNIVERSE_PRESETS`, `send_telegram`, `get_factor_timing_weights`, `calc_factor_scores`, `calc_factor_scores_sectoral`, `generate_system_signals`. Everything else above `main()` (≈120 top-level defs) and all of `main()` (≈3,000 lines) is read only by Streamlit. So "app.py is 7,500 lines" is the wrong problem statement; the real one is that those six entry points share a file with UI code, and **changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** All six are now covered by network-free tests — measure progress by that coverage, not by line count. Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
 
 ### Two factor engines exist — parallel, but the raw blends are now shared
 
@@ -49,6 +49,14 @@ Rule of thumb: inject when the loop body is the logic; split when the loop is I/
 - `modules/factor_engine.py` is a **standalone, Streamlit-free** reimplementation (pure pandas/numpy: 5 factors + ICT + regime detection) used by the paper-trade runners and `factor_validator.py`.
 
 These remain parallel implementations — different factor sets (app: skip-1M momentum + optional analyst/short/EPS-surprise extras; engine: mom_3m/mom_1m + regime weights) and different normalization (app: `_zscore_to_score`; engine: z-score → 10–90 min-max). One does not call the other, so momentum / low-vol / weighting changes still need applying in both places.
+
+**The two app-side scanners are not interchangeable, and `signal_worker.py` defaults to the sectoral one** (`SECTOR_NEUTRAL` defaults to true). Documented divergences, all pinned by `tests/test_sectoral_scores.py`:
+
+- `calc_factor_scores_sectoral` **never reads `ic_weights.json`** — the weekly IC loop reaches `factor_engine.py` (paper trading) but not the default scan path.
+- Its own default weights are `.30/.25/.30/.15`, i.e. `low_vol` never got the P1-B reduction. Normally masked because `signal_worker` passes `get_factor_timing_weights()` output, but it surfaces with `FACTOR_TIMING=false`.
+- Its `composite` is a plain weighted sum with **no division by the weight total**, unlike `calc_factor_scores`. Safe only because timing weights always sum to 1.0.
+- It does not round raw factor values; `calc_factor_scores` rounds to 2dp.
+- **Known defect:** it never sets `attrs['failed']`, but `signal_worker.py:82` reads it — so the Telegram alert's failure count is always 0 on the default path.
 
 `calc_factor_scores`'s scoring math now lives in `modules/factor_scoring.py` (thresholds, `DEFAULT_FACTOR_WEIGHTS`, z-score normalization, the 50:50 IC blend, extra-factor scales). `calc_factor_scores_sectoral` still has its own copy of the loop and only shares `zscore_to_score` (via the `app._zscore_to_score` alias) — porting it is the next step, and it needs its own behavior tests first.
 
