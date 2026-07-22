@@ -27,6 +27,16 @@ except Exception:
     _ict_factor_score = None
     _ICT_AVAILABLE = False
 
+# 가치·퀄리티 원점수 배합의 단일 진실 공급원 (app.py 의 두 구현과 공유).
+# 의존성 없는 순수 산술 모듈이라 방어적 import 대상이 아니다.
+from modules.factor_formulas import (
+    ACCRUAL_NEUTRAL as _ACCRUAL_NEUTRAL,
+    book_yield as _book_yield,
+    earnings_yield as _earnings_yield,
+    quality_raw as _quality_raw,
+    value_raw as _value_raw,
+)
+
 warnings.filterwarnings("ignore")
 
 # ── 레짐별 팩터 가중치 ──────────────────────────────────────────────
@@ -385,21 +395,20 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
     mu_i, sigma_i = df["ict_raw"].mean(), df["ict_raw"].std()
     df["z_ict"] = (df["ict_raw"] - mu_i) / (sigma_i + 1e-9)
 
-    # 가치 팩터: EP(1/PE) 40% + BP(1/PB) 30% + FCF수익률 30%
-    # (app.py::calc_factor_scores의 P3-A 배합과 동일 — 두 엔진 드리프트 해소)
-    ep = df["pe"].apply(lambda x: 100.0 / x if pd.notna(x) and x > 0 else 0.0)
-    bp = df["pb"].apply(lambda x: 100.0 / x if pd.notna(x) and x > 0 else 0.0)
+    # 가치·퀄리티 배합은 factor_formulas 가 소유한다 (app.py 의 두 구현과 공유).
+    # 계수를 바꾸려면 modules/factor_formulas.py 에서만 바꿀 것 — 여기서 고치면
+    # UI 랭킹과 백테스트 결과가 조용히 갈린다.
+    ep = df["pe"].apply(_earnings_yield)
+    bp = df["pb"].apply(_book_yield)
     fcf_y = df["fcf_yield"].fillna(0.0)
-    df["value_raw"] = ep * 0.40 + bp * 0.30 + fcf_y * 0.30
+    df["value_raw"] = _value_raw(ep, bp, fcf_y)
     mu_val, sigma_val = df["value_raw"].mean(), df["value_raw"].std()
     df["z_value"] = (df["value_raw"] - mu_val) / (sigma_val + 1e-9)
 
-    # 퀄리티 팩터: ROE 45% + 이익률 35% + 발생액 품질 20%
-    # (app.py::calc_factor_scores의 P3-B 배합과 동일 — 두 엔진 드리프트 해소)
     roe_v     = df["roe"].fillna(0.0)
     margin_v  = df["margin"].fillna(0.0)
-    accrual_v = df["accrual_q"].fillna(50.0)
-    df["quality_raw"] = roe_v * 0.45 + margin_v * 0.35 + accrual_v * 0.20
+    accrual_v = df["accrual_q"].fillna(_ACCRUAL_NEUTRAL)
+    df["quality_raw"] = _quality_raw(roe_v, margin_v, accrual_v)
     mu_q, sigma_q = df["quality_raw"].mean(), df["quality_raw"].std()
     df["z_quality"] = (df["quality_raw"] - mu_q) / (sigma_q + 1e-9)
 
