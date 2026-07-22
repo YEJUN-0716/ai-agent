@@ -3317,6 +3317,17 @@ UNIVERSE_PRESETS = {
                      'VRNS','SAIL'],
 }
 
+# 'S&P 500 전체' 프리셋은 백엔드(modules/universe.SP500)를 단일 출처로 삼는다.
+# 그동안 이 하드코딩 리스트가 백엔드의 생존편향 정리(상폐·피인수 종목 제거)를
+# 반영하지 못해 ATVI/PXD/KSU/MRO/HES 등 부도·피인수 종목이 UI에만 남아 있었다.
+# 백엔드를 참조하면 ic_weight_updater가 쓰는 유니버스와 영구히 일치한다.
+try:
+    from modules.universe import SP500 as _BACKEND_SP500
+    if _BACKEND_SP500:
+        UNIVERSE_PRESETS['S&P 500 전체 (500종목)'] = list(_BACKEND_SP500)
+except Exception:
+    pass
+
 
 def get_factor_timing_weights():
     """VIX/금리 환경 기반 팩터 가중치 자동 조절.
