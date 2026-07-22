@@ -23,12 +23,6 @@ except Exception:
     _OFFICE_GAME_AVAILABLE = False
 
 # ── 퀀트 모듈 ──────────────────────────────────────────────────
-try:
-    from modules.pit_data_logger import PITStore as _PITStore
-    _pit_store = _PITStore("pit_fundamentals.db")
-    _PIT_AVAILABLE = True
-except Exception:
-    _PIT_AVAILABLE = False
 
 try:
     from modules.dart_fundamentals import fetch_krx_fundamentals as _fetch_dart_fundamentals
@@ -128,13 +122,6 @@ except Exception:
     _FACTOR_RISK_AVAILABLE = False
 
 
-def _pit_snapshot(ticker, info):
-    """yf.Ticker(...).info 호출 직후 PIT 스냅샷 저장. 실패해도 앱은 계속 진행."""
-    if _PIT_AVAILABLE and info:
-        try:
-            _pit_store.snapshot(ticker, info)
-        except Exception:
-            pass
 
 st.set_page_config(page_title="퀀트 트레이딩 시스템", page_icon="📈", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -1262,7 +1249,6 @@ def calc_piotroski_fscore(ticker):
 def fundamental_score(ticker, df=None):
     try:
         info = yf.Ticker(ticker).info
-        _pit_snapshot(ticker, info)
         det  = {}
 
         # ── 밸류에이션 (20%): PER·PBR·PEG·EV/EBITDA ──
@@ -2580,7 +2566,6 @@ def calc_dcf(ticker, treasury_yield=4.5):
     """그레이엄 변형 공식 기반 내재가치 산출 (기본/보수적 2가지)"""
     try:
         info = yf.Ticker(ticker).info
-        _pit_snapshot(ticker, info)
         eps  = info.get('trailingEps') or info.get('forwardEps')
         if not eps or eps <= 0: return None, {}
         g_raw = info.get('earningsGrowth')
@@ -3063,7 +3048,6 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             info = {}
             try:
                 info = yf.Ticker(tk).info or {}
-                _pit_snapshot(tk, info)
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
@@ -3519,7 +3503,6 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
                 all_prices[tk] = df['Close']
             info = yf.Ticker(tk).info
             if info:
-                _pit_snapshot(tk, info)
                 per = info.get('trailingPE') or info.get('forwardPE')
                 pbr = info.get('priceToBook')
                 roe = info.get('returnOnEquity')
@@ -4871,7 +4854,6 @@ def main():
 
                     try:
                         _info = yf.Ticker(ticker).info
-                        _pit_snapshot(ticker, _info)
                         _name = _info.get('longName') or _info.get('shortName') or ticker
                     except: _info, _name = {}, ticker
 
