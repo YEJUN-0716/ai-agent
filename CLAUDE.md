@@ -28,7 +28,7 @@ python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
 ```
 
-**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~57 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_ic_weights`, `test_price_panel`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~84 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_ic_weights`, `test_price_panel`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
@@ -36,12 +36,14 @@ python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to av
 
 `app.py` (~7,650 lines) is a monolith. Headless scripts import it as the core library — e.g. `signal_worker.py` does `import app as core` and calls `core.generate_system_signals(...)`, `core.calc_factor_scores_sectoral(...)`, `core.UNIVERSE_PRESETS`, `core.send_telegram(...)`. **Changing a function signature or constant in `app.py` can break the headless scripts even though they never touch the Streamlit UI.** Streamlit UI code lives inside `main()` (top tabs: `종목 분석`, `퀀트 · 자동매매`, `매매 일지`; the quant tab has 10 sub-tabs from 팩터 랭킹 to 세금 계산기). Everything above `main()` is reusable scoring/analysis logic.
 
-### Two factor engines exist — keep them in sync deliberately
+### Two factor engines exist — parallel, but the raw blends are now shared
 
 - `app.py`'s `calc_factor_scores` / `calc_factor_scores_sectoral` power the UI and `signal_worker.py`.
 - `modules/factor_engine.py` is a **standalone, Streamlit-free** reimplementation (pure pandas/numpy: 5 factors + ICT + regime detection) used by the paper-trade runners and `factor_validator.py`.
 
-These are parallel implementations, not one calling the other. A scoring change often needs to be applied in both places.
+These remain parallel implementations — different factor sets (app: skip-1M momentum + optional analyst/short/EPS-surprise extras; engine: mom_3m/mom_1m + regime weights) and different normalization (app: `_zscore_to_score`; engine: z-score → 10–90 min-max). One does not call the other, so momentum / low-vol / weighting changes still need applying in both places.
+
+**What is no longer duplicated:** the value and quality *raw blends* (EP 40 / BP 30 / FCF 30; ROE 45 / margin 35 / accrual 20), the PER/PBR→yield conversion, and the accrual-quality rule now live only in `modules/factor_formulas.py` — a dependency-free pure-arithmetic module that works on scalars and Series alike. All three former copies (`calc_factor_scores`, `calc_factor_scores_sectoral`, `factor_engine.calc_factor_scores`) import it. Change a coefficient **there and only there**. `tests/test_factor_formulas.py` pins the coefficients and fails CI if either engine reintroduces an inline copy.
 
 ### `modules/` — optional quant library loaded defensively
 

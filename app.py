@@ -46,6 +46,18 @@ try:
 except Exception:
     _REAL_MACRO_AVAILABLE = False
 
+# 가치·퀄리티 원점수 배합의 단일 진실 공급원. modules/factor_engine.py 도 같은
+# 함수를 쓴다 — 계수를 바꾸려면 factor_formulas.py 에서만 바꿀 것.
+# 의존성 없는 순수 산술 모듈이라 방어적 import 대상이 아니다 (없으면 즉시 실패해야 한다).
+from modules.factor_formulas import (
+    ACCRUAL_NEUTRAL as _ACCRUAL_NEUTRAL,
+    accrual_quality as _accrual_quality,
+    book_yield as _book_yield,
+    earnings_yield as _earnings_yield,
+    quality_raw as _quality_raw,
+    value_raw as _value_raw,
+)
+
 
 def _dart_fallback_batch(tickers):
     """KRX(.KS/.KQ) 종목만 골라 DART 재무를 일괄 조회 (yfinance가 KRX 재무를 못 주는 문제 보완).
@@ -3044,7 +3056,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             annual_vol = float(daily_ret.tail(252).std()) * np.sqrt(252) * 100
 
             per, pbr, roe_v, pm_v, name = None, None, 0, 0, tk
-            fcf_yield_pct, accrual_q = 0.0, 50.0
+            fcf_yield_pct, accrual_q = 0.0, _ACCRUAL_NEUTRAL
             info = {}
             try:
                 info = yf.Ticker(tk).info or {}
@@ -3061,11 +3073,8 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
                 ni_v = info.get('netIncomeToCommon')
                 if fcf is not None and mcap and mcap > 0:
                     fcf_yield_pct = fcf / mcap * 100  # 음수 FCF도 반영 (현금 소각 패널티)
-                # P3-B: 발생액 품질 (FCF>0 + NI>0 이어야 의미 있음; 음수 NI는 기본값 유지)
-                if fcf is not None and ni_v is not None and ni_v > 0 and fcf > 0:
-                    accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
-                elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
-                    accrual_q = 0.0  # GAAP흑자+현금소각 → 최저 품질
+                # P3-B: 발생액 품질 — 판정 규칙은 factor_formulas.accrual_quality 소유
+                accrual_q = _accrual_quality(fcf, ni_v)
                 # DART 폴백 (KRX 종목은 yfinance ROE/이익률이 비어있는 경우가 많음)
                 if tk.endswith(('.KS', '.KQ')) and (not roe_v or not pm_v):
                     _dd = _dart_data.get(tk, {})
@@ -3079,16 +3088,15 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
             except Exception:
                 pass
 
-            ep = (1.0/per*100) if per and per > 0 else 0
-            bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
+            ep = _earnings_yield(per)
+            bp = _book_yield(pbr)
             row = {
                 'ticker': tk, 'name': name, 'price': cp,
                 # P1-A: skip-1M 공식
                 'momentum_raw': round(mom_skip1m, 2),
-                # P3-A: EP 40% + BP 30% + FCF수익률 30%
-                'value_raw': round(ep*0.40 + bp*0.30 + fcf_yield_pct*0.30, 2),
-                # P2-B: 매출성장률 제거, P3-B: 발생액 품질 추가
-                'quality_raw': round(roe_v*0.45 + pm_v*0.35 + accrual_q*0.20, 2),
+                # P3-A/P3-B 배합은 factor_formulas 가 소유 (factor_engine.py 와 공유)
+                'value_raw': round(_value_raw(ep, bp, fcf_yield_pct), 2),
+                'quality_raw': round(_quality_raw(roe_v, pm_v, accrual_q), 2),
                 'low_vol_raw': round(max(100-annual_vol, 0), 2),
                 'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
             }
@@ -3404,7 +3412,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
                           if len(df) >= 252 else 0)
 
             sector, per, pbr, roe_v, pm_v, name = 'Unknown', None, None, 0, 0, tk
-            fcf_yield_pct, accrual_q = 0.0, 50.0
+            fcf_yield_pct, accrual_q = 0.0, _ACCRUAL_NEUTRAL
             try:
                 info = yf.Ticker(tk).info or {}
                 sector = info.get('sector', 'Unknown')
@@ -3421,10 +3429,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
                 ni_v = info.get('netIncomeToCommon')
                 if fcf is not None and mcap and mcap > 0:
                     fcf_yield_pct = fcf / mcap * 100
-                if fcf is not None and ni_v is not None and ni_v > 0 and fcf > 0:
-                    accrual_q = float(np.clip((fcf / ni_v) * 50, 0, 100))
-                elif fcf is not None and ni_v is not None and ni_v > 0 and fcf <= 0:
-                    accrual_q = 0.0
+                accrual_q = _accrual_quality(fcf, ni_v)
                 # DART 폴백 (KRX 종목은 yfinance ROE/이익률이 비어있는 경우가 많음)
                 if tk.endswith(('.KS', '.KQ')) and (not roe_v or not pm_v):
                     _dd = _dart_data.get(tk, {})
@@ -3438,13 +3443,13 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
             except Exception:
                 pass
 
-            ep = (1.0/per*100) if per and per > 0 else 0
-            bp = (1.0/pbr*100) if pbr and pbr > 0 else 0
+            ep = _earnings_yield(per)
+            bp = _book_yield(pbr)
             results.append({
                 'ticker': tk, 'name': name, 'price': cp, 'sector': sector,
                 'momentum_raw': mom_skip1m,
-                'value_raw': ep*0.40 + bp*0.30 + fcf_yield_pct*0.30,
-                'quality_raw': roe_v*0.45 + pm_v*0.35 + accrual_q*0.20,
+                'value_raw': _value_raw(ep, bp, fcf_yield_pct),
+                'quality_raw': _quality_raw(roe_v, pm_v, accrual_q),
                 'low_vol_raw': max(100-annual_vol, 0),
                 'vol': round(annual_vol, 1), 'per': per, 'pbr': pbr, 'roe': roe_v,
             })
