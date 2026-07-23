@@ -3249,6 +3249,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
     import time
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
+    failed = []
     _dart_data = _dart_fallback_batch(tickers)
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
@@ -3256,7 +3257,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
         try:
             df = _scoring.clean_price_frame(download_stock(tk, start=start, end=end))
             if df is None:
-                continue
+                failed.append(tk); continue
 
             # 재무 조회가 실패해도 가격 팩터로 랭킹은 계속한다.
             try:
@@ -3273,9 +3274,14 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
             if i < len(tickers) - 1:
                 time.sleep(0.3)
         except Exception:
-            continue
+            failed.append(tk)
     if not results: return pd.DataFrame()
-    return _scoring.rank_by_sector_neutral_composite(results, factor_weights)
+    rdf = _scoring.rank_by_sector_neutral_composite(results, factor_weights)
+    # signal_worker.py 가 텔레그램 알림에 실패 종목 수를 찍는다. 이 키가 없으면
+    # 조용히 0으로 보고돼, 유니버스 절반이 죽어도 알림은 정상으로 보인다.
+    if failed:
+        rdf.attrs['failed'] = failed
+    return rdf
 
 
 def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,

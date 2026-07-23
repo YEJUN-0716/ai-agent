@@ -262,23 +262,28 @@ def test_unusable_tickers_are_dropped(patch_market):
     assert result["ticker"].tolist() == ["GOOD"]
 
 
-def test_failed_tickers_are_not_reported_at_all(patch_market):
-    """**알려진 결함 — 현재 동작을 고정한다.**
+def test_failed_tickers_are_reported_in_attrs(patch_market):
+    """실패 종목을 attrs['failed'] 로 보고한다.
 
-    calc_factor_scores 와 달리 이 함수는 attrs['failed'] 를 만들지 않는다.
-    그런데 signal_worker.py:82 는 `fdf.attrs.get('failed', [])` 를 읽어
-    텔레그램 알림에 실패 종목 수를 찍는다. SECTOR_NEUTRAL 이 기본 true 이므로
-    **평소 알림의 '실패' 카운트는 실제 실패가 몇이든 항상 0** 이다.
-
-    고치는 것은 동작 변경이라 별도 PR 로 분리한다. 그때 이 테스트가
-    "이제 보고한다" 로 바뀌어야 한다.
+    signal_worker.py:82 가 `fdf.attrs.get('failed', [])` 를 읽어 텔레그램 알림에
+    실패 종목 수를 찍는다. 이 키가 없으면 조용히 0으로 보고되는데,
+    SECTOR_NEUTRAL 이 기본 true 라 **평소 알림이 바로 이 경로**다. 유니버스
+    절반이 죽어도 "0종목 실패" 라고 말하던 것이 이 테스트가 막는 상황이다.
     """
     patch_market({
         "GOOD": _prices(_ramp(100, 150)),
         "EMPTY": pd.DataFrame(),
+        "SHORT": _prices(_ramp(100, 110, n=10)),
     }, infos={"GOOD": _info("Technology")})
-    result = app.calc_factor_scores_sectoral(["GOOD", "EMPTY"])
-    assert "failed" not in result.attrs
+    result = app.calc_factor_scores_sectoral(["GOOD", "EMPTY", "SHORT"])
+    assert sorted(result.attrs.get("failed", [])) == ["EMPTY", "SHORT"]
+
+
+def test_failed_attr_is_absent_when_everything_succeeds(patch_market):
+    """전 종목 성공이면 키 자체를 만들지 않는다 (calc_factor_scores 와 동일)."""
+    frames, infos = _two_sector_market()
+    patch_market(frames, infos)
+    assert "failed" not in app.calc_factor_scores_sectoral(list(frames)).attrs
 
 
 def test_fundamentals_failure_still_produces_a_row(patch_market):
