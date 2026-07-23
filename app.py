@@ -30,6 +30,8 @@ try:
 except Exception:
     _DART_AVAILABLE = False
 
+from modules import analyst_team as _analyst_team
+
 try:
     from modules.analyst_weights import (
         load_analyst_weights as _load_analyst_weights,
@@ -3682,7 +3684,8 @@ def ict_crt_analyst(df):
         from modules.ict_analysis import ict_factor_score, calc_ict_adjustment
         base = ict_factor_score(df)
         adj_info = calc_ict_adjustment(df)
-        score = float(np.clip(base + adj_info['adjustment'], 0, 100))
+        # 산식은 modules/analyst_team 이 소유한다 — 자동 기록 경로가 같은 값을 내야 한다.
+        score = _analyst_team.ict_score(base, adj_info['adjustment'])
         reasons = adj_info['signals'] or ['뚜렷한 ICT/CRT 신호 없음 — 구조적으로 중립']
         return build_analyst_report('ICT+CRT', '🧭', score, reasons, adj_info)
     except Exception as e:
@@ -3692,7 +3695,7 @@ def ict_crt_analyst(df):
 def technical_momentum_analyst(t_score, t_det, mom_data):
     """차트+파동+모멘텀 직원: 기술점수 70% + 모멘텀점수 30%."""
     mom_score = mom_data.get('score', 50.0) if mom_data else 50.0
-    score = t_score * 0.7 + mom_score * 0.3
+    score = _analyst_team.chart_score(t_score, mom_score)
     reasons = []
     if t_det.get('RSI값') is not None:
         reasons.append(f"RSI {t_det['RSI값']}")
