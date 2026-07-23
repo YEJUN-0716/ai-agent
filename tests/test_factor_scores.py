@@ -96,7 +96,7 @@ def patch_market(monkeypatch):
         monkeypatch.setattr(app, "_dart_fallback_batch", lambda tickers: dart or {})
         # None 이면 기본 가중치 경로. 진짜 함수는 SPY 를 내려받으므로 반드시 막는다.
         monkeypatch.setattr(app, "_load_ic_factor_weights_4f",
-                            lambda regime=None: ic_weights)
+                            lambda regime=None, benchmark=None: ic_weights)
         # 종목당 0.3초 레이트리밋 슬립 — 테스트에서는 의미 없다.
         monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
     return _install

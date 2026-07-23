@@ -54,6 +54,8 @@ except Exception:
 from modules import signal_engine as _signal_engine
 # 팩터 점수의 순수 계산부. 여기(app.py)에는 조회 루프만 남긴다.
 from modules import factor_scoring as _scoring
+# 시장 판별·시장별 벤치마크의 소유자 (국면 지수, 섹터 ETF)
+from modules import market_scope as _scope
 
 
 def _dart_fallback_batch(tickers):
@@ -655,19 +657,8 @@ def download_stock(ticker, start, end, interval='1d'):
     return df
 
 
-SECTOR_ETF = {
-    'Technology':             'XLK',
-    'Consumer Cyclical':      'XLY',
-    'Financial Services':     'XLF',
-    'Healthcare':             'XLV',
-    'Consumer Defensive':     'XLP',
-    'Communication Services': 'XLC',
-    'Industrials':            'XLI',
-    'Basic Materials':        'XLB',
-    'Energy':                 'XLE',
-    'Real Estate':            'XLRE',
-    'Utilities':              'XLU',
-}
+# 섹터 ETF 맵의 소유자는 market_scope (미국·한국 양쪽). UI 호환용 별칭.
+SECTOR_ETF = _scope.SECTOR_ETF[_scope.US]
 
 SECTOR_AVG_PER = {
     'Technology': 28, 'Consumer Cyclical': 22, 'Financial Services': 13,
@@ -1344,11 +1335,17 @@ def fundamental_score(ticker, df=None):
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
-def get_market_regime():
-    """SPY vs MA200 기반 시장 국면 감지 (bull/bear/neutral)"""
+def get_market_regime(benchmark=None):
+    """벤치마크 지수 vs MA200 기반 시장 국면 감지 (bull/bear/neutral).
+
+    benchmark 를 안 주면 SPY — 미국 유니버스용 기존 동작이다. 한국 유니버스는
+    ^KS11(KOSPI)을 넘겨야 한다. 안 그러면 미국 시장이 강세라는 이유로 한국
+    종목의 팩터 가중치가 정해진다.
+    """
+    benchmark = benchmark or _scope.REGIME_BENCHMARK[_scope.US]
     try:
         end = datetime.now(); start = end - timedelta(days=310)
-        spy = yf.download('SPY', start=start, end=end, progress=False)
+        spy = yf.download(benchmark, start=start, end=end, progress=False)
         if isinstance(spy.columns, pd.MultiIndex): spy.columns = spy.columns.droplevel(1)
         spy = spy.dropna(subset=['Close'])
         if len(spy) < 200: return 'neutral', 0.0
@@ -1867,21 +1864,25 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
 
 
 def calc_sector_relative(ticker, sector, df):
-    """종목 vs 섹터 ETF vs SPY 상대 강도 분석.
-    Returns dict: horizons × {ticker_ret, etf_ret, spy_ret, rs_vs_etf, rs_vs_spy}
+    """종목 vs 섹터 ETF vs 시장지수 상대 강도 분석.
+
+    지수와 섹터 ETF 는 종목이 속한 시장 것을 쓴다 — 한국 종목을 SPY·XLK 와
+    비교하던 것이 원래 동작이었다. spy_* 키 이름은 호출부 호환을 위해
+    유지하되, 실제 기준은 반환 dict 의 'benchmark' 가 알려준다.
     """
-    etf = SECTOR_ETF.get(sector, '')
+    etf = _scope.sector_etf_for_ticker(sector, ticker)
+    market_index = _scope.REGIME_BENCHMARK[_scope.market_of_ticker(ticker)]
     end = datetime.now()
     start = end - timedelta(days=200)
-    tickers_to_dl = ['SPY'] + ([etf] if etf else [])
+    tickers_to_dl = [market_index] + ([etf] if etf else [])
 
     try:
         bench = yf.download(tickers_to_dl, start=start, end=end, progress=False)
         if isinstance(bench.columns, pd.MultiIndex):
-            spy_close = bench['Close']['SPY'].dropna()
+            spy_close = bench['Close'][market_index].dropna()
             etf_close = bench['Close'][etf].dropna() if etf else None
         else:
-            spy_close = bench['Close'].dropna() if 'SPY' in tickers_to_dl else None
+            spy_close = bench['Close'].dropna()
             etf_close = None
     except Exception:
         return {}
@@ -1903,7 +1904,9 @@ def calc_sector_relative(ticker, sector, df):
             }
         except Exception:
             continue
-    return {'data': results, 'etf': etf, 'sector': sector}
+    # benchmark 를 함께 돌려준다 — UI 가 'SPY 대비' 라고 못 박으면 안 된다.
+    return {'data': results, 'etf': etf, 'sector': sector,
+            'benchmark': market_index}
 
 
 def regime_adjusted_technical(t_det, regime='neutral'):
@@ -2983,7 +2986,7 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 # 정규화 규칙은 factor_scoring 소유. calc_factor_scores_sectoral 도 이 이름을 쓴다.
 _zscore_to_score = _scoring.zscore_to_score
 
-def _load_ic_factor_weights_4f(regime=None):
+def _load_ic_factor_weights_4f(regime=None, benchmark=None):
     """ic_weights.json의 6팩터 레짐 가중치를 4팩터(momentum/value/quality/low_vol)로 매핑."""
     try:
         import json as _json, os as _os
@@ -2991,7 +2994,7 @@ def _load_ic_factor_weights_4f(regime=None):
         with open(ic_path, encoding='utf-8') as _f:
             _d = _json.load(_f)
         if regime is None:
-            regime, _ = get_market_regime()
+            regime, _ = get_market_regime(benchmark)
         rw = _d.get('regime_weights', {}).get(regime, {})
         if not rw:
             return None
@@ -3060,7 +3063,8 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
     rdf = _scoring.rank_by_composite(
         results,
         factor_weights=factor_weights,
-        ic_weights=_load_ic_factor_weights_4f(),
+        ic_weights=_load_ic_factor_weights_4f(
+            benchmark=_scope.regime_benchmark(tickers)),
     )
     if failed:
         rdf.attrs['failed'] = failed
@@ -3281,7 +3285,8 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
     rdf = _scoring.rank_by_sector_neutral_composite(
         results,
         factor_weights=factor_weights,
-        ic_weights=_load_ic_factor_weights_4f(),
+        ic_weights=_load_ic_factor_weights_4f(
+            benchmark=_scope.regime_benchmark(tickers)),
     )
     # signal_worker.py 가 텔레그램 알림에 실패 종목 수를 찍는다. 이 키가 없으면
     # 조용히 0으로 보고돼, 유니버스 절반이 죽어도 알림은 정상으로 보인다.

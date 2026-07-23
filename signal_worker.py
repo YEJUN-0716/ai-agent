@@ -12,14 +12,29 @@ import sys
 from datetime import date
 
 import app as core
+from modules import krx_universe
 
 
 KRX_SUFFIXES = ('.KS', '.KQ')
 
 
 def _resolve_universe(raw):
+    """UNIVERSE 환경변수 → 티커 목록.
+
+    해석 순서: 고정 프리셋 → 동적 KRX 유니버스("KOSPI 100") → 쉼표구분 티커.
+    KRX 쪽을 프리셋 dict 에 넣지 않는 이유는 목록이 매일 달라지기 때문이다.
+    """
     if raw in core.UNIVERSE_PRESETS:
         return core.UNIVERSE_PRESETS[raw]
+    try:
+        dynamic = krx_universe.resolve(raw)
+    except Exception as exc:
+        # 상장목록 조회 실패를 쉼표구분 티커로 잘못 해석하면, "KOSPI 100" 이
+        # 티커 하나짜리 유니버스가 돼 조용히 빈 스캔이 된다.
+        print(f"KRX 상장목록 조회 실패 ({raw}): {exc}", file=sys.stderr)
+        dynamic = None
+    if dynamic:
+        return dynamic
     return [t.strip().upper() for t in raw.split(',') if t.strip()]
 
 

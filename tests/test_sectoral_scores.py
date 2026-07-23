@@ -83,7 +83,7 @@ def patch_market(monkeypatch):
         monkeypatch.setattr(app, "_dart_fallback_batch", lambda tickers: dart or {})
         # 진짜 함수는 get_market_regime() 을 거쳐 SPY 를 내려받는다. 반드시 막는다.
         monkeypatch.setattr(app, "_load_ic_factor_weights_4f",
-                            lambda regime=None: ic_weights)
+                            lambda regime=None, benchmark=None: ic_weights)
         monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
     return _install
 
