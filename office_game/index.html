@@ -35,7 +35,9 @@ function setFrameHeight(h)    { _send("streamlit:setFrameHeight", { height: h })
 
 /* ── 상수 ── */
 const LOGICAL_W = 1240;
-const TOP_BAR_H = 40;               // 전광판 영역
+const TOP_BAR_H = 68;               // 전광판: 1줄 업무 지시 + 2줄 야간 근무 현황
+const BAR_ROW1_Y = 22;              // 1줄 세로 중심
+const BAR_ROW2_Y = 50;              // 2줄 세로 중심
 const ROOM_H    = 168;
 const ROW_GAP   = 14;
 const SLOT_W    = 64;
@@ -52,6 +54,8 @@ let dark = false;
 let working = false;
 let boardTicker = null;             // 작업 중 종목
 let lastResult = null;              // {ticker, score, verdict, color}
+let jobs = [];                      // 야간 근무 현황 칩 [{icon,name,label,status}]
+let repoStale = null;               // 저장소를 안 당긴 것으로 보이는 일수
 let rooms = [];
 let chars = new Map();
 let particles = [];
@@ -72,12 +76,23 @@ const PALETTE = {
            board:"#0b1220", boardBorder:"#24314d", boardText:"#d6dee8", boardSub:"#5f7396" },
 };
 function pal() { return dark ? PALETTE.dark : PALETTE.light; }
+
+/* 방마다 색 아이덴티티. 예전엔 방 전부가 같은 나무색이라 구분이 안 됐다.
+   헤더 바와 바닥 색조에만 쓰고, 캐릭터·책상 색은 건드리지 않는다. */
+const ROOM_TINT = {
+  analyst: "#3b82f6", ops: "#f97316", siggen: "#8b5cf6",
+  ml: "#06b6d4", bt: "#b45309", qa: "#10b981", perf: "#eab308",
+};
+function roomTint(key) { return ROOM_TINT[key] || "#8b6f3e"; }
+
+/* 사무실 벽 띠 높이. 방 배치가 이만큼 아래로 내려간다. */
+const WALL_H = 26;
 function rand(a, b) { return a + Math.random() * (b - a); }
 
 /* ── 레이아웃 ── */
 function layoutRooms(roomData) {
   const placed = [];
-  let x = 8, y = TOP_BAR_H + 8, rowMax = 0;
+  let x = 8, y = TOP_BAR_H + WALL_H + 6, rowMax = 0;
   for (const r of roomData) {
     const seats = Math.max(r.chars.length, r.ghost || 0);
     const w = Math.max(150, 40 + seats * SLOT_W);
@@ -93,7 +108,7 @@ function deskPos(room, i) {
   return { x: room.x + 40 + i * SLOT_W + SLOT_W / 2 - 12, y: room.y + DESK_DY };
 }
 function floorBounds() {
-  return { x1: 26, x2: LOGICAL_W - 26, y1: TOP_BAR_H + 62, y2: canvasH - 22 };
+  return { x1: 26, x2: LOGICAL_W - 26, y1: TOP_BAR_H + WALL_H + 60, y2: canvasH - 22 };
 }
 
 /* ── 캐릭터 ── */
@@ -356,37 +371,93 @@ function drawTopBar(t) {
     const blink = 0.55 + 0.45 * Math.sin(t * 5);
     ctx.fillStyle = "#ef4444";
     ctx.globalAlpha = blink;
-    ctx.beginPath(); ctx.arc(28, TOP_BAR_H / 2, 5, 0, 6.29); ctx.fill();
+    ctx.beginPath(); ctx.arc(28, BAR_ROW1_Y, 5, 0, 6.29); ctx.fill();
     ctx.globalAlpha = 1;
     ctx.fillStyle = "#fca5a5"; ctx.font = "800 13px sans-serif"; ctx.textAlign = "left";
-    ctx.fillText("📋 사장님 업무 지시:", 42, TOP_BAR_H / 2);
+    ctx.fillText("📋 사장님 업무 지시:", 42, BAR_ROW1_Y);
     ctx.fillStyle = "#7ee6b8"; ctx.font = "800 15px 'JetBrains Mono', monospace";
-    ctx.fillText(boardTicker || "…", 190, TOP_BAR_H / 2);
+    ctx.fillText(boardTicker || "…", 190, BAR_ROW1_Y);
     ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 5);
     ctx.fillStyle = pal().boardText; ctx.font = "700 12px sans-serif";
-    ctx.fillText("— 전 직원 분석 작업 중…", 265, TOP_BAR_H / 2);
+    ctx.fillText("— 전 직원 분석 작업 중…", 265, BAR_ROW1_Y);
     ctx.globalAlpha = 1;
   } else if (lastResult) {
     ctx.fillStyle = "#10b981"; ctx.font = "700 13px sans-serif"; ctx.textAlign = "left";
-    ctx.fillText("✅ 최근 분석", 24, TOP_BAR_H / 2);
+    ctx.fillText("✅ 최근 분석", 24, BAR_ROW1_Y);
     ctx.fillStyle = "#7ee6b8"; ctx.font = "800 15px 'JetBrains Mono', monospace";
-    ctx.fillText(lastResult.ticker, 118, TOP_BAR_H / 2);
+    ctx.fillText(lastResult.ticker, 118, BAR_ROW1_Y);
     ctx.fillStyle = lastResult.color || "#f59e0b"; ctx.font = "800 14px sans-serif";
-    ctx.fillText(lastResult.score + "점 · " + lastResult.verdict, 185, TOP_BAR_H / 2);
+    ctx.fillText(lastResult.score + "점 · " + lastResult.verdict, 185, BAR_ROW1_Y);
     ctx.fillStyle = p.boardSub; ctx.font = "600 12px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText("사장님의 다음 지시를 기다리는 중 — 시세판에 종목을 입력하세요", LOGICAL_W - 82, TOP_BAR_H / 2);
+    ctx.fillText("사장님의 다음 지시를 기다리는 중 — 시세판에 종목을 입력하세요", LOGICAL_W - 82, BAR_ROW1_Y);
   } else {
     ctx.fillStyle = p.boardText; ctx.font = "700 13px sans-serif"; ctx.textAlign = "left";
-    ctx.fillText("🏢 대기 중", 24, TOP_BAR_H / 2);
+    ctx.fillText("🏢 대기 중", 24, BAR_ROW1_Y);
     ctx.fillStyle = p.boardSub; ctx.font = "600 12px sans-serif"; ctx.textAlign = "right";
-    ctx.fillText("사장님의 지시를 기다리는 중 — 아래 시세판에 종목을 입력하면 전 직원이 분석을 시작합니다", LOGICAL_W - 82, TOP_BAR_H / 2);
+    ctx.fillText("사장님의 지시를 기다리는 중 — 아래 시세판에 종목을 입력하면 전 직원이 분석을 시작합니다", LOGICAL_W - 82, BAR_ROW1_Y);
   }
 
   // 벽시계 (실시간)
   const nowD = new Date();
   const hhmm = String(nowD.getHours()).padStart(2, "0") + ":" + String(nowD.getMinutes()).padStart(2, "0");
   ctx.fillStyle = "#7ee6b8"; ctx.font = "800 13px 'JetBrains Mono', monospace"; ctx.textAlign = "right";
-  ctx.fillText(hhmm, LOGICAL_W - 26, TOP_BAR_H / 2);
+  ctx.fillText(hhmm, LOGICAL_W - 26, BAR_ROW1_Y);
+
+  // ── 2줄: 야간 근무 현황 ──
+  // 사장이 화면을 안 보는 시간에 도는 잡들. 평상시엔 조용하고 경고일 때만
+  // 깜빡여 시선을 끈다 — 상시 점등은 사람에게 무시하는 법을 가르친다.
+  const CHIP_COLOR = { "정상": "#10b981", "주의": "#f59e0b",
+                       "경고": "#ef4444", "대기": "#7d93b8" };
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  if (repoStale !== null) {
+    ctx.fillStyle = "#f59e0b"; ctx.font = "700 11.5px sans-serif";
+    ctx.fillText("⚠️ 저장소를 " + repoStale + "일 안 당겼습니다 — 아래 상태가 오래된 값일 수 있습니다",
+                 24, BAR_ROW2_Y);
+    return;
+  }
+  let cx = 24;
+  for (const j of jobs) {
+    const txt = j.icon + " " + j.name + " " + j.label;
+    ctx.font = "700 11.5px sans-serif";
+    const w = ctx.measureText(txt).width;
+    if (cx + w > LOGICAL_W - 30) break;
+    ctx.globalAlpha = (j.status === "경고") ? 0.55 + 0.45 * Math.sin(t * 5) : 1;
+    ctx.fillStyle = CHIP_COLOR[j.status] || "#7d93b8";
+    ctx.fillText(txt, cx, BAR_ROW2_Y);
+    ctx.globalAlpha = 1;
+    cx += w + 14;
+    ctx.fillStyle = pal().boardSub;
+    ctx.fillText("·", cx - 9, BAR_ROW2_Y);
+  }
+}
+
+/* 벽과 창문. 창밖은 시간대에 따라 바뀌며 조명(drawTimeOverlay)과 같은
+   dayPhase() 를 쓴다 — 두 곳이 어긋나면 "밤인데 창밖은 낮" 이 된다. */
+function drawWall() {
+  const phase = dayPhase();
+  const sky = phase === "day"  ? ["#8ec5ff", "#cfe6ff"]
+            : phase === "dusk" ? ["#f0956a", "#7a4a86"]
+                               : ["#0b1430", "#1a2350"];
+  ctx.fillStyle = dark ? "#161d2b" : "#cbb894";
+  ctx.fillRect(0, TOP_BAR_H, LOGICAL_W, WALL_H);
+
+  for (let i = 0; i < 4; i++) {
+    const wx = 120 + i * 300, wy = TOP_BAR_H + 5, ww = 96, wh = WALL_H - 10;
+    const g = ctx.createLinearGradient(wx, wy, wx, wy + wh);
+    g.addColorStop(0, sky[0]); g.addColorStop(1, sky[1]);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(wx, wy, ww, wh, 3); ctx.fill();
+    if (phase === "night") {                       // 별
+      ctx.fillStyle = "rgba(255,255,255,.75)";
+      for (let s = 0; s < 5; s++) {
+        ctx.beginPath();
+        ctx.arc(wx + 12 + s * 18, wy + 4 + (s % 3) * 4, 0.9, 0, 6.29);
+        ctx.fill();
+      }
+    }
+    ctx.strokeStyle = dark ? "#2b3446" : "#8b6f3e"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(wx, wy, ww, wh, 3); ctx.stroke();
+  }
 }
 
 function drawRoom(room, t) {
@@ -402,7 +473,28 @@ function drawRoom(room, t) {
   ctx.strokeStyle = p.border; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.stroke();
 
-  ctx.fillStyle = dark ? "#6f5730" : "#8b6f3e";
+  const tint = roomTint(room.key);
+  // 바닥에 팀 색을 아주 옅게 깐다 — 방 구분은 되되 나무 바닥 질감은 남는다.
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.clip();
+  ctx.globalAlpha = 0.10; ctx.fillStyle = tint;
+  ctx.fillRect(room.x, room.y, room.w, room.h);
+  ctx.globalAlpha = 1; ctx.restore();
+
+  // 선택된 직원이 있는 방을 밝힌다 — 캐릭터 둘레 원 하나만으로는 넓은
+  // 화면에서 "지금 어디를 보고 있는지" 를 놓치기 쉽다.
+  if (selectedId && selectedId.split("|")[0] === room.key) {
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.clip();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = "rgba(245,179,1,.07)";
+    ctx.fillRect(room.x, room.y, room.w, room.h);
+    ctx.restore();
+    ctx.strokeStyle = "#f5b301"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.stroke();
+  }
+
+  ctx.fillStyle = tint;
   ctx.beginPath(); ctx.roundRect(room.x + 8, room.y + 8, Math.min(room.w - 16, 168), 24, 5); ctx.fill();
   ctx.fillStyle = "#fdf6e3"; ctx.font = "700 11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
   ctx.fillText(room.icon + " " + room.name, room.x + 15, room.y + 21, Math.min(room.w - 30, 156));
@@ -420,7 +512,12 @@ function drawRoom(room, t) {
     ctx.fillStyle = p.desk;
     ctx.beginPath(); ctx.roundRect(d.x - 22, d.y + 12, 46, 15, 3); ctx.fill();
     ctx.fillStyle = p.deskTop;
-    ctx.fillRect(d.x - 22, d.y + 12, 46, 4);
+    ctx.beginPath();                       // 뒤가 좁은 사다리꼴 = 위에서 내려다본 원근
+    ctx.moveTo(d.x - 18, d.y + 12);
+    ctx.lineTo(d.x + 20, d.y + 12);
+    ctx.lineTo(d.x + 24, d.y + 16);
+    ctx.lineTo(d.x - 22, d.y + 16);
+    ctx.closePath(); ctx.fill();
     ctx.fillStyle = p.monitor;
     ctx.beginPath(); ctx.roundRect(d.x - 9, d.y - 3, 20, 14, 2); ctx.fill();
     if (!ghost) {
@@ -500,6 +597,47 @@ function drawBubble(bx, by, txt) {
   ctx.fillText(txt, bx, by + 1);
 }
 
+/* ── 시간대 조명 ──────────────────────────────────────────────
+   다크모드(dark)는 '사용자 테마', 시간대는 '극중 시각' 으로 축이 다르다.
+   그래서 PALETTE 를 건드리지 않고 그 위에 반투명 오버레이를 덮는다.
+
+   야간에 켜지는 자리는 실제로 그 시간에 잡이 도는 팀이다 —
+   조명이 장식이 아니라 정보가 되는 지점. */
+function dayPhase() {
+  const h = new Date().getHours();
+  if (h >= 6 && h < 18)  return "day";
+  if (h >= 18 && h < 22) return "dusk";
+  return "night";
+}
+
+const NIGHT_LIT_ROOMS = new Set(["perf", "ops", "siggen"]);   // 야간 잡 담당 방
+
+function drawTimeOverlay() {
+  const phase = dayPhase();
+  if (phase === "day") return;
+
+  ctx.fillStyle = phase === "dusk" ? "rgba(40,28,60,.18)" : "rgba(8,12,26,.46)";
+  ctx.fillRect(0, TOP_BAR_H, LOGICAL_W, canvasH - TOP_BAR_H);
+
+  if (phase !== "night") return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (const room of rooms) {
+    if (!NIGHT_LIT_ROOMS.has(room.key)) continue;
+    const seats = Math.max(room.chars.length, room.ghost || 0);
+    for (let i = 0; i < seats; i++) {
+      const d = deskPos(room, i);
+      const g = ctx.createRadialGradient(d.x, d.y, 4, d.x, d.y, 52);
+      g.addColorStop(0, "rgba(255,214,130,.30)");
+      g.addColorStop(1, "rgba(255,214,130,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(d.x, d.y, 52, 0, 6.29); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 function drawParticles(dt) {
   particles = particles.filter(pt => (pt.life -= dt) > 0);
   particles.forEach(pt => {
@@ -521,6 +659,7 @@ function frame(nowMs) {
 
   ctx.clearRect(0, 0, LOGICAL_W, canvasH);
   drawTopBar(t);
+  drawWall();
   rooms.forEach(r => drawRoom(r, t));
   // 총괄 보고 씬 트리거 — 총괄이 입장·축하를 마칠 때까지 매 프레임 재시도
   if (reportPending && !working) {
@@ -536,6 +675,7 @@ function frame(nowMs) {
 
   const list = [...chars.values()].sort((a, b) => a.y - b.y);
   list.forEach(ch => updateChar(ch, dt, t, now));
+  drawTimeOverlay();          // 방·책상 위, 캐릭터 아래 — 사람이 어둠에 묻히면 안 된다
   list.forEach(ch => drawChar(ch, t));
   updateBoss(dt);
   drawBoss(t);
@@ -582,6 +722,8 @@ function applyRender(args) {
   working = !!args.working;
   boardTicker = args.ticker || null;
   lastResult = args.result || null;
+  jobs = Array.isArray(args.jobs) ? args.jobs : [];
+  repoStale = (typeof args.repoStale === "number") ? args.repoStale : null;
   rooms = layoutRooms(args.rooms || []);
   mergeChars(rooms);
   if (working !== wasWorking) onModeChange();

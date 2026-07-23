@@ -7610,10 +7610,17 @@ def main():
                            'score': round(_mb['total_score'], 1),
                            'verdict': _mb['verdict'],
                            'color': score_color(_mb['total_score'])}
+        # 야간 근무 현황 — 사장이 화면을 안 보는 시간에 도는 잡들.
+        _job_states = _office_jobs.job_states(os.path.dirname(__file__))
+        _job_chips = [{'icon': s['icon'], 'name': s['name'],
+                       'label': s['label'], 'status': s['status']}
+                      for s in _job_states.values()]
+        _repo_stale = _office_jobs.repo_stale_days(_job_states)
         _clicked = _office_game_component(
             rooms=_game_rooms, dark=_dark_mode,
             selected=(f"{_sel_now[0]}|{_sel_now[1]}" if _sel_now else None),
             working=bool(_pending_tk), ticker=_pending_tk, result=_result_arg,
+            jobs=_job_chips, repoStale=_repo_stale,
             key="office_game_scene", default=None)
         if _clicked and _clicked.get('nonce') != st.session_state.get('_office_game_nonce'):
             st.session_state['_office_game_nonce'] = _clicked['nonce']
