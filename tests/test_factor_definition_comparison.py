@@ -89,23 +89,63 @@ def test_prod_low_vol_uses_production_window_and_sign():
         assert got[tk]["low_vol_252"] == pytest.approx(expected[tk])
 
 
-def test_prod_definitions_require_full_warmup():
-    """253봉이 안 되는 종목은 단면에서 빠진다.
-
-    12-1 모멘텀을 낼 수 없는 종목을 0(중립)으로 채워 넣으면, 두 정의가
-    서로 다른 단면 위에서 측정돼 짝지은 비교가 성립하지 않는다.
-    """
+def _panel_with_short_ticker():
     prices, idx = _panel()
-    short_tk = "SHORT"
-    prices[short_tk] = pd.Series(
-        [100 + j for j in range(200)], index=idx[-200:]
-    )
+    prices["SHORT"] = pd.Series([100 + j for j in range(200)], index=idx[-200:])
+    return prices, idx
 
-    with_prod = fv._calc_per_factor_zscores(prices, idx[-1], include_prod_defs=True)
-    legacy_only = fv._calc_per_factor_zscores(prices, idx[-1])
 
-    assert short_tk not in with_prod, "워밍업 부족 종목이 남아 있다"
-    assert short_tk in legacy_only, "기존 경로의 65봉 기준이 바뀌었다"
+def test_short_history_ticker_keeps_legacy_factors_but_drops_prod_keys():
+    """253봉이 안 되는 종목은 12-1 을 낼 수 없다 — 키를 빼지, 0 으로 채우지 않는다.
+
+    0(중립)으로 채우면 '계산 불가'가 '예측력 없음'으로 IC 에 섞여 들어
+    프로덕션 팩터가 실제보다 무력해 보인다. 반대로 종목을 통째로 버리면
+    legacy 팩터의 단면까지 좁아져 factor_engine 이 읽는 IC 가 바뀐다.
+    """
+    prices, idx = _panel_with_short_ticker()
+    got = fv._calc_per_factor_zscores(prices, idx[-1], include_prod_defs=True)
+
+    assert "SHORT" in got, "legacy 팩터의 65봉 기준이 바뀌었다"
+    assert "mom_3m" in got["SHORT"]
+    assert "mom_12_1" not in got["SHORT"]
+    assert "low_vol_252" not in got["SHORT"]
+    assert "mom_12_1" in got["A"]
+
+
+def test_prod_defs_do_not_shift_legacy_zscores():
+    """프로덕션 정의를 켜도 기존 팩터의 z-score 는 한 값도 바뀌지 않는다.
+
+    주간 IC 산출에 프로덕션 정의를 추가하면서 factor_engine 의 가중치가
+    조용히 바뀌는 것을 막는 잠금장치.
+    """
+    prices, idx = _panel_with_short_ticker()
+    off = fv._calc_per_factor_zscores(prices, idx[-1])
+    on = fv._calc_per_factor_zscores(prices, idx[-1], include_prod_defs=True)
+
+    assert set(off) == set(on)
+    for tk in off:
+        for factor, val in off[tk].items():
+            assert on[tk][factor] == pytest.approx(val), f"{tk}/{factor} 가 움직였다"
+
+
+def test_comparison_path_pins_identical_cross_section():
+    """짝지은 비교는 min_bars 를 올려 두 정의의 단면을 완전히 일치시킨다."""
+    prices, idx = _panel_with_short_ticker()
+    strict = fv._calc_per_factor_zscores(
+        prices, idx[-1], include_prod_defs=True, min_bars=fv._PROD_MIN_BARS)
+
+    assert "SHORT" not in strict
+    assert all("mom_12_1" in s and "low_vol_252" in s for s in strict.values())
+
+
+def test_period_ics_scores_each_factor_on_its_own_subset():
+    """이력이 짧은 종목이 섞여도 프로덕션 팩터 IC 가 계산된다."""
+    prices, idx = _panel_with_short_ticker()
+    scores = fv._calc_per_factor_zscores(prices, idx[-22], include_prod_defs=True)
+    got = fv._period_factor_ics(prices, scores, idx[-22], idx[-1],
+                                ["mom_3m"] + fv.PRODUCTION_FACTORS)
+
+    assert set(got) == {"mom_3m", "mom_12_1", "low_vol_252"}
 
 
 # ── 3. 짝지은 차이 통계 ──────────────────────────────────────────────

@@ -93,6 +93,11 @@ _PROD_MIN_BARS = _PROD_MOM_LOOKBACK + 1
 # 창 앞부분에서 통째로 0(중립) 이 되어 비교가 무의미해진다.
 _PROD_WARMUP_CALENDAR_DAYS = 480
 
+# 프로덕션 스캔(factor_scoring)이 실제로 쓰는 가격 팩터의 IC 키.
+# 프로덕션 가중치는 반드시 이 이름들의 IC 로 배분돼야 한다 — mom_3m/mom_1m
+# 은 factor_engine(페이퍼트레이드)이 쓰는 팩터이지 프로덕션의 것이 아니다.
+PRODUCTION_FACTORS = ["mom_12_1", "low_vol_252"]
+
 # 6-팩터 고정 가중치 (IC 검증용, 레짐 미분류)
 _IC_WEIGHTS = {
     "mom_3m":  0.27,
@@ -365,7 +370,8 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
                               fin_hist: dict = None,
                               shares_hist: dict = None,
                               equity_hist: dict = None,
-                              include_prod_defs: bool = False) -> dict:
+                              include_prod_defs: bool = False,
+                              min_bars: int = 65) -> dict:
     """
     as_of_date 기준 각 티커의 팩터별 z-score (6-팩터).
 
@@ -373,17 +379,19 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
                     "value": z, "quality": z, "ict": z}}
 
     include_prod_defs=True 면 **프로덕션 스캔이 실제로 쓰는 정의**
-    (`mom_12_1` = 12-1 모멘텀, `low_vol_252` = 252봉 변동성)를 같은
-    단면에 나란히 추가한다. 이중화 해소 2단계의 비교용이며, 기본값은
-    False 라 주간 `ic_weights.json` 산출 경로는 한 글자도 바뀌지 않는다.
+    (`mom_12_1` = 12-1 모멘텀, `low_vol_252` = 252봉 변동성)를 추가한다.
+    기본값은 False 라 켜지 않으면 반환 키가 예전 그대로다.
 
-    프로덕션 정의를 켜면 티커 최소 봉수가 65 → 253 으로 올라간다.
-    같은 단면 위에서 두 정의를 재야 짝지은(paired) 비교가 성립하기
-    때문이다. 그래서 이때의 legacy IC 는 저장된 IC 히스토리와 같은
-    유니버스가 아니다 — 비교는 이 실행 안에서만 유효하다.
+    12-1 은 종목당 253봉이 필요하다. 그 미만인 종목은 **해당 키를 아예
+    빼서** 돌려준다 — 0(중립)으로 채우면 계산 불가를 '예측력 없음'으로
+    관측한 것처럼 IC 에 섞여 든다. 대신 legacy 팩터의 기준(min_bars)은
+    건드리지 않으므로, 프로덕션 정의를 켜도 factor_engine 이 쓰는
+    mom_3m/mom_1m/low_vol 의 IC 는 바뀌지 않는다.
+
+    min_bars 를 _PROD_MIN_BARS 로 올려 부르면 모든 종목이 두 정의를 다
+    갖게 되어 단면이 완전히 일치한다 — 짝지은(paired) 정의 비교가 이 형태를
+    쓴다. 그 경우 legacy IC 는 저장된 IC 히스토리와 같은 유니버스가 아니다.
     """
-    min_bars = _PROD_MIN_BARS if include_prod_defs else 65
-
     rows = []
     for tk, close in prices_dict.items():
         sub = close[close.index <= as_of_date]
@@ -410,9 +418,14 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
         if include_prod_defs:
             # factor_scoring 이 프로덕션 스캔에서 쓰는 바로 그 구간.
             # 상수를 import 해 왔으므로 프로덕션이 구간을 바꾸면 여기도 따라간다.
-            row_extra["mom_12_1"] = _momentum_pct(sub, _PROD_MOM_LOOKBACK,
-                                                  skip_bars=_PROD_MOM_SKIP)
-            row_extra["vol_252"] = _annualized_vol_pct(sub, _PROD_VOL_WINDOW)
+            # 봉수가 모자라면 NaN — 아래 z-score 에서 제외되고 키도 빠진다.
+            if len(sub) >= _PROD_MIN_BARS:
+                row_extra["mom_12_1"] = _momentum_pct(sub, _PROD_MOM_LOOKBACK,
+                                                      skip_bars=_PROD_MOM_SKIP)
+                row_extra["vol_252"] = _annualized_vol_pct(sub, _PROD_VOL_WINDOW)
+            else:
+                row_extra["mom_12_1"] = np.nan
+                row_extra["vol_252"] = np.nan
 
         rows.append({
             "ticker": tk,
@@ -440,11 +453,16 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
     df["z_low_vol"] = -(df["vol"] - mu) / (sigma + 1e-9)
 
     if include_prod_defs:
-        mu, sigma = df["mom_12_1"].mean(), df["mom_12_1"].std()
-        df["z_mom_12_1"] = (df["mom_12_1"] - mu) / (sigma + 1e-9)
-        # 변동성은 낮을수록 좋다 — legacy low_vol 과 같은 부호 규칙.
-        mu, sigma = df["vol_252"].mean(), df["vol_252"].std()
-        df["z_low_vol_252"] = -(df["vol_252"] - mu) / (sigma + 1e-9)
+        # 계산 가능한 종목만으로 평균·표준편차를 낸다. NaN 은 NaN 으로 남고
+        # 아래에서 키가 빠진다 (부호: 변동성은 낮을수록 좋다).
+        for src, dst, sign in (("mom_12_1", "z_mom_12_1", 1.0),
+                               ("vol_252", "z_low_vol_252", -1.0)):
+            valid = df[src].dropna()
+            if len(valid) < 3:
+                df[dst] = np.nan
+            else:
+                mu, sigma = valid.mean(), valid.std()
+                df[dst] = sign * (df[src] - mu) / (sigma + 1e-9)
 
     _add_value_quality_z(df)
 
@@ -466,8 +484,11 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
             "bulls":   float(df.loc[tk, "z_bulls"]),
         }
         if include_prod_defs:
-            scores["mom_12_1"]    = float(df.loc[tk, "z_mom_12_1"])
-            scores["low_vol_252"] = float(df.loc[tk, "z_low_vol_252"])
+            for key, col in (("mom_12_1", "z_mom_12_1"),
+                             ("low_vol_252", "z_low_vol_252")):
+                val = df.loc[tk, col]
+                if pd.notna(val):
+                    scores[key] = float(val)
         result[tk] = scores
     return result
 
@@ -477,9 +498,12 @@ def _period_factor_ics(prices_dict: dict, factor_scores: dict,
     """리밸런싱 한 시점의 팩터별 IC.
 
     as_of 시점 z-score 와 as_of→fwd_date 선행수익률의 스피어만 상관.
-    IC 를 낼 수 없는 시점(공통 종목 5개 미만)이면 빈 dict 을 준다.
-    NaN 이 나온 팩터는 키 자체를 뺀다 — 0 으로 채우면 예측력 없음을
-    관측한 것처럼 평균에 섞여 든다.
+    IC 를 낼 수 없는 팩터(유효 종목 5개 미만, 혹은 상관이 NaN)는 키 자체를
+    뺀다 — 0 으로 채우면 '예측력 없음'을 관측한 것처럼 평균에 섞여 든다.
+
+    팩터마다 **자기 값을 가진 종목만으로** 상관을 낸다. 12-1 모멘텀처럼
+    긴 이력이 필요한 팩터는 일부 종목에서 계산되지 않는데, 그 종목을
+    0(중립)으로 채워 넣으면 팩터가 실제보다 무력해 보인다.
 
     한 시점의 단면 계산을 여기에 모아 둔 이유: 주간 IC 산출과 정의 비교가
     **같은 산술**을 써야 두 결과를 나란히 놓고 볼 수 있다.
@@ -492,14 +516,15 @@ def _period_factor_ics(prices_dict: dict, factor_scores: dict,
             cp, fp = float(cur_vals.iloc[-1]), float(fwd_vals.iloc[-1])
             returns[tk] = (fp / cp - 1) * 100 if cp > 0 else np.nan
 
-    common = [t for t in factor_scores if t in returns and not np.isnan(returns[t])]
-    if len(common) < 5:
-        return {}
+    priced = [t for t in factor_scores if t in returns and not np.isnan(returns[t])]
 
-    y = np.array([returns[t] for t in common])
     out = {}
     for factor in factors:
-        x     = np.array([factor_scores[t].get(factor, 0.0) for t in common])
+        common = [t for t in priced if factor in factor_scores[t]]
+        if len(common) < 5:
+            continue
+        x = np.array([factor_scores[t][factor] for t in common])
+        y = np.array([returns[t] for t in common])
         ic, _ = spearmanr(x, y)
         if not np.isnan(ic):
             out[factor] = float(ic)
@@ -512,10 +537,17 @@ def run_per_factor_ic_analysis(
     rebal_days: int = 21,
     forward_days: int = 21,
     progress_cb=None,
+    include_prod_defs: bool = False,
 ) -> dict:
     """
     팩터별 walk-forward IC 분석.
     ic_weight_updater.py 가 호출하여 ic_weights.json을 생성할 때 사용.
+
+    include_prod_defs=True 면 프로덕션 스캔이 실제로 쓰는 정의
+    (`mom_12_1`, `low_vol_252`)의 IC 도 함께 낸다. 프로덕션 가중치를
+    프로덕션이 쓰지 않는 팩터의 예측력으로 배분하던 문제를 푸는 입력이다.
+    기존 팩터의 종목 기준(65봉)은 그대로라 factor_engine 이 읽는
+    mom_3m/mom_1m/low_vol 의 IC 는 이 플래그와 무관하게 같은 값이 나온다.
 
     Returns
     -------
@@ -547,7 +579,9 @@ def run_per_factor_ic_analysis(
     if not rebal_indices:
         return {}
 
-    FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict", "bulls"]
+    FACTORS = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict", "bulls"]
+    if include_prod_defs:
+        FACTORS = FACTORS + PRODUCTION_FACTORS
     factor_ics = {f: [] for f in FACTORS}
 
     for step_i, idx in enumerate(rebal_indices):
@@ -561,6 +595,7 @@ def run_per_factor_ic_analysis(
             fin_hist=fin_hist,
             shares_hist=shares_hist,
             equity_hist=equity_hist,
+            include_prod_defs=include_prod_defs,
         )
         if len(factor_scores) < 5:
             continue
@@ -760,6 +795,8 @@ def run_factor_definition_comparison(
             shares_hist=shares_hist,
             equity_hist=equity_hist,
             include_prod_defs=True,
+            # 짝지은 비교는 두 정의가 완전히 같은 단면 위에 있어야 한다.
+            min_bars=_PROD_MIN_BARS,
         )
         if len(factor_scores) < 5:
             continue

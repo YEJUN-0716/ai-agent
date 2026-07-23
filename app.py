@@ -2986,8 +2986,43 @@ def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
 # 정규화 규칙은 factor_scoring 소유. calc_factor_scores_sectoral 도 이 이름을 쓴다.
 _zscore_to_score = _scoring.zscore_to_score
 
+def _pick_4f_weights(ic_data, regime):
+    """ic_weights.json 내용에서 이 스캔의 4팩터 가중치를 고른다 (순수 함수).
+
+    IO 와 분리해 둔 이유는 선택 규칙 자체를 테스트로 잠그기 위해서다 —
+    어느 블록을 읽느냐가 실전 포트폴리오를 바꾼다.
+    """
+    pw = (ic_data.get('production_weights') or {}).get(regime, {})
+    if pw:
+        total_pw = sum(pw.values())
+        if total_pw >= 0.01:
+            return {k: v / total_pw for k, v in pw.items()}
+
+    rw = ic_data.get('regime_weights', {}).get(regime, {})
+    if not rw:
+        return None
+    momentum = rw.get('mom_3m', 0) + rw.get('mom_1m', 0)
+    value    = rw.get('value',   0)
+    quality  = rw.get('quality', 0)
+    low_vol  = rw.get('low_vol', 0)
+    total_4f = momentum + value + quality + low_vol
+    if total_4f < 0.01:
+        return None
+    return {k: v / total_4f for k, v in
+            [('momentum', momentum), ('value', value), ('quality', quality), ('low_vol', low_vol)]}
+
+
 def _load_ic_factor_weights_4f(regime=None, benchmark=None):
-    """ic_weights.json의 6팩터 레짐 가중치를 4팩터(momentum/value/quality/low_vol)로 매핑."""
+    """ic_weights.json에서 이 스캔의 4팩터(momentum/value/quality/low_vol) 가중치를 읽는다.
+
+    `production_weights` 를 먼저 본다. 이 스캔은 12-1 모멘텀(252→21봉)과
+    252봉 변동성으로 랭킹하는데, 그 예측력으로 배분된 가중치가 거기 들어 있다.
+
+    없으면 예전처럼 6팩터 `regime_weights` 를 접어서 쓴다. 그 경로는
+    momentum 을 mom_3m + mom_1m 으로 잡는데, **이 스캔이 계산조차 하지 않는
+    팩터들이다.** ic_weight_updater 를 아직 새로 돌리지 않았을 때를 위한
+    후퇴 경로일 뿐이니 여기에 기대지 말 것.
+    """
     try:
         import json as _json, os as _os
         ic_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'ic_weights.json')
@@ -2995,18 +3030,8 @@ def _load_ic_factor_weights_4f(regime=None, benchmark=None):
             _d = _json.load(_f)
         if regime is None:
             regime, _ = get_market_regime(benchmark)
-        rw = _d.get('regime_weights', {}).get(regime, {})
-        if not rw:
-            return None
-        momentum = rw.get('mom_3m', 0) + rw.get('mom_1m', 0)
-        value    = rw.get('value',   0)
-        quality  = rw.get('quality', 0)
-        low_vol  = rw.get('low_vol', 0)
-        total_4f = momentum + value + quality + low_vol
-        if total_4f < 0.01:
-            return None
-        return {k: v / total_4f for k, v in
-                [('momentum', momentum), ('value', value), ('quality', quality), ('low_vol', low_vol)]}
+
+        return _pick_4f_weights(_d, regime)
     except Exception:
         return None
 
