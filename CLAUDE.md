@@ -28,7 +28,7 @@ python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
 ```
 
-**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~193 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_krx_universe`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~198 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_krx_universe`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
@@ -50,10 +50,8 @@ Rule of thumb: inject when the loop body is the logic; split when the loop is I/
 
 These remain parallel implementations — different factor sets (app: skip-1M momentum + optional analyst/short/EPS-surprise extras; engine: mom_3m/mom_1m + regime weights) and different normalization (app: `_zscore_to_score`; engine: z-score → 10–90 min-max). One does not call the other, so momentum / low-vol / weighting changes still need applying in both places.
 
-**The two app-side scanners are not interchangeable, and `signal_worker.py` defaults to the sectoral one** (`SECTOR_NEUTRAL` defaults to true). Documented divergences, all pinned by `tests/test_sectoral_scores.py`:
+**`signal_worker.py` defaults to the sectoral scanner** (`SECTOR_NEUTRAL` defaults to true), so that is the path production actually runs. Both scanners now share the same default weights and the same IC blending. Remaining divergences, pinned by `tests/test_sectoral_scores.py`:
 
-- `calc_factor_scores_sectoral` **never reads `ic_weights.json`** — the weekly IC loop reaches `factor_engine.py` (paper trading) but not the default scan path.
-- Its own default weights are `.30/.25/.30/.15`, i.e. `low_vol` never got the P1-B reduction. Normally masked because `signal_worker` passes `get_factor_timing_weights()` output, but it surfaces with `FACTOR_TIMING=false`.
 - Its `composite` is a plain weighted sum with **no division by the weight total**, unlike `calc_factor_scores`. Safe only because timing weights always sum to 1.0.
 - It does not round raw factor values; `calc_factor_scores` rounds to 2dp.
 
@@ -67,7 +65,9 @@ These remain parallel implementations — different factor sets (app: skip-1M mo
 
 ### The weekly IC feedback loop
 
-`REGIME_WEIGHTS` in `factor_engine.py` are only a weak prior. Every Sunday `ic_weight_updater.py` computes 5-year walk-forward Information Coefficients and writes `ic_weights.json`; the factor engines read that file to rescale factor weights (low/negative-IC factors shrink automatically, floored at `IC_FLOOR`). Don't hand-tune the weights expecting them to stick — this job overwrites them.
+`REGIME_WEIGHTS` in `factor_engine.py` are only a weak prior. Every Sunday `ic_weight_updater.py` computes 5-year walk-forward Information Coefficients and writes `ic_weights.json`; the factor engines read that file to rescale factor weights (low/negative-IC factors shrink automatically, floored at `IC_FLOOR`).
+
+**How IC combines with factor timing:** `get_factor_timing_weights()` (VIX/rates) and the IC weights measure different things — market environment vs. how well a factor has actually predicted — so `factor_scoring.blend_ic_weights(ic, base=…)` mixes them 50:50 rather than letting either win outright. `base` is whatever the caller supplied (timing weights, or `DEFAULT_FACTOR_WEIGHTS` when none). Both sum to 1.0, so the blend does too — which matters because the sectoral path does not renormalize. Until this was fixed, an explicit `factor_weights` argument made the IC weights be dropped entirely, and since `FACTOR_TIMING` also defaults to true, **the weekly IC job never once reached the live scan.** Don't hand-tune the weights expecting them to stick — this job overwrites them.
 
 ### Config is entirely env-var driven; state is committed JSON
 

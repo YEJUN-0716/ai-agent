@@ -87,16 +87,6 @@ BASE_RAW_COLUMNS = ('momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw')
 MIN_SECTOR_MEMBERS = 3
 UNKNOWN_SECTOR = 'Unknown'
 
-# 섹터 경로의 기본 가중치. calc_factor_scores 기본값과 **다르다** —
-# low_vol 이 0.15 로 P1-B 축소가 반영돼 있지 않다. 평소에는
-# get_factor_timing_weights() 결과가 넘어와 가려지지만, FACTOR_TIMING=false 면
-# 이 값이 그대로 나간다. 맞추는 것은 전략 변경이라 별도로 다룬다.
-DEFAULT_SECTORAL_WEIGHTS = {
-    'momentum': 0.30,
-    'value': 0.25,
-    'quality': 0.30,
-    'low_vol': 0.15,
-}
 
 
 # ── 정규화 ──────────────────────────────────────────────────────────
@@ -263,12 +253,27 @@ def eps_surprise_score(earnings_history):
 
 # ── 합성과 랭킹 ─────────────────────────────────────────────────────
 
-def blend_ic_weights(ic_weights):
-    """주간 IC 가중치를 기본값과 50:50 으로 섞는다. IC 가 없으면 기본값 그대로."""
+def blend_ic_weights(ic_weights, base=None):
+    """주간 IC 가중치를 기준 가중치와 50:50 으로 섞는다.
+
+    base 는 "IC 가 없었다면 썼을 가중치" 다. 호출부가 팩터 타이밍 가중치를
+    넘기면 그 위에 IC 를 얹는다. 둘은 서로 다른 것을 측정하기 때문이다:
+
+      - 타이밍 가중치 — 지금 시장이 어떤 환경인가 (VIX·금리)
+      - IC 가중치     — 이 팩터가 최근 실제로 맞았는가 (5년 walk-forward)
+
+    직교하는 신호라 하나를 버릴 이유가 없다. 예전에는 타이밍 가중치가 오면
+    IC 를 통째로 무시했는데, FACTOR_TIMING 기본값이 true 라 **매주 돌린 IC
+    계산이 실전 스캔에 한 번도 반영되지 않았다.**
+
+    양쪽 합이 모두 1.0 이면 결과도 1.0 이다 — 섹터 경로는 가중치 합으로
+    나누지 않으므로 이 성질이 점수 스케일을 지켜 준다.
+    """
+    base = dict(base) if base else dict(DEFAULT_FACTOR_WEIGHTS)
     if not ic_weights:
-        return dict(DEFAULT_FACTOR_WEIGHTS)
+        return base
     return {k: d * (1 - IC_BLEND_WEIGHT) + ic_weights.get(k, d) * IC_BLEND_WEIGHT
-            for k, d in DEFAULT_FACTOR_WEIGHTS.items()}
+            for k, d in base.items()}
 
 
 def rank_by_composite(rows, factor_weights=None, ic_weights=None):
@@ -290,7 +295,7 @@ def rank_by_composite(rows, factor_weights=None, ic_weights=None):
             extra_w.append(w)
     base_w = 1 - sum(extra_w)
 
-    fw = factor_weights if factor_weights is not None else blend_ic_weights(ic_weights)
+    fw = blend_ic_weights(ic_weights, base=factor_weights)
     fw_sum = sum(fw.values()) or 1.0
 
     rdf['composite'] = sum(
@@ -312,7 +317,7 @@ def _sector_zscore(group):
     return zscore_to_score(group)
 
 
-def rank_by_sector_neutral_composite(rows, factor_weights=None):
+def rank_by_sector_neutral_composite(rows, factor_weights=None, ic_weights=None):
     """섹터 중립 랭킹. 각 팩터를 섹터 **안에서** Z-score 정규화한다.
 
     "기술주는 통째로 모멘텀이 높다" 같은 섹터 편향이 랭킹을 독점하지 못하게
@@ -323,9 +328,13 @@ def rank_by_sector_neutral_composite(rows, factor_weights=None):
     결과지만, 지금 맞추면 랭킹이 바뀌므로 동작을 보존한다:
       - 가중치 합으로 나누지 않는다 (합이 1이 아니면 점수 스케일이 따라 움직인다)
       - 추가 팩터(analyst/short/ict)를 지원하지 않는다
+
+    기본 가중치와 IC 블렌딩은 rank_by_composite 와 **같다** — 예전에는 섹터
+    경로만 low_vol 0.15 를 쓰고 IC 를 아예 안 읽었는데, 정작 프로덕션
+    기본값(SECTOR_NEUTRAL=true)이 이쪽이었다.
     """
     rdf = pd.DataFrame(rows)
-    fw = factor_weights if factor_weights is not None else DEFAULT_SECTORAL_WEIGHTS
+    fw = blend_ic_weights(ic_weights, base=factor_weights)
 
     for col in BASE_RAW_COLUMNS:
         fname = col.replace('_raw', '')
