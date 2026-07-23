@@ -9,9 +9,10 @@ app.calc_factor_scores_sectoral 동작 고정 테스트.
 "기술주가 통째로 모멘텀이 높은" 식의 섹터 편향이 랭킹을 독점하지 못하게 한다.
 섹터 표본이 3종목 미만이면 통계가 무의미하므로 전체 기준 점수로 되돌린다.
 
-네트워크 진입점은 둘이다 (calc_factor_scores 와 달리 IC 가중치를 안 읽는다):
+네트워크 진입점은 셋이다 (calc_factor_scores 와 같다):
   1. download_stock(tk, ...)
   2. yf.Ticker(tk).info
+  3. _load_ic_factor_weights_4f() — 내부에서 get_market_regime() 이 SPY 를 받는다
 """
 import time
 
@@ -21,6 +22,7 @@ import pytest
 
 import app
 from modules import factor_formulas as ff
+from modules import factor_scoring as scoring
 
 FULL_YEAR_BARS = 300
 
@@ -60,7 +62,7 @@ def _info(sector, **overrides):
 
 @pytest.fixture
 def patch_market(monkeypatch):
-    def _install(frames, infos=None, dart=None):
+    def _install(frames, infos=None, dart=None, ic_weights=None):
         infos = infos or {}
 
         class FakeTicker:
@@ -79,6 +81,9 @@ def patch_market(monkeypatch):
                             frames.get(tk, pd.DataFrame()))
         monkeypatch.setattr(app.yf, "Ticker", FakeTicker)
         monkeypatch.setattr(app, "_dart_fallback_batch", lambda tickers: dart or {})
+        # 진짜 함수는 get_market_regime() 을 거쳐 SPY 를 내려받는다. 반드시 막는다.
+        monkeypatch.setattr(app, "_load_ic_factor_weights_4f",
+                            lambda regime=None: ic_weights)
         monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
     return _install
 
@@ -185,18 +190,18 @@ def test_exactly_three_members_is_enough_for_sector_normalization(patch_market):
 
 # ── 3. 가중 합성 ────────────────────────────────────────────────────
 
-def test_default_sectoral_weights_are_pinned(patch_market):
-    """calc_factor_scores 의 기본값(.35/.25/.32/.08)과 **다르다**.
+def test_default_weights_match_the_non_sectoral_scanner(patch_market):
+    """두 스캐너의 기본 가중치가 같아야 한다: .35/.25/.32/.08.
 
-    이쪽 low_vol 은 0.15 로, P1-B 축소(ICIR=-0.199)가 반영되지 않았다.
-    평소에는 signal_worker 가 get_factor_timing_weights() 결과를 넘겨서
-    이 기본값이 안 쓰이지만, FACTOR_TIMING=false 면 이 값이 그대로 나간다.
+    예전에는 섹터 경로만 low_vol 0.15 를 썼다 — P1-B 축소(ICIR=-0.199)가
+    반영되지 않은 값이다. 정작 프로덕션 기본값(SECTOR_NEUTRAL=true)이
+    이쪽이라, 토글 하나로 배분이 달라지는 상태였다.
     """
     frames, infos = _two_sector_market()
     patch_market(frames, infos)
     result = app.calc_factor_scores_sectoral(list(frames))
-    expected = (result["momentum"] * 0.30 + result["value"] * 0.25
-                + result["quality"] * 0.30 + result["low_vol"] * 0.15)
+    expected = (result["momentum"] * 0.35 + result["value"] * 0.25
+                + result["quality"] * 0.32 + result["low_vol"] * 0.08)
     assert result["composite"].tolist() == pytest.approx(expected.tolist())
 
 
@@ -303,3 +308,63 @@ def test_krx_falls_back_to_dart_when_yfinance_has_no_roe(patch_market):
         dart={"005930.KS": {"net_income": 30.0, "equity": 200.0, "margin": 12.5}},
     )
     assert app.calc_factor_scores_sectoral(["005930.KS"]).iloc[0]["roe"] == pytest.approx(15.0)
+
+
+# ── 7. IC 가중치 — 예전에는 이 경로에 아예 안 닿았다 ────────────────
+
+def test_ic_weights_blend_into_the_sectoral_path(patch_market):
+    """섹터 경로도 ic_weights.json 을 반영한다.
+
+    예전에는 이 함수가 IC 를 아예 안 읽었다. SECTOR_NEUTRAL 기본값이 true 라,
+    매주 일요일 10~60분씩 돌린 IC 계산이 실전 스캔에 한 번도 닿지 않았다.
+    """
+    ic = {"momentum": 1.0, "value": 0.0, "quality": 0.0, "low_vol": 0.0}
+    frames, infos = _two_sector_market()
+    patch_market(frames, infos, ic_weights=ic)
+    result = app.calc_factor_scores_sectoral(list(frames))
+
+    blended = {"momentum": 0.35 * 0.5 + 0.5, "value": 0.25 * 0.5,
+               "quality": 0.32 * 0.5, "low_vol": 0.08 * 0.5}
+    expected = sum(result[k] * w for k, w in blended.items())
+    assert result["composite"].tolist() == pytest.approx(expected.tolist())
+
+
+def test_ic_weights_blend_on_top_of_timing_weights(patch_market):
+    """팩터 타이밍 가중치가 와도 IC 를 버리지 않는다.
+
+    타이밍(시장 환경)과 IC(팩터 예측력)는 직교하는 신호다. 예전에는 타이밍
+    가중치가 들어오면 IC 를 통째로 무시했는데, FACTOR_TIMING 기본값도 true라
+    두 조건이 겹쳐 IC 가 영영 반영되지 않았다.
+    """
+    timing = {"momentum": 0.45, "value": 0.22, "quality": 0.25, "low_vol": 0.08}
+    ic = {"momentum": 1.0, "value": 0.0, "quality": 0.0, "low_vol": 0.0}
+    frames, infos = _two_sector_market()
+    patch_market(frames, infos, ic_weights=ic)
+    result = app.calc_factor_scores_sectoral(list(frames), factor_weights=timing)
+
+    blended = {k: v * 0.5 + ic[k] * 0.5 for k, v in timing.items()}
+    expected = sum(result[k] * w for k, w in blended.items())
+    assert result["composite"].tolist() == pytest.approx(expected.tolist())
+
+
+def test_blending_preserves_the_score_scale(patch_market):
+    """합이 1.0 인 두 가중치를 섞으면 결과도 1.0 이다.
+
+    섹터 경로는 가중치 합으로 나누지 않으므로, 이 성질이 깨지면 합성점수
+    스케일이 통째로 움직여 절대 임계값이 의미를 잃는다.
+    """
+    timing = {"momentum": 0.45, "value": 0.22, "quality": 0.25, "low_vol": 0.08}
+    ic = {"momentum": 0.10, "value": 0.40, "quality": 0.40, "low_vol": 0.10}
+    blended = scoring.blend_ic_weights(ic, base=timing)
+    assert sum(blended.values()) == pytest.approx(1.0)
+
+
+def test_absent_ic_weights_leave_the_base_untouched():
+    """IC 파일이 없거나 비면 넘어온 가중치를 그대로 쓴다."""
+    timing = {"momentum": 0.45, "value": 0.22, "quality": 0.25, "low_vol": 0.08}
+    assert scoring.blend_ic_weights(None, base=timing) == timing
+    assert scoring.blend_ic_weights({}, base=timing) == timing
+
+
+def test_absent_base_falls_back_to_default_weights():
+    assert scoring.blend_ic_weights(None) == scoring.DEFAULT_FACTOR_WEIGHTS

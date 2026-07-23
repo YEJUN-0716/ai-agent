@@ -3055,10 +3055,12 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
         except Exception:
             failed.append(tk)
     if not results: return pd.DataFrame()
+    # IC 가중치는 명시 가중치가 있어도 읽는다. 팩터 타이밍(시장 환경)과
+    # IC(팩터 예측력)는 직교하는 신호라 둘을 섞는다 — blend_ic_weights 참고.
     rdf = _scoring.rank_by_composite(
         results,
         factor_weights=factor_weights,
-        ic_weights=_load_ic_factor_weights_4f() if factor_weights is None else None,
+        ic_weights=_load_ic_factor_weights_4f(),
     )
     if failed:
         rdf.attrs['failed'] = failed
@@ -3276,7 +3278,11 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
         except Exception:
             failed.append(tk)
     if not results: return pd.DataFrame()
-    rdf = _scoring.rank_by_sector_neutral_composite(results, factor_weights)
+    rdf = _scoring.rank_by_sector_neutral_composite(
+        results,
+        factor_weights=factor_weights,
+        ic_weights=_load_ic_factor_weights_4f(),
+    )
     # signal_worker.py 가 텔레그램 알림에 실패 종목 수를 찍는다. 이 키가 없으면
     # 조용히 0으로 보고돼, 유니버스 절반이 죽어도 알림은 정상으로 보인다.
     if failed:
