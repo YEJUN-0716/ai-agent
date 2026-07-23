@@ -28,7 +28,7 @@ python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
 ```
 
-**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~172 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~193 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_krx_universe`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
@@ -74,6 +74,12 @@ These remain parallel implementations — different factor sets (app: skip-1M mo
 There is no config file — everything comes from environment variables, supplied as GitHub Actions **secrets**: `TOSS_CLIENT_ID/SECRET/ACCOUNT_SEQ`, `TELEGRAM_TOKEN/CHAT_ID`, `DART_API_KEY`, `ALPACA_API_KEY/SECRET_KEY` (legacy), plus an Anthropic key (news sentiment) and Google service-account creds (gspread trade journal). Behavior knobs (`UNIVERSE`, `TOP_N`, `DRY_RUN`, `BUY_SCORE_MIN`, regime position caps, `TRAIL_STOP_PCT`, `PORTFOLIO_DD_STOP_PCT`, …) are also env vars — see the `workflow_dispatch` inputs in `.github/workflows/` for the authoritative list and defaults.
 
 Runtime **state lives in version-controlled files** that the workflows `git commit` back after each run: `signal_log.json` (buy signals; 21-day forward returns tracked automatically), `equity_log.json`, `peak_prices.json` (trailing-stop reference), and `ic_weights.json`. Treat edits to these as data changes. DART caches (`dart_fund_cache.json`, `dart_corp_map.json`) and `.env` are gitignored.
+
+### KRX (Korean) universe
+
+The `한국 대형 15` preset, the DART fundamentals fallback, ₩ formatting, and `tax_kr.py` were all already in place — what was missing was one wire: `signal-alerts.yml` did not pass `DART_API_KEY`, so any KRX scan run from Actions lost the DART fallback entirely. **That failure is silent**: prices still download, so the failure count stays 0, but ROE and profit margin come back empty for most KRX names, `quality_raw` collapses to the same value for every ticker, and z-score normalization turns that into a flat 50 — one of the four factors quietly disappears. The key is now wired, and `signal_worker.krx_data_warning()` puts a warning at the top of the Telegram message whenever the universe contains KRX tickers and no key is set. `tests/test_krx_universe.py` guards both the code path and the workflow file itself.
+
+Still US-centric for KRX runs: `get_market_regime()` measures SPY vs its MA200, and the sector-rotation ETF map is US-only. The Korean universe is also 15 hardcoded tickers — there is no KOSPI/KOSDAQ listing source.
 
 ### GitHub Actions workflows (`.github/workflows/`)
 

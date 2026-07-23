@@ -14,10 +14,38 @@ from datetime import date
 import app as core
 
 
+KRX_SUFFIXES = ('.KS', '.KQ')
+
+
 def _resolve_universe(raw):
     if raw in core.UNIVERSE_PRESETS:
         return core.UNIVERSE_PRESETS[raw]
     return [t.strip().upper() for t in raw.split(',') if t.strip()]
+
+
+def krx_tickers(tickers):
+    return [t for t in tickers if t.endswith(KRX_SUFFIXES)]
+
+
+def krx_data_warning(tickers, dart_key=None):
+    """KRX 종목이 있는데 DART 키가 없으면 경고 문구, 아니면 None.
+
+    yfinance 는 KRX 종목의 ROE·이익률을 대체로 비워서 보낸다. DART 폴백이
+    없으면 퀄리티 원점수가 전 종목 동일값(ROE 0 · 이익률 0 · 발생액 중립)으로
+    주저앉고, Z-score 정규화가 그걸 전부 50점으로 만든다 — 4팩터 중 하나가
+    통째로 사라진다.
+
+    그런데 가격은 정상적으로 받아지므로 **실패 종목 수는 0** 이다. 알림만
+    보면 스캔이 멀쩡해 보인다. 그래서 조용히 넘기지 않고 알림에 싣는다.
+    """
+    krx = krx_tickers(tickers)
+    if not krx:
+        return None
+    key = os.environ.get('DART_API_KEY', '') if dart_key is None else dart_key
+    if key:
+        return None
+    return (f"⚠️ DART_API_KEY 미설정 — KRX {len(krx)}종목의 ROE·이익률을 "
+            f"가져올 수 없어 퀄리티 팩터가 무의미해집니다. 랭킹을 신뢰하지 마세요.")
 
 
 def _env_bool(name, default):
@@ -27,7 +55,7 @@ def _env_bool(name, default):
     return val.strip().lower() not in ('0', 'false', 'no')
 
 
-def build_message(tickers, actions, rebal, failed):
+def build_message(tickers, actions, rebal, failed, warning=None):
     actionable = [a for a in actions if '관망' not in a['action'] and '대기' not in a['action']]
 
     lines = [
@@ -35,6 +63,11 @@ def build_message(tickers, actions, rebal, failed):
         f"매수 {rebal['buy_count']} · 매도/축소 {rebal['sell_count']} · 관망 {rebal['hold_count']}",
         "",
     ]
+
+    # 데이터 품질 경고는 맨 위에 — 아래 랭킹을 믿을지 말지가 먼저다.
+    if warning:
+        lines.append(warning)
+        lines.append("")
 
     if not actionable:
         lines.append(f"오늘은 매수/매도 시그널 없음 (관망 {rebal['hold_count']}종목) — 자동 스캔은 정상 작동 중.")
@@ -69,6 +102,10 @@ def main():
     tickers = _resolve_universe(universe_raw)
     print(f"유니버스: {universe_raw} ({len(tickers)}종목)")
 
+    data_warning = krx_data_warning(tickers)
+    if data_warning:
+        print(data_warning, file=sys.stderr)
+
     factor_weights = None
     if factor_timing:
         factor_weights, env = core.get_factor_timing_weights()
@@ -91,7 +128,7 @@ def main():
     actions, rebal = core.generate_system_signals(
         tickers, factor_df=fdf, top_n=top_n, capital=capital)
 
-    msg = build_message(tickers, actions, rebal, failed)
+    msg = build_message(tickers, actions, rebal, failed, warning=data_warning)
     ok, err = core.send_telegram(token, chat_id, msg)
     print(f"텔레그램 발송: {'성공' if ok else f'실패 ({err})'}")
     print(msg)
