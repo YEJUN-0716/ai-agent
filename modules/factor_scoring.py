@@ -19,8 +19,10 @@ import pandas as pd
 
 from modules.factor_formulas import (
     accrual_quality,
+    annualized_vol_pct,
     book_yield,
     earnings_yield,
+    momentum_pct,
     quality_raw,
     value_raw,
 )
@@ -38,8 +40,9 @@ MOMENTUM_LOOKBACK_DAYS = 252
 # ── 변동성 (P2-A) ──────────────────────────────────────────────────
 # 전 구간 표준편차를 쓰면 몇 년 전 급등락이 현재 점수를 계속 끌고 다닌다.
 VOL_WINDOW = 252
-TRADING_DAYS_PER_YEAR = 252
 LOW_VOL_BASE = 100.0       # low_vol 점수 = 100 - 연변동성(%), 0 하한
+# 연율화 계수(√252)는 factor_formulas 가 소유한다 — 여기서 다시 정의하면
+# IC 측정 쪽과 조용히 갈릴 수 있다.
 
 # ── 정규화 (z-score → 점수) ────────────────────────────────────────
 WINSOR_LOW, WINSOR_HIGH = 0.01, 0.99   # 극단값 하나가 랭킹을 독점하지 못하게
@@ -139,18 +142,17 @@ def _maybe_round(value, ndigits):
 
 
 def price_factors(df, round_raw=2):
-    """clean_price_frame 을 통과한 프레임 → 가격 기반 원점수."""
-    close = df['Close']
-    if len(df) >= MOMENTUM_LOOKBACK_DAYS:
-        momentum = (float(close.iloc[-MOMENTUM_SKIP_DAYS])
-                    / float(close.iloc[-MOMENTUM_LOOKBACK_DAYS]) - 1) * 100
-    else:
-        # 1년치가 없으면 추정하지 않는다. 짧은 구간 모멘텀은 잡음이다.
-        momentum = 0
+    """clean_price_frame 을 통과한 프레임 → 가격 기반 원점수.
 
-    daily_ret = close.pct_change().dropna()
-    annual_vol = (float(daily_ret.tail(VOL_WINDOW).std())
-                  * np.sqrt(TRADING_DAYS_PER_YEAR) * 100)
+    구간(12-1 모멘텀, 252봉 변동성)은 여기가 정하고, 수식은
+    factor_formulas 가 소유한다. IC 를 측정하는 factor_validator 는 같은
+    함수를 **다른 구간**으로 부른다 — 그 차이가 아직 남은 이중화다.
+    """
+    close = df['Close']
+    # 1년치가 없으면 momentum_pct 가 0 을 준다 — 짧은 구간 모멘텀은 잡음이다.
+    momentum = momentum_pct(close, MOMENTUM_LOOKBACK_DAYS,
+                            skip_bars=MOMENTUM_SKIP_DAYS)
+    annual_vol = annualized_vol_pct(close, VOL_WINDOW)
     return {
         'price': float(close.iloc[-1]),
         'momentum_raw': _maybe_round(momentum, round_raw),

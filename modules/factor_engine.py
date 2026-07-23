@@ -31,8 +31,10 @@ except Exception:
 # 의존성 없는 순수 산술 모듈이라 방어적 import 대상이 아니다.
 from modules.factor_formulas import (
     ACCRUAL_NEUTRAL as _ACCRUAL_NEUTRAL,
+    annualized_vol_pct as _annualized_vol_pct,
     book_yield as _book_yield,
     earnings_yield as _earnings_yield,
+    momentum_pct as _momentum_pct,
     quality_raw as _quality_raw,
     value_raw as _value_raw,
 )
@@ -112,13 +114,14 @@ def _rsi(close: pd.Series, period: int = 14) -> float:
 
 
 def _momentum(close: pd.Series) -> dict:
-    ret = {}
-    for label, days in [("1M", 21), ("3M", 63), ("6M", 126)]:
-        if len(close) >= days + 1:
-            ret[label] = float((close.iloc[-1] / close.iloc[-(days + 1)] - 1) * 100)
-        else:
-            ret[label] = 0.0
-    return ret
+    """구간별 단순 수익률(%). 프로덕션 스캔의 12-1 모멘텀과는 다른 팩터다 —
+    수식만 factor_formulas 와 공유하고 구간은 여기가 정한다.
+
+    days+1 봉을 거슬러 올라간다: days 개 봉의 수익률을 재려면 시작점이
+    한 봉 더 앞이어야 한다.
+    """
+    return {label: _momentum_pct(close, days + 1)
+            for label, days in [("1M", 21), ("3M", 63), ("6M", 126)]}
 
 
 def fetch_fundamentals(tickers: list) -> dict:
@@ -343,7 +346,8 @@ def calc_factor_scores(tickers: list, regime: str = "neutral") -> pd.DataFrame:
             close = raw["Close"].dropna()
             mom   = _momentum(close)
             rsi   = _rsi(close)
-            vol   = float(close.pct_change().tail(20).std() * np.sqrt(252) * 100)
+            # 20봉 — IC 측정(21봉)·프로덕션 스캔(252봉)과 또 다른 구간이다.
+            vol   = _annualized_vol_pct(close, 20)
             ict_raw = 50.0
             if _ICT_AVAILABLE:
                 try:
