@@ -65,3 +65,84 @@ def test_duplicate_date_is_replaced(tmp_path):
 
 def test_missing_directory_returns_empty(tmp_path):
     assert al.load_days(tmp_path / "nope") == []
+
+
+# ── 일일 스캔 배선 ───────────────────────────────────────────────────
+#
+# 기록은 성적표의 유일한 재료다. 하지만 기록이 깨졌다고 일일 스캔(텔레그램
+# 알림·시그널 로그)까지 죽으면 안 된다 — 부수 기능이 본체를 무너뜨리는 형태다.
+
+def _panel(n_bars=300):
+    import numpy as np
+    import pandas as pd
+
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n_bars)
+    close = pd.Series([100 + 0.2 * i + 3 * np.sin(i / 9) for i in range(n_bars)],
+                      index=idx)
+    return pd.DataFrame({
+        "Open": close * 0.99, "High": close * 1.02,
+        "Low": close * 0.98, "Close": close,
+        "Volume": pd.Series([1_000_000] * n_bars, index=idx),
+    })
+
+
+def test_recording_failure_does_not_raise(monkeypatch):
+    """기록이 깨져도 일일 스캔은 계속돼야 한다."""
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"AAPL": _panel()}))
+
+    def _boom(*a, **k):
+        raise RuntimeError("디스크 꽉 참")
+
+    monkeypatch.setattr(signal_worker.analyst_log, "append_day", _boom)
+    assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 0
+
+
+def test_panel_failure_does_not_raise(monkeypatch):
+    """가격 패널을 못 받아도 스캔은 계속된다."""
+    import signal_worker
+
+    def _boom(*a, **k):
+        raise RuntimeError("yfinance 다운")
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel", _boom)
+    assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 0
+
+
+def test_empty_universe_records_nothing(monkeypatch):
+    import signal_worker
+
+    assert signal_worker.record_analyst_scores([], "bull") == 0
+
+
+def test_records_chart_and_ict(monkeypatch, tmp_path):
+    """정상 경로 — 두 애널리스트 점수가 기록된다."""
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"AAPL": _panel()}))
+
+    captured = {}
+
+    def _capture(date_str, regime, scores, **kw):
+        captured["scores"] = scores
+
+    monkeypatch.setattr(signal_worker.analyst_log, "append_day", _capture)
+
+    assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 1
+    assert set(captured["scores"]["AAPL"]) <= {"chart", "ict"}
+    assert captured["scores"]["AAPL"]
+
+
+def test_short_history_ticker_is_skipped(monkeypatch):
+    """봉이 모자란 종목은 기록하지 않는다 — 지표가 잡음이다."""
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"NEW": _panel(n_bars=20)}))
+    monkeypatch.setattr(signal_worker.analyst_log, "append_day",
+                        lambda *a, **k: None)
+
+    assert signal_worker.record_analyst_scores(["NEW"], "bull") == 0

@@ -45,6 +45,45 @@ def newey_west_se(values, lag):
     return float(np.sqrt(total / n))
 
 
+def build_forward_returns(prices, dates, horizon):
+    """기록된 날짜별 선행수익률 — {date: {ticker: pct}}.
+
+    prices : {ticker: 종가 Series (DatetimeIndex)}
+    dates  : 채점할 날짜 문자열 목록 ("YYYY-MM-DD")
+
+    horizon 거래봉 뒤의 가격과 비교한다. 아직 미래가 안 온 날짜(선행 구간이
+    데이터 끝을 넘는 경우)는 **그 종목을 넣지 않는다** — 마지막 가격으로
+    대신하면 최근 기록이 전부 수익률 0 근처로 눌려 성적이 왜곡된다.
+    """
+    import pandas as pd
+
+    out = {}
+    for date_str in dates:
+        as_of = pd.Timestamp(date_str)
+        row = {}
+        for ticker, series in prices.items():
+            if series is None or len(series) == 0:
+                continue
+            past = series[series.index <= as_of]
+            if len(past) == 0:
+                continue
+
+            start_pos = len(past) - 1
+            end_pos = start_pos + int(horizon)
+            if end_pos >= len(series):
+                continue            # 아직 미래가 오지 않았다
+
+            cur = float(series.iloc[start_pos])
+            fwd = float(series.iloc[end_pos])
+            if cur > 0:
+                row[ticker] = (fwd / cur - 1.0) * 100.0
+
+        if row:
+            out[date_str] = row
+
+    return out
+
+
 def _daily_ic(day_scores, returns, slug):
     """하루치 단면 IC. 유효 종목이 모자라면 None.
 

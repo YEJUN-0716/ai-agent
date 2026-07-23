@@ -131,3 +131,69 @@ def test_effective_n_never_exceeds_apparent_n():
 
 def test_horizons_are_the_three_agreed_windows():
     assert sc.HORIZONS == (5, 21, 63)
+
+
+# ── 선행수익률 산출 ──────────────────────────────────────────────────
+
+def _rising_prices(n=30):
+    import pandas as pd
+
+    idx = pd.bdate_range("2026-01-01", periods=n)
+    return {"A": pd.Series([100.0 + i for i in range(n)], index=idx)}
+
+
+def test_forward_return_is_horizon_bars_ahead():
+    prices = _rising_prices()
+    dates = [prices["A"].index[0].strftime("%Y-%m-%d")]
+
+    got = sc.build_forward_returns(prices, dates, horizon=5)
+
+    # 100 → 105 = +5%
+    assert got[dates[0]]["A"] == pytest.approx(5.0)
+
+
+def test_dates_without_future_are_dropped():
+    """미래가 아직 안 온 날짜는 마지막 가격으로 때우지 않고 뺀다."""
+    prices = _rising_prices(n=30)
+    last = prices["A"].index[-1].strftime("%Y-%m-%d")
+
+    assert sc.build_forward_returns(prices, [last], horizon=5) == {}
+
+
+def test_partial_future_drops_only_that_ticker():
+    import pandas as pd
+
+    idx = pd.bdate_range("2026-01-01", periods=30)
+    prices = {
+        "LONG": pd.Series([100.0 + i for i in range(30)], index=idx),
+        "SHORT": pd.Series([100.0 + i for i in range(10)], index=idx[:10]),
+    }
+    date = idx[7].strftime("%Y-%m-%d")
+
+    got = sc.build_forward_returns(prices, [date], horizon=5)
+
+    assert "LONG" in got[date]
+    assert "SHORT" not in got[date]
+
+
+def test_scorecard_runs_end_to_end_on_built_returns():
+    """기록 → 선행수익률 → 채점이 이어 붙는지."""
+    import pandas as pd
+
+    idx = pd.bdate_range("2026-01-01", periods=40)
+    prices, days = {}, []
+    for rank, ticker in enumerate("ABCDE"):
+        # 순위가 높을수록 많이 오른다 → 점수와 수익률이 같은 방향
+        prices[ticker] = pd.Series(
+            [100.0 * (1 + 0.001 * rank) ** i for i in range(40)], index=idx)
+
+    for i in range(5):
+        date = idx[i].strftime("%Y-%m-%d")
+        days.append(_day(date, {t: {"chart": float(r)}
+                                for r, t in enumerate("ABCDE")}))
+
+    fwd = sc.build_forward_returns(prices, [d["date"] for d in days], horizon=5)
+    got = sc.score_analysts(days, fwd, horizon=5)
+
+    assert got["chart"]["mean_ic"] == pytest.approx(1.0)
+    assert got["chart"]["n"] == 5
