@@ -245,6 +245,8 @@ function moveTowardObj(o, tx, ty, spd, dt) {
 }
 function drawBoss(t) {
   const p = pal();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   const walking = boss.state === "walk";
   const bob = walking ? Math.abs(Math.sin(t * 8)) * 3 : Math.sin(t * 2.5) * 0.8;
   ctx.fillStyle = p.shadow;
@@ -708,6 +710,10 @@ function drawRoom(room, t) {
 
 function drawChar(ch, t) {
   const p = pal();
+  // 캔버스 상태를 물려받지 않는다. 앞서 그린 유령 책상(0.4)이나 팀 색조(0.1)의
+  // 알파가 새어들면 직원이 반투명하게 그려져 벽이 몸을 통과해 보인다.
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   const walking = ["enter", "rush", "roam_walk", "panic"].includes(ch.state);
   let bob = 0, tilt = 0;
   if (ch.state === "celebrate")         bob = Math.abs(Math.sin(t * 12 + ch.phase)) * 7;
@@ -885,6 +891,25 @@ canvas.addEventListener("click", ev => {
   }
 });
 
+/* 표시되는 크기 그대로 렌더한다.
+
+   예전엔 논리폭 1240 짜리 비트맵을 만들어 CSS 로 실제 폭(iframe 안에서는
+   보통 700~950px)에 맞춰 줄여 그렸다. 0.75 같은 비정수 배율로 축소되면
+   1px 선과 9.5px 글자가 리샘플링에 뭉개져 전체가 흐릿해진다.
+
+   대신 비트맵을 표시 크기 × 픽셀비로 잡고, 컨텍스트를 그만큼 확대해
+   논리좌표(1240 기준)를 그대로 쓴다. 래스터화가 화면 해상도에서 일어난다. */
+function resizeCanvas() {
+  const cssW = canvas.getBoundingClientRect().width || LOGICAL_W;
+  const scale = cssW / LOGICAL_W;
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(cssW * dpr));
+  canvas.height = Math.max(1, Math.round(canvasH * scale * dpr));
+  canvas.style.height = "auto";
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  setFrameHeight(Math.ceil(canvasH * scale) + 4);
+}
+
 /* ── 렌더 수신 ── */
 function applyRender(args) {
   dark = !!args.dark;
@@ -898,12 +923,7 @@ function applyRender(args) {
   mergeChars(rooms);
   if (working !== wasWorking) onModeChange();
   if (args.selected) selectedId = args.selected;
-  dpr = window.devicePixelRatio || 1;
-  canvas.width = LOGICAL_W * dpr;
-  canvas.height = canvasH * dpr;
-  canvas.style.height = "auto";
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  setFrameHeight(Math.ceil(canvasH * (canvas.getBoundingClientRect().width / LOGICAL_W)) + 4);
+  resizeCanvas();
 }
 
 window.addEventListener("message", ev => {
@@ -911,7 +931,9 @@ window.addEventListener("message", ev => {
   if (m && m.type === "streamlit:render") applyRender(m.args || {});
 });
 window.addEventListener("resize", () => {
-  if (rooms.length) setFrameHeight(Math.ceil(canvasH * (canvas.getBoundingClientRect().width / LOGICAL_W)) + 4);
+  // 폭이 바뀌면 비트맵도 다시 잡아야 한다 — 안 그러면 축소 배율이 어긋나
+  // 다시 흐려진다.
+  if (rooms.length) resizeCanvas();
 });
 
 window.chars = chars;   // 디버그/테스트용 노출
