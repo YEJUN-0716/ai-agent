@@ -31,6 +31,7 @@ except Exception:
     _DART_AVAILABLE = False
 
 from modules import analyst_team as _analyst_team
+from modules import office_jobs as _office_jobs
 
 try:
     from modules.analyst_weights import (
@@ -4049,6 +4050,27 @@ def build_ops_report(name, icon, status, reasons):
             'reasons': [r for r in reasons if r][:4]}
 
 
+def _job_overlay(report, job_key, extra=None):
+    """직원 보고서에 담당 자동화 잡의 상태를 덮어씌운다.
+
+    잡이 꺼져 있으면 '주의' 가 아니라 '대기'(휴직) 다. 의도적으로 끈 것을
+    고장으로 표시하면 경고등이 상시 점등되고, 사람은 그걸 무시하는 법을
+    배운다 — 그러면 진짜 경고도 같이 묻힌다.
+
+    잡 상태가 세션 상태보다 나쁠 때만 덮어쓴다. 세션에서 방금 뭔가 실패한
+    것을 잡 상태가 초록으로 가려서는 안 된다.
+    """
+    state = _office_jobs.job_states(os.path.dirname(__file__))[job_key]
+    rank = {'정상': 0, '대기': 1, '주의': 2, '경고': 3}
+    reasons = list(report['reasons']) + list(state['reasons']) + list(extra or [])
+    status = report['status']
+    if not state['scheduled']:
+        status = '대기'
+    elif rank.get(state['status'], 0) > rank.get(status, 0):
+        status = state['status']
+    return build_ops_report(report['name'], report['icon'], status, reasons)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def signal_pipeline_employee():
     """시그널 파이프라인 직원: signal_log.json 상태 점검 (신호 발생/평가 현황).
@@ -4072,25 +4094,35 @@ def signal_pipeline_employee():
         days_since = ((datetime.now().date() - pd.to_datetime(last_date).date()).days
                       if last_date else None)
 
-        status = '주의' if (days_since is not None and days_since > 5) else '정상'
+        # 스케줄을 문구로 단정하지 않는다. 예전엔 "자동 스캔: signal-alerts.yml
+        # (매일 UTC 22:30, 월~금)" 이라고 적어뒀는데, 2026-07-20 에 그 크론이
+        # 꺼진 뒤로 이 줄이 계속 거짓말을 했다. 상태는 office_jobs 가 읽는다.
         reasons = [
             f"누적 시그널 {len(data)}건 (평가완료 {done} · 대기 {pending})",
             f"최근 시그널: {last_date}" + (f" ({days_since}일 전)" if days_since is not None else ''),
-            "자동 스캔: signal-alerts.yml (매일 UTC 22:30, 월~금)",
         ]
-        return build_ops_report('시그널 파이프라인', '📡', status, reasons)
+        return _job_overlay(
+            build_ops_report('시그널 파이프라인', '📡', '정상', reasons),
+            'signal_alerts')
     except Exception as e:
         return build_ops_report('시그널 파이프라인', '📡', '경고', [f'로그 읽기 실패: {e}'])
 
 
 def execution_mode_employee():
-    """실행 모드 직원: 현재 시스템이 시그널 전용 모드임을 명시 — 안전성 투명성 담당."""
-    return build_ops_report('실행 모드', '⚙️', '정상', [
-        '현재 모드: 시그널 전용 — 실제 주문 없음',
-        'signal-alerts.yml: 활성 (텔레그램 알림만 발송)',
-        'paper-trade-us.yml: 크론 비활성화 (DRY_RUN 기본값 true)',
-        '실제 매매는 시그널 확인 후 사용자가 직접 실행',
-    ])
+    """실행 모드 직원: 현재 시스템이 시그널 전용 모드임을 명시 — 안전성 투명성 담당.
+
+    워크플로가 켜져 있는지는 여기서 단정하지 않는다. 예전에 'signal-alerts.yml:
+    활성' 이라고 적어뒀다가 크론이 꺼진 뒤에도 그 문구가 남아 사실과 달라졌다.
+    상태는 office_jobs 가 워크플로 파일에서 읽는다.
+    """
+    states = _office_jobs.job_states(os.path.dirname(__file__))
+    reasons = ['현재 모드: 시그널 전용 — 실제 주문 없음',
+               '실제 매매는 시그널 확인 후 사용자가 직접 실행']
+    for key in ('signal_alerts', 'paper_trade'):
+        s = states[key]
+        reasons.append(f"{s['name']}: "
+                       + (f"예정대로 ({s['label']})" if s['scheduled'] else '휴직 — 크론 꺼짐'))
+    return build_ops_report('실행 모드', '⚙️', '정상', reasons)
 
 
 def risk_guardrail_employee():
@@ -4113,21 +4145,27 @@ def equity_log_employee():
     무효화 없이 캐시해도 안전하다."""
     path = os.path.join(os.path.dirname(__file__), "equity_log.json")
     if not os.path.exists(path):
-        return build_ops_report('계좌 현황', '📊', '정상',
-            ['equity_log.json 없음 — 시그널 전용 모드에서는 정상 (실거래가 없어 자산 변동 기록도 없음)'])
+        return _job_overlay(
+            build_ops_report('계좌 현황', '📊', '정상',
+                ['equity_log.json 없음 — 시그널 전용 모드에서는 정상 (실거래가 없어 자산 변동 기록도 없음)']),
+            'paper_trade')
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
         records = data if isinstance(data, list) else data.get('records', [])
         if not records:
-            return build_ops_report('계좌 현황', '📊', '정상',
-                ['equity_log.json 존재하나 기록 0건 (과거 페이퍼 트레이딩 이력 없음)'])
+            return _job_overlay(
+                build_ops_report('계좌 현황', '📊', '정상',
+                    ['equity_log.json 존재하나 기록 0건 (과거 페이퍼 트레이딩 이력 없음)']),
+                'paper_trade')
         last = records[-1]
         reasons = [f'{len(records)}개 기록 존재 (과거 페이퍼 트레이딩 이력)']
         if last.get('date') and last.get('equity') is not None:
             reasons.append(f"최근 기록: {last['date']} · 자산 {last['equity']:,.0f}")
-        return build_ops_report('계좌 현황', '📊', '정상', reasons)
+        return _job_overlay(
+            build_ops_report('계좌 현황', '📊', '정상', reasons), 'paper_trade')
     except Exception as e:
+        # 읽기 실패는 진짜 고장이다 — 잡 휴직 상태가 이걸 '대기' 로 덮으면 안 된다.
         return build_ops_report('계좌 현황', '📊', '경고', [f'로그 읽기 실패: {e}'])
 
 
@@ -4138,18 +4176,36 @@ def equity_log_employee():
 #          퀀트 리서치/QA팀(고급 분석)
 # ─────────────────────────────────────────────
 
+@st.cache_data(ttl=60, show_spinner=False)
+def scorecard_employee():
+    """성적표 직원(성과 평가팀): 애널리스트 기록 잡이 실제로 돌고 있는지.
+
+    2026-07-23 에 이 기록은 두 겹으로 죽어 있었다 — 크론이 꺼져 있었고(PR #25),
+    고친 뒤에도 결과가 gitignore 에 걸려 커밋되지 않았다(PR #26). 화면 어디에도
+    흔적이 없었다. 이 직원이 그때 있었다면 첫날 티가 났다.
+    """
+    state = _office_jobs.job_states(os.path.dirname(__file__))['analyst_log']
+    reasons = list(state['reasons'])
+    reasons.append('판정까지 5일 기준 유효표본 30 필요 — 그 전엔 비어 있는 게 정상')
+    return build_ops_report('성적표', '🎓', state['status'], reasons)
+
+
 def factor_ranking_employee():
     """팩터 랭킹 담당(시그널 생성팀): 세션에 실행된 팩터 분석 결과 상태."""
     fdf = st.session_state.get('qt_factors')
     if fdf is None or fdf.empty:
-        return build_ops_report('팩터 랭킹', '📊', '대기',
-            ['아직 팩터 분석 미실행 — "📊 팩터 분석 실행" 버튼으로 시작'])
+        return _job_overlay(
+            build_ops_report('팩터 랭킹', '📊', '대기',
+                ['아직 팩터 분석 미실행 — "📊 팩터 분석 실행" 버튼으로 시작']),
+            'ic_update')
     failed = fdf.attrs.get('failed', [])
     top = fdf.iloc[0]
     reasons = [f"{len(fdf)}개 종목 분석 완료 (1위: {top['ticker']} {top['composite']:.0f}점)"]
     if failed:
         reasons.append(f"⚠️ {len(failed)}개 종목 분석 실패: {', '.join(failed[:3])}")
-    return build_ops_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons)
+    return _job_overlay(
+        build_ops_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons),
+        'ic_update')
 
 
 def system_signal_employee():
@@ -4247,12 +4303,16 @@ class OfficeEmployee(NamedTuple):
 class OfficeRoom(NamedTuple):
     """사무실의 방(팀) 하나. employees는 직원 리스트이거나, 인자 없는 callable
     (team_panel_fn 실행 *이후*에 평가됨 — AI애널리스트팀처럼 그 방의 공용 패널이 실행돼야
-    로스터가 정해지는 경우에 사용)."""
+    로스터가 정해지는 경우에 사용).
+
+    ghost: 아직 사람이 없는 자리 수. 최소 좌석 수로 쓰여 "여기 누가 더 온다"를
+    빈 책상으로 예고한다."""
     key: str
     name: str
     icon: str
     employees: Union[List[OfficeEmployee], Callable[[], List[OfficeEmployee]]]
     team_panel_fn: Optional[Callable] = None
+    ghost: int = 0
 
 
 _OFFICE_STATUS_COLOR = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}
@@ -4264,7 +4324,7 @@ _OFFICE_AVATARS = {
     'ICT+CRT': '🕵️', '백테스팅팀': '🧑‍🔬', '리스크팀': '💂', '총괄': '🧑‍⚖️',
     '실행 모드': '🧑‍✈️', '시그널 파이프라인': '🧑‍🔧', '리스크 가드레일': '👮', '계좌 현황': '🕴️',
     '팩터 랭킹': '🧑‍🔬', '시스템 시그널': '🤖', '섹터 로테이션': '🧑‍🚀',
-    'ML 신호': '👩‍💻',
+    'ML 신호': '👩‍💻', '성적표': '👩‍🏫',
     '팩터 백테스트': '🧑‍🔬', '종목 백테스팅': '🧑‍💻',
     '고급 분석': '🕵️‍♀️',
 }
@@ -4473,6 +4533,9 @@ def collect_office_game_data(rooms: List[OfficeRoom]):
                 # "종목을 입력하면 출근한다"는 게임 서사를 시각적으로 예고
                 game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon,
                                    'chars': [], 'ghost': len(TEAM_WEIGHTS) + 1})  # 7명 + 총괄
+            elif room.ghost:
+                game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon,
+                                   'chars': [], 'ghost': room.ghost})
             continue
         chars = []
         for emp in employees:
@@ -4481,7 +4544,8 @@ def collect_office_game_data(rooms: List[OfficeRoom]):
             n = _office_normalize(rep)
             chars.append({'key': emp.key, 'name': emp.name, 'avatar': emp.avatar,
                           'color': color, 'anim': anim, 'headline': n['headline']})
-        game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon, 'chars': chars})
+        game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon,
+                           'chars': chars, 'ghost': room.ghost})
     return game_rooms
 
 
@@ -7521,6 +7585,9 @@ def main():
         OfficeRoom('qa', '퀀트 리서치/QA팀', '🔬', [
             _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
         ]),
+        OfficeRoom('perf', '성과 평가팀', '📊', [
+            _emp('scorecard', '성적표', scorecard_employee, render_analyst_scorecard),
+        ], ghost=3),   # quant 성적·전환 게이트가 나중에 앉을 자리
     ]
 
     # ── 게임 씬: 캐릭터가 실제로 걸어다니는 사무실 평면 ──────

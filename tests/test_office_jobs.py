@@ -242,3 +242,34 @@ def test_no_repo_hint_when_only_one_job_lags(tmp_path):
 
     states = oj.job_states(tmp_path, today=date(2026, 7, 24))
     assert oj.repo_stale_days(states) is None
+
+
+# ── app 배선 회귀 ────────────────────────────────────────────────────
+#
+# 실제 저장소 상태로 돈다. 네트워크는 타지 않는다 — 이 직원 함수들은
+# 로컬 파일과 세션 상태만 본다.
+
+def test_disabled_job_employee_is_not_perpetually_caution():
+    """꺼진 잡의 담당 직원은 '주의' 로 상시 점등되면 안 된다."""
+    import app
+
+    rep = app.signal_pipeline_employee()
+    assert rep['status'] in ('대기', '정상', '경고')
+
+
+def test_no_hardcoded_schedule_claim_in_reports():
+    """워크플로 스케줄을 문구로 단정하지 않는다 — 꺼지면 그 문구가 거짓이 된다."""
+    import app
+
+    for rep in (app.signal_pipeline_employee(), app.execution_mode_employee()):
+        joined = ' '.join(rep['reasons'])
+        assert 'UTC 22:30' not in joined
+        assert 'signal-alerts.yml: 활성' not in joined
+
+
+def test_scorecard_employee_reports_a_known_status():
+    import app
+
+    rep = app.scorecard_employee()
+    assert rep['name'] == '성적표'
+    assert rep['status'] in ('정상', '주의', '경고', '대기')
