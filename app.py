@@ -4549,6 +4549,32 @@ def collect_office_game_data(rooms: List[OfficeRoom]):
     return game_rooms
 
 
+def open_office_report_dialog(room, emp):
+    """직원을 클릭했을 때 보고서를 팝업(모달)으로 띄운다.
+
+    업무 화면(panel_fn)은 넣지 않는다 — 차트·버튼이 있어 한 번 누르면 rerun 이
+    돌면서 모달이 닫히고, 그때마다 하던 작업이 끊긴다. 모달은 "이 사람이 지금
+    뭐라고 하는가" 만 보여주고, 실제 작업은 사무실 아래 화면에서 이어간다.
+
+    st.dialog 가 없는 옛 Streamlit 에서는 조용히 아무것도 하지 않는다 — 아래
+    보고서 카드가 그대로 있으므로 기능이 사라지지는 않는다.
+    """
+    if room is None or emp is None or not hasattr(st, 'dialog'):
+        return
+    rep = emp.report_fn()
+
+    @st.dialog(f"{emp.avatar} {emp.name}", width="large")
+    def _dlg():
+        st.markdown(
+            f"<div style='font-size:12px;font-weight:700;color:var(--text-3);"
+            f"margin-bottom:6px'>{room.icon} {room.name}</div>",
+            unsafe_allow_html=True)
+        render_office_report_card(rep)
+        st.caption("업무 화면은 팝업을 닫으면 사무실 아래에 열려 있습니다.")
+
+    _dlg()
+
+
 def render_office_report_card(rep):
     """선택된 직원의 보고서 카드를 표시."""
     n = _office_normalize(rep)
@@ -7628,7 +7654,10 @@ def main():
                 st.session_state['office_view'] = ('boss', 'summary')
             else:
                 st.session_state['office_view'] = (_clicked['room'], _clicked['emp'])
-        st.caption("🖱️ 캐릭터를 클릭하면 바로 아래에 보고서와 업무 화면이 열립니다 · "
+                # 새로 클릭한 이 rerun 에서만 팝업을 연다. 매 rerun 마다 열면
+                # 아래 업무 화면을 만질 때마다 모달이 다시 튀어나온다.
+                st.session_state['_office_popup'] = True
+        st.caption("🖱️ 캐릭터를 클릭하면 보고서가 팝업으로 뜨고, 업무 화면은 아래에 열립니다 · "
                    "상태에 따라 일하고(타이핑) · 산책하고(🚰) · 졸고(💤) · 뛰어다니는(❗) 모습이 달라집니다")
 
         # ── 클릭한 직원의 보고서 + 업무 화면 ──────────────
@@ -7638,6 +7667,8 @@ def main():
             _sel_emps = (_sel_room.employees() if callable(_sel_room.employees)
                          else _sel_room.employees) if _sel_room else []
             _sel_emp = next((e for e in (_sel_emps or []) if e.key == _sel[1]), None) if _sel else None
+            if st.session_state.pop('_office_popup', False):
+                open_office_report_dialog(_sel_room, _sel_emp)
             if _sel == ('boss', 'summary'):
                 st.markdown(
                     "<div style='font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:2px'>"

@@ -273,3 +273,47 @@ def test_scorecard_employee_reports_a_known_status():
     rep = app.scorecard_employee()
     assert rep['name'] == '성적표'
     assert rep['status'] in ('정상', '주의', '경고', '대기')
+
+
+# ── 보고서 팝업 ──────────────────────────────────────────────────────
+
+def test_report_dialog_is_a_noop_without_selection():
+    """선택이 없으면 조용히 지나가야 한다 — 사무실 첫 진입에서 죽으면 안 된다."""
+    import app
+
+    assert app.open_office_report_dialog(None, None) is None
+
+
+def test_report_dialog_survives_old_streamlit(monkeypatch):
+    """st.dialog 가 없는 버전에서도 죽지 않는다 (아래 보고서 카드가 대신 남는다)."""
+    import app
+
+    monkeypatch.delattr(app.st, 'dialog', raising=False)
+    room = app.OfficeRoom('x', '테스트팀', '🧪', [])
+    emp = app.OfficeEmployee('e', '테스트', '🧑', lambda: {
+        'name': '테스트', 'icon': '🧑', 'status': '정상', 'reasons': ['ok']})
+
+    assert app.open_office_report_dialog(room, emp) is None
+
+
+def test_report_dialog_does_not_run_employee_panel(monkeypatch):
+    """팝업은 보고서만 띄운다 — 업무 화면을 넣으면 버튼 한 번에 모달이 닫힌다."""
+    import app
+
+    calls = {'panel': 0, 'report': 0}
+
+    def _panel():
+        calls['panel'] += 1
+
+    def _report():
+        calls['report'] += 1
+        return {'name': '테스트', 'icon': '🧑', 'status': '정상', 'reasons': ['ok']}
+
+    room = app.OfficeRoom('x', '테스트팀', '🧪', [])
+    emp = app.OfficeEmployee('e', '테스트', '🧑', _report, _panel)
+    monkeypatch.setattr(app.st, 'dialog', lambda *a, **k: (lambda fn: fn))
+
+    app.open_office_report_dialog(room, emp)
+
+    assert calls['report'] == 1
+    assert calls['panel'] == 0
