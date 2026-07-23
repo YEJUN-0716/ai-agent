@@ -22,7 +22,11 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(errors="replace")
 
 from modules.factor_engine import REGIME_WEIGHTS
-from modules.factor_validator import run_per_factor_ic_analysis, run_out_of_sample_validation
+from modules.factor_validator import (
+    PRODUCTION_FACTORS,
+    run_per_factor_ic_analysis,
+    run_out_of_sample_validation,
+)
 from modules.survivorship_check import survivorship_bias_warning, known_failures_in_period
 from modules.universe import SP500
 from modules import price_panel
@@ -78,6 +82,66 @@ def derive_ic_regime_weights(per_factor_ic: dict, base_weights: dict,
     return ic_regime_weights
 
 
+# 프로덕션 스캔의 4팩터 각각을 **어느 IC 로 스케일링할지**.
+# 모멘텀·저변동성은 factor_scoring 이 12-1 / 252봉으로 계산하므로
+# 그 정의의 IC(mom_12_1, low_vol_252)를 쓴다. mom_3m/mom_1m/low_vol 은
+# factor_engine(페이퍼트레이드)이 쓰는 팩터이지 프로덕션의 것이 아니다.
+# value/quality 는 두 엔진이 같은 배합(factor_formulas)을 쓰므로 그대로.
+PRODUCTION_IC_SOURCE = {
+    "momentum": "mom_12_1",
+    "value":    "value",
+    "quality":  "quality",
+    "low_vol":  "low_vol_252",
+}
+
+
+def derive_production_regime_weights(per_factor_ic: dict,
+                                     base_weights: dict = None) -> dict:
+    """프로덕션 스캔(4팩터)의 레짐별 가중치를 **프로덕션 정의의 IC** 로 스케일링.
+
+    app.py 는 지금까지 6팩터 레짐 가중치를 momentum = mom_3m + mom_1m 으로
+    접어서 썼다. 그런데 프로덕션 스캔은 mom_3m/mom_1m 을 계산조차 하지
+    않는다 — 재지도 않는 팩터의 예측력으로 실전 비중을 정해 온 것이다.
+    여기서 그 고리를 끊는다.
+
+    레짐 구조(bull/neutral/bear 의 상대적 기울기)는 기존 REGIME_WEIGHTS 를
+    그대로 접어서 유지한다. 바뀌는 것은 **무엇의 IC 로 스케일링하는가** 뿐이다.
+    ict 는 프로덕션 4팩터에 없으므로 접는 과정에서 빠지고 나머지를 재정규화한다.
+
+    프로덕션 정의의 IC 가 하나라도 측정되지 않았으면 None 을 돌려준다.
+    없는 값을 IC_FLOOR 로 메우면 그 팩터가 조용히 최소 비중으로 눌리는데,
+    그게 바로 지금 고치려는 고장의 형태다. 차라리 아무것도 쓰지 않는다.
+    """
+    base_weights = base_weights or REGIME_WEIGHTS
+
+    for factor in PRODUCTION_FACTORS:
+        stats = per_factor_ic.get(factor)
+        if not stats or stats.get("n", 0) == 0:
+            return None
+
+    out = {}
+    for regime, bw in base_weights.items():
+        folded = {
+            "momentum": bw.get("mom_3m", 0) + bw.get("mom_1m", 0),
+            "value":    bw.get("value", 0),
+            "quality":  bw.get("quality", 0),
+            "low_vol":  bw.get("low_vol", 0),
+        }
+        scaled = {}
+        for factor, base in folded.items():
+            ic_val = max(
+                per_factor_ic.get(PRODUCTION_IC_SOURCE[factor], {})
+                             .get("mean_ic", IC_FLOOR),
+                IC_FLOOR,
+            )
+            scaled[factor] = base * ic_val
+
+        total = sum(scaled.values()) or 1.0
+        out[regime] = {f: round(v / total, 4) for f, v in scaled.items()}
+
+    return out
+
+
 def progress_cb(pct: float):
     bar_len = 30
     filled  = int(bar_len * pct)
@@ -97,6 +161,9 @@ def main():
         rebal_days=21,
         forward_days=21,
         progress_cb=progress_cb,
+        # 프로덕션 스캔이 실제로 쓰는 정의(12-1·252봉)의 IC 도 함께 낸다.
+        # 기존 팩터의 종목 기준은 그대로라 factor_engine 이 읽는 IC 는 불변.
+        include_prod_defs=True,
     )
     print()  # progress bar 개행
 
@@ -124,6 +191,22 @@ def main():
         for factor in old_w:
             delta = new_w[factor] - old_w[factor]
             print(f"    {factor:<12}: {old_w[factor]:.4f} → {new_w[factor]:.4f}  ({delta:+.4f})")
+
+    # 프로덕션 스캔용 4팩터 가중치 — 프로덕션이 실제로 쓰는 정의의 IC 로 배분
+    prod_w = derive_production_regime_weights(per_factor)
+    if prod_w:
+        print("\n프로덕션 스캔 가중치 (프로덕션 정의 IC 기준):")
+        for regime, w in prod_w.items():
+            line = "  ".join(f"{f}={v:.4f}" for f, v in w.items())
+            print(f"  [{regime}] {line}")
+        for factor in PRODUCTION_FACTORS:
+            s = per_factor[factor]
+            print(f"    {factor:<12} mean_IC={s['mean_ic']:+.4f}  n={s['n']}")
+    else:
+        missing = [f for f in PRODUCTION_FACTORS
+                   if per_factor.get(f, {}).get("n", 0) == 0]
+        print(f"\n⚠️  프로덕션 정의 IC 미측정 {missing} → production_weights 생략. "
+              f"app.py 가 기존 6팩터 매핑으로 후퇴한다.", file=sys.stderr)
 
     # OOS 검증
     print(f"\n📊 OOS 검증 실행 중 (lookback={LOOKBACK_YEARS}년, test_fraction=0.25)...")
@@ -168,6 +251,10 @@ def main():
         "per_factor_ic":         per_factor,
         "ic_unavailable_factors": ic_unavailable,
         "regime_weights":        ic_rw,
+        # factor_engine(페이퍼트레이드)은 regime_weights 를, 프로덕션 스캔은
+        # production_weights 를 읽는다. 두 엔진이 서로 다른 팩터를 계산하므로
+        # 가중치도 각자 계산하는 팩터의 IC 에서 나와야 한다.
+        "production_weights":    prod_w,
         "out_of_sample_validation": oos,
         "caveats": {
             "survivorship_bias_warning":  warning,
