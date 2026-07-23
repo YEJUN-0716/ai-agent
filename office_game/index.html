@@ -38,8 +38,10 @@ const LOGICAL_W = 1240;
 const TOP_BAR_H = 68;               // 전광판: 1줄 업무 지시 + 2줄 야간 근무 현황
 const BAR_ROW1_Y = 22;              // 1줄 세로 중심
 const BAR_ROW2_Y = 50;              // 2줄 세로 중심
-const ROOM_H    = 168;
-const ROW_GAP   = 14;
+const ROOM_H     = 168;
+const WALL_T     = 7;               // 방을 나누는 벽 두께 — 이웃한 방은 벽을 공유한다
+const CORRIDOR_H = 56;              // 방 줄 사이 복도 폭
+const DOOR_W     = 44;              // 복도로 통하는 문의 폭
 const SLOT_W    = 64;
 const DESK_DY   = 104;
 const CHAR_R    = 20;
@@ -81,7 +83,9 @@ function pal() { return dark ? PALETTE.dark : PALETTE.light; }
    헤더 바와 바닥 색조에만 쓰고, 캐릭터·책상 색은 건드리지 않는다. */
 const ROOM_TINT = {
   analyst: "#3b82f6", ops: "#f97316", siggen: "#8b5cf6",
-  ml: "#06b6d4", bt: "#b45309", qa: "#10b981", perf: "#eab308",
+  // perf 를 금색 계열로 두면 선택 표시(#f5b301)와 겹쳐 어느 방이 선택됐는지
+  // 구분이 안 된다. 팀 색은 선택 색과 충분히 떨어져 있어야 한다.
+  ml: "#06b6d4", bt: "#b45309", qa: "#10b981", perf: "#d946ef",
 };
 function roomTint(key) { return ROOM_TINT[key] || "#8b6f3e"; }
 
@@ -89,26 +93,76 @@ function roomTint(key) { return ROOM_TINT[key] || "#8b6f3e"; }
 const WALL_H = 26;
 function rand(a, b) { return a + Math.random() * (b - a); }
 
-/* ── 레이아웃 ── */
+/* ── 레이아웃: 사무실 평면도 ──────────────────────────────────
+   방은 벽을 맞대고 붙어 있고, 줄 사이에 복도가 지난다. 각 방은 복도
+   쪽으로 문이 하나 나 있다. 예전처럼 방을 띄엄띄엄 놓으면 도표처럼
+   보이지 사무실로 보이지 않는다.
+
+   방 줄의 남는 폭은 그 줄의 방들에 고르게 나눠준다 — 그래야 벽이
+   건물 양끝까지 닿아 "평면도" 가 된다. */
+let corridors = [];                 // [{x1,x2,y1,y2}] 복도 띠
+
 function layoutRooms(roomData) {
-  const placed = [];
-  let x = 8, y = TOP_BAR_H + WALL_H + 6, rowMax = 0;
+  const rows = [];
+  let row = [], rowW = 0;
+  const usable = LOGICAL_W - WALL_T * 2;
   for (const r of roomData) {
     const seats = Math.max(r.chars.length, r.ghost || 0);
-    const w = Math.max(150, 40 + seats * SLOT_W);
-    if (x + w > LOGICAL_W - 8 && x > 8) { x = 8; y += ROOM_H + ROW_GAP; }
-    placed.push(Object.assign({}, r, { x: x, y: y, w: w, h: ROOM_H }));
-    x += w + 12;
-    rowMax = Math.max(rowMax, y + ROOM_H);
+    const w = Math.max(176, 48 + seats * SLOT_W);
+    if (rowW + w > usable && row.length) { rows.push(row); row = []; rowW = 0; }
+    row.push(Object.assign({}, r, { w: w }));
+    rowW += w;
   }
-  canvasH = rowMax + 10;
+  if (row.length) rows.push(row);
+
+  const placed = [];
+  corridors = [];
+  let y = TOP_BAR_H + WALL_H;
+  for (const rw of rows) {
+    const slack = (usable - rw.reduce((s, r) => s + r.w, 0)) / rw.length;
+    let x = WALL_T;
+    for (const r of rw) {
+      const w = r.w + slack;
+      const room = Object.assign({}, r, { x: x, y: y, w: w, h: ROOM_H });
+      room.door = { x: x + w / 2, y: y + ROOM_H };     // 아래 복도로 나가는 문
+      placed.push(room);
+      x += w;
+    }
+    y += ROOM_H;
+    corridors.push({ x1: WALL_T, x2: LOGICAL_W - WALL_T, y1: y, y2: y + CORRIDOR_H });
+    y += CORRIDOR_H;
+  }
+  canvasH = y + WALL_T;
   return placed;
 }
+
 function deskPos(room, i) {
-  return { x: room.x + 40 + i * SLOT_W + SLOT_W / 2 - 12, y: room.y + DESK_DY };
+  const seats = Math.max(room.chars.length, room.ghost || 0) || 1;
+  const span = seats * SLOT_W;
+  const left = room.x + (room.w - span) / 2;          // 책상을 방 가운데로 모은다
+  return { x: left + i * SLOT_W + SLOT_W / 2, y: room.y + DESK_DY };
+}
+
+/* 캐릭터가 걸어다닐 수 있는 곳 — 자기 방 안, 그리고 복도.
+   남의 방에는 들어가지 않는다. 실제 사무실도 그렇고, 문을 여러 번
+   거치는 경로 탐색을 만들 필요도 없어진다. */
+function roomInner(room) {
+  return { x1: room.x + WALL_T + 14, x2: room.x + room.w - WALL_T - 14,
+           y1: room.y + 46, y2: room.y + room.h - WALL_T - 12 };
+}
+function corridorOf(room) {
+  return corridors.find(c => c.y1 >= room.y + room.h - 1) || corridors[corridors.length - 1];
+}
+function inBox(x, y, b) {
+  return b && x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2;
+}
+function clampTo(b, x, y) {
+  return { x: Math.max(b.x1, Math.min(b.x2, x)), y: Math.max(b.y1, Math.min(b.y2, y)) };
 }
 function floorBounds() {
-  return { x1: 26, x2: LOGICAL_W - 26, y1: TOP_BAR_H + WALL_H + 60, y2: canvasH - 22 };
+  const c = corridors[corridors.length - 1];
+  return c ? { x1: c.x1 + 16, x2: c.x2 - 16, y1: c.y1 + 12, y2: c.y2 - 10 }
+           : { x1: 26, x2: LOGICAL_W - 26, y1: TOP_BAR_H + WALL_H + 60, y2: canvasH - 22 };
 }
 
 /* ── 캐릭터 ── */
@@ -124,16 +178,21 @@ function mergeChars(placedRooms) {
       const desk = deskPos(room, i);
       let ch = chars.get(id);
       if (!ch) {
+        // 복도 끝에서 걸어 들어온다. 예전엔 화면 밖에서 책상으로 직진했는데,
+        // 이제 방 사이에 벽이 있어 그러면 벽을 뚫고 지나간다.
+        const cor = corridorOf(room);
         ch = { id: id, room: room.key, emp: c.key,
-               x: -30 - Math.random() * 200, y: desk.y,
+               x: WALL_T + 24 + Math.random() * 60,
+               y: cor ? (cor.y1 + cor.y2) / 2 : desk.y,
                state: working ? "rush" : "enter",
                stateT: 0, pauseT: 0, phase: Math.random() * 6.28,
-               chatWith: null, chatCool: 0, facing: 1 };
+               chatWith: null, chatCool: 0, facing: 1, via: null };
         chars.set(id, ch);
       }
       ch.name = c.name; ch.avatar = c.avatar; ch.color = c.color;
       ch.behavior = BEHAVIOR[c.anim] || "work";
       ch.deskX = desk.x; ch.deskY = desk.y;
+      ch.roomRef = room;          // 배회 범위와 문 위치를 아는 데 쓴다
     });
   });
   for (const id of chars.keys()) if (!seen.has(id)) chars.delete(id);
@@ -165,9 +224,10 @@ function updateBoss(dt) {
   const spd = working ? 62 : 30;                 // 작업 중엔 더 바쁘게 순찰
   if (boss.state === "pause") {
     if (boss.stateT > boss.pauseT) {
-      const fb = floorBounds();
-      boss.tx = rand(fb.x1 + 20, fb.x2 - 20);
-      boss.ty = rand(fb.y1, fb.y2);
+      // 사장은 복도만 순찰한다 — 방에 불쑥 들어가지 않고, 벽도 안 뚫는다.
+      const c = corridors.length ? corridors[(Math.random() * corridors.length) | 0] : null;
+      if (c) { boss.tx = rand(c.x1 + 24, c.x2 - 24); boss.ty = rand(c.y1 + 16, c.y2 - 12); }
+      else { const fb = floorBounds(); boss.tx = rand(fb.x1, fb.x2); boss.ty = rand(fb.y1, fb.y2); }
       boss.state = "walk"; boss.stateT = 0;
     }
   } else if (moveTowardObj(boss, boss.tx, boss.ty, spd, dt)) {
@@ -222,19 +282,50 @@ function moveToward(ch, tx, ty, spd, dt) {
   return false;
 }
 
+/* 배회 목표를 고른다. 갈 수 있는 곳은 자기 방과 복도뿐이다.
+
+   방 ↔ 복도로 넘어갈 땐 반드시 문을 거친다(ch.via). 벽을 통과해 걸어가면
+   평면도를 그린 의미가 없다. 문이 하나뿐이라 경유지도 하나면 충분하다. */
+/* 벽을 통과하지 않고 목표로 간다 — 경유지(문)가 있으면 거기부터 들른다. */
+function moveVia(ch, tx, ty, spd, dt) {
+  if (ch.via) {
+    if (moveToward(ch, ch.via.x, ch.via.y, spd, dt)) ch.via = null;
+    return false;
+  }
+  return moveToward(ch, tx, ty, spd, dt);
+}
+
+/* 제 자리로 돌아간다. 복도에 있었다면 문을 거쳐 들어간다. */
+function moveToDesk(ch, spd, dt) {
+  const room = ch.roomRef;
+  if (!ch.via && room && !inBox(ch.x, ch.y, roomInner(room)))
+    ch.via = { x: room.door.x, y: room.door.y };
+  return moveVia(ch, ch.deskX, ch.deskY, spd, dt);
+}
+
 function pickRoamTarget(ch) {
-  const fb = floorBounds();
+  const room = ch.roomRef;
+  if (!room) { ch.tx = ch.deskX; ch.ty = ch.deskY; ch.via = null; return; }
+
+  const inner = roomInner(room);
+  const cor = corridorOf(room);
   const r = Math.random();
-  if (r < 0.18) { ch.tx = ch.deskX; ch.ty = ch.deskY; }               // 제 자리 들르기
-  else if (r < 0.34) {                                                 // 다른 직원 근처로
-    const others = [...chars.values()].filter(o => o.id !== ch.id);
-    if (others.length) {
-      const o = others[(Math.random() * others.length) | 0];
-      ch.tx = o.x + rand(-34, 34); ch.ty = o.y + rand(-16, 16);
-    } else { ch.tx = rand(fb.x1, fb.x2); ch.ty = rand(fb.y1, fb.y2); }
-  } else { ch.tx = rand(fb.x1, fb.x2); ch.ty = rand(fb.y1, fb.y2); }   // 아무 데나 산책
-  ch.tx = Math.max(fb.x1, Math.min(fb.x2, ch.tx));
-  ch.ty = Math.max(fb.y1, Math.min(fb.y2, ch.ty));
+
+  if (r < 0.20) {                                    // 제 자리 들르기
+    ch.tx = ch.deskX; ch.ty = ch.deskY;
+  } else if (r < 0.55 && cor) {                      // 복도로 나가기 (정수기·잡담)
+    const p = clampTo({ x1: cor.x1 + 18, x2: cor.x2 - 18,
+                        y1: cor.y1 + 14, y2: cor.y2 - 12 },
+                      rand(cor.x1, cor.x2), rand(cor.y1, cor.y2));
+    ch.tx = p.x; ch.ty = p.y;
+  } else {                                            // 방 안을 어슬렁
+    const p = clampTo(inner, rand(inner.x1, inner.x2), rand(inner.y1, inner.y2));
+    ch.tx = p.x; ch.ty = p.y;
+  }
+
+  const fromRoom = inBox(ch.x, ch.y, inner);
+  const toRoom = inBox(ch.tx, ch.ty, inner);
+  ch.via = (fromRoom !== toRoom) ? { x: room.door.x, y: room.door.y } : null;
 }
 
 function tryChat(ch, now) {
@@ -262,7 +353,7 @@ function updateChar(ch, dt, t, now) {
   /* ── 작업 모드: 무조건 자리로 → 착석 근무 (조는 직원도 예외 없음) ── */
   if (working) {
     if (ch.state !== "at_desk") {
-      if (moveToward(ch, ch.deskX, ch.deskY, RUN_SPD, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
+      if (moveToDesk(ch, RUN_SPD, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
     } else {
       ch.x = ch.deskX; ch.y = ch.deskY;
       if (Math.random() < 0.06)
@@ -308,14 +399,14 @@ function updateChar(ch, dt, t, now) {
 
   if (b === "sleep") {                       // 대기 상태 직원: 자리에서 낮잠
     if (ch.state !== "at_desk") {
-      if (moveToward(ch, ch.deskX, ch.deskY, WALK_SPD, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
+      if (moveToDesk(ch, WALK_SPD, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
     } else if (Math.random() < 0.012)
       particles.push({ x: ch.x + 10, y: ch.y - 26, vy: -14, life: 2.2, txt: "💤", size: 11 });
     return;
   }
   if (b === "alert") {                       // 경고 상태 직원: 자리 주변을 다급하게
     if (ch.state !== "panic") {
-      if (moveToward(ch, ch.deskX, ch.deskY, RUN_SPD * 0.8, dt)) { ch.state = "panic"; ch.panicDir = 1; }
+      if (moveToDesk(ch, RUN_SPD * 0.8, dt)) { ch.state = "panic"; ch.panicDir = 1; }
     } else {
       if (moveToward(ch, ch.deskX + ch.panicDir * 30, ch.deskY, RUN_SPD * 0.85, dt)) ch.panicDir *= -1;
       if (Math.random() < 0.02)
@@ -327,7 +418,7 @@ function updateChar(ch, dt, t, now) {
   switch (ch.state) {
     case "enter":
     case "rush":
-      if (moveToward(ch, ch.deskX, ch.deskY, WALK_SPD + 40, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
+      if (moveToDesk(ch, WALK_SPD + 40, dt)) { ch.state = "at_desk"; ch.stateT = 0; }
       break;
     case "at_desk":                          // 잠깐 앉아 있다가 다시 어슬렁
       ch.x = ch.deskX; ch.y = ch.deskY;
@@ -438,77 +529,147 @@ function drawWall() {
   const sky = phase === "day"  ? ["#8ec5ff", "#cfe6ff"]
             : phase === "dusk" ? ["#f0956a", "#7a4a86"]
                                : ["#0b1430", "#1a2350"];
-  ctx.fillStyle = dark ? "#161d2b" : "#cbb894";
+  // 벽 색은 방을 나누는 벽과 같아야 한다 — 바닥색에 가까우면 창문이
+  // 벽에 난 게 아니라 공중에 뜬 상자처럼 보인다.
+  ctx.fillStyle = dark ? "#414a5e" : "#a08a63";
   ctx.fillRect(0, TOP_BAR_H, LOGICAL_W, WALL_H);
 
-  for (let i = 0; i < 4; i++) {
-    const wx = 120 + i * 300, wy = TOP_BAR_H + 5, ww = 96, wh = WALL_H - 10;
+  const N_WIN = 5, WIN_W = 108;
+  for (let i = 0; i < N_WIN; i++) {
+    const step = (LOGICAL_W - WALL_T * 2) / N_WIN;
+    const wx = WALL_T + step * i + (step - WIN_W) / 2;
+    const wy = TOP_BAR_H + 5, ww = WIN_W, wh = WALL_H - 10;
     const g = ctx.createLinearGradient(wx, wy, wx, wy + wh);
     g.addColorStop(0, sky[0]); g.addColorStop(1, sky[1]);
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.roundRect(wx, wy, ww, wh, 3); ctx.fill();
     if (phase === "night") {                       // 별
       ctx.fillStyle = "rgba(255,255,255,.75)";
-      for (let s = 0; s < 5; s++) {
+      for (let s = 0; s < 6; s++) {
         ctx.beginPath();
-        ctx.arc(wx + 12 + s * 18, wy + 4 + (s % 3) * 4, 0.9, 0, 6.29);
+        ctx.arc(wx + 14 + s * 17, wy + 4 + (s % 3) * 4, 0.9, 0, 6.29);
         ctx.fill();
       }
     }
-    ctx.strokeStyle = dark ? "#2b3446" : "#8b6f3e"; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = dark ? "#2b3446" : "#7a5c30"; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.roundRect(wx, wy, ww, wh, 3); ctx.stroke();
+    ctx.beginPath();                               // 창틀 세로 가로대
+    ctx.moveTo(wx + ww / 2, wy); ctx.lineTo(wx + ww / 2, wy + wh);
+    ctx.stroke();
   }
+}
+
+/* 건물 외벽 — 평면도의 테두리. 방·복도를 다 그린 뒤 마지막에 두른다. */
+function drawBuildingOutline() {
+  // 창문이 난 위쪽 띠(drawWall)도 건물의 일부다 — 외곽선을 그 위에서
+  // 시작해야 띠가 건물에 붙어 보인다. 아래에서 시작하면 띠가 공중에 뜬다.
+  const top = TOP_BAR_H;
+  ctx.fillStyle = dark ? "#414a5e" : "#a08a63";
+  ctx.fillRect(0, top + WALL_H, WALL_T, canvasH - top - WALL_H);                  // 좌
+  ctx.fillRect(LOGICAL_W - WALL_T, top + WALL_H, WALL_T, canvasH - top - WALL_H); // 우
+  ctx.fillRect(0, canvasH - WALL_T, LOGICAL_W, WALL_T);                           // 하
+  ctx.strokeStyle = dark ? "#5a6580" : "#7a5c30"; ctx.lineWidth = 1.5;
+  ctx.strokeRect(0.75, top + 0.75, LOGICAL_W - 1.5, canvasH - top - 1.5);
+}
+
+/* 복도 — 방과 다른 바닥재(타일)로 깔아 "여기는 통로" 임을 읽히게 한다. */
+function drawCorridors() {
+  const p = pal();
+  for (const c of corridors) {
+    ctx.fillStyle = dark ? "#2b3242" : "#ded5c4";
+    ctx.fillRect(c.x1, c.y1, c.x2 - c.x1, c.y2 - c.y1);
+    ctx.strokeStyle = dark ? "#353d4f" : "#cfc3ad"; ctx.lineWidth = 1;
+    for (let x = c.x1; x < c.x2; x += 34) {              // 타일 줄눈
+      ctx.beginPath(); ctx.moveTo(x, c.y1); ctx.lineTo(x, c.y2); ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(c.x1, (c.y1 + c.y2) / 2); ctx.lineTo(c.x2, (c.y1 + c.y2) / 2); ctx.stroke();
+    // 복도 비품
+    ctx.font = "15px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = p.label;
+    ctx.fillText("🚰", c.x1 + 40, (c.y1 + c.y2) / 2);
+    ctx.fillText("🪴", c.x2 - 40, (c.y1 + c.y2) / 2);
+    ctx.fillText("☕", c.x1 + 96, (c.y1 + c.y2) / 2);
+  }
+}
+
+/* 방의 벽. 이웃한 방과 벽을 맞대고, 복도 쪽 벽에는 문이 뚫려 있다.
+   문을 그리지 않으면 캐릭터가 벽을 통과하는 것처럼 보인다. */
+function drawRoomWalls(room) {
+  ctx.fillStyle = dark ? "#414a5e" : "#a08a63";
+  const { x, y, w, h } = room;
+  ctx.fillRect(x, y, w, WALL_T);                        // 위
+  ctx.fillRect(x, y, WALL_T, h);                        // 왼
+  ctx.fillRect(x + w - WALL_T, y, WALL_T, h);           // 오
+  // 아래 벽 — 가운데 문만큼 비운다
+  const dl = room.door.x - DOOR_W / 2, dr = room.door.x + DOOR_W / 2;
+  ctx.fillRect(x, y + h - WALL_T, dl - x, WALL_T);
+  ctx.fillRect(dr, y + h - WALL_T, x + w - dr, WALL_T);
+  // 문틀 + 열린 문짝
+  ctx.strokeStyle = dark ? "#6f7ea0" : "#7a5c30"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(dl, y + h - WALL_T / 2); ctx.lineTo(dl, y + h + 2);
+  ctx.moveTo(dr, y + h - WALL_T / 2); ctx.lineTo(dr, y + h + 2);
+  ctx.stroke();
+  ctx.beginPath();                                       // 안쪽으로 열린 문짝
+  ctx.moveTo(dl, y + h - WALL_T);
+  ctx.lineTo(dl + DOOR_W * 0.72, y + h - WALL_T - DOOR_W * 0.5);
+  ctx.stroke();
 }
 
 function drawRoom(room, t) {
   const p = pal();
-  ctx.fillStyle = p.floor;
-  ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.fill();
-  ctx.save(); ctx.clip();
-  ctx.strokeStyle = p.plank; ctx.lineWidth = 1;
-  for (let yy = room.y + 12; yy < room.y + room.h; yy += 14) {
-    ctx.beginPath(); ctx.moveTo(room.x, yy); ctx.lineTo(room.x + room.w, yy); ctx.stroke();
-  }
-  ctx.restore();
-  ctx.strokeStyle = p.border; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.stroke();
-
   const tint = roomTint(room.key);
-  // 바닥에 팀 색을 아주 옅게 깐다 — 방 구분은 되되 나무 바닥 질감은 남는다.
+  const { x, y, w, h } = room;
+
+  // 바닥 (나무결 + 팀 색조)
+  ctx.fillStyle = p.floor;
+  ctx.fillRect(x, y, w, h);
   ctx.save();
-  ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.clip();
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.strokeStyle = p.plank; ctx.lineWidth = 1;
+  for (let yy = y + 12; yy < y + h; yy += 14) {
+    ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + w, yy); ctx.stroke();
+  }
   ctx.globalAlpha = 0.10; ctx.fillStyle = tint;
-  ctx.fillRect(room.x, room.y, room.w, room.h);
-  ctx.globalAlpha = 1; ctx.restore();
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha = 1;
 
   // 선택된 직원이 있는 방을 밝힌다 — 캐릭터 둘레 원 하나만으로는 넓은
   // 화면에서 "지금 어디를 보고 있는지" 를 놓치기 쉽다.
   if (selectedId && selectedId.split("|")[0] === room.key) {
-    ctx.save();
-    ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.clip();
     ctx.globalCompositeOperation = "lighter";
-    ctx.fillStyle = "rgba(245,179,1,.07)";
-    ctx.fillRect(room.x, room.y, room.w, room.h);
-    ctx.restore();
-    ctx.strokeStyle = "#f5b301"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.roundRect(room.x, room.y, room.w, room.h, 10); ctx.stroke();
+    ctx.fillStyle = "rgba(245,179,1,.09)";
+    ctx.fillRect(x, y, w, h);
+    ctx.globalCompositeOperation = "source-over";
   }
+  ctx.restore();
 
+  // 문패 — 벽에 붙은 명패처럼 방 왼쪽 위에
   ctx.fillStyle = tint;
-  ctx.beginPath(); ctx.roundRect(room.x + 8, room.y + 8, Math.min(room.w - 16, 168), 24, 5); ctx.fill();
-  ctx.fillStyle = "#fdf6e3"; ctx.font = "700 11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-  ctx.fillText(room.icon + " " + room.name, room.x + 15, room.y + 21, Math.min(room.w - 30, 156));
+  ctx.beginPath(); ctx.roundRect(x + WALL_T + 6, y + WALL_T + 5,
+                                 Math.min(w - WALL_T * 2 - 12, 170), 21, 4); ctx.fill();
+  ctx.fillStyle = "#fdf6e3"; ctx.font = "700 11px sans-serif";
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText(room.icon + " " + room.name, x + WALL_T + 13, y + WALL_T + 16,
+               Math.min(w - WALL_T * 2 - 26, 156));
 
-  ctx.font = "15px serif"; ctx.textAlign = "center";
-  ctx.fillText("🚰", room.x + room.w - 16, room.y + 74);
-  ctx.fillText("🪴", room.x + 14, room.y + room.h - 14);
+  // 방 비품 — 서류함과 화분을 벽에 붙여 둔다
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = "14px serif";
+  ctx.fillText("🗄️", x + w - WALL_T - 16, y + 44);
+  ctx.fillText("🪴", x + WALL_T + 15, y + h - WALL_T - 15);
 
+  // 책상 — 상판·모니터·의자
   const seats = Math.max(room.chars.length, room.ghost || 0);
   for (let i = 0; i < seats; i++) {
-    const c = room.chars[i];
+    const cdef = room.chars[i];
     const d = deskPos(room, i);
-    const ghost = !c;
-    ctx.globalAlpha = ghost ? 0.45 : 1;
+    const ghost = !cdef;
+    ctx.globalAlpha = ghost ? 0.4 : 1;
+
+    ctx.fillStyle = p.shadow;                                  // 책상 그림자
+    ctx.fillRect(d.x - 21, d.y + 27, 46, 3);
     ctx.fillStyle = p.desk;
     ctx.beginPath(); ctx.roundRect(d.x - 22, d.y + 12, 46, 15, 3); ctx.fill();
     ctx.fillStyle = p.deskTop;
@@ -518,24 +679,31 @@ function drawRoom(room, t) {
     ctx.lineTo(d.x + 24, d.y + 16);
     ctx.lineTo(d.x - 22, d.y + 16);
     ctx.closePath(); ctx.fill();
+
+    ctx.fillStyle = dark ? "#2a3346" : "#6b7280";               // 의자 (책상 앞)
+    ctx.beginPath(); ctx.roundRect(d.x - 9, d.y + 30, 18, 9, 4); ctx.fill();
+
     ctx.fillStyle = p.monitor;
     ctx.beginPath(); ctx.roundRect(d.x - 9, d.y - 3, 20, 14, 2); ctx.fill();
     if (!ghost) {
-      const ch = chars.get(room.key + "|" + c.key);
+      const ch = chars.get(room.key + "|" + cdef.key);
       const seated = ch && ch.state === "at_desk";
-      ctx.fillStyle = seated ? c.color : (dark ? "#1c2434" : "#3a4152");
+      ctx.fillStyle = seated ? cdef.color : (dark ? "#1c2434" : "#3a4152");
       ctx.globalAlpha = (working && seated) ? 0.65 + 0.35 * Math.abs(Math.sin(t * 9 + i)) : 0.85;
       ctx.fillRect(d.x - 7, d.y - 1, 16, 10);
     }
     ctx.globalAlpha = 1;
   }
-  if (room.ghost && room.chars.length === 0) {
-    ctx.fillStyle = pal().label; ctx.globalAlpha = 0.55;
+
+  if (room.ghost && room.chars.length === 0 && room.key === 'analyst') {
+    ctx.fillStyle = p.label; ctx.globalAlpha = 0.55;
     ctx.font = "600 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText("📈 시세판에 종목을 입력하면 애널리스트팀이 출근합니다",
-                 room.x + room.w / 2, room.y + 52);
+                 x + w / 2, y + 58);
     ctx.globalAlpha = 1;
   }
+
+  drawRoomWalls(room);
 }
 
 function drawChar(ch, t) {
@@ -660,7 +828,9 @@ function frame(nowMs) {
   ctx.clearRect(0, 0, LOGICAL_W, canvasH);
   drawTopBar(t);
   drawWall();
+  drawCorridors();
   rooms.forEach(r => drawRoom(r, t));
+  drawBuildingOutline();
   // 총괄 보고 씬 트리거 — 총괄이 입장·축하를 마칠 때까지 매 프레임 재시도
   if (reportPending && !working) {
     reportTimer -= dt;
