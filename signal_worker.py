@@ -122,10 +122,10 @@ def main():
         print(data_warning, file=sys.stderr)
 
     factor_weights = None
-    regime = 'neutral'
     if factor_timing:
         factor_weights, env = core.get_factor_timing_weights()
-        regime = env.get('regime', 'neutral')
+        # env['regime'] 은 텔레그램에 찍는 표시용 문장이다. 기록에 넣을 국면은
+        # market_regime_slug() 가 따로 낸다 — 아래 기록 호출 참고.
         print(f"팩터 타이밍: {env['regime']} / VIX {env['vix']} / 가중치 {factor_weights}")
 
     if sector_neutral:
@@ -151,7 +151,8 @@ def main():
     print(msg)
 
     # ── 애널리스트 점수 기록 (성적표 재료) ──────────────────────────
-    record_analyst_scores(tickers, regime)
+    # 위 regime 은 텔레그램에 찍는 표시용 문장이라 기록에 쓰지 않는다.
+    record_analyst_scores(tickers, market_regime_slug(tickers))
 
     # ── 매수 시그널 → signal_log.json 저장 ──────────────────────────
     save_signal_log(actions)
@@ -159,6 +160,57 @@ def main():
 
 ANALYST_PANEL_DAYS = 400        # 12M 모멘텀 + 기술지표 워밍업에 필요한 달력일
 ANALYST_MIN_BARS = 60           # 이보다 짧으면 ICT·기술지표가 의미 없다
+
+# 기록 전용 실행의 기본 유니버스. IC 재측정에 쓴 것과 같은 유니버스여야
+# 성적표의 단면이 프로덕션 판단과 같은 폭을 갖는다. 30종목 단면으로 IC 를
+# 내면 성적 자체가 잡음에 묻힌다.
+ANALYST_LOG_UNIVERSE = 'S&P 500 전체 (500종목)'
+
+
+def market_regime_slug(tickers):
+    """기록에 남길 국면 — 'bull' / 'bear' / 'neutral'.
+
+    팩터 타이밍이 내주는 regime 은 '저변동성 — 모멘텀 강조 + 금리하락(모멘텀↑)'
+    같은 표시용 문장이다. 그걸 기록에 넣으면 ic_weights.json 의 국면 키와
+    맞지 않아 나중에 국면별 성적을 갈라 볼 수 없고, 문구를 한 번만 손봐도
+    과거 기록과 이어지지 않는다.
+
+    국면을 못 재도 점수 기록 자체는 진행한다 — 국면은 부가 정보고, 그날의
+    판단을 못 남기는 쪽이 훨씬 비싸다.
+    """
+    try:
+        regime, _ = core.get_market_regime(core._scope.regime_benchmark(tickers))
+        return regime
+    except Exception as e:
+        print(f"[경고] 국면 판정 실패 — neutral 로 기록: {e}")
+        return 'neutral'
+
+
+def record_only_main():
+    """애널리스트 점수만 기록한다 — 텔레그램 발송도 시그널 로그도 없다.
+
+    signal-alerts 의 크론이 꺼진 뒤(2026-07-20, 팩터에 측정 가능한 알파가
+    없어 매수 알림 중단) 기록을 부르는 곳이 같이 사라졌다. 매수를 추천할지와
+    "누가 잘 맞히나" 를 잴지는 별개의 결정이다 — 알림을 멈춘 동안에도 성적표의
+    재료는 쌓여야 한다. 그래서 발송 없이 기록만 도는 경로를 따로 둔다.
+
+    0종목 기록은 성공이 아니다. 조용히 넘어가면 몇 달 뒤 빈 성적표를 보고서야
+    끊긴 걸 안다 — 이 기능이 실제로 겪은 고장이 그 형태였다.
+    """
+    universe_raw = os.environ.get('UNIVERSE', ANALYST_LOG_UNIVERSE)
+    tickers = _resolve_universe(universe_raw)
+    if not tickers:
+        print(f"유니버스가 비었다: {universe_raw}", file=sys.stderr)
+        return 1
+
+    regime = market_regime_slug(tickers)
+    print(f"유니버스: {universe_raw} ({len(tickers)}종목) / 국면: {regime}")
+
+    if not record_analyst_scores(tickers, regime):
+        print("기록된 종목이 없다 — 성적표 재료가 오늘 하루 끊겼다.", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 def record_analyst_scores(tickers, regime):

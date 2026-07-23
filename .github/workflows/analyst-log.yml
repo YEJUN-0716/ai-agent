@@ -1,0 +1,67 @@
+name: 애널리스트 점수 기록
+
+# 성적표(누가 잘 맞히나)의 유일한 재료를 매일 쌓는 잡.
+#
+# 왜 signal-alerts.yml 에 얹지 않는가: 그쪽은 2026-07-20 에 크론을 껐다
+# (팩터에 측정 가능한 알파가 없어 매수 알림 중단). 그런데 기록을 부르는
+# 곳이 거기 하나뿐이라, 알림을 끈 순간 성적표의 재료도 같이 끊겼다.
+# 매수를 추천할지와 판단을 기록할지는 별개의 결정이므로 잡을 갈랐다.
+# 이 잡은 텔레그램으로 아무것도 보내지 않는다 — 기록만 한다.
+
+on:
+  # 미국 장마감(겨울 21:00 UTC / 여름 20:00 UTC) 후, daily-report(23:30 UTC)
+  # 앞. 그날 종가가 확정된 뒤에 지표를 계산해야 판단이 하루 밀리지 않는다.
+  schedule:
+    - cron: "0 23 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      universe:
+        description: "유니버스 이름 (UNIVERSE_PRESETS 키 또는 쉼표구분 티커)"
+        required: false
+        default: "S&P 500 전체 (500종목)"
+
+concurrency:
+  group: analyst-log
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 애널리스트 점수 기록
+        env:
+          PYTHONUTF8: "1"
+          # chart·ict 는 OHLCV 만 본다 — 재무 조회가 없으므로 DART 키가 필요없다.
+          # quant 를 붙일 때 DART_API_KEY 를 여기에 추가해야 한다.
+          UNIVERSE: ${{ github.event.inputs.universe || 'S&P 500 전체 (500종목)' }}
+        run: python scripts/record_analyst_scores.py
+
+      - name: 기록 커밋 (변경 있을 때만)
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add data/analyst_log
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: analyst log $(date -u +%Y-%m-%d)"
+            git pull --rebase origin main
+            git push
+          else
+            echo "analyst_log 변경 없음 — 커밋 생략"
+          fi

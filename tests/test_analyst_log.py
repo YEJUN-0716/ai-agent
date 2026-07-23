@@ -146,3 +146,91 @@ def test_short_history_ticker_is_skipped(monkeypatch):
                         lambda *a, **k: None)
 
     assert signal_worker.record_analyst_scores(["NEW"], "bull") == 0
+
+
+# ── 국면 슬러그 ──────────────────────────────────────────────────────
+#
+# 팩터 타이밍의 regime 은 '저변동성 — 모멘텀 강조 + 금리하락(모멘텀↑)' 같은
+# 표시용 문장이다. 그걸 그대로 기록하면 ic_weights.json 의 국면 키
+# (bull/bear/neutral)와 맞지 않아 나중에 국면별 성적을 갈라 볼 수 없고,
+# 문구가 바뀌는 순간 과거 기록과도 끊긴다.
+
+def test_regime_slug_is_a_stable_key(monkeypatch):
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker.core, "get_market_regime",
+                        lambda *a, **k: ("bull", 3.2))
+
+    assert signal_worker.market_regime_slug(["AAPL"]) == "bull"
+
+
+def test_regime_slug_falls_back_to_neutral(monkeypatch):
+    """국면 조회가 깨져도 기록 자체는 진행돼야 한다."""
+    import signal_worker
+
+    def _boom(*a, **k):
+        raise RuntimeError("네트워크 없음")
+
+    monkeypatch.setattr(signal_worker.core, "get_market_regime", _boom)
+
+    assert signal_worker.market_regime_slug(["AAPL"]) == "neutral"
+
+
+# ── 기록 전용 진입점 ─────────────────────────────────────────────────
+#
+# signal-alerts 의 크론이 꺼진 뒤(2026-07-20) 기록을 부르는 곳이 사라졌다.
+# 매수 알림을 멈추는 것과 "누가 잘 맞히나" 를 재는 것은 별개의 결정이라
+# 발송 없이 기록만 도는 경로가 따로 있어야 한다.
+
+def test_record_only_records_and_succeeds(monkeypatch):
+    import signal_worker
+
+    monkeypatch.setenv("UNIVERSE", "AAPL,MSFT")
+    monkeypatch.setattr(signal_worker.core, "get_market_regime",
+                        lambda *a, **k: ("bear", -4.0))
+    monkeypatch.setattr(signal_worker, "record_analyst_scores",
+                        lambda tickers, regime: len(tickers))
+
+    assert signal_worker.record_only_main() == 0
+
+
+def test_record_only_fails_loudly_when_nothing_recorded(monkeypatch):
+    """0종목 기록은 성공이 아니다 — 조용히 넘어가면 몇 달 뒤 빈 성적표를 본다."""
+    import signal_worker
+
+    monkeypatch.setenv("UNIVERSE", "AAPL")
+    monkeypatch.setattr(signal_worker.core, "get_market_regime",
+                        lambda *a, **k: ("bull", 1.0))
+    monkeypatch.setattr(signal_worker, "record_analyst_scores",
+                        lambda tickers, regime: 0)
+
+    assert signal_worker.record_only_main() == 1
+
+
+def test_record_only_passes_slug_not_prose(monkeypatch):
+    """기록에 들어가는 국면은 표시용 문장이 아니라 슬러그다."""
+    import signal_worker
+
+    monkeypatch.setenv("UNIVERSE", "AAPL")
+    monkeypatch.setattr(signal_worker.core, "get_market_regime",
+                        lambda *a, **k: ("bull", 1.0))
+
+    seen = {}
+
+    def _record(tickers, regime):
+        seen["regime"] = regime
+        return len(tickers)
+
+    monkeypatch.setattr(signal_worker, "record_analyst_scores", _record)
+    signal_worker.record_only_main()
+
+    assert seen["regime"] == "bull"
+
+
+def test_record_only_fails_on_empty_universe(monkeypatch):
+    import signal_worker
+
+    monkeypatch.setenv("UNIVERSE", "  ")
+    monkeypatch.setattr(signal_worker, "_resolve_universe", lambda raw: [])
+
+    assert signal_worker.record_only_main() == 1
