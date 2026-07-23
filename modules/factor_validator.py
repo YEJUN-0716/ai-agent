@@ -22,6 +22,10 @@ from datetime import datetime, timedelta
 from scipy.stats import spearmanr
 
 from modules.factor_engine import point_in_time_fundamentals as _pit_fundamentals
+from modules.factor_formulas import (
+    annualized_vol_pct as _annualized_vol_pct,
+    momentum_pct as _momentum_pct,
+)
 from modules.edgar_fundamentals import (
     fetch_quarterly_fundamentals_history as _fetch_fin_hist,
     fetch_shares_history                 as _fetch_shares_hist,
@@ -145,9 +149,12 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
         if len(sub) < 64:
             continue
         cur_price = float(sub.iloc[-1])
-        mom_3m = float((sub.iloc[-1] / sub.iloc[-63] - 1) * 100)
-        mom_1m = float((sub.iloc[-1] / sub.iloc[-21] - 1) * 100) if len(sub) >= 22 else 0.0
-        vol_21 = float(sub.pct_change().iloc[-21:].std() * np.sqrt(252) * 100) if len(sub) >= 22 else 100.0
+        # 구간이 아래 _calc_per_factor_zscores 와 한 봉씩 어긋나 있다(63 vs 64,
+        # 21 vs 22). 실측 IC 를 무효화하지 않으려고 그대로 뒀다 — 3단계에서
+        # 정의를 확정할 때 함께 맞춘다.
+        mom_3m = _momentum_pct(sub, 63)
+        mom_1m = _momentum_pct(sub, 21) if len(sub) >= 22 else 0.0
+        vol_21 = _annualized_vol_pct(sub, 21) if len(sub) >= 22 else 100.0
 
         if fin_hist is not None:
             fund = _pit_fundamentals(tk, as_of_date, cur_price,
@@ -355,9 +362,12 @@ def _calc_per_factor_zscores(prices_dict: dict, as_of_date,
         if len(sub) < 65:
             continue
         cur_price = float(sub.iloc[-1])
-        mom_3m = float((sub.iloc[-1] / sub.iloc[-64] - 1) * 100)
-        mom_1m = float((sub.iloc[-1] / sub.iloc[-22] - 1) * 100) if len(sub) >= 22 else 0.0
-        vol_21 = float(sub.pct_change().iloc[-21:].std() * np.sqrt(252) * 100)
+        # 여기서 재는 mom_3m/mom_1m/low_vol 이 곧 ic_weights.json 의 IC 다.
+        # 프로덕션 스캔은 이와 다른 구간(12-1, 252봉)을 쓴다 — 팩터 정의를
+        # 바꾸면 저장된 IC 히스토리와의 비교가 끊긴다.
+        mom_3m = _momentum_pct(sub, 64)
+        mom_1m = _momentum_pct(sub, 22) if len(sub) >= 22 else 0.0
+        vol_21 = _annualized_vol_pct(sub, 21)
 
         if fin_hist is not None:
             fund = _pit_fundamentals(tk, as_of_date, cur_price,

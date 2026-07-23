@@ -159,3 +159,181 @@ def test_no_inline_blend_literals_remain(relpath):
         f"{relpath} 에 퀄리티 배합(0.45/0.35/0.20)이 인라인으로 남아 있다 — "
         f"factor_formulas.quality_raw() 를 쓸 것."
     )
+
+
+# ── 6. 가격 팩터 정의 (모멘텀 · 변동성) ─────────────────────────────
+#
+# 가치·퀄리티와 달리 가격 팩터는 네 곳이 **서로 다른 구간**으로 계산한다.
+# 여기서 하는 일은 그 차이를 없애는 게 아니라 **한 함수의 인자로 드러내는**
+# 것이다 — 어느 정의가 맞는지는 IC 실측 없이 정할 수 없기 때문이다.
+# 아래 테스트는 공유 함수가 각 호출부의 기존 수식을 **그대로** 재현하는지
+# 확인한다. 통합은 그 다음 문제다.
+
+def _ramp_series(n, start=100.0, step=0.7):
+    """단조 증가 가격 시계열 — 구간을 한 봉만 잘못 잡아도 값이 달라진다."""
+    return pd.Series([start + step * i for i in range(n)])
+
+
+def _wiggly_series(n, start=100.0):
+    """등락이 섞인 시계열 — 변동성이 0이면 검증이 의미를 잃는다."""
+    return pd.Series([start + 5 * ((i * 7) % 11) + 0.3 * i for i in range(n)])
+
+
+def test_momentum_pct_measures_between_two_bars():
+    close = _ramp_series(300)
+    # skip=0 이면 마지막 봉 기준, lookback 만큼 이전 봉과 비교한다.
+    expected = (close.iloc[-1] / close.iloc[-64] - 1) * 100
+    assert ff.momentum_pct(close, 64) == pytest.approx(expected)
+
+
+def test_momentum_pct_skips_recent_bars():
+    """12-1 모멘텀: 최근 한 달을 건너뛰고 그 이전 구간을 잰다."""
+    close = _ramp_series(300)
+    expected = (close.iloc[-21] / close.iloc[-252] - 1) * 100
+    assert ff.momentum_pct(close, 252, skip_bars=21) == pytest.approx(expected)
+
+
+def test_momentum_pct_returns_zero_when_history_too_short():
+    """1년치가 없으면 짧은 구간으로 추정하지 않는다 — 0 을 돌려준다."""
+    assert ff.momentum_pct(_ramp_series(100), 252, skip_bars=21) == 0.0
+    assert ff.momentum_pct(_ramp_series(63), 64) == 0.0
+
+
+def test_annualized_vol_pct_uses_last_n_daily_returns():
+    close = _wiggly_series(300)
+    daily = close.pct_change().dropna().tail(21)
+    expected = daily.std() * (252 ** 0.5) * 100
+    assert ff.annualized_vol_pct(close, 21) == pytest.approx(expected)
+
+
+def test_annualized_vol_pct_window_changes_the_answer():
+    """구간 길이는 실제로 값을 바꾼다 — 21봉과 252봉은 다른 팩터다."""
+    close = _wiggly_series(300)
+    assert ff.annualized_vol_pct(close, 21) != pytest.approx(
+        ff.annualized_vol_pct(close, 252)
+    )
+
+
+# 네 호출부가 지금 쓰는 구간. (호출부, lookback, skip) — 통합 전 실측 근거가
+# 없으므로 값을 맞추지 않고 그대로 보존한다. 3단계에서 이 표가 한 줄로 줄어야
+# 이중화가 끝난 것이다.
+LEGACY_MOMENTUM_CALLSITES = [
+    ("factor_scoring.price_factors",        252, 21),   # 12-1 모멘텀 (프로덕션 스캔)
+    ("factor_engine._momentum(3M)",          64,  0),
+    ("factor_engine._momentum(1M)",          22,  0),
+    ("factor_validator._calc_momentum_vol",  63,  0),   # 한 봉 짧다 (per_factor 와 불일치)
+    ("factor_validator._calc_per_factor",    64,  0),
+]
+
+
+@pytest.mark.parametrize("label,lookback,skip", LEGACY_MOMENTUM_CALLSITES)
+def test_shared_momentum_reproduces_each_callsite(label, lookback, skip):
+    """공유 함수가 각 호출부의 기존 수식과 소수점까지 같은 값을 낸다."""
+    close = _wiggly_series(300)
+    end = close.iloc[-skip] if skip else close.iloc[-1]
+    legacy = float((end / close.iloc[-lookback] - 1) * 100)
+    assert ff.momentum_pct(close, lookback, skip_bars=skip) == pytest.approx(legacy)
+
+
+LEGACY_VOL_CALLSITES = [
+    ("factor_scoring.price_factors", 252),   # 프로덕션 스캔
+    ("factor_engine.calc_factor_scores", 20),
+    ("factor_validator", 21),                # IC 를 측정하는 구간
+]
+
+
+@pytest.mark.parametrize("label,window", LEGACY_VOL_CALLSITES)
+def test_shared_vol_reproduces_each_callsite(label, window):
+    close = _wiggly_series(300)
+    legacy = float(close.pct_change().dropna().tail(window).std() * (252 ** 0.5) * 100)
+    assert ff.annualized_vol_pct(close, window) == pytest.approx(legacy)
+
+
+# ── 7. 호출부가 실제로 넘기는 구간 고정 ─────────────────────────────
+#
+# 공유 함수가 옳아도 호출부가 인자를 잘못 넘기면 팩터가 조용히 바뀐다.
+# factor_scoring 쪽은 test_factor_scores.py / test_sectoral_scores.py 가 이미
+# 덮고 있지만, factor_engine 과 factor_validator 에는 동작 테스트가 하나도
+# 없었다 — IC 를 만드는 코드인데도 그랬다. 여기서 구간만 못 박는다.
+
+def test_factor_engine_momentum_windows_are_pinned():
+    """factor_engine 은 days+1 봉 전과 비교한다 (1M=22, 3M=64, 6M=127)."""
+    from modules import factor_engine
+
+    close = _wiggly_series(300)
+    got = factor_engine._momentum(close)
+    assert got["1M"] == pytest.approx(ff.momentum_pct(close, 22))
+    assert got["3M"] == pytest.approx(ff.momentum_pct(close, 64))
+    assert got["6M"] == pytest.approx(ff.momentum_pct(close, 127))
+
+
+def test_factor_engine_momentum_is_zero_when_history_too_short():
+    """구간이 안 되면 0 — 예전 if/else 가 하던 것과 같아야 한다."""
+    from modules import factor_engine
+
+    close = _wiggly_series(30)
+    got = factor_engine._momentum(close)
+    assert got["3M"] == 0.0
+    assert got["6M"] == 0.0
+    assert got["1M"] == pytest.approx(ff.momentum_pct(close, 22))
+
+
+def _price_panel(n_tickers=6, n_bars=300):
+    idx = pd.date_range("2024-01-01", periods=n_bars, freq="D")
+    return {
+        chr(ord("A") + i): pd.Series(
+            [100 + (i + 1) * 0.3 * j + 5 * ((j * 7) % 11) for j in range(n_bars)],
+            index=idx,
+        )
+        for i in range(n_tickers)
+    }, idx
+
+
+def test_ic_factor_windows_are_pinned():
+    """IC 가 재는 구간을 고정한다 — mom_3m=64봉, mom_1m=22봉, 변동성=21봉.
+
+    이 숫자가 바뀌면 ic_weights.json 의 IC 히스토리와 비교가 끊긴다.
+    프로덕션 스캔(12-1 모멘텀·252봉)과 다르다는 사실 자체도 여기 박아 둔다.
+    """
+    from modules import factor_validator as fv
+
+    prices, idx = _price_panel()
+    got = fv._calc_per_factor_zscores(prices, idx[-1])
+
+    raw_mom = pd.Series({tk: ff.momentum_pct(s, 64) for tk, s in prices.items()})
+    expected_z = (raw_mom - raw_mom.mean()) / (raw_mom.std() + 1e-9)
+    for tk in prices:
+        assert got[tk]["mom_3m"] == pytest.approx(expected_z[tk])
+
+    raw_vol = pd.Series({tk: ff.annualized_vol_pct(s, 21) for tk, s in prices.items()})
+    expected_vol_z = -(raw_vol - raw_vol.mean()) / (raw_vol.std() + 1e-9)
+    for tk in prices:
+        assert got[tk]["low_vol"] == pytest.approx(expected_vol_z[tk])
+
+
+def test_ic_momentum_window_differs_from_production_scan():
+    """같은 가격으로도 IC 구간과 프로덕션 구간은 다른 값을 낸다.
+
+    두 정의가 실제로 갈라져 있다는 증거 — 합칠 때 이 테스트가 바뀌어야 한다.
+    """
+    close = _wiggly_series(300)
+    ic_side = ff.momentum_pct(close, 64)
+    production = ff.momentum_pct(close, 252, skip_bars=21)
+    assert ic_side != pytest.approx(production)
+
+
+def test_price_factor_definitions_have_one_owner():
+    """가격 팩터 수식이 호출부에 다시 인라인으로 나타나면 실패시킨다."""
+    inline_momentum = re.compile(r"iloc\[-\d+\]\s*/\s*[^\n]*iloc\[-\d+\]")
+    inline_vol = re.compile(r"pct_change\(\)[^\n]*std\(\)[^\n]*sqrt")
+    for relpath in ("modules/factor_scoring.py", "modules/factor_engine.py",
+                    "modules/factor_validator.py"):
+        source = (REPO_ROOT / relpath).read_text(encoding="utf-8")
+        assert not inline_momentum.search(source), (
+            f"{relpath} 에 모멘텀 수식이 인라인으로 남아 있다 — "
+            f"factor_formulas.momentum_pct() 를 쓸 것."
+        )
+        assert not inline_vol.search(source), (
+            f"{relpath} 에 연변동성 수식이 인라인으로 남아 있다 — "
+            f"factor_formulas.annualized_vol_pct() 를 쓸 것."
+        )

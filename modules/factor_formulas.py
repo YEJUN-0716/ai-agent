@@ -101,3 +101,53 @@ def quality_raw(roe, margin, accrual_q):
     return (roe * QUALITY_ROE_WEIGHT
             + margin * QUALITY_MARGIN_WEIGHT
             + accrual_q * QUALITY_ACCRUAL_WEIGHT)
+
+
+# ── 가격 팩터 정의 (모멘텀 · 변동성) ────────────────────────────────
+#
+# 가치·퀄리티 배합과 달리 이쪽은 **구간이 호출부마다 다르다**.
+# 프로덕션 스캔은 12-1 모멘텀(252봉 전 → 21봉 전)과 252봉 변동성을 쓰고,
+# IC 를 측정하는 factor_validator 는 3개월·1개월 수익률과 21봉 변동성을 쓴다.
+# 즉 **주간 IC 가 재는 팩터와 실전 스캔이 쓰는 팩터가 다르다.**
+#
+# 그래서 여기서 값을 하나로 맞추지 않는다 — 어느 구간이 옳은지는 실측 없이
+# 정할 수 없고, 지금 합치면 근거 없이 프로덕션 랭킹을 바꾸게 된다.
+# 이 함수들이 하는 일은 수식을 한 곳에 모아 **차이를 인자로 드러내는** 것이다.
+# 호출부가 넘기는 lookback/window 를 나란히 놓고 보면 무엇이 갈렸는지 보인다
+# (tests/test_factor_formulas.py 의 LEGACY_*_CALLSITES 표가 그 목록이다).
+
+TRADING_DAYS_PER_YEAR = 252
+
+
+def momentum_pct(close, lookback_bars, skip_bars=0):
+    """가격 시계열 → 모멘텀(%).
+
+    `lookback_bars` 전 가격 대비 `skip_bars` 전 가격의 수익률.
+    skip_bars=0 이면 마지막 봉이 기준점이다.
+
+    skip 이 필요한 이유: 12-1 모멘텀은 최근 한 달을 일부러 건너뛴다. 직전
+    한 달 수익률에는 단기 반전(reversal)이 섞여 있어 12개월 추세와 부호가
+    반대로 나오곤 하기 때문이다.
+
+    데이터가 lookback 에 못 미치면 0 을 돌려준다 — 짧은 구간으로 추정하면
+    잡음을 모멘텀으로 오해한다. 호출부는 이 0 을 '중립'으로 받는다.
+
+    pandas 를 import 하지 않는다. `.iloc` 과 `len()` 만 쓰므로 Series 면
+    무엇이든 동작한다 (이 모듈의 무의존성 원칙 유지).
+    """
+    if lookback_bars <= 0 or len(close) < lookback_bars:
+        return 0.0
+    end = close.iloc[-skip_bars] if skip_bars else close.iloc[-1]
+    start = close.iloc[-lookback_bars]
+    return float((end / start - 1) * 100)
+
+
+def annualized_vol_pct(close, window_bars):
+    """가격 시계열 → 연율화 변동성(%). 최근 `window_bars` 개 일수익률 기준.
+
+    수익률이 2개 미만이면 표준편차가 정의되지 않아 NaN 이 나온다. 여기서
+    임의의 기본값으로 덮지 않는다 — 호출부마다 대체값이 다르고(예: 100.0),
+    그 판단은 이미 호출부가 갖고 있다.
+    """
+    daily = close.pct_change().dropna().tail(window_bars)
+    return float(daily.std() * (TRADING_DAYS_PER_YEAR ** 0.5) * 100)
