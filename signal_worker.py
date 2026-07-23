@@ -12,7 +12,7 @@ import sys
 from datetime import date
 
 import app as core
-from modules import krx_universe
+from modules import analyst_log, analyst_team, krx_universe, price_panel
 
 
 KRX_SUFFIXES = ('.KS', '.KQ')
@@ -122,8 +122,10 @@ def main():
         print(data_warning, file=sys.stderr)
 
     factor_weights = None
+    regime = 'neutral'
     if factor_timing:
         factor_weights, env = core.get_factor_timing_weights()
+        regime = env.get('regime', 'neutral')
         print(f"팩터 타이밍: {env['regime']} / VIX {env['vix']} / 가중치 {factor_weights}")
 
     if sector_neutral:
@@ -148,8 +150,84 @@ def main():
     print(f"텔레그램 발송: {'성공' if ok else f'실패 ({err})'}")
     print(msg)
 
+    # ── 애널리스트 점수 기록 (성적표 재료) ──────────────────────────
+    record_analyst_scores(tickers, regime)
+
     # ── 매수 시그널 → signal_log.json 저장 ──────────────────────────
     save_signal_log(actions)
+
+
+ANALYST_PANEL_DAYS = 400        # 12M 모멘텀 + 기술지표 워밍업에 필요한 달력일
+ANALYST_MIN_BARS = 60           # 이보다 짧으면 ICT·기술지표가 의미 없다
+
+
+def record_analyst_scores(tickers, regime):
+    """전 유니버스의 chart·ict 점수를 기록한다. 실패해도 스캔은 계속된다.
+
+    성적표의 재료를 만드는 유일한 지점이다 — 여기서 안 남기면 "누가 잘
+    맞히나" 를 영원히 알 수 없다. 그래서 조용히 죽지 않게 감싸 두고,
+    실패하면 경고를 남긴다.
+
+    quant(퀀트+재무)는 종목별 yfinance .info 가 필요해 Phase 1 에서 제외했다.
+    스캔의 반환 계약을 정리한 뒤 별도로 붙인다 — 기록 포맷은 이미 수용한다.
+    """
+    from datetime import datetime, timedelta
+
+    if not tickers:
+        return 0
+
+    try:
+        from modules.ict_analysis import ict_factor_score, calc_ict_adjustment
+    except Exception as e:
+        print(f"[경고] ICT 모듈 없음 — 애널리스트 기록 생략: {e}")
+        return 0
+
+    try:
+        end = datetime.now()
+        _, ohlcv = price_panel.load_panel(
+            tickers, end - timedelta(days=ANALYST_PANEL_DAYS), end)
+    except Exception as e:
+        print(f"[경고] 가격 패널 로드 실패 — 애널리스트 기록 생략: {e}")
+        return 0
+
+    scores = {}
+    for ticker, df in (ohlcv or {}).items():
+        if df is None or len(df) < ANALYST_MIN_BARS:
+            continue
+
+        row = {}
+        # 계산 실패는 키를 뺀다 — 중립값 50 으로 채우면 '계산 불가'가
+        # '중립 판단'으로 성적에 섞인다.
+        try:
+            t_score, _ = core.technical_score(df)
+            mom = core.calc_momentum(df) or {}
+            row["chart"] = analyst_team.chart_score(
+                t_score, mom.get("score", 50.0))
+        except Exception:
+            pass
+
+        try:
+            row["ict"] = analyst_team.ict_score(
+                ict_factor_score(df), calc_ict_adjustment(df)["adjustment"])
+        except Exception:
+            pass
+
+        if row:
+            scores[ticker] = row
+
+    if not scores:
+        print("[경고] 애널리스트 점수를 낸 종목이 없다 — 기록 생략.")
+        return 0
+
+    try:
+        analyst_log.append_day(
+            datetime.now().strftime("%Y-%m-%d"), regime, scores)
+    except Exception as e:
+        print(f"[경고] 애널리스트 기록 실패 (스캔은 계속): {e}")
+        return 0
+
+    print(f"애널리스트 기록: {len(scores)}종목 ({regime})")
+    return len(scores)
 
 
 def save_signal_log(actions):

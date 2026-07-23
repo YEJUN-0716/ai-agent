@@ -83,11 +83,13 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add signal_log.json
+          # analyst_log 는 애널리스트 성적표의 유일한 재료다. 여기서 커밋하지
+          # 않으면 매 실행마다 버려져 성적이 영원히 쌓이지 않는다.
+          git add signal_log.json data/analyst_log
           if ! git diff --staged --quiet; then
             git commit -m "chore: signal log update $(date -u +%Y-%m-%d)"
             git pull --rebase origin main
             git push
           else
-            echo "signal_log.json 변경 없음 — 커밋 생략"
+            echo "signal_log.json · analyst_log 변경 없음 — 커밋 생략"
           fi
