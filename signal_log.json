@@ -56,6 +56,51 @@
       "reason": "팩터 58점 + 상승추세 (RSI 55) | 거래량 주의(0.7×)",
       "source": "github_actions",
       "return_pct": null
+    },
+    {
+      "symbol": "005930.KS",
+      "entry_date": "2026-07-23",
+      "entry_price": 266250.0,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 65점 — 추세 확인 시 비중 확대 (RSI 44)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "000660.KS",
+      "entry_date": "2026-07-23",
+      "entry_price": 1868000.0,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 73점 — 추세 확인 시 비중 확대 (RSI 42)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "055550.KS",
+      "entry_date": "2026-07-23",
+      "entry_price": 103400.0,
+      "action": "🟢 매수",
+      "reason": "팩터 54점 + 상승추세 (RSI 50) | 거래량 주의(0.3×)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "000270.KS",
+      "entry_date": "2026-07-23",
+      "entry_price": 147600.0,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 54점 — 추세 확인 시 비중 확대 (RSI 49)",
+      "source": "github_actions",
+      "return_pct": null
+    },
+    {
+      "symbol": "034730.KS",
+      "entry_date": "2026-07-23",
+      "entry_price": 646000.0,
+      "action": "🟡 조건부 매수",
+      "reason": "팩터 68점 — 추세 확인 시 비중 확대 (RSI 51)",
+      "source": "github_actions",
+      "return_pct": null
     }
   ]
 }
