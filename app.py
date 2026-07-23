@@ -3659,6 +3659,114 @@ def _current_analyst_weights():
     return {k: round(TEAM_WEIGHTS[k] / _fallback_total * 100, 1) for k in _DIRECTIONAL_ANALYSTS}
 
 
+# ── 애널리스트 성적표 ────────────────────────────────────────────────
+#
+# 매일 기록된 애널리스트 점수를 실제 수익률과 대조해 "누가 잘 맞히나" 를 보여준다.
+# **표시 전용이다 — 가중치를 바꾸지 않는다.** 표본이 쌓이기 전에 비중을 옮기면
+# 근거 없이 포트폴리오를 흔드는 것이고, 그게 PR #22 에서 고친 고장의 형태다.
+
+_ANALYST_SLUG_NAMES = {
+    'chart': '차트+파동+모멘텀',
+    'quant': '퀀트+재무',
+    'ict':   'ICT+CRT',
+}
+
+# 유효 표본(겉보기 n 이 아니라)이 이만큼은 돼야 판정에 쓸 수 있다.
+ANALYST_SCORECARD_MIN_EFFECTIVE_N = 30
+ANALYST_SCORECARD_T_THRESHOLD = 2.0
+
+# 기록에서 가격을 끌어올 때의 여유. 63일 채점 + 지표 워밍업을 덮는다.
+_SCORECARD_PANEL_EXTRA_DAYS = 200
+
+
+def _analyst_scorecard_rows(days, prices, horizon):
+    """기록 + 가격 → 성적표 행 목록.
+
+    Streamlit 을 모른다 — 표시와 분리해 두어야 산술을 테스트로 잠글 수 있다.
+    """
+    from modules import analyst_scorecard as _sc
+
+    fwd = _sc.build_forward_returns(prices, [d['date'] for d in days], horizon)
+    scored = _sc.score_analysts(days, fwd, horizon)
+
+    rows = []
+    for slug, stat in sorted(scored.items()):
+        t_stat = stat.get('t_stat')
+        decided = (stat['effective_n'] >= ANALYST_SCORECARD_MIN_EFFECTIVE_N
+                   and t_stat is not None
+                   and abs(t_stat) >= ANALYST_SCORECARD_T_THRESHOLD)
+        rows.append({
+            '애널리스트': _ANALYST_SLUG_NAMES.get(slug, slug),
+            'IC': stat['mean_ic'],
+            't': t_stat,
+            '적중률(%)': stat['hit_rate'],
+            '표본(겉보기)': stat['n'],
+            '유효표본': stat['effective_n'],
+            '판정': '가능' if decided else '아직 불가',
+        })
+    return rows
+
+
+def render_analyst_scorecard():
+    """애널리스트 성적표 섹션. 기록이 없으면 안내만 띄운다."""
+    from modules import analyst_log as _log
+    from modules import analyst_scorecard as _sc
+
+    st.subheader("🎓 AI 애널리스트 성적표")
+    st.caption(
+        "매일 기록된 애널리스트 점수를 실제 수익률과 대조합니다.  \n"
+        "**표시 전용 — 가중치에는 반영하지 않습니다.** 표본이 쌓이기 전에 비중을 "
+        "옮기면 근거 없이 포트폴리오를 흔들게 됩니다.  \n"
+        "매일 기록하면 예측 구간이 서로 겹쳐 표본이 실제보다 많아 보입니다. "
+        "**판정은 '겉보기 표본'이 아니라 '유효표본'으로 합니다.**")
+
+    try:
+        days = _log.load_days()
+    except Exception as e:
+        st.warning(f"기록을 읽지 못했습니다: {e}")
+        return
+
+    if not days:
+        st.info(
+            "아직 기록이 없습니다. 매일 자동 스캔이 애널리스트 점수를 남기기 "
+            "시작하면 여기에 성적이 쌓입니다.  \n"
+            f"5일 기준으로 유효표본 {ANALYST_SCORECARD_MIN_EFFECTIVE_N}개가 모이려면 "
+            "약 7개월이 걸립니다 — 21일 기준만 쓰면 2.5년입니다.")
+        return
+
+    tickers = sorted({t for d in days for t in d.get('scores', {})})
+    st.caption(f"기록 {len(days)}일 · {len(tickers)}종목 "
+               f"({days[0]['date']} ~ {days[-1]['date']})")
+
+    try:
+        from modules import price_panel as _panel
+        start = pd.Timestamp(days[0]['date']) - pd.Timedelta(days=30)
+        end = pd.Timestamp(days[-1]['date']) + pd.Timedelta(
+            days=_SCORECARD_PANEL_EXTRA_DAYS)
+        prices, _ = _panel.load_panel(tickers, start, min(end, pd.Timestamp.today()))
+    except Exception as e:
+        st.warning(f"가격 데이터를 받지 못했습니다: {e}")
+        return
+
+    any_rows = False
+    for horizon in _sc.HORIZONS:
+        rows = _analyst_scorecard_rows(days, prices, horizon)
+        if not rows:
+            continue
+        any_rows = True
+        st.markdown(f"##### {horizon}거래일 앞선 수익률 기준")
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+
+    if not any_rows:
+        st.info("아직 채점할 수 있는 날이 없습니다 — 예측 구간이 지나야 성적이 나옵니다.")
+        return
+
+    st.caption(
+        f"판정 조건: 유효표본 ≥ {ANALYST_SCORECARD_MIN_EFFECTIVE_N} 이고 "
+        f"|t| ≥ {ANALYST_SCORECARD_T_THRESHOLD}. IC 값 하나만 보고 결론 내지 마세요 — "
+        "이 규모에서는 IC 자체가 표준오차와 비슷한 크기입니다.")
+
+
 def build_analyst_report(name, icon, score, reasons, detail=None, role='directional'):
     """6개 부서 직원 공통 보고서 포맷.
 
@@ -6304,6 +6412,9 @@ def main():
                         st.dataframe(pd.DataFrame(bt_log), width='stretch', hide_index=True, height=300)
 
                 st.caption("⚠️ 과거 성과는 미래 수익을 보장하지 않습니다. 거래비용·슬리피지 반영.")
+
+            st.divider()
+            render_analyst_scorecard()
 
             st.divider()
             st.subheader("🔬 팩터 IC 검증 (예측력 통계 검증)")
