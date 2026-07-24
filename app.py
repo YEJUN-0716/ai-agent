@@ -5273,9 +5273,15 @@ def main():
                                 find_swing_points, find_bos_choch, premium_discount,
                                 ict_factor_score,
                             )
+                            from modules.trade_plan import build_trade_plan
                             _n_c = st.slider("표시 캔들 수", 40, 200, 80, 10, key="ict_zoom_c")
-                            st.plotly_chart(plot_ict_chart(df, n_candles=_n_c, ticker=ticker),
-                                            width='stretch')
+                            try:
+                                _plan = build_trade_plan(df)
+                            except Exception:
+                                _plan = None
+                            st.plotly_chart(
+                                plot_ict_chart(df, n_candles=_n_c, ticker=ticker, plan=_plan),
+                                width='stretch')
                             _ict_cur = float(df["Close"].iloc[-1])
                             _fvgs    = find_fvg(df, lookback=_n_c + 20)
                             _obs     = find_order_blocks(df, lookback=_n_c + 20)
@@ -5293,6 +5299,27 @@ def main():
                                         f"범위 내 {_pd_info['position_pct']:.0f}%")
                             _dp2.metric("마지막 구조 이탈",
                                         _evs[-1]["type"].replace("_"," ").upper() if _evs else "없음")
+
+                            if _plan and _plan["direction"] in ("long", "short"):
+                                _dir_txt = "🟢 롱" if _plan["direction"] == "long" else "🔴 숏"
+                                st.markdown(f"#### 트레이드 플랜 — {_dir_txt}  ·  확신도 {_plan['confidence']}")
+                                if _plan["valid"]:
+                                    _t1, _t2, _t3, _t4 = st.columns(4)
+                                    _t1.metric("진입 구간",
+                                               f"{fmt_p(_plan['entry']['low'])} ~ {fmt_p(_plan['entry']['high'])}")
+                                    _t2.metric("손절", fmt_p(_plan["stop"]))
+                                    _t3.metric("목표1", fmt_p(_plan["targets"][0]),
+                                               f"R:R {_plan['rr'][0]:.1f}")
+                                    if len(_plan["targets"]) > 1:
+                                        _t4.metric("목표2", fmt_p(_plan["targets"][1]),
+                                                   f"R:R {_plan['rr'][1]:.1f}" if _plan["rr"][1] else None)
+                                    with st.expander("진입 근거"):
+                                        for _sg in _plan["signals"]:
+                                            st.markdown(f"- {_sg}")
+                                else:
+                                    st.info(f"유효 셋업 아님 — {_plan['reason_invalid']}")
+                            elif _plan and _plan.get("reason_invalid"):
+                                st.caption(f"트레이드 플랜: {_plan['reason_invalid']}")
                         except Exception as _e:
                             st.warning(f"ICT 분석 오류: {_e}")
                     elif _zoom == "ch":

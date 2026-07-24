@@ -179,8 +179,43 @@ _TV_GRID  = "#1e2530"
 _TV_TEXT  = "#9598a1"
 
 
-def plot_ict_chart(df: pd.DataFrame, n_candles: int = 80, ticker: str = "") -> go.Figure:
-    """ICT 오버레이 캔들스틱 차트 반환."""
+def overlay_trade_plan(fig: go.Figure, plan: dict | None) -> go.Figure:
+    """트레이드 플랜(진입 구간·손절·목표) 라인을 기존 차트 fig 에 얹는다.
+
+    plan 은 modules.trade_plan.build_trade_plan 의 반환 dict. 방향이 없거나
+    진입가가 비어 있으면 아무것도 그리지 않는다.
+    """
+    if not plan or plan.get("direction") not in ("long", "short"):
+        return fig
+    entry = plan.get("entry") or {}
+    if not entry.get("ref"):
+        return fig
+
+    dir_ko = "롱" if plan["direction"] == "long" else "숏"
+    fig.add_hrect(
+        y0=entry["low"], y1=entry["high"],
+        fillcolor="rgba(120,144,156,0.18)", line_color="#90a4ae", line_width=1,
+        annotation_text=f"진입 {dir_ko} {entry['low']:.2f}~{entry['high']:.2f}",
+        annotation_position="left", annotation_font=dict(size=9, color="#b0bec5"),
+    )
+    fig.add_hline(
+        y=plan["stop"], line_dash="dash", line_color="#ef5350", line_width=1.2,
+        annotation_text=f"손절 {plan['stop']:.2f}", annotation_position="right",
+        annotation_font=dict(size=9, color="#ef5350"),
+    )
+    for i, (t, rr) in enumerate(zip(plan.get("targets", []), plan.get("rr", [])), start=1):
+        rr_s = f" (R:R {rr:.1f})" if rr else ""
+        fig.add_hline(
+            y=t, line_dash="dot", line_color="#26a69a", line_width=1.2,
+            annotation_text=f"목표{i} {t:.2f}{rr_s}", annotation_position="right",
+            annotation_font=dict(size=9, color="#26a69a"),
+        )
+    return fig
+
+
+def plot_ict_chart(df: pd.DataFrame, n_candles: int = 80, ticker: str = "",
+                   plan: dict | None = None) -> go.Figure:
+    """ICT 오버레이 캔들스틱 차트 반환. plan 을 주면 진입/손절/목표선도 그린다."""
     sub = df.tail(n_candles).copy()
     fig = go.Figure()
 
@@ -278,6 +313,7 @@ def plot_ict_chart(df: pd.DataFrame, n_candles: int = 80, ticker: str = "") -> g
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=_TV_TEXT)),
         margin=dict(l=0, r=160, t=40, b=0),
     )
+    overlay_trade_plan(fig, plan)
     return fig
 
 

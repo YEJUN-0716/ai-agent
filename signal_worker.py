@@ -70,7 +70,27 @@ def _env_bool(name, default):
     return val.strip().lower() not in ('0', 'false', 'no')
 
 
-def build_message(tickers, actions, rebal, failed, warning=None):
+def _plan_fmt_price(ticker, value):
+    """플랜 라인용 가격 포맷 — KRX 는 ₩ 정수, 그 외 $ 소수 2자리."""
+    if ticker.endswith(('.KS', '.KQ')):
+        return f"₩{value:,.0f}"
+    return f"${value:.2f}"
+
+
+def _plan_line(ticker, plan):
+    """유효 플랜 → '진입 X~Y · 손절 Z · 목표 W (R:R)' 한 줄. 없으면 None."""
+    if not plan or not plan.get('valid') or not plan.get('targets'):
+        return None
+    e = plan['entry']
+    rr = plan['rr'][0]
+    rr_s = f" (R:R {rr:.1f})" if rr else ""
+    return (f"진입 {_plan_fmt_price(ticker, e['low'])}~{_plan_fmt_price(ticker, e['high'])}"
+            f" · 손절 {_plan_fmt_price(ticker, plan['stop'])}"
+            f" · 목표 {_plan_fmt_price(ticker, plan['targets'][0])}{rr_s}")
+
+
+def build_message(tickers, actions, rebal, failed, warning=None, plans=None):
+    plans = plans or {}
     actionable = [a for a in actions if '관망' not in a['action'] and '대기' not in a['action']]
 
     lines = [
@@ -88,11 +108,27 @@ def build_message(tickers, actions, rebal, failed, warning=None):
         lines.append(f"오늘은 매수/매도 시그널 없음 (관망 {rebal['hold_count']}종목) — 자동 스캔은 정상 작동 중.")
     else:
         for a in sorted(actionable, key=lambda x: {'HIGH': 0, 'NORMAL': 1, 'LOW': 2}.get(x['priority'], 3)):
-            lines.append(
+            block = (
                 f"*{a['ticker']}* {a['action']} ({a['priority']})\n"
                 f"  {a['price']} · {a['alloc']} · {a['qty']}\n"
                 f"  {a['reason']}"
             )
+            # 매수 신호엔 롱 트레이드 플랜 라인을 붙인다 (있을 때만)
+            p = plans.get(a['ticker'])
+            if '매수' in a['action'] and p and p.get('direction') == 'long':
+                pl = _plan_line(a['ticker'], p)
+                if pl:
+                    block += f"\n  📐 {pl}"
+            lines.append(block)
+
+    # 숏 관찰 — 신호 엔진은 롱 전용이라 숏은 여기서만 '분석용'으로 표시한다.
+    shorts = [(tk, p) for tk, p in plans.items()
+              if p.get('valid') and p.get('direction') == 'short']
+    if shorts:
+        lines.append("")
+        lines.append("🔻 *숏 관찰* (분석용 · 자동주문 아님)")
+        for tk, p in sorted(shorts, key=lambda x: -abs(x[1].get('bias_score', 0)))[:5]:
+            lines.append(f"*{tk}* 숏 ({p['confidence']})\n  {_plan_line(tk, p)}")
 
     if failed:
         lines.append("")
@@ -145,7 +181,21 @@ def main():
     actions, rebal = core.generate_system_signals(
         tickers, factor_df=fdf, top_n=top_n, capital=capital)
 
-    msg = build_message(tickers, actions, rebal, failed, warning=data_warning)
+    # ── 트레이드 플랜(진입/손절/목표 라인) — 롱은 신호에 붙이고 숏은 관찰 목록 ──
+    plans = {}
+    try:
+        from datetime import datetime, timedelta
+
+        from modules.trade_plan import MIN_BARS, build_trade_plan
+        _, _ohlcv = price_panel.load_panel(
+            tickers, datetime.now() - timedelta(days=ANALYST_PANEL_DAYS), datetime.now())
+        for _tk, _pdf in (_ohlcv or {}).items():
+            if _pdf is not None and len(_pdf) >= MIN_BARS:
+                plans[_tk] = build_trade_plan(_pdf)
+    except Exception as e:
+        print(f"[경고] 트레이드 플랜 생성 실패 — 라인 생략: {e}", file=sys.stderr)
+
+    msg = build_message(tickers, actions, rebal, failed, warning=data_warning, plans=plans)
     ok, err = core.send_telegram(token, chat_id, msg)
     print(f"텔레그램 발송: {'성공' if ok else f'실패 ({err})'}")
     print(msg)
