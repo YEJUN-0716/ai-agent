@@ -48,6 +48,14 @@ python tools/obsidian_bridge.py pull
 → `{"tickers": ["AAPL","NVDA","005930.KS"], "count": 3}` 처럼 JSON 출력.
 이 목록을 stock-analyzer 스캔의 `UNIVERSE` 로 넘겨 분석하면 된다.
 
+### 4) 읽은 결과를 옵시디언에서 보기 (analyze)
+```
+python tools/obsidian_bridge.py analyze
+```
+Watchlist 종목을 읽어 **각 종목의 트레이드 플랜(방향·진입·손절·목표·R:R·확신도)**
+을 계산하고, 볼트에 **`관심종목 분석.md`** 노트로 쓴다. 이게 "읽은 결과를 보는 곳"이다.
+stock-analyzer 모듈과 가격 조회(네트워크)를 쓰므로 **같은 파이썬 환경**에서 실행한다.
+
 ## 경계 / 주의
 - **Watchlist 는 사람이 쓰는 입력**이라 push 가 덮어쓰지 않는다. 나머지 관리 노트는 출력이라 덮어쓴다.
 - 메모리 동기화는 **단방향(우리→볼트)** 이다. 볼트에서 메모리 노트를 고쳐도 `.claude` 원본에 되반영되지 않는다(충돌·오작동 방지). 메모리 수정은 에이전트에게 말로 지시.

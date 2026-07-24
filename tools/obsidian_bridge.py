@@ -22,7 +22,7 @@ import json
 import os
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 HOME = Path.home()
@@ -171,7 +171,78 @@ def cmd_pull() -> int:
     return 0
 
 
-COMMANDS = {"init": cmd_init, "push": cmd_push, "pull": cmd_pull}
+def _fp(ticker: str, value: float) -> str:
+    """KRX 는 ₩ 정수, 그 외 $ 소수 2자리."""
+    if ticker.endswith((".KS", ".KQ")):
+        return f"₩{value:,.0f}"
+    return f"${value:.2f}"
+
+
+def cmd_analyze() -> int:
+    """Watchlist 종목을 읽어 트레이드 플랜을 계산하고 볼트에 '관심종목 분석' 노트로 쓴다.
+
+    stock-analyzer 의 가격 로더(price_panel)와 build_trade_plan 을 재사용한다 —
+    같은 파이썬 환경에서 실행해야 import 가 된다. 가격 조회는 네트워크를 탄다.
+    """
+    wl = VAULT / "Watchlist.md"
+    if not wl.exists():
+        print(f"Watchlist.md 없음: {wl}")
+        return 1
+    tickers = _parse_tickers(wl.read_text(encoding="utf-8"))
+    if not tickers:
+        print("Watchlist 에 종목이 없습니다.")
+        return 1
+
+    sys.path.insert(0, str(STOCK_DIR))
+    try:
+        from modules import price_panel
+        from modules.trade_plan import MIN_BARS, build_trade_plan
+    except Exception as e:
+        print(f"[오류] stock-analyzer 모듈 로드 실패 — 같은 파이썬 환경에서 실행하세요: {e}")
+        return 1
+
+    end = datetime.now()
+    try:
+        _, ohlcv = price_panel.load_panel(tickers, end - timedelta(days=420), end)
+    except Exception as e:
+        print(f"[오류] 가격 데이터 로드 실패: {e}")
+        return 1
+    ohlcv = ohlcv or {}
+
+    dir_ko = {"long": "🟢 롱", "short": "🔴 숏", "none": "—"}
+    rows = ["| 종목 | 방향 | 확신도 | 진입 구간 | 손절 | 목표1 (R:R) | 상태 |",
+            "|---|---|---|---|---|---|---|"]
+    for tk in tickers:
+        df = ohlcv.get(tk)
+        if df is None or len(df) < MIN_BARS:
+            rows.append(f"| {tk} | — | — | | | | 데이터 부족 |")
+            continue
+        try:
+            p = build_trade_plan(df)
+        except Exception as e:
+            rows.append(f"| {tk} | — | — | | | | 오류: {e} |")
+            continue
+        d = dir_ko.get(p["direction"], "—")
+        if p["valid"]:
+            e0 = p["entry"]
+            rows.append(
+                f"| {tk} | {d} | {p['confidence']} "
+                f"| {_fp(tk, e0['low'])}~{_fp(tk, e0['high'])} | {_fp(tk, p['stop'])} "
+                f"| {_fp(tk, p['targets'][0])} (R:R {p['rr'][0]:.1f}) | ✅ 유효 |")
+        else:
+            rows.append(f"| {tk} | {d} | {p.get('confidence','—')} | | | | {p['reason_invalid']} |")
+
+    note = (f"# 🔍 관심종목 분석\n\n{MANAGED_TAG}\n\n"
+            f"갱신: {datetime.now():%Y-%m-%d %H:%M} · {len(tickers)}종목\n\n"
+            + "\n".join(rows) + "\n\n"
+            "> 자동주문 아님 · 분석용. 숏은 하락추세 + 중간확신 이상만 유효로 잡힙니다.\n")
+    dest = VAULT / "관심종목 분석.md"
+    _write(dest, note)
+    print(f"분석 {len(tickers)}종목 → {dest}")
+    return 0
+
+
+COMMANDS = {"init": cmd_init, "push": cmd_push, "pull": cmd_pull, "analyze": cmd_analyze}
 
 
 def main() -> int:
