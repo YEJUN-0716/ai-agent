@@ -1,0 +1,22 @@
+# Secrets
+.env
+credentials.json
+token.json
+
+# Scratch space (keep the folder, ignore its contents)
+.tmp/*
+!.tmp/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
