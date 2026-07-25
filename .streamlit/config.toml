@@ -1,0 +1,9 @@
+# 다크 트레이딩 터미널 테마 (TradingView 계열).
+# app.py 의 토큰 기반 CSS 와 값을 맞춰 흰 깜빡임/위젯 불일치를 없앤다.
+[theme]
+base = "dark"
+primaryColor = "#2962ff"
+backgroundColor = "#131722"
+secondaryBackgroundColor = "#1b1f2a"
+textColor = "#d1d4dc"
+font = "sans serif"

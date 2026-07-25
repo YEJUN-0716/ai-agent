@@ -147,38 +147,40 @@ st.markdown("""<style>
 /* ═══════════════════════════════════════════
    DESIGN TOKENS
 ═══════════════════════════════════════════ */
+/* 다크 트레이딩 터미널 (TradingView 계열) — 기본값. 변수명은 그대로 두고
+   값만 다크로 바꿔 앱 전체가 한 번에 리스킨된다. */
 :root {
-  --bg:        #f8fafc;
-  --surface:   #ffffff;
-  --surface2:  #f1f5f9;
-  --border:    #e2e8f0;
-  --border2:   #cbd5e1;
+  --bg:        #131722;
+  --surface:   #1b1f2a;
+  --surface2:  #232838;
+  --border:    #2a2e39;
+  --border2:   #363b47;
 
-  --text-1:    #0f172a;
-  --text-2:    #334155;
-  --text-3:    #64748b;
-  --text-4:    #94a3b8;
+  --text-1:    #d1d4dc;
+  --text-2:    #b2b5be;
+  --text-3:    #868993;
+  --text-4:    #5d616b;
 
-  --green:     #10b981;
-  --green-bg:  #ecfdf5;
-  --green-bd:  #6ee7b7;
-  --red:       #ef4444;
-  --red-bg:    #fef2f2;
-  --red-bd:    #fca5a5;
-  --amber:     #f59e0b;
-  --amber-bg:  #fffbeb;
-  --amber-bd:  #fcd34d;
-  --blue:      #3b82f6;
-  --blue-bg:   #eff6ff;
-  --blue-bd:   #93c5fd;
+  --green:     #26a69a;
+  --green-bg:  rgba(38,166,154,.14);
+  --green-bd:  rgba(38,166,154,.55);
+  --red:       #ef5350;
+  --red-bg:    rgba(239,83,80,.14);
+  --red-bd:    rgba(239,83,80,.55);
+  --amber:     #ff9800;
+  --amber-bg:  rgba(255,152,0,.14);
+  --amber-bd:  rgba(255,152,0,.55);
+  --blue:      #2962ff;
+  --blue-bg:   rgba(41,98,255,.16);
+  --blue-bd:   rgba(41,98,255,.6);
 
-  --radius-sm: 6px;
-  --radius:    10px;
-  --radius-lg: 14px;
+  --radius-sm: 3px;
+  --radius:    4px;
+  --radius-lg: 6px;
 
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.06);
-  --shadow:    0 2px 8px rgba(0,0,0,.08);
-  --shadow-md: 0 4px 16px rgba(0,0,0,.10);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --shadow:    0 2px 8px rgba(0,0,0,.45);
+  --shadow-md: 0 6px 20px rgba(0,0,0,.55);
 }
 
 /* ═══════════════════════════════════════════
@@ -191,6 +193,7 @@ html, body, [class*="css"] {
   color: var(--text-1);
   background: var(--bg);
 }
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] { background: var(--bg) !important; }
 .block-container {
   padding: 3.5rem 2rem 3rem !important;
   max-width: 1600px;
