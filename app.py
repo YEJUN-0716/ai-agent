@@ -4321,6 +4321,60 @@ div[class*="st-key-cmd_bar"] input::placeholder { color: #4a525f !important; }
 """, unsafe_allow_html=True)
 
 
+def render_command_bar():
+    """터미널 커맨드 바 — 시장/티커 입력 + 분석 실행. 티커 테이프 바로 아래(화면 최상단)에
+    두고, 실제 분석과 결과 표시는 아래쪽 워크스페이스(render_stock_analysis_panel)가 맡는다.
+
+    실행은 "예약 → rerun → 실행" 2단계다. 여기서 pending_analysis만 세우고 rerun하면,
+    다음 rerun에서 이 함수가 스캔 스트립을 먼저 그린 뒤 워크스페이스가 블로킹 분석을 돌린다."""
+    with st.container(key="cmd_bar"):
+        st.markdown("""
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;
+            font-family:'JetBrains Mono',ui-monospace,monospace">
+  <span style="width:6px;height:6px;border-radius:50%;background:#26a69a;
+               box-shadow:0 0 7px #26a69a"></span>
+  <span style="font-size:10.5px;font-weight:800;color:#26a69a;letter-spacing:1.4px">READY</span>
+  <span style="font-size:10.5px;font-weight:700;color:var(--text-3);letter-spacing:1.4px;
+               margin-left:4px">SYMBOL INPUT · 종목 분석</span>
+</div>
+""", unsafe_allow_html=True)
+        c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
+        with c_mkt:
+            market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"],
+                                  label_visibility="collapsed")
+        with c_tkr:
+            if market == "한국 (KRX)":
+                ca, cb = st.columns([2, 1])
+                ticker_raw = ca.text_input("종목코드", placeholder="005930",
+                                           label_visibility="collapsed")
+                sfx = ".KS" if "KS" in cb.radio("거래소", [".KS", ".KQ"], horizontal=True,
+                                                label_visibility="collapsed") else ".KQ"
+                ticker = (ticker_raw.strip() + sfx).upper() if ticker_raw else ""
+            elif market == "미국 (NYSE/NASDAQ)":
+                ticker = st.text_input("티커", placeholder="AAPL  /  NVDA  /  TSLA",
+                                       label_visibility="collapsed").strip().upper()
+            else:
+                ticker = st.text_input("ETF 티커", placeholder="SPY  /  QQQ  /  GLD",
+                                       label_visibility="collapsed").strip().upper()
+        with c_btn1:
+            run = st.button("분석 시작", type="primary", disabled=(not ticker), use_container_width=True)
+        with c_btn2:
+            refresh = st.button("새로고침", disabled=('tab1' not in st.session_state), use_container_width=True)
+    if refresh:
+        if 'tab1' in st.session_state:
+            del st.session_state['tab1']
+        run = True
+
+    if run and ticker:
+        st.session_state['pending_analysis'] = ticker
+        st.rerun()
+
+    # 예약된 분석이 이번 rerun에서 돌아가는 중 — 입력칸 바로 아래에 진행 표시를 띄운다.
+    _pending = st.session_state.get('pending_analysis')
+    if _pending:
+        render_scan_strip(st.empty(), f"ANALYZING {_pending} · 전 모듈 스캔 중")
+
+
 def _module_accent(rep):
     """모듈 칩의 좌측 상태 바 색 + 경고 점멸 여부를 보고서에서 계산 —
     클릭 전에도 각 모듈이 어떤 상태인지 한눈에 보이게 한다."""
@@ -4576,8 +4630,9 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
-    # ── 상단 티커 테이프 (지수 · 레짐 · 운영 모드) ──────────────────
+    # ── 상단 티커 테이프 (지수 · 레짐 · 운영 모드) + 커맨드 바 ──────────────────
     render_market_tape()
+    render_command_bar()
 
     # ── 애널리스트 그룹 공용 패널: 단일 종목 분석 ──────
     def render_stock_analysis_panel():
@@ -4589,51 +4644,6 @@ def main():
         max_position_pct = 20
         min_rr           = 1.5
 
-        with st.container(key="cmd_bar"):
-            st.markdown("""
-<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;
-            font-family:'JetBrains Mono',ui-monospace,monospace">
-  <span style="width:6px;height:6px;border-radius:50%;background:#26a69a;
-               box-shadow:0 0 7px #26a69a"></span>
-  <span style="font-size:10.5px;font-weight:800;color:#26a69a;letter-spacing:1.4px">READY</span>
-  <span style="font-size:10.5px;font-weight:700;color:var(--text-3);letter-spacing:1.4px;
-               margin-left:4px">SYMBOL INPUT · 종목 분석</span>
-</div>
-""", unsafe_allow_html=True)
-            c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
-            with c_mkt:
-                market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"],
-                                      label_visibility="collapsed")
-            with c_tkr:
-                if market == "한국 (KRX)":
-                    ca, cb = st.columns([2,1])
-                    ticker_raw = ca.text_input("종목코드", placeholder="005930",
-                                               label_visibility="collapsed")
-                    sfx = ".KS" if "KS" in cb.radio("거래소", [".KS",".KQ"], horizontal=True,
-                                                       label_visibility="collapsed") else ".KQ"
-                    ticker = (ticker_raw.strip()+sfx).upper() if ticker_raw else ""
-                elif market == "미국 (NYSE/NASDAQ)":
-                    ticker = st.text_input("티커", placeholder="AAPL  /  NVDA  /  TSLA",
-                                           label_visibility="collapsed").strip().upper()
-                else:
-                    ticker = st.text_input("ETF 티커", placeholder="SPY  /  QQQ  /  GLD",
-                                           label_visibility="collapsed").strip().upper()
-            with c_btn1:
-                run = st.button("분석 시작", type="primary", disabled=(not ticker), use_container_width=True)
-            with c_btn2:
-                refresh = st.button("새로고침", disabled=('tab1' not in st.session_state), use_container_width=True)
-        if refresh:
-            if 'tab1' in st.session_state:
-                del st.session_state['tab1']
-            run = True
-
-        # ── 분석은 "예약 → rerun → 실행" 2단계 ──────────────────
-        # 예약된 rerun에서 스캔 스트립을 먼저 그린 뒤 실제 분석(블로킹)이 돈다.
-        # 분석 종료 후 main 끝의 flip rerun이 콘솔을 새 결과로 다시 그린다.
-        if run and ticker:
-            st.session_state['pending_analysis'] = ticker
-            st.rerun()
-
         _err_prev = st.session_state.pop('analysis_error', None)
         if _err_prev:
             st.error(_err_prev)
@@ -4641,8 +4651,6 @@ def main():
         run_ticker = st.session_state.pop('pending_analysis', None)
         if run_ticker:
             ticker = run_ticker
-            walk_ph = st.empty()
-            render_scan_strip(walk_ph, f"ANALYZING {ticker} · 전 모듈 스캔 중")
             prog = st.progress(0); msg = st.empty()
             msg.text("📥 데이터 다운로드 중...")
             prog.progress(5)
@@ -4654,13 +4662,13 @@ def main():
             if _df.empty:
                 st.session_state['analysis_error'] = f"'{ticker}' 데이터를 찾을 수 없습니다."
                 st.session_state['_analysis_done_flip'] = True
-                prog.empty(); msg.empty(); walk_ph.empty()
+                prog.empty(); msg.empty()
             else:
                 _df = _df.dropna(subset=['Close'])
                 if len(_df) < 30:
                     st.session_state['analysis_error'] = "데이터 부족 (30일 미만)."
                     st.session_state['_analysis_done_flip'] = True
-                    prog.empty(); msg.empty(); walk_ph.empty()
+                    prog.empty(); msg.empty()
                 else:
                     prog.progress(15); msg.text("📈 차트·파동 분석 중...")
                     _t_score, _t_det  = technical_score(_df)
@@ -4791,7 +4799,7 @@ def main():
                     except Exception:
                         pass
 
-                    prog.progress(100); prog.empty(); msg.empty(); walk_ph.empty()
+                    prog.progress(100); prog.empty(); msg.empty()
 
                     st.session_state['tab1'] = {
                         'ticker': ticker, 'df': _df, 'end_dt': end_dt,
@@ -7465,12 +7473,12 @@ def main():
 
     render_module_console(_groups)
 
-    # ── 분석 워크스페이스 (항상 표시 — 여기서 분석해야 애널리스트 모듈이 채워진다) ──
+    # ── 분석 워크스페이스 (커맨드 바에서 실행한 분석의 결과 화면) ──
     st.markdown("""
 <div style="display:flex;align-items:baseline;gap:10px;margin:20px 0 8px 0">
   <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
                font-family:'JetBrains Mono',ui-monospace,monospace">ANALYSIS WORKSPACE</span>
-  <span style="font-size:10.5px;color:var(--text-4)">단일 종목 정밀 분석 · 결과가 애널리스트 모듈로 반영됩니다</span>
+  <span style="font-size:10.5px;color:var(--text-4)">상단 커맨드 바에서 실행한 종목 분석 결과 · 애널리스트 모듈로도 반영됩니다</span>
 </div>""", unsafe_allow_html=True)
     with st.container(border=True, key="analysis_workspace"):
         render_stock_analysis_panel()
