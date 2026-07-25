@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as _st_components
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -12,15 +11,6 @@ import os
 import json
 import warnings
 warnings.filterwarnings('ignore')
-
-# ── 사무실 게임 씬 컴포넌트 (office_game/index.html) ──────────────
-# 캔버스 위에서 직원 캐릭터가 실제로 걸어다니고, 클릭하면 (room, emp)를 반환한다.
-try:
-    _office_game_component = _st_components.declare_component(
-        "office_game", path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "office_game"))
-    _OFFICE_GAME_AVAILABLE = True
-except Exception:
-    _OFFICE_GAME_AVAILABLE = False
 
 # ── 퀀트 모듈 ──────────────────────────────────────────────────
 
@@ -139,7 +129,6 @@ except Exception:
 st.set_page_config(page_title="퀀트 트레이딩 시스템", page_icon="📈", layout="wide",
                    initial_sidebar_state="collapsed")
 
-_dark_mode = st.session_state.get('ui_dark_mode', False)
 
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -470,37 +459,11 @@ code { font-family: 'JetBrains Mono', monospace !important; font-size: 12px !imp
 ::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
 </style>""", unsafe_allow_html=True)
 
-if _dark_mode:
-    st.markdown("""<style>
-:root {
-  --bg:        #0b1220;
-  --surface:   #111827;
-  --surface2:  #1a2233;
-  --border:    #232b3d;
-  --border2:   #334155;
-
-  --text-1:    #e5e7eb;
-  --text-2:    #cbd5e1;
-  --text-3:    #94a3b8;
-  --text-4:    #64748b;
-
-  --green-bg:  rgba(16,185,129,.14);
-  --red-bg:    rgba(239,68,68,.14);
-  --amber-bg:  rgba(245,158,11,.14);
-  --blue-bg:   rgba(59,130,246,.14);
-}
-.stApp { background: var(--bg) !important; }
-</style>""", unsafe_allow_html=True)
-
-    TV_BG = TV_PAPER = '#131722'
-    TV_GRID = '#2a2e39'
-    TV_BORDER = '#363c4e'
-    TV_TEXT = '#d1d4dc'
-else:
-    TV_BG = TV_PAPER = '#ffffff'
-    TV_GRID = '#e0e0e0'
-    TV_BORDER = '#cccccc'
-    TV_TEXT = '#1a1a1a'
+# 차트 색은 상단 :root 터미널 팔레트와 같은 값을 쓴다 — 라이트 테마 분기 없음.
+TV_BG = TV_PAPER = '#131722'
+TV_GRID = '#2a2e39'
+TV_BORDER = '#363c4e'
+TV_TEXT = '#d1d4dc'
 
 TV_UP = '#26a69a'
 TV_DOWN = '#ef5350'
@@ -4234,205 +4197,207 @@ def advanced_research_employee():
 
 
 # ─────────────────────────────────────────────
-# 사무실 뷰 — 팀별 방 + 직원 클릭 → 보고서, 마지막 총괄 트레이더 종합 보고
+# 모듈 콘솔 — 그룹별 모듈 목록 + 모듈 클릭 → 보고서·업무 패널, 하단 데스크 종합 상태
 # ─────────────────────────────────────────────
 
-class OfficeEmployee(NamedTuple):
-    """방 안의 직원 한 명. panel_fn이 있으면 보고서 카드 아래에 실제 업무 화면(입력폼·실행버튼·결과)을
-    이어서 그린다 — 이름 있는 필드라 emp[3]/emp[4] 같은 위치 인덱싱과 len() 방어 코드가 필요 없다."""
+class AnalyticsModule(NamedTuple):
+    """콘솔에 노출되는 분석/운영 모듈 하나. panel_fn이 있으면 보고서 카드 아래에 실제
+    업무 화면(입력폼·실행버튼·결과)을 이어서 그린다."""
     key: str
     name: str
-    avatar: str
     report_fn: Callable
     panel_fn: Optional[Callable] = None
 
 
-class OfficeRoom(NamedTuple):
-    """사무실의 방(팀) 하나. employees는 직원 리스트이거나, 인자 없는 callable
-    (team_panel_fn 실행 *이후*에 평가됨 — AI애널리스트팀처럼 그 방의 공용 패널이 실행돼야
-    로스터가 정해지는 경우에 사용)."""
+class ModuleGroup(NamedTuple):
+    """모듈 그룹(데스크) 하나. modules는 모듈 리스트이거나, 매 rerun 평가되는 인자 없는
+    callable(애널리스트 그룹처럼 직전 분석 결과에 따라 목록이 달라지는 경우에 사용).
+    group_panel_fn은 이 그룹의 모듈을 열었을 때 보고서 위에 먼저 그리는 공용 입력 패널
+    (예: 시그널·백테스트 그룹의 종목 유니버스 선택)."""
     key: str
     name: str
     icon: str
-    employees: Union[List[OfficeEmployee], Callable[[], List[OfficeEmployee]]]
-    team_panel_fn: Optional[Callable] = None
+    modules: Union[List[AnalyticsModule], Callable[[], List[AnalyticsModule]]]
+    group_panel_fn: Optional[Callable] = None
 
 
-_OFFICE_STATUS_COLOR = {'정상': '#10b981', '주의': '#f59e0b', '경고': '#ef4444', '대기': '#94a3b8'}
-
-# 보고서 카드의 기능성 아이콘(rep['icon'])은 Tab1 애널리스트 카드에서도 재사용되므로 그대로 두고,
-# 사무실 방 안의 아바타(클릭 타일)에만 쓸 사람 캐릭터 이모지를 직원 이름 기준으로 별도 매핑한다.
-_OFFICE_AVATARS = {
-    '차트+파동+모멘텀': '🧑‍💻', '퀀트+재무': '🧑‍💼', '매크로+금리': '🧑‍🏫',
-    'ICT+CRT': '🕵️', '백테스팅팀': '🧑‍🔬', '리스크팀': '💂', '총괄': '🧑‍⚖️',
-    '실행 모드': '🧑‍✈️', '시그널 파이프라인': '🧑‍🔧', '리스크 가드레일': '👮', '계좌 현황': '🕴️',
-    '팩터 랭킹': '🧑‍🔬', '시스템 시그널': '🤖', '섹터 로테이션': '🧑‍🚀',
-    'ML 신호': '👩‍💻',
-    '팩터 백테스트': '🧑‍🔬', '종목 백테스팅': '🧑‍💻',
-    '고급 분석': '🕵️‍♀️',
-}
+_MODULE_STATUS_COLOR = {'정상': '#26a69a', '주의': '#f0b90b', '경고': '#ef5350', '대기': '#5d6673'}
 
 
-def _office_avatar(name):
-    return _OFFICE_AVATARS.get(name, '🧑‍💼')
-
-
-def inject_office_css():
-    """방 컨테이너를 사무실 바닥·파티션처럼 보이게 하는 CSS + 직원 타일 "일하는 중" 애니메이션
-    키프레임을 주입. st.container(key=...)가 만드는 안정적인 st-key-* 클래스를 이용해
-    사무실 방에만 스코프를 좁힌다(앱 전역 컨테이너에는 영향 없음). 실제 색/애니메이션
-    선택(직원별로 다름)은 render_office_rooms가 매 rerun 별도의 작은 <style> 블록으로 주입한다.
+def inject_console_css():
+    """모듈 콘솔(그룹 컨테이너 + 모듈 칩 버튼) + 커맨드 바 CSS를 주입.
+    st.container(key=...)가 만드는 안정적인 st-key-* 클래스로 스코프를 좁힌다.
 
     주의: 세션당 1회 주입(session_state 게이트)은 금물 — Streamlit은 rerun마다 화면을
-    새로 그리므로 두 번째 rerun부터 <style>이 DOM에서 사라져 사무실 스타일이 전부 풀린다.
-    매 rerun 호출돼야 하며, 중복 호출 방지는 호출부(render_office_rooms 한 곳)가 담당한다."""
+    새로 그리므로 두 번째 rerun부터 <style>이 DOM에서 사라져 스타일이 전부 풀린다.
+    매 rerun 호출돼야 하며, 중복 호출 방지는 호출부(render_module_console 한 곳)가 담당한다."""
     st.markdown("""
 <style>
-/* ── 사무실 바닥재: 원목 파케이 플로어링 느낌의 마루 패턴 ── */
-div[class*="st-key-office_room_"] {
-    background:
-        repeating-linear-gradient(90deg, rgba(120,90,40,.05) 0 2px, transparent 2px 34px),
-        repeating-linear-gradient(0deg, rgba(120,90,40,.045) 0 2px, transparent 2px 34px),
-        linear-gradient(180deg, rgba(120,100,60,.05) 0%, rgba(120,100,60,.05) 100%);
-    border-radius: 14px !important;
-    border: 1px solid var(--border) !important;
-    border-top: 3px solid #8b6f3e !important;
-    padding: 16px 14px 14px 14px !important;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 1px 3px rgba(0,0,0,.05) !important;
-}
-/* ── 직원 = 책상 앞에 선 캐릭터 타일 (기존 알약 버튼보다 훨씬 큼직하게) ── */
-div[class*="st-key-office_room_"] button {
-    font-size: 1.65rem !important;
-    line-height: 1.35 !important;
-    min-height: 88px !important;
-    padding: 10px 8px 14px 8px !important;
-    border-radius: 12px 12px 6px 6px !important;
+/* ── 모듈 그룹 패널 ── */
+div[class*="st-key-modgrp_"] {
     background: var(--surface) !important;
-    border-bottom: 5px solid var(--border2, #cbd5e1) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
+    padding: 10px 12px 12px 12px !important;
+}
+/* ── 모듈 칩: 좌측 상태 바 + 이름 + 상태(모노) ──
+   주의: Streamlit이 버튼의 background/border를 !important로 고정하므로 그 두 속성으로는
+   상태색을 칠할 수 없다. 덮어쓰기가 통하는 box-shadow(inset)로 좌측 바와 배경 틴트를 그린다. */
+div[class*="st-key-modbtn_"] button {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace !important;
+    font-size: 11.5px !important;
+    line-height: 1.6 !important;
+    min-height: 58px !important;
+    padding: 8px 10px !important;
+    color: var(--text-2) !important;
     white-space: pre-line !important;
-    transition: transform .15s ease, box-shadow .15s ease;
+    box-shadow: inset 3px 0 0 0 var(--border2) !important;
+    transition: filter .12s ease;
 }
-div[class*="st-key-office_room_"] button p { font-size: 1.65rem !important; line-height: 1.3 !important; }
-div[class*="st-key-office_room_"] button:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 6px 14px rgba(0,0,0,.12) !important;
+div[class*="st-key-modbtn_"] button p {
+    font-size: 11.5px !important; line-height: 1.6 !important;
 }
-div[class*="st-key-office_room_"] button:active { transform: translateY(-1px) scale(.98); }
+div[class*="st-key-modbtn_"] button:hover { filter: brightness(1.25); }
 
-@keyframes office-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 var(--office-glow, rgba(16,185,129,.35)); }
-    50%      { box-shadow: 0 0 0 5px rgba(16,185,129,0); }
-}
-@keyframes office-pulse-fast {
-    0%, 100% { box-shadow: 0 0 0 0 var(--office-glow, rgba(245,158,11,.4)); }
-    50%      { box-shadow: 0 0 0 5px rgba(245,158,11,0); }
-}
-@keyframes office-shake {
-    0%, 100% { transform: translateX(0); }
-    20%      { transform: translateX(-2px); }
-    40%      { transform: translateX(2px); }
-    60%      { transform: translateX(-2px); }
-    80%      { transform: translateX(2px); }
-}
-@keyframes office-sleep {
-    0%, 100% { opacity: .55; }
-    50%      { opacity: .85; }
+/* 경고 모듈은 좌측 바가 점멸한다 (per-chip box-shadow를 주지 않아야 애니메이션이 산다) */
+@keyframes mod-alert {
+    0%, 100% { box-shadow: inset 3px 0 0 0 #ef5350, inset 0 0 0 999px rgba(239,83,80,.10); }
+    50%      { box-shadow: inset 3px 0 0 0 rgba(239,83,80,.22), inset 0 0 0 999px rgba(239,83,80,.02); }
 }
 
-/* ── 직원들이 자리로 뛰어가는 애니메이션 (분석 실행 중에만 표시) ── */
-@keyframes office-walk-bounce {
-    0%, 100% { transform: translateY(0) scaleX(1); }
-    25%      { transform: translateY(-9px) scaleX(.94); }
-    50%      { transform: translateY(0) scaleX(1.05); }
-    75%      { transform: translateY(-5px) scaleX(.97); }
-}
-.office-walk-strip {
-    display: flex; align-items: center; gap: 14px;
-    background: var(--surface2); border: 1px dashed var(--border2, #cbd5e1);
-    border-radius: 10px; padding: 10px 16px; margin: 4px 0 12px 0;
-}
-.office-walk-strip .office-walk-char {
-    font-size: 1.6rem; display: inline-block;
-    animation: office-walk-bounce 0.7s ease-in-out infinite;
-}
-.office-walk-strip .office-walk-label {
-    font-size: 12.5px; font-weight: 600; color: var(--text-3);
-}
-
-/* ── 시세판(칠판/전광판 스타일) 종목 입력 패널 — 라이트/다크 무관하게 항상 짙은 보드 ── */
-div[class*="st-key-office_ticker_board"] {
+/* ── 커맨드 바(종목 입력) — 터미널 입력 라인 ── */
+div[class*="st-key-cmd_bar"] {
     background:
-        radial-gradient(ellipse at top left, rgba(16,185,129,.10), transparent 60%),
-        repeating-linear-gradient(180deg, rgba(255,255,255,.015) 0 1px, transparent 1px 3px),
-        linear-gradient(155deg, #0b1220 0%, #111a2c 55%, #0b1220 100%);
-    border: 1px solid #24314d !important;
-    border-radius: 14px !important;
-    padding: 18px 20px 16px 20px !important;
-    box-shadow: inset 0 0 40px rgba(0,0,0,.35), 0 4px 16px rgba(0,0,0,.18) !important;
+        repeating-linear-gradient(180deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px),
+        linear-gradient(180deg, #171b26 0%, #12151d 100%);
+    border: 1px solid var(--border2) !important;
+    border-radius: 4px !important;
+    padding: 14px 16px 12px 16px !important;
 }
-div[class*="st-key-office_ticker_board"] label,
-div[class*="st-key-office_ticker_board"] p { color: #d6dee8 !important; }
-div[class*="st-key-office_ticker_board"] input,
-div[class*="st-key-office_ticker_board"] [data-baseweb="select"] > div {
-    background: #0f1829 !important;
-    border: 1px solid #2c3b5c !important;
-    color: #7ee6b8 !important;
-    font-family: 'JetBrains Mono', monospace !important;
+div[class*="st-key-cmd_bar"] label,
+div[class*="st-key-cmd_bar"] p { color: var(--text-3) !important; }
+div[class*="st-key-cmd_bar"] input,
+div[class*="st-key-cmd_bar"] [data-baseweb="select"] > div {
+    background: #0d1017 !important;
+    border: 1px solid var(--border2) !important;
+    color: #26a69a !important;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace !important;
 }
-div[class*="st-key-office_ticker_board"] input::placeholder { color: #4c5f80 !important; }
+div[class*="st-key-cmd_bar"] input::placeholder { color: #4a525f !important; }
+
+/* ── 티커 테이프(상단 시장 상태 스트립) ── */
+.tape {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0;
+    background: linear-gradient(180deg, #171b26 0%, #12151d 100%);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 4px; margin-bottom: 12px; overflow: hidden;
+}
+.tape .cell {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 9px 14px; border-right: 1px solid var(--border);
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+.tape .cell:last-child { border-right: none; }
+.tape .sym { font-size: 11px; font-weight: 700; color: var(--text-3); letter-spacing: .8px; }
+.tape .val { font-size: 12.5px; font-weight: 700; }
+.tape .chg { font-size: 11px; font-weight: 600; }
+.tape .spacer { flex: 1 1 auto; border-right: none; }
+
+/* ── 스캔 진행 스트립(분석 실행 중) ── */
+@keyframes scan-sweep { 0% { left: -34%; } 100% { left: 104%; } }
+.scan-strip {
+    position: relative; overflow: hidden;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 9px 14px; margin: 4px 0 12px 0;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11.5px; font-weight: 600; color: var(--text-2); letter-spacing: .5px;
+}
+.scan-strip::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 30%;
+    background: linear-gradient(90deg, transparent, rgba(41,98,255,.20), transparent);
+    animation: scan-sweep 1.1s linear infinite;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-_OFFICE_ANIM = {'정상': 'office-pulse', '주의': 'office-pulse-fast', '경고': 'office-shake', '대기': 'office-sleep'}
-
-
-def _office_tile_style(rep):
-    """직원 타일 테두리 색·애니메이션을 보고서에서 계산 — 클릭 전에도 "지금 뭘 하고 있는지"가
-    보이게 한다(정상=은은한 초록 펄스, 주의=빠른 호박색 펄스, 경고=흔들림, 대기=졸린 깜빡임)."""
+def _module_accent(rep):
+    """모듈 칩의 좌측 상태 바 색 + 경고 점멸 여부를 보고서에서 계산 —
+    클릭 전에도 각 모듈이 어떤 상태인지 한눈에 보이게 한다."""
     if 'score' in rep:
-        color = score_color(rep['score'])
-        anim = ('office-pulse' if rep['verdict'] == '매수'
-                else 'office-shake' if rep['verdict'] == '매도' else 'office-sleep')
-    else:
-        color = _OFFICE_STATUS_COLOR.get(rep['status'], '#94a3b8')
-        anim = _OFFICE_ANIM.get(rep['status'], '')
-    return color, anim
+        return score_color(rep['score']), rep['verdict'] == '매도'
+    return _MODULE_STATUS_COLOR.get(rep['status'], '#5d6673'), rep['status'] == '경고'
 
 
-def _office_normalize(rep):
-    """분석직원(score 보고서) / 운영·시스템직원(status 보고서)을 공통 표시 포맷으로 변환."""
+def _normalize_report(rep):
+    """분석 모듈(score 보고서) / 운영·시스템 모듈(status 보고서)을 공통 표시 포맷으로 변환."""
     if 'score' in rep:
         return {'icon': rep['icon'], 'name': rep['name'], 'color': score_color(rep['score']),
                 'headline': f"{rep['score']:.0f}점 · {rep['verdict']}", 'reasons': rep['reasons']}
     return {'icon': rep['icon'], 'name': rep['name'],
-            'color': _OFFICE_STATUS_COLOR.get(rep['status'], '#94a3b8'),
+            'color': _MODULE_STATUS_COLOR.get(rep['status'], '#5d6673'),
             'headline': rep['status'], 'reasons': rep['reasons']}
 
 
 def _reasons_to_html(reasons, empty_msg='참고할 정보 없음'):
-    """근거 리스트를 <li> HTML로 변환 — 사무실 카드와 Tab1 팀 카드가 공유하는 로직."""
+    """근거 리스트를 <li> HTML로 변환 — 모듈 보고서 카드와 Tab1 팀 카드가 공유하는 로직."""
     return ''.join(f"<li>{r}</li>" for r in reasons) or f'<li>{empty_msg}</li>'
 
 
-_OFFICE_WALK_CHARS = ['🧑‍💻', '🧑‍💼', '🕵️', '🧑‍🔬', '👮', '🧑‍✈️']
-
-
-def office_walk_strip_show(placeholder, label="직원들이 자리로 뛰어가는 중..."):
-    """분석 시작 시 직원들이 책상으로 뛰어가는 모습을 흉내내는 애니메이션 띠를 표시.
+def render_scan_strip(placeholder, label="ANALYZING · 전 모듈 스캔 중"):
+    """분석 실행 중 표시하는 스캔 진행 스트립.
     placeholder(st.empty())에 그려서, 분석이 끝나면 호출부에서 placeholder.empty()로 지운다."""
-    chars_html = "".join(
-        f'<span class="office-walk-char" style="animation-delay:{i*0.12:.2f}s">{c}</span>'
-        for i, c in enumerate(_OFFICE_WALK_CHARS))
-    placeholder.markdown(f"""
-<div class="office-walk-strip">
-  {chars_html}
-  <span class="office-walk-label">🏃 {label}</span>
-</div>""", unsafe_allow_html=True)
+    placeholder.markdown(
+        f'<div class="scan-strip">▚ {label}</div>', unsafe_allow_html=True)
 
 
-def render_company_summary():
-    """전사 종합 보고 배너 — 페이지 하단 상시 표시 + 게임에서 사장 클릭 시 상세 영역에도 표시."""
+@st.cache_data(ttl=900, show_spinner=False)
+def _market_tape():
+    """상단 티커 테이프용 지수 스냅샷(종가·전일대비 %). 15분 캐시, 실패 시 빈 리스트."""
+    syms = [('SPY', 'SPY'), ('QQQ', 'QQQ'), ('IWM', 'IWM'), ('^VIX', 'VIX')]
+    try:
+        data = yf.download([s for s, _ in syms], period='7d', interval='1d',
+                           progress=False, auto_adjust=True)['Close']
+        out = []
+        for sym, label in syms:
+            c = data[sym].dropna()
+            if len(c) < 2:
+                continue
+            last, prev = float(c.iloc[-1]), float(c.iloc[-2])
+            out.append({'sym': label, 'last': last,
+                        'chg': (last - prev) / prev * 100 if prev else 0.0})
+        return out
+    except Exception:
+        return []
+
+
+def render_market_tape():
+    """터미널 상단 티커 테이프 — 지수 시세 + 시장 레짐 + 운영 모드."""
+    regime = _get_market_regime()
+    r_color = {'bull': '#26a69a', 'bear': '#ef5350',
+               'mixed': '#f0b90b', 'unknown': '#5d6673'}.get(regime, '#5d6673')
+    r_label = {'bull': 'BULL · SPY·QQQ 200일선 위', 'bear': 'BEAR · SPY·QQQ 200일선 아래',
+               'mixed': 'MIXED · 엇갈림', 'unknown': 'N/A'}.get(regime, 'N/A')
+
+    cells = []
+    for q in _market_tape():
+        c = '#26a69a' if q['chg'] >= 0 else '#ef5350'
+        cells.append(
+            f"<div class='cell'><span class='sym'>{q['sym']}</span>"
+            f"<span class='val' style='color:{c}'>{q['last']:,.2f}</span>"
+            f"<span class='chg' style='color:{c}'>{q['chg']:+.2f}%</span></div>")
+    cells.append(
+        f"<div class='cell'><span class='sym'>REGIME</span>"
+        f"<span class='val' style='color:{r_color}'>{r_label}</span></div>")
+    cells.append("<div class='cell spacer'></div>")
+    cells.append(
+        "<div class='cell'><span class='sym'>MODE</span>"
+        "<span class='val' style='color:#787b86'>SIGNAL ONLY · 자동주문 없음</span></div>")
+    st.markdown(f"<div class='tape'>{''.join(cells)}</div>", unsafe_allow_html=True)
+
+
+def render_desk_status():
+    """데스크 종합 상태 바 — 페이지 하단 상시 표시. 운영·시스템 모듈 상태를 집계한다."""
     status_fns = [
         execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
         factor_ranking_employee, system_signal_employee, sector_rotation_employee,
@@ -4442,167 +4407,141 @@ def render_company_summary():
     warn_n, caution_n = statuses.count('경고'), statuses.count('주의')
     ok_n, wait_n = statuses.count('정상'), statuses.count('대기')
     if warn_n:
-        color, headline = '#ef4444', f"⚠️ 경고 {warn_n}건 — 확인 필요"
+        color, headline = '#ef5350', f"ALERT · 경고 {warn_n}건 — 확인 필요"
     elif caution_n:
-        color, headline = '#f59e0b', f"🟡 주의 {caution_n}건"
+        color, headline = '#f0b90b', f"CAUTION · 주의 {caution_n}건"
     else:
-        color, headline = '#10b981', "✅ 전체 정상 운영 중"
+        color, headline = '#26a69a', "NOMINAL · 전체 정상 운영 중"
 
     analyst_line = ''
-    snap = st.session_state.get('office_analyst_snapshot')
+    snap = st.session_state.get('analyst_snapshot')
     if snap:
         m = snap['manager']
-        analyst_line = (f"<div style='margin-top:6px'>📈 {snap['ticker']} 분석: "
-                        f"<b style='color:{score_color(m['total_score'])}'>{m['total_score']:.1f}점 · {m['consensus']}</b></div>")
+        analyst_line = (f"<div style='margin-top:6px'>LAST SCAN · {snap['ticker']} "
+                        f"<b style='color:{score_color(m['total_score'])}'>{m['total_score']:.1f} · {m['consensus']}</b></div>")
 
     st.markdown(f"""
-<div style="background:{color}0d;border:1px solid {color}40;border-radius:12px;padding:16px 20px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 총괄 트레이더 — 전사 종합 보고</div>
-  <div style="font-size:1.3rem;font-weight:800;color:{color};margin:6px 0">{headline}</div>
-  <div style="font-size:12px;color:var(--text-3)">정상 {ok_n} · 주의 {caution_n} · 경고 {warn_n} · 대기 {wait_n} (운영·시스템팀 {len(statuses)}명 기준){analyst_line}</div>
+<div style="background:{color}0d;border:1px solid {color}40;border-left:3px solid {color};
+            border-radius:4px;padding:14px 18px">
+  <div style="font-size:10.5px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:1.2px">DESK STATUS · 종합 상태</div>
+  <div style="font-size:1.15rem;font-weight:800;color:{color};margin:5px 0;
+              font-family:'JetBrains Mono',ui-monospace,monospace">{headline}</div>
+  <div style="font-size:11.5px;color:var(--text-3);font-family:'JetBrains Mono',ui-monospace,monospace">
+    OK {ok_n} · WARN {caution_n} · ALERT {warn_n} · IDLE {wait_n} (운영·시스템 모듈 {len(statuses)}개){analyst_line}</div>
 </div>""", unsafe_allow_html=True)
 
 
-def collect_office_game_data(rooms: List[OfficeRoom]):
-    """게임 씬(office_game 컴포넌트)에 넘길 방·캐릭터 데이터를 수집.
-    직원별 보고서를 평가해 상태색·애니메이션(behavior)을 뽑는다 — report_fn들은
-    로컬 파일/세션만 읽는 가벼운 함수라 render_office_rooms와 중복 호출해도 부담 없다."""
-    game_rooms = []
-    for room in rooms:
-        employees = room.employees() if callable(room.employees) else room.employees
-        if not employees:
-            if room.key == 'analyst':
-                # 분석 전에도 애널리스트팀 방과 빈 책상들을 보여준다 —
-                # "종목을 입력하면 출근한다"는 게임 서사를 시각적으로 예고
-                game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon,
-                                   'chars': [], 'ghost': len(TEAM_WEIGHTS) + 1})  # 7명 + 총괄
-            continue
-        chars = []
-        for emp in employees:
-            rep = emp.report_fn()
-            color, anim = _office_tile_style(rep)
-            n = _office_normalize(rep)
-            chars.append({'key': emp.key, 'name': emp.name, 'avatar': emp.avatar,
-                          'color': color, 'anim': anim, 'headline': n['headline']})
-        game_rooms.append({'key': room.key, 'name': room.name, 'icon': room.icon, 'chars': chars})
-    return game_rooms
-
-
-def render_office_report_card(rep):
-    """선택된 직원의 보고서 카드를 표시."""
-    n = _office_normalize(rep)
+def render_report_card(rep):
+    """선택된 모듈의 보고서 카드를 표시."""
+    n = _normalize_report(rep)
     _reason_html = _reasons_to_html(n['reasons'])
     st.markdown(f"""
-<div style="background:{n['color']}0d;border:1px solid {n['color']}40;border-radius:10px;
-            padding:12px 16px;margin:8px 0 4px 0">
+<div style="background:{n['color']}0d;border:1px solid {n['color']}40;border-left:3px solid {n['color']};
+            border-radius:4px;padding:12px 16px;margin:8px 0 4px 0">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
     <span style="font-size:13px;font-weight:700;color:var(--text-2)">{n['icon']} {n['name']}</span>
-    <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:{n['color']}20;color:{n['color']}">{n['headline']}</span>
+    <span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:3px;
+                 background:{n['color']}20;color:{n['color']};letter-spacing:.5px;
+                 font-family:'JetBrains Mono',ui-monospace,monospace">{n['headline']}</span>
   </div>
   <ul style="font-size:12px;color:var(--text-3);margin:0;padding-left:18px;line-height:1.7">{_reason_html}</ul>
 </div>""", unsafe_allow_html=True)
 
 
-def render_office_rooms(rooms: List[OfficeRoom]):
-    """여러 방을 2단계로 렌더링: 1) 모든 방의 헤더·(팀 공용 패널)·버튼을 먼저 그려 클릭을 확정하고(카드 자리는 예약만),
-    2) 최종 확정된 선택값으로 해당 방의 카드 자리에만 보고서를 채운다.
-    한 번의 rerun 안에서 버튼을 st.button()으로 순차 평가하는 Streamlit 특성상,
-    방마다 즉시 session_state를 읽어 카드를 그리면 방금 클릭한 방보다 먼저 그려진 방이
-    직전 선택값을 그대로 보여주는 결함이 생기므로 2단계로 분리한다.
-
-    team_panel_fn이 있는 방(입력폼·차트 등 넓은 화면이 필요)은 항상 전체 폭으로,
-    없는 방(버튼만 있는 단순한 방)은 사무실 평면도처럼 2개씩 나란히 배치한다."""
-    inject_office_css()
-    slots = {}
-    tile_css = []
-
-    def _render_room_body(room):
-        st.markdown(f"""
-<div style="display:inline-flex;align-items:center;gap:9px;margin:18px 0 8px 0;
-            background:linear-gradient(180deg,#8b6f3e 0%,#6f5730 100%);
-            border-radius:6px 6px 3px 3px;padding:7px 16px 7px 12px;
-            box-shadow:0 3px 6px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.15)">
-  <span style="font-size:17px">{room.icon}</span>
-  <span style="font-size:12.5px;font-weight:800;color:#fdf6e3;letter-spacing:.4px;
-               text-transform:uppercase">{room.name}</span>
-</div>""", unsafe_allow_html=True)
-        with st.container(border=True, key=f"office_room_{room.key}"):
-            if room.team_panel_fn is not None:
-                room.team_panel_fn()
-            employees = room.employees() if callable(room.employees) else room.employees
-            reports = {}
-            if employees:
-                st.caption(f"👥 직원 {len(employees)}명")
-                cols = st.columns(len(employees))
-                for col, emp in zip(cols, employees):
-                    with col:
-                        rep = emp.report_fn()
-                        reports[emp.key] = rep
-                        color, anim = _office_tile_style(rep)
-                        tile_css.append(
-                            f'.st-key-office_btn_{room.key}_{emp.key} button {{'
-                            f'border:2px solid {color} !important;'
-                            f'--office-glow:{color}59;'
-                            f'animation:{anim} 2.4s ease-in-out infinite;}}')
-                        _name_line = emp.name
-                        if anim == 'office-sleep':
-                            _name_line = f"😴 {_name_line}"
-                        elif anim == 'office-shake':
-                            _name_line = f"❗ {_name_line}"
-                        label = f"{emp.avatar}\n{_name_line}"
-                        if st.button(label, key=f"office_btn_{room.key}_{emp.key}", use_container_width=True):
-                            st.session_state['office_view'] = (room.key, emp.key)
-            slots[room.key] = (st.container(), employees, reports)
-
-    i = 0
-    while i < len(rooms):
-        room = rooms[i]
-        if room.team_panel_fn is not None:
-            _render_room_body(room)
-            i += 1
-        else:
-            pair = [room]
-            if i + 1 < len(rooms) and rooms[i + 1].team_panel_fn is None:
-                pair.append(rooms[i + 1])
-                i += 2
-            else:
-                i += 1
-            for col, r in zip(st.columns(len(pair)), pair):
-                with col:
-                    _render_room_body(r)
-
-    if tile_css:
-        st.markdown(f"<style>{''.join(tile_css)}</style>", unsafe_allow_html=True)
-
-    _sel = st.session_state.get('office_view')
-    for room_key, (slot, employees, reports) in slots.items():
-        with slot:
-            if employees and _sel and _sel[0] == room_key:
-                emp = next((e for e in employees if e.key == _sel[1]), None)
-                if emp is not None:
-                    render_office_report_card(reports.get(emp.key) or emp.report_fn())
-                    if emp.panel_fn is not None:
-                        st.markdown("")
-                        emp.panel_fn()
-            elif employees:
-                st.caption("👆 직원을 클릭하면 이 방에서 보고서와 업무 화면을 볼 수 있습니다.")
+def _group_modules(group: ModuleGroup):
+    return group.modules() if callable(group.modules) else group.modules
 
 
-def office_analyst_employees():
-    """AI 애널리스트팀 방의 직원 목록 — Tab1에서 마지막으로 분석한 종목 스냅샷 기반.
+def render_module_console(groups: List[ModuleGroup], per_row: int = 3):
+    """모듈 콘솔을 2단계로 렌더링: 1) 모든 그룹의 모듈 칩을 먼저 그려 이번 rerun의 클릭을
+    확정하고, 2) 확정된 선택값으로 콘솔 아래 상세 영역에 보고서·업무 패널을 그린다.
+    (Streamlit은 st.button()을 순차 평가하므로, 칩을 그리는 도중에 상세를 그리면
+    방금 클릭한 모듈이 직전 선택값을 덮어쓰기 전 상태로 표시된다.)
+
+    칩 스타일은 inject_console_css()에 의존한다 — main()이 매 rerun 먼저 주입한다."""
+    chip_css = []
+    reports = {}
+
+    for row_start in range(0, len(groups), per_row):
+        row = groups[row_start:row_start + per_row]
+        cols = st.columns(per_row)
+        for col, group in zip(cols, row):
+            with col:
+                modules = _group_modules(group)
+                with st.container(key=f"modgrp_{group.key}"):
+                    st.markdown(
+                        f"<div style='display:flex;align-items:baseline;gap:7px;margin-bottom:8px'>"
+                        f"<span style='font-size:13px'>{group.icon}</span>"
+                        f"<span style='font-size:10.5px;font-weight:800;color:var(--text-3);"
+                        f"letter-spacing:1.1px;text-transform:uppercase'>{group.name}</span>"
+                        f"<span style='font-size:10px;color:var(--text-4);margin-left:auto;"
+                        f"font-family:JetBrains Mono,monospace'>{len(modules or [])}</span></div>",
+                        unsafe_allow_html=True)
+                    if not modules:
+                        st.caption("대기 — 종목을 분석하면 모듈이 활성화됩니다.")
+                        continue
+                    # 위젯 키는 순번으로 만든다 — 모듈 키(예: '차트+파동+모멘텀')를 그대로 쓰면
+                    # st-key-* 클래스에 '+'·한글이 섞여 CSS 셀렉터가 깨진다.
+                    for idx, mod in enumerate(modules):
+                        chip_key = f"modbtn_{group.key}_{idx}"
+                        rep = mod.report_fn()
+                        reports[(group.key, mod.key)] = rep
+                        color, alert = _module_accent(rep)
+                        n = _normalize_report(rep)
+                        sel = st.session_state.get('module_view') == (group.key, mod.key)
+                        # 경고 모듈은 점멸 애니메이션이 box-shadow를 그리므로 여기서 덮어쓰지 않는다
+                        if alert:
+                            shadow = 'animation:mod-alert 1.4s ease-in-out infinite;'
+                        elif sel:
+                            shadow = (f'box-shadow:inset 3px 0 0 0 {color},'
+                                      f'inset 0 0 0 1px {color}77,'
+                                      f'inset 0 0 0 999px {color}26 !important;')
+                        else:
+                            shadow = (f'box-shadow:inset 3px 0 0 0 {color},'
+                                      f'inset 0 0 0 999px {color}0f !important;')
+                        chip_css.append(f'.st-key-{chip_key} button {{{shadow}}}')
+                        if st.button(f"{mod.name}\n{n['headline']}",
+                                     key=chip_key, use_container_width=True):
+                            st.session_state['module_view'] = (group.key, mod.key)
+
+    if chip_css:
+        st.markdown(f"<style>{''.join(chip_css)}</style>", unsafe_allow_html=True)
+
+    # ── 선택된 모듈 상세 ──────────────
+    sel = st.session_state.get('module_view')
+    sel_group = next((g for g in groups if sel and g.key == sel[0]), None)
+    sel_mod = next((m for m in (_group_modules(sel_group) or []) if m.key == sel[1]),
+                   None) if sel_group else None
+    with st.container(border=True, key="module_detail"):
+        if sel_mod is None:
+            st.caption("모듈을 선택하면 이 자리에 보고서와 업무 화면이 열립니다.")
+            return
+        st.markdown(
+            f"<div style='font-size:10.5px;font-weight:700;color:var(--text-4);letter-spacing:1px;"
+            f"margin-bottom:4px;font-family:JetBrains Mono,monospace'>"
+            f"{sel_group.icon} {sel_group.name} / {sel_mod.name}</div>", unsafe_allow_html=True)
+        if sel_group.group_panel_fn is not None:
+            sel_group.group_panel_fn()
+        render_report_card(reports.get((sel_group.key, sel_mod.key)) or sel_mod.report_fn())
+        if sel_mod.panel_fn is not None:
+            st.markdown("")
+            sel_mod.panel_fn()
+
+
+def analyst_modules():
+    """애널리스트 그룹의 모듈 목록 — 마지막으로 분석한 종목 스냅샷 기반.
     아직 분석 이력이 없으면 None."""
-    snap = st.session_state.get('office_analyst_snapshot')
+    snap = st.session_state.get('analyst_snapshot')
     if not snap:
         return None
     mgr = snap['manager']
-    mgr_rep = {'icon': '🧑‍💼', 'name': '총괄', 'score': mgr['total_score'], 'verdict': mgr['verdict'],
+    mgr_rep = {'icon': '📐', 'name': '총괄', 'score': mgr['total_score'], 'verdict': mgr['verdict'],
                'reasons': [mgr['consensus'], f"팀 합의율 {mgr['agreement']}%",
                            f"가장 강한 의견: {mgr['strongest_opinion']}"]
                + ([mgr['dissent']] if mgr['dissent'] else [])}
-    employees = [OfficeEmployee(r['name'], r['name'], _office_avatar(r['name']), (lambda rr=r: rr))
-                 for r in snap['reports']]
-    employees.append(OfficeEmployee('총괄', '총괄', _office_avatar('총괄'), lambda: mgr_rep))
-    return employees
+    modules = [AnalyticsModule(r['name'], r['name'], (lambda rr=r: rr)) for r in snap['reports']]
+    modules.append(AnalyticsModule('총괄', '총괄', lambda: mgr_rep))
+    return modules
 
 
 # 종목 분석 가중치 — 사이드바 제거, 값 하드코딩. 유일한 기준값(_DEFAULT_*)에서 파생시켜서
@@ -4617,46 +4556,30 @@ total_w = _DEFAULT_TOTAL_W
 
 
 def main():
-    _hdr_col1, _hdr_col2 = st.columns([5, 1])
-    with _hdr_col1:
-        st.markdown("""
-<div style="display:flex;align-items:center;gap:12px;padding:4px 0 12px 0;margin-bottom:0">
-  <div style="width:40px;height:40px;border-radius:10px;
-              background:linear-gradient(135deg,#10b981,#059669);
-              display:flex;align-items:center;justify-content:center;
-              font-size:20px;flex-shrink:0">📈</div>
+    inject_console_css()   # 테이프·커맨드바·모듈칩이 모두 이 CSS에 의존 (매 rerun 필요)
+    st.markdown(f"""
+<div style="display:flex;align-items:center;gap:12px;padding:2px 0 10px 0">
+  <div style="width:34px;height:34px;border-radius:4px;background:var(--surface2);
+              border:1px solid var(--border2);display:flex;align-items:center;
+              justify-content:center;font-size:16px;flex-shrink:0">▚</div>
   <div>
-    <div style="font-size:1.45rem;font-weight:800;color:var(--text-1);
-                letter-spacing:-0.5px;line-height:1.2">퀀트 트레이딩 시스템</div>
-    <div style="font-size:12.5px;color:var(--text-3);margin-top:2px">
-      종목 분석 &nbsp;·&nbsp; 팩터 퀀트 &nbsp;·&nbsp; 시그널 알림 &nbsp;·&nbsp; 리스크 관리
+    <div style="font-size:1.15rem;font-weight:800;color:var(--text-1);letter-spacing:.6px;
+                line-height:1.2;font-family:'JetBrains Mono',ui-monospace,monospace">QUANT TERMINAL</div>
+    <div style="font-size:11px;color:var(--text-4);margin-top:2px;letter-spacing:.6px;
+                font-family:'JetBrains Mono',ui-monospace,monospace">
+      종목분석 · 팩터퀀트 · 시그널 · 리스크
     </div>
   </div>
+  <div style="margin-left:auto;font-size:11px;color:var(--text-4);letter-spacing:.6px;
+              font-family:'JetBrains Mono',ui-monospace,monospace">
+    {datetime.now().strftime('%Y-%m-%d %H:%M')} KST</div>
 </div>
 """, unsafe_allow_html=True)
-    with _hdr_col2:
-        st.toggle("🌙 다크모드", value=_dark_mode, key="ui_dark_mode")
-    st.divider()
 
-    # ── 홈 요약 배너 (시장 레짐 스냅샷) ──────────────────
-    _home_regime = _get_market_regime()
-    _home_r_color = {'bull': '#10b981', 'bear': '#ef4444', 'mixed': '#f59e0b', 'unknown': '#94a3b8'}.get(_home_regime, '#94a3b8')
-    _home_r_label = {
-        'bull': '🐂 강세장 — SPY·QQQ 모두 200일선 위 (롱 우호적)',
-        'bear': '🐻 약세장 — SPY·QQQ 모두 200일선 아래 (신중 접근)',
-        'mixed': '🟡 혼조 — SPY·QQQ 엇갈림 (선택적 진입)',
-        'unknown': '⚪ 시장 레짐 확인 불가',
-    }.get(_home_regime, '⚪ 시장 레짐 확인 불가')
-    st.markdown(
-        f"<div style='background:{_home_r_color}12;border:1px solid {_home_r_color}40;"
-        f"border-radius:8px;padding:8px 16px;margin-bottom:14px;display:flex;"
-        f"align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
-        f"<span style='font-size:13px;font-weight:600;color:{_home_r_color}'>{_home_r_label}</span>"
-        f"<span style='font-size:11px;color:var(--text-4)'>📡 시그널 전용 모드 — 매일 장마감 후 자동 스캔, 실제 주문 없음</span>"
-        f"</div>", unsafe_allow_html=True)
+    # ── 상단 티커 테이프 (지수 · 레짐 · 운영 모드) ──────────────────
+    render_market_tape()
 
-
-    # ── AI 애널리스트팀 방 공용 패널: 단일 종목 분석 ──────
+    # ── 애널리스트 그룹 공용 패널: 단일 종목 분석 ──────
     def render_stock_analysis_panel():
         # 사이드바 제거 — 값 하드코딩 (이 패널 전용). 캐시된 스냅샷 재표시 시 아래에서
         # w_tech 등을 다시 지역 할당하므로 모듈 전역 이름을 직접 못 쓰고 _DEFAULT_*에서 시작한다.
@@ -4666,14 +4589,15 @@ def main():
         max_position_pct = 20
         min_rr           = 1.5
 
-        with st.container(key="office_ticker_board"):
+        with st.container(key="cmd_bar"):
             st.markdown("""
-<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-  <span style="width:8px;height:8px;border-radius:50%;background:#ef4444;
-               box-shadow:0 0 8px #ef4444;animation:office-pulse-fast 1.6s infinite"></span>
-  <span style="font-size:11px;font-weight:800;color:#ef4444;letter-spacing:1.5px">LIVE</span>
-  <span style="font-size:12px;font-weight:700;color:#9fb3d1;letter-spacing:2px;
-               text-transform:uppercase;margin-left:4px">시세 입력 · 종목 검색</span>
+<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;
+            font-family:'JetBrains Mono',ui-monospace,monospace">
+  <span style="width:6px;height:6px;border-radius:50%;background:#26a69a;
+               box-shadow:0 0 7px #26a69a"></span>
+  <span style="font-size:10.5px;font-weight:800;color:#26a69a;letter-spacing:1.4px">READY</span>
+  <span style="font-size:10.5px;font-weight:700;color:var(--text-3);letter-spacing:1.4px;
+               margin-left:4px">SYMBOL INPUT · 종목 분석</span>
 </div>
 """, unsafe_allow_html=True)
             c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
@@ -4704,15 +4628,13 @@ def main():
             run = True
 
         # ── 분석은 "예약 → rerun → 실행" 2단계 ──────────────────
-        # 예약된 rerun에서 위 게임 씬이 먼저 working=True로 렌더돼 전 직원이 자리로
-        # 뛰어가고, 그 다음 여기서 실제 분석(블로킹)이 돈다 — 그동안 iframe은
-        # 클라이언트에서 독립적으로 계속 움직인다. 분석 종료 후 main 끝의 flip
-        # rerun이 게임을 대기 모드로 되돌린다.
+        # 예약된 rerun에서 스캔 스트립을 먼저 그린 뒤 실제 분석(블로킹)이 돈다.
+        # 분석 종료 후 main 끝의 flip rerun이 콘솔을 새 결과로 다시 그린다.
         if run and ticker:
             st.session_state['pending_analysis'] = ticker
             st.rerun()
 
-        _err_prev = st.session_state.pop('office_analysis_error', None)
+        _err_prev = st.session_state.pop('analysis_error', None)
         if _err_prev:
             st.error(_err_prev)
 
@@ -4720,7 +4642,7 @@ def main():
         if run_ticker:
             ticker = run_ticker
             walk_ph = st.empty()
-            office_walk_strip_show(walk_ph)
+            render_scan_strip(walk_ph, f"ANALYZING {ticker} · 전 모듈 스캔 중")
             prog = st.progress(0); msg = st.empty()
             msg.text("📥 데이터 다운로드 중...")
             prog.progress(5)
@@ -4730,13 +4652,13 @@ def main():
             _df = download_stock(ticker, start=start_dt, end=end_dt)
 
             if _df.empty:
-                st.session_state['office_analysis_error'] = f"'{ticker}' 데이터를 찾을 수 없습니다."
+                st.session_state['analysis_error'] = f"'{ticker}' 데이터를 찾을 수 없습니다."
                 st.session_state['_analysis_done_flip'] = True
                 prog.empty(); msg.empty(); walk_ph.empty()
             else:
                 _df = _df.dropna(subset=['Close'])
                 if len(_df) < 30:
-                    st.session_state['office_analysis_error'] = "데이터 부족 (30일 미만)."
+                    st.session_state['analysis_error'] = "데이터 부족 (30일 미만)."
                     st.session_state['_analysis_done_flip'] = True
                     prog.empty(); msg.empty(); walk_ph.empty()
                 else:
@@ -5114,7 +5036,7 @@ def main():
 
                 _risk_rep = next(r for r in _team_reports if r['name'] == '리스크팀')
                 _trader = trader_signal_lines(df, _mgr, _risk_rep)
-                st.session_state['office_analyst_snapshot'] = {
+                st.session_state['analyst_snapshot'] = {
                     'ticker': ticker, 'reports': _team_reports, 'manager': _mgr, 'trader': _trader,
                 }
                 _tl_color = '#10b981' if _mgr['verdict'] == '매수' else ('#ef4444' if _mgr['verdict'] == '매도' else '#f59e0b')
@@ -5163,10 +5085,9 @@ def main():
                     _tv_sym = ticker
 
                 def _tv_widget_url(height: int = 400) -> str:
-                    _tv_theme = 'dark' if _dark_mode else 'light'
                     return (
                         f"https://www.tradingview.com/widgetembed/"
-                        f"?symbol={_tv_sym}&interval=D&theme={_tv_theme}&style=1"
+                        f"?symbol={_tv_sym}&interval=D&theme=dark&style=1"
                         f"&timezone=Asia%2FSeoul&locale=kr"
                         f"&studies=STD%3BMASimple%2CSTD%3BRSI%2CSTD%3BMACD"
                         f"&hide_side_toolbar=0&allow_symbol_change=0"
@@ -7508,133 +7429,58 @@ def main():
                         st.error("JSON 파싱 오류")
 
     st.markdown("""
-<div style="display:flex;align-items:center;gap:14px;margin:6px 0 16px 0;padding:16px 22px;
-            background:linear-gradient(135deg,#1a2332 0%,#0f1622 100%);
-            border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.16)">
-  <div style="width:46px;height:46px;border-radius:8px;background:rgba(255,255,255,.08);
-              display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;
-              border:1px solid rgba(255,255,255,.12)">🏢</div>
-  <div>
-    <div style="font-size:1.1rem;font-weight:800;color:#f5f0e2;letter-spacing:.3px">퀀트 증권 트레이딩 데스크</div>
-    <div style="font-size:12px;color:#9fb3d1;margin-top:2px">
-      팀별 방을 둘러보고 직원을 클릭해 보고서와 업무 화면을 확인하세요 · 마지막엔 총괄 트레이더가 전체를 종합 보고합니다
-    </div>
-  </div>
+<div style="display:flex;align-items:baseline;gap:10px;margin:16px 0 8px 0">
+  <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
+               font-family:'JetBrains Mono',ui-monospace,monospace">MODULES</span>
+  <span style="font-size:10.5px;color:var(--text-4)">모듈을 클릭하면 콘솔 아래에 보고서와 업무 화면이 열립니다</span>
 </div>""", unsafe_allow_html=True)
 
-    def _emp(emp_key, name, fn, panel_fn=None):
-        return OfficeEmployee(emp_key, name, _office_avatar(name), fn, panel_fn)
-
     def _analyst_roster():
-        return office_analyst_employees() or []
+        return analyst_modules() or []
 
-    _rooms = [
-        OfficeRoom('analyst', 'AI 애널리스트팀', '📈', _analyst_roster, render_stock_analysis_panel),
-        OfficeRoom('ops', '자동매매 운영팀', '⚙️', [
-            _emp('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
-            _emp('sig', '시그널 파이프라인', signal_pipeline_employee),
-            _emp('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
-            _emp('eq', '계좌 현황', equity_log_employee),
+    _groups = [
+        ModuleGroup('analyst', '애널리스트', '📈', _analyst_roster),
+        ModuleGroup('ops', '자동매매 운영', '⚙️', [
+            AnalyticsModule('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
+            AnalyticsModule('sig', '시그널 파이프라인', signal_pipeline_employee),
+            AnalyticsModule('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
+            AnalyticsModule('eq', '계좌 현황', equity_log_employee),
         ]),
-        OfficeRoom('siggen', '시그널 생성팀', '📡', [
-            _emp('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
-            _emp('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
-            _emp('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
+        ModuleGroup('siggen', '시그널 생성', '📡', [
+            AnalyticsModule('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
+            AnalyticsModule('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
+            AnalyticsModule('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
         ], render_universe_picker),
-        OfficeRoom('ml', 'ML 시그널팀', '🧠', [
-            _emp('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
+        ModuleGroup('ml', 'ML 시그널', '🧠', [
+            AnalyticsModule('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
         ]),
-        OfficeRoom('bt', '백테스트 검증팀', '📉', [
-            _emp('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
-            _emp('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
-        ]),
-        OfficeRoom('qa', '퀀트 리서치/QA팀', '🔬', [
-            _emp('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
+        ModuleGroup('bt', '백테스트 검증', '📉', [
+            AnalyticsModule('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
+            AnalyticsModule('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
+        ], render_universe_picker),
+        ModuleGroup('qa', '퀀트 리서치 / QA', '🔬', [
+            AnalyticsModule('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
         ]),
     ]
 
-    # ── 게임 씬: 캐릭터가 실제로 걸어다니는 사무실 평면 ──────
-    # 사무실이 유일한 내비게이션 — 캐릭터 클릭 → (room, emp) 반환 → 바로 아래에
-    # 보고서·업무 화면이 열린다. 같은 클릭이 이후 선택을 계속 덮어쓰지 않도록
-    # nonce 변화가 있을 때만 반영한다. 컴포넌트 로드 실패 시에만 기존 방 UI로 폴백.
-    if _OFFICE_GAME_AVAILABLE:
-        inject_office_css()   # 게임 모드에선 render_office_rooms를 안 거치므로 여기서 직접 주입
-        _game_rooms = collect_office_game_data(_rooms)
-        _sel_now = st.session_state.get('office_view')
-        # 작업 모드: 분석이 예약돼 있으면(pending) 게임 속 전 직원이 자리로 뛰어가 일한다.
-        # 이 rerun에서 아래 시세판 패널이 실제 분석(블로킹)을 실행하는 동안에도
-        # iframe 애니메이션은 클라이언트에서 독립적으로 계속 돈다.
-        _pending_tk = st.session_state.get('pending_analysis')
-        _snap_board = st.session_state.get('office_analyst_snapshot')
-        _result_arg = None
-        if _snap_board:
-            _mb = _snap_board['manager']
-            _result_arg = {'ticker': _snap_board['ticker'],
-                           'score': round(_mb['total_score'], 1),
-                           'verdict': _mb['verdict'],
-                           'color': score_color(_mb['total_score'])}
-        _clicked = _office_game_component(
-            rooms=_game_rooms, dark=_dark_mode,
-            selected=(f"{_sel_now[0]}|{_sel_now[1]}" if _sel_now else None),
-            working=bool(_pending_tk), ticker=_pending_tk, result=_result_arg,
-            key="office_game_scene", default=None)
-        if _clicked and _clicked.get('nonce') != st.session_state.get('_office_game_nonce'):
-            st.session_state['_office_game_nonce'] = _clicked['nonce']
-            if _clicked.get('boss'):
-                st.session_state['office_view'] = ('boss', 'summary')
-            else:
-                st.session_state['office_view'] = (_clicked['room'], _clicked['emp'])
-        st.caption("🖱️ 캐릭터를 클릭하면 바로 아래에 보고서와 업무 화면이 열립니다 · "
-                   "상태에 따라 일하고(타이핑) · 산책하고(🚰) · 졸고(💤) · 뛰어다니는(❗) 모습이 달라집니다")
+    render_module_console(_groups)
 
-        # ── 클릭한 직원의 보고서 + 업무 화면 ──────────────
-        _sel = st.session_state.get('office_view')
-        with st.container(border=True, key="office_selected_view"):
-            _sel_room = next((r for r in _rooms if _sel and r.key == _sel[0]), None)
-            _sel_emps = (_sel_room.employees() if callable(_sel_room.employees)
-                         else _sel_room.employees) if _sel_room else []
-            _sel_emp = next((e for e in (_sel_emps or []) if e.key == _sel[1]), None) if _sel else None
-            if _sel == ('boss', 'summary'):
-                st.markdown(
-                    "<div style='font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:2px'>"
-                    "🤵 사장실 &nbsp;›&nbsp; 전사 종합 보고</div>", unsafe_allow_html=True)
-                render_company_summary()
-            elif _sel_emp is None:
-                st.caption("👆 사무실에서 직원(또는 사장님) 캐릭터를 클릭하면 이 자리에 보고서가 열립니다.")
-            else:
-                st.markdown(
-                    f"<div style='font-size:12px;font-weight:700;color:var(--text-3);margin-bottom:2px'>"
-                    f"{_sel_room.icon} {_sel_room.name} &nbsp;›&nbsp; "
-                    f"{_sel_emp.avatar} {_sel_emp.name}</div>", unsafe_allow_html=True)
-                # 시그널 생성팀·백테스트 검증팀 직원은 종목 유니버스 입력이 선행돼야 한다
-                if _sel_room.key in ('siggen', 'bt'):
-                    render_universe_picker()
-                render_office_report_card(_sel_emp.report_fn())
-                if _sel_emp.panel_fn is not None:
-                    st.markdown("")
-                    _sel_emp.panel_fn()
-
-        # ── 시세판 · 종목 분석 (항상 표시 — 여기서 분석해야 애널리스트팀이 출근한다) ──
-        st.markdown("""
-<div style="display:inline-flex;align-items:center;gap:9px;margin:18px 0 8px 0;
-            background:linear-gradient(180deg,#8b6f3e 0%,#6f5730 100%);
-            border-radius:6px 6px 3px 3px;padding:7px 16px 7px 12px;
-            box-shadow:0 3px 6px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.15)">
-  <span style="font-size:17px">📈</span>
-  <span style="font-size:12.5px;font-weight:800;color:#fdf6e3;letter-spacing:.4px;
-               text-transform:uppercase">AI 애널리스트팀 · 시세판</span>
+    # ── 분석 워크스페이스 (항상 표시 — 여기서 분석해야 애널리스트 모듈이 채워진다) ──
+    st.markdown("""
+<div style="display:flex;align-items:baseline;gap:10px;margin:20px 0 8px 0">
+  <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
+               font-family:'JetBrains Mono',ui-monospace,monospace">ANALYSIS WORKSPACE</span>
+  <span style="font-size:10.5px;color:var(--text-4)">단일 종목 정밀 분석 · 결과가 애널리스트 모듈로 반영됩니다</span>
 </div>""", unsafe_allow_html=True)
-        with st.container(border=True, key="office_room_analyst_board"):
-            render_stock_analysis_panel()
-    else:
-        render_office_rooms(_rooms)
+    with st.container(border=True, key="analysis_workspace"):
+        render_stock_analysis_panel()
 
-    # ── 총괄 트레이더 최종 보고 ──────────────
+    # ── 데스크 종합 상태 ──────────────
     st.markdown("---")
-    render_company_summary()
+    render_desk_status()
 
-    # 분석이 방금 끝났으면 한 번 더 rerun — 게임 씬 상단이 이번 rerun에선 아직
-    # working=True로 그려져 있으므로, 결과가 저장된 상태에서 다시 그려 대기 모드로 되돌린다.
+    # 분석이 방금 끝났으면 한 번 더 rerun — 이번 rerun의 모듈 콘솔은 분석 *이전*
+    # 스냅샷으로 이미 그려졌으므로, 새 결과가 저장된 상태에서 다시 그린다.
     if st.session_state.pop('_analysis_done_flip', False):
         st.rerun()
 
