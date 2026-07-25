@@ -4008,9 +4008,9 @@ def trader_signal_lines(df, manager_report, risk_report=None):
 # ─────────────────────────────────────────────
 
 def build_ops_report(name, icon, status, reasons):
-    """운영팀·시스템/멀티종목팀 공통 보고서 포맷. status: 정상/주의/경고/대기.
-    팀 소속은 이 dict가 아니라 사무실의 방 구성(main()의 _rooms 목록)으로 결정된다 —
-    보고서 자체에 팀을 중복 태깅하지 않는다."""
+    """운영·시스템 모듈 공통 보고서 포맷. status: 정상/주의/경고/대기(+트레이드 플랜의 롱/숏).
+    그룹 소속은 이 dict가 아니라 모듈 콘솔 구성(main()의 _groups 목록)으로 결정된다 —
+    보고서 자체에 그룹을 중복 태깅하지 않는다."""
     return {'name': name, 'icon': icon, 'status': status,
             'reasons': [r for r in reasons if r][:4]}
 
@@ -4221,7 +4221,9 @@ class ModuleGroup(NamedTuple):
     group_panel_fn: Optional[Callable] = None
 
 
-_MODULE_STATUS_COLOR = {'정상': '#26a69a', '주의': '#f0b90b', '경고': '#ef5350', '대기': '#5d6673'}
+_MODULE_STATUS_COLOR = {'정상': '#26a69a', '주의': '#f0b90b', '경고': '#ef5350', '대기': '#5d6673',
+                        # 트레이드 플랜 모듈 전용 상태 — 방향을 색으로 바로 읽게 한다
+                        '롱 셋업': '#26a69a', '숏 셋업': '#ef5350', '셋업 없음': '#5d6673'}
 
 
 def inject_console_css():
@@ -4580,6 +4582,43 @@ def render_module_console(groups: List[ModuleGroup], per_row: int = 3):
         if sel_mod.panel_fn is not None:
             st.markdown("")
             sel_mod.panel_fn()
+
+
+def _fmt_price(v, is_krw):
+    return f"₩{v:,.0f}" if is_krw else f"${v:,.2f}"
+
+
+def trade_plan_report():
+    """ICT 트레이드 플랜 모듈 보고서 — 마지막으로 분석한 종목의 롱/숏 셋업 요약.
+    상세(진입 근거·플랜 라인이 그려진 ICT 차트)는 panel_fn이 이어서 그린다."""
+    snap = st.session_state.get('tab1')
+    if not snap:
+        return build_ops_report('트레이드 플랜', '🎯', '대기',
+                                ['종목을 분석하면 롱/숏 셋업이 산출됩니다'])
+    try:
+        from modules.trade_plan import build_trade_plan
+        plan = build_trade_plan(snap['df'])
+    except Exception as e:
+        return build_ops_report('트레이드 플랜', '🎯', '경고', [f'플랜 계산 실패: {e}'])
+
+    tk, is_krw = snap['ticker'], snap['is_krw']
+    if plan['direction'] not in ('long', 'short'):
+        return build_ops_report('트레이드 플랜', '🎯', '셋업 없음',
+                                [f"{tk} — {plan.get('reason_invalid') or '방향성 신호 없음'}"])
+    if not plan['valid']:
+        return build_ops_report('트레이드 플랜', '🎯', '셋업 없음',
+                                [f"{tk} — {'롱' if plan['direction']=='long' else '숏'} 편향이나 "
+                                 f"유효 셋업 아님: {plan['reason_invalid']}"])
+
+    p = lambda v: _fmt_price(v, is_krw)   # noqa: E731 — 이 함수 안에서만 쓰는 표기 헬퍼
+    rr1 = f"R:R {plan['rr'][0]:.1f}" if plan['rr'] and plan['rr'][0] else "R:R -"
+    return build_ops_report(
+        '트레이드 플랜', '🎯',
+        '롱 셋업' if plan['direction'] == 'long' else '숏 셋업',
+        [f"{tk} · 확신도 {plan['confidence'].upper()} · 동의 신호 {plan['confluence']}개",
+         f"진입 {p(plan['entry']['low'])} ~ {p(plan['entry']['high'])} · 손절 {p(plan['stop'])}",
+         f"목표1 {p(plan['targets'][0])} ({rr1})" if plan['targets'] else "목표 산출 불가",
+         plan['signals'][0] if plan['signals'] else ''])
 
 
 def analyst_modules():
@@ -7443,8 +7482,57 @@ def main():
   <span style="font-size:10.5px;color:var(--text-4)">모듈을 클릭하면 콘솔 아래에 보고서와 업무 화면이 열립니다</span>
 </div>""", unsafe_allow_html=True)
 
+    def render_trade_plan_panel():
+        """트레이드 플랜 상세 — 플랜 라인이 그려진 ICT 차트 + 진입 근거."""
+        snap = st.session_state.get('tab1')
+        if not snap:
+            st.caption("상단 커맨드 바에서 종목을 분석하면 롱/숏 플랜이 그려집니다.")
+            return
+        try:
+            from modules.ict_analysis import plot_ict_chart
+            from modules.trade_plan import build_trade_plan
+        except Exception as e:
+            st.warning(f"ICT 모듈을 불러오지 못했습니다: {e}")
+            return
+
+        _df, _tk, _krw = snap['df'], snap['ticker'], snap['is_krw']
+        _plan = build_trade_plan(_df)
+        _n = st.slider("표시 캔들 수", 40, 200, 80, 10, key="plan_candles")
+        st.plotly_chart(plot_ict_chart(_df, n_candles=_n, ticker=_tk, plan=_plan),
+                        width='stretch')
+
+        if _plan['direction'] not in ('long', 'short'):
+            st.info(f"방향성 셋업 없음 — {_plan.get('reason_invalid') or 'ICT 구조 신호 부족'}")
+            return
+
+        _p = lambda v: _fmt_price(v, _krw)   # noqa: E731
+        _dir = "🟢 롱" if _plan['direction'] == 'long' else "🔴 숏"
+        st.markdown(f"**{_dir} · 확신도 {_plan['confidence'].upper()} · "
+                    f"동의 신호 {_plan['confluence']}개 · 편향점수 {_plan['bias_score']:+.0f}**")
+        if not _plan['valid']:
+            st.info(f"유효 셋업 아님 — {_plan['reason_invalid']}")
+        else:
+            _c1, _c2, _c3, _c4 = st.columns(4)
+            _c1.metric("진입 구간", f"{_p(_plan['entry']['low'])} ~ {_p(_plan['entry']['high'])}")
+            _c2.metric("손절", _p(_plan['stop']))
+            if _plan['targets']:
+                _c3.metric("목표1", _p(_plan['targets'][0]),
+                           f"R:R {_plan['rr'][0]:.1f}" if _plan['rr'] and _plan['rr'][0] else None)
+            if len(_plan['targets']) > 1:
+                _c4.metric("목표2", _p(_plan['targets'][1]),
+                           f"R:R {_plan['rr'][1]:.1f}" if len(_plan['rr']) > 1 and _plan['rr'][1] else None)
+        if _plan['signals']:
+            with st.expander("진입 근거", expanded=True):
+                for _sg in _plan['signals']:
+                    st.markdown(f"- {_sg}")
+
     def _analyst_roster():
-        return analyst_modules() or []
+        mods = analyst_modules() or []
+        # 트레이드 플랜은 분석된 종목이 있어야 의미가 있다 — 애널리스트 모듈과 같은 조건
+        if mods:
+            mods.append(AnalyticsModule('plan', '트레이드 플랜',
+                                        trade_plan_report, render_trade_plan_panel))
+        return mods
 
     _groups = [
         ModuleGroup('analyst', '애널리스트', '📈', _analyst_roster),
