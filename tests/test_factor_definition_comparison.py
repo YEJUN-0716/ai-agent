@@ -24,10 +24,21 @@ from modules.factor_scoring import (
 )
 
 
+def _last_business_day(ts):
+    """주말이면 직전 금요일로 스냅.
+
+    pd.bdate_range(end=..., periods=n) 은 end 가 영업일이 아닐 때 pandas 버전에 따라
+    n 보다 1 개 적은 인덱스를 돌려준다 — 그러면 토·일에만 데이터 길이와 인덱스 길이가
+    어긋나 테스트가 주말마다 깨진다. end 를 항상 영업일로 만들어 요일 의존을 없앤다."""
+    ts = pd.Timestamp(ts).normalize()
+    return ts - pd.Timedelta(days=max(ts.weekday() - 4, 0))
+
+
 def _panel(n_tickers=6, n_bars=700, end=None):
     """오늘까지 이어지는 합성 가격 패널 (티커마다 다른 추세·진폭)."""
-    end = end or pd.Timestamp.today().normalize()
+    end = _last_business_day(end or pd.Timestamp.today())
     idx = pd.bdate_range(end=end, periods=n_bars)
+    assert len(idx) == n_bars, f"영업일 인덱스 길이 불일치: {len(idx)} != {n_bars}"
     return {
         chr(ord("A") + i): pd.Series(
             [100 + (i + 1) * 0.25 * j + (3 + i) * np.sin(j / (7 + i))
