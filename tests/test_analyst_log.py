@@ -76,7 +76,12 @@ def _panel(n_bars=300):
     import numpy as np
     import pandas as pd
 
-    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n_bars)
+    # 주말이면 직전 금요일로 스냅한다 — end 가 영업일이 아니면 pandas 버전에 따라
+    # bdate_range 가 periods 보다 1 개 적은 인덱스를 줘서 토·일에만 길이가 어긋난다.
+    _today = pd.Timestamp.today().normalize()
+    _end = _today - pd.Timedelta(days=max(_today.weekday() - 4, 0))
+    idx = pd.bdate_range(end=_end, periods=n_bars)
+    assert len(idx) == n_bars, f"영업일 인덱스 길이 불일치: {len(idx)} != {n_bars}"
     close = pd.Series([100 + 0.2 * i + 3 * np.sin(i / 9) for i in range(n_bars)],
                       index=idx)
     return pd.DataFrame({
