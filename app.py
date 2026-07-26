@@ -2060,23 +2060,6 @@ def score_label(s):
     return ('강한 매수 🚀' if s >= 80 else ('매수 📈' if s >= 65 else
             ('중립 ➡️' if s >= 50 else ('매도 📉' if s >= 35 else '강한 매도 ⚠️'))))
 
-def gauge(value, title):
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=value,
-        title={'text': title, 'font': {'size': 13}},
-        number={'font': {'size': 36, 'color': score_color(value)}},
-        gauge={
-            'axis': {'range': [0,100], 'tickwidth': 1},
-            'bar':  {'color': score_color(value), 'thickness': 0.3},
-            'steps': [{'range':[0,35],'color':'#FFEBEE'},
-                      {'range':[35,65],'color':'#FFF8E1'},
-                      {'range':[65,100],'color':'#E8F5E9'}],
-            'threshold': {'line':{'color':'#555','width':2},'thickness':0.75,'value':50},
-        }
-    ))
-    fig.update_layout(height=220, margin=dict(l=20,r=20,t=50,b=10))
-    return fig
-
 def fmt(v, pct=False, mul=100):
     if v is None: return 'N/A'
     try:
@@ -3596,7 +3579,7 @@ def _draw_chart_legacy(df, ticker, is_krw):
 
 
 # ─────────────────────────────────────────────
-# AI 애널리스트 팀 — 4개 부서 직원 + 총괄 + 트레이더
+# AI 애널리스트 팀 — 4개 분석 파트 + 총괄 + 트레이더
 # ─────────────────────────────────────────────
 
 TEAM_WEIGHTS = {'차트+파동+모멘텀': 20, '퀀트+재무': 20, '매크로+금리': 15,
@@ -3734,7 +3717,7 @@ def render_analyst_scorecard():
 
 
 def build_analyst_report(name, icon, score, reasons, detail=None, role='directional'):
-    """6개 부서 직원 공통 보고서 포맷.
+    """6개 분석 파트 공통 보고서 포맷.
 
     role: 'directional'(방향성 블렌드 대상 — IC가중치 적용) |
           'context'(매크로, 레짐 맥락 참고용) |
@@ -3753,7 +3736,7 @@ def build_analyst_report(name, icon, score, reasons, detail=None, role='directio
 
 
 def ict_crt_analyst(df):
-    """ICT+CRT 직원: 구조 점수 + CRT/FVG/OB 조정을 합산한 보고서."""
+    """ICT+CRT: 구조 점수 + CRT/FVG/OB 조정을 합산한 보고서."""
     try:
         from modules.ict_analysis import ict_factor_score, calc_ict_adjustment
         base = ict_factor_score(df)
@@ -3767,7 +3750,7 @@ def ict_crt_analyst(df):
 
 
 def technical_momentum_analyst(t_score, t_det, mom_data):
-    """차트+파동+모멘텀 직원: 기술점수 70% + 모멘텀점수 30%."""
+    """차트+파동+모멘텀: 기술점수 70% + 모멘텀점수 30%."""
     mom_score = mom_data.get('score', 50.0) if mom_data else 50.0
     score = _analyst_team.chart_score(t_score, mom_score)
     reasons = []
@@ -3784,7 +3767,7 @@ def technical_momentum_analyst(t_score, t_det, mom_data):
 
 
 def quant_fundamental_analyst(f_score, f_det, dcf_det=None):
-    """퀀트+재무 직원: fundamental_score(밸류·수익성·성장성·안전성·품질) 기반."""
+    """퀀트+재무: fundamental_score(밸류·수익성·성장성·안전성·품질) 기반."""
     reasons = []
     if f_det.get('업종'):
         reasons.append(f"업종 {f_det['업종']} (평균 PER {f_det.get('업종평균PER','N/A')})")
@@ -3806,7 +3789,7 @@ def get_real_macro():
 
 
 def macro_rate_analyst(m_score, m_det):
-    """매크로+금리 직원: 시장프록시 macro_score(금리·VIX·환율 등)에 FRED 실물
+    """매크로+금리: 시장프록시 macro_score(금리·VIX·환율 등)에 FRED 실물
     경제지표(CPI·실업률·산업생산)를 결합. 역할=레짐 맥락(context) — 방향성
     점수 블렌드에는 포함되지 않는다."""
     reasons = [f"{k}: {v}" for k, v in list(m_det.items())[:3] if not isinstance(v, dict)]
@@ -3824,7 +3807,7 @@ def macro_rate_analyst(m_score, m_det):
 
 
 def geopolitical_analyst(g_score, g_det):
-    """지정학 직원: geopolitical_risk_score(유가·금·방산·VIX 프록시) 기반.
+    """지정학: geopolitical_risk_score(유가·금·방산·VIX 프록시) 기반.
     역할=리스크 맥락(context) — 종목 방향성이 아니라 시장 전반의 지정학 스트레스를
     나타내므로 방향성 블렌드에 포함되지 않는다. 점수 높을수록 안정/저위험."""
     reasons = [f"{k}: {v}" for k, v in list(g_det.items())[:4] if not isinstance(v, dict)]
@@ -3840,7 +3823,7 @@ def _parse_pct(s):
 
 
 def backtest_analyst(df):
-    """백테스팅팀 직원: 기술 시그널 전략을 이 종목 과거 데이터에 그대로 적용했을 때의 성과 검증.
+    """백테스팅팀: 기술 시그널 전략을 이 종목 과거 데이터에 그대로 적용했을 때의 성과 검증.
     look-ahead bias 방지를 위해 순수 기술적 백테스트만 사용(재무/매크로 보정 없음)."""
     try:
         metrics, _, _ = run_backtest(df)
@@ -3869,7 +3852,7 @@ def backtest_analyst(df):
 
 
 def risk_analyst(ticker, backtest_report=None):
-    """리스크팀 직원: Beta·VaR·연간변동성·Sharpe 기반 안전성 점수 +
+    """리스크팀: Beta·VaR·연간변동성·Sharpe 기반 안전성 점수 +
     (백테스팅팀 자료가 있으면) Kelly 공식 기반 권장 비중."""
     try:
         rm = calc_risk_metrics(ticker)
@@ -3907,7 +3890,7 @@ def risk_analyst(ticker, backtest_report=None):
 
 
 def manager_consolidate(reports):
-    """총괄 직원: 방향성 3명(차트+파동+모멘텀·퀀트+재무·ICT+CRT)의 IC가중 블렌드로
+    """총괄: 방향성 3명(차트+파동+모멘텀·퀀트+재무·ICT+CRT)의 IC가중 블렌드로
     매수/매도를 판정 — 가중합 + 합의율.
 
     매크로(레짐 맥락)·백테스트(신뢰도 플래그)·리스크(Kelly 사이징)는 역할이
@@ -3966,7 +3949,7 @@ def manager_consolidate(reports):
 
 
 def trader_signal_lines(df, manager_report, risk_report=None):
-    """트레이더 직원: 총괄 보고서 + 지지/저항 레벨로 매수/매도 라인 산출.
+    """트레이더: 총괄 보고서 + 지지/저항 레벨로 매수/매도 라인 산출.
     리스크팀 보고서에 Kelly 권장 비중이 있으면 그대로 인용한다."""
     cp = float(df['Close'].iloc[-1])
     sr = find_sr_levels(df['Close'], df['High'], df['Low'])
@@ -4016,8 +3999,8 @@ def build_ops_report(name, icon, status, reasons):
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def signal_pipeline_employee():
-    """시그널 파이프라인 직원: signal_log.json 상태 점검 (신호 발생/평가 현황).
+def signal_pipeline_status():
+    """시그널 파이프라인: signal_log.json 상태 점검 (신호 발생/평가 현황).
     앱 안에서 signal_log.json을 쓰는 두 지점(시스템 시그널 생성, 21일 수익률 평가)이
     각자 .clear()로 이 캐시를 무효화하므로, 세션 내 갱신은 즉시 반영되고 그 사이엔
     매 rerun·중복 호출마다 파일을 다시 읽지 않는다."""
@@ -4049,8 +4032,8 @@ def signal_pipeline_employee():
         return build_ops_report('시그널 파이프라인', '📡', '경고', [f'로그 읽기 실패: {e}'])
 
 
-def execution_mode_employee():
-    """실행 모드 직원: 현재 시스템이 시그널 전용 모드임을 명시 — 안전성 투명성 담당."""
+def execution_mode_status():
+    """실행 모드: 현재 시스템이 시그널 전용 모드임을 명시 — 안전성 투명성 담당."""
     return build_ops_report('실행 모드', '⚙️', '정상', [
         '현재 모드: 시그널 전용 — 실제 주문 없음',
         'signal-alerts.yml: 활성 (텔레그램 알림만 발송)',
@@ -4059,8 +4042,8 @@ def execution_mode_employee():
     ])
 
 
-def risk_guardrail_employee():
-    """리스크 가드레일 직원: 킬스위치·서킷브레이커 모듈 로드 상태와 설정 위치 안내
+def risk_guardrail_status():
+    """리스크 가드레일: 킬스위치·서킷브레이커 모듈 로드 상태와 설정 위치 안내
     (계좌 연동 없이 모니터링만 — 실제 값 점검은 아래 위젯에서 수행)."""
     reasons = [
         '일일 손실 한도 킬스위치: 아래 "킬스위치" 위젯에서 설정·점검',
@@ -4073,8 +4056,8 @@ def risk_guardrail_employee():
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def equity_log_employee():
-    """계좌 현황 직원: equity_log.json 상태 (시그널 전용 모드에서는 보통 비어있는 게 정상).
+def equity_log_status():
+    """계좌 현황: equity_log.json 상태 (시그널 전용 모드에서는 보통 비어있는 게 정상).
     equity_log.json은 앱 안에서는 쓰지 않고 외부 페이퍼 트레이딩 스크립트만 갱신하므로
     무효화 없이 캐시해도 안전하다."""
     path = os.path.join(os.path.dirname(__file__), "equity_log.json")
@@ -4098,13 +4081,13 @@ def equity_log_employee():
 
 
 # ─────────────────────────────────────────────
-# 시스템/멀티종목 담당팀 — 사무실의 팀별 방에 배치되는 직원 (보고서 + 실제 업무 화면)
+# 시스템/멀티종목 담당 모듈 — 모듈 콘솔에 배치된다 (보고서 + 실제 업무 화면)
 # 4팀 7명: 시그널 생성팀(팩터 랭킹·시스템 시그널·섹터 로테이션),
 #          ML 시그널팀(ML 신호), 백테스트 검증팀(팩터 백테스트·종목 백테스팅),
 #          퀀트 리서치/QA팀(고급 분석)
 # ─────────────────────────────────────────────
 
-def factor_ranking_employee():
+def factor_ranking_status():
     """팩터 랭킹 담당(시그널 생성팀): 세션에 실행된 팩터 분석 결과 상태."""
     fdf = st.session_state.get('qt_factors')
     if fdf is None or fdf.empty:
@@ -4118,7 +4101,7 @@ def factor_ranking_employee():
     return build_ops_report('팩터 랭킹', '📊', '주의' if failed else '정상', reasons)
 
 
-def system_signal_employee():
+def system_signal_status():
     """시스템 시그널 담당(시그널 생성팀): 세션에서 생성한 매매 액션 상태."""
     qs = st.session_state.get('qt_signals')
     if not qs:
@@ -4130,14 +4113,14 @@ def system_signal_employee():
     return build_ops_report('시스템 시그널', '🤖', '정상', reasons)
 
 
-def sector_rotation_employee():
+def sector_rotation_status():
     """섹터 로테이션 담당(시그널 생성팀): 신규 다운로드 없이 정적 상태만 안내(비용 방지)."""
     return build_ops_report('섹터 로테이션', '🔄', '정상',
         ['12개 섹터 ETF 모멘텀 랭킹 상시 제공 (1시간 캐시)',
          '모멘텀 = 1M×50% + 3M×30% + 6M×20%'])
 
 
-def ml_signal_employee():
+def ml_signal_status():
     """ML 신호 담당(ML 시그널팀): Purged K-Fold 검증 결과 상태."""
     if not _ML_AVAILABLE:
         return build_ops_report('ML 신호', '🧠', '경고', ['modules/ml_signals.py 로드 실패'])
@@ -4151,7 +4134,7 @@ def ml_signal_employee():
     return build_ops_report('ML 신호', '🧠', '정상' if res['mean_auc'] >= 0.53 else '주의', reasons)
 
 
-def factor_backtest_employee():
+def factor_backtest_status():
     """팩터 백테스트 담당(백테스트 검증팀): 팩터 전략 백테스트 + IC 검증 상태."""
     reasons, status = [], '대기'
     qbt = st.session_state.get('qt_bt')
@@ -4169,7 +4152,7 @@ def factor_backtest_employee():
     return build_ops_report('팩터 백테스트', '📉', status, reasons)
 
 
-def stock_backtest_employee():
+def stock_backtest_status():
     """종목 백테스팅 담당(백테스트 검증팀): 개별 종목 전략 백테스트 상태."""
     bt = st.session_state.get('tab3')
     if not bt:
@@ -4181,7 +4164,7 @@ def stock_backtest_employee():
     return build_ops_report('종목 백테스팅', '📊', '정상', reasons)
 
 
-def advanced_research_employee():
+def advanced_research_status():
     """고급 분석 담당(퀀트 리서치/QA팀): 무결성·스트레스·알파디케이·시그널디케이·팩터리스크
     5개 검증 모듈의 로드 상태를 점검(각 분석은 세션 상태로 남지 않아 실행 결과 자체는 집계하지 않음)."""
     mods = [('데이터 무결성', _DATA_INTEGRITY_AVAILABLE), ('스트레스 테스트', _STRESS_TEST_AVAILABLE),
@@ -4455,9 +4438,9 @@ def render_market_tape():
 def render_desk_status():
     """데스크 종합 상태 바 — 페이지 하단 상시 표시. 운영·시스템 모듈 상태를 집계한다."""
     status_fns = [
-        execution_mode_employee, signal_pipeline_employee, risk_guardrail_employee, equity_log_employee,
-        factor_ranking_employee, system_signal_employee, sector_rotation_employee,
-        ml_signal_employee, factor_backtest_employee, stock_backtest_employee, advanced_research_employee,
+        execution_mode_status, signal_pipeline_status, risk_guardrail_status, equity_log_status,
+        factor_ranking_status, system_signal_status, sector_rotation_status,
+        ml_signal_status, factor_backtest_status, stock_backtest_status, advanced_research_status,
     ]
     statuses = [fn()['status'] for fn in status_fns]
     warn_n, caution_n = statuses.count('경고'), statuses.count('주의')
@@ -5028,7 +5011,7 @@ def main():
 </div>""", unsafe_allow_html=True)
 
             # ── AI 애널리스트 팀 리포트 ──────────────────────
-            with st.expander("🏢 AI 애널리스트 팀 리포트 — 7개 부서 → 총괄 → 매수/매도 라인", expanded=False):
+            with st.expander("📋 애널리스트 팀 리포트 — 7개 파트 → 총괄 → 매수/매도 라인", expanded=False):
                 with st.spinner("팀 리포트 작성 중 (백테스트·리스크 분석 포함)..."):
                     _bt_rep = backtest_analyst(df)
                     _team_reports = [
@@ -5071,7 +5054,7 @@ def main():
                                  if _context_bits else '')
                 st.markdown(f"""
 <div style="background:{_mc}0d;border:1px solid {_mc}40;border-radius:10px;padding:14px 18px;margin-top:4px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">🧑‍💼 총괄 직원 종합 보고서 <span style="text-transform:none;font-weight:500">— 방향성 3인 IC가중 블렌드</span></div>
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📊 총괄 종합 보고서 <span style="text-transform:none;font-weight:500">— 방향성 3인 IC가중 블렌드</span></div>
   <div style="display:flex;align-items:baseline;gap:12px;margin:6px 0;flex-wrap:wrap">
     <span style="font-size:2rem;font-weight:800;color:{_mc};font-family:'JetBrains Mono',monospace">{_mgr['total_score']:.1f}</span>
     <span style="font-size:13px;font-weight:700;color:{_mc}">{_mgr['consensus']}</span>
@@ -5091,7 +5074,7 @@ def main():
                              if _trader['position_note'] else '')
                 st.markdown(f"""
 <div style="background:{_tl_color}0d;border:1px solid {_tl_color}40;border-radius:10px;padding:14px 18px;margin-top:8px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 직원 — 매수/매도 라인</div>
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 — 매수/매도 라인</div>
   <div style="font-size:13px;font-weight:700;color:{_tl_color};margin:6px 0">{_trader['stance']}</div>
   <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
     <span>🟢 매수 라인: <b style="font-family:'JetBrains Mono',monospace">{fmt_p(_trader['buy_line'])}</b>
@@ -5821,13 +5804,13 @@ def main():
                     st.caption("⚠️ 몬테카를로 시뮬레이션은 과거 변동성이 미래에도 지속된다고 가정합니다. 실제 수익을 보장하지 않습니다.")
 
 
-    # ── 시스템/멀티종목 담당 직원 패널 정의 모음 (사무실 탭에서 호출됨) ──
+    # ── 시스템/멀티종목 모듈 패널 정의 모음 (모듈 콘솔에서 호출됨) ──
     # 탭이 아니라 main() 내부 함수로만 존재 — main()의 w_tech/w_fund/w_macro/total_w
     # 클로저를 그대로 쓰기 위해 이 위치(main() 안)에 정의를 둔다.
     if True:
         def render_universe_picker():
-            """시그널 생성팀 방 공용 자원 — 여러 팀 직원이 함께 쓰는 종목 유니버스 입력.
-            st.session_state['qt_tickers']에 저장해 어느 직원 패널에서든 읽을 수 있게 한다."""
+            """시그널·종목 발굴 그룹 공용 입력 — 여러 모듈이 함께 쓰는 종목 유니버스.
+            st.session_state['qt_tickers']에 저장해 어느 모듈 패널에서든 읽을 수 있게 한다."""
             qu_c1, qu_c2 = st.columns([1, 2])
             with qu_c1:
                 qt_preset = st.selectbox("유니버스 프리셋", ["직접 입력"] + list(UNIVERSE_PRESETS.keys()), key="qt_preset")
@@ -5843,7 +5826,7 @@ def main():
                     else:
                         st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
             st.session_state['qt_tickers'] = qt_tickers
-            st.caption("💡 이 유니버스는 팩터 백테스트 직원 카드(백테스트 검증팀)에서도 함께 사용됩니다.")
+            st.caption("💡 이 유니버스는 전략 검증·리서치 그룹의 팩터 백테스트 모듈에서도 함께 사용됩니다.")
 
         def render_factor_ranking_panel():
             qt_tickers = st.session_state.get('qt_tickers', [])
@@ -6015,7 +5998,7 @@ def main():
                     try:
                         with open(_sl_path_w, 'w') as _fw2:
                             _json_w.dump({'signals': _sigs_w}, _fw2, ensure_ascii=False, indent=2)
-                        signal_pipeline_employee.clear()
+                        signal_pipeline_status.clear()
                     except Exception: pass
 
             if 'qt_signals' in st.session_state:
@@ -6202,7 +6185,7 @@ def main():
                                 with open(_sl_path, 'w') as _slf2:
                                     _json.dump({'signals': _sl_data}, _slf2,
                                                ensure_ascii=False, indent=2)
-                                signal_pipeline_employee.clear()
+                                signal_pipeline_status.clear()
                             except Exception:
                                 pass
 
@@ -6272,7 +6255,7 @@ def main():
 
             if st.button("📉 팩터 전략 백테스트 실행", type="primary", key="qt_bt_run"):
                 with st.spinner(f"{len(qt_tickers)}개 종목 × {bt_years}년 백테스트 중... (1~3분 소요)"):
-                    # '팩터 랭킹' 직원 카드의 체크박스(key="qt_timing")를 그대로 존중한다 — 그
+                    # '팩터 랭킹' 모듈의 체크박스(key="qt_timing")를 그대로 존중한다 — 그
                     # 카드가 이번 세션에 한 번도 안 열렸다면 체크박스 기본값(True)으로 대체한다.
                     _bt_use_timing = st.session_state.get('qt_timing', True)
                     _bt_fw = get_factor_timing_weights()[0] if _bt_use_timing else None
@@ -6961,7 +6944,7 @@ def main():
                         pm3.metric("MDD",              f"{pf_mdd:.1f}%")
                         pm4.metric("Sharpe",           f"{pf_sharpe:.2f}")
 
-        # ── 섹터 로테이션 패널 (시그널 생성팀 직원용) ─────────────
+        # ── 섹터 로테이션 패널 (시그널·종목 발굴 그룹) ─────────────
         def render_sector_rotation_panel():
             st.caption("12개 섹터 ETF 모멘텀 랭킹 — 상위 3~4개 섹터 집중, 하위 회피 전략")
             _sr_c, _sr_btn = st.columns([4, 1])
@@ -7013,7 +6996,7 @@ def main():
                 st.plotly_chart(_fig_sr2, width='stretch')
                 st.caption("모멘텀 = 1M×50% + 3M×30% + 6M×20% 가중 평균 · 1시간 캐시")
 
-        # ── ML 신호 패널 (ML 시그널팀 직원용) ────────────────────
+        # ── ML 신호 패널 (시그널·종목 발굴 그룹) ────────────────────
         def render_ml_signal_panel():
             st.subheader("🧠 ML 신호 (Purged K-Fold 검증)")
             st.caption(
@@ -7134,7 +7117,7 @@ def main():
                             else:
                                 st.info(f"최신 신호: 상승 확률 **{_last_prob*100:.1f}%** — 중립 (0.40~0.60)")
 
-        # ── 고급 분석 패널 (퀀트 리서치/QA팀 직원용) ──────────────
+        # ── 고급 분석 패널 (전략 검증·리서치 그룹) ──────────────
         def render_advanced_research_panel():
             st.subheader("🧪 고급 분석")
 
@@ -7306,7 +7289,7 @@ def main():
                                                    margin=dict(l=20, r=20, t=40, b=20))
                             st.plotly_chart(_fr_fig, width='stretch')
 
-        # ── 운영 안전성 패널 (자동매매 운영팀 직원용) ────────────
+        # ── 운영 안전성 패널 (운영·리스크 그룹) ────────────
         def render_execution_mode_panel():
             with st.expander("📡 시그널 자동 발송 현황", expanded=True):
                 st.markdown(
@@ -7329,7 +7312,7 @@ def main():
 
 **시그널 적중률 추적:**
 - 매수 시그널은 `signal_log.json`에 자동 기록
-- 사무실 → 시그널 생성팀 → '시스템 시그널' 직원 카드의 '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
+- 모듈 콘솔 → 시그널·종목 발굴 → '시스템 시그널' 모듈의 '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
 """
                 )
                 st.caption("⚙️ `.github/workflows/signal-alerts.yml` · `signal_worker.py` — 크론 비활성화, 수동(workflow_dispatch) 실행만 가능. 주문 워크플로도 비활성화 상태")
@@ -7457,21 +7440,21 @@ def main():
     _groups = [
         ModuleGroup('analyst', '종목 판정', '📈', _analyst_roster),
         ModuleGroup('siggen', '시그널 · 종목 발굴', '📡', [
-            AnalyticsModule('rank', '팩터 랭킹', factor_ranking_employee, render_factor_ranking_panel),
-            AnalyticsModule('sys', '시스템 시그널', system_signal_employee, render_system_signal_panel),
-            AnalyticsModule('sector', '섹터 로테이션', sector_rotation_employee, render_sector_rotation_panel),
-            AnalyticsModule('ml', 'ML 신호', ml_signal_employee, render_ml_signal_panel),
+            AnalyticsModule('rank', '팩터 랭킹', factor_ranking_status, render_factor_ranking_panel),
+            AnalyticsModule('sys', '시스템 시그널', system_signal_status, render_system_signal_panel),
+            AnalyticsModule('sector', '섹터 로테이션', sector_rotation_status, render_sector_rotation_panel),
+            AnalyticsModule('ml', 'ML 신호', ml_signal_status, render_ml_signal_panel),
         ], render_universe_picker),
         ModuleGroup('bt', '전략 검증 · 리서치', '🔬', [
-            AnalyticsModule('factor_bt', '팩터 백테스트', factor_backtest_employee, render_factor_backtest_panel),
-            AnalyticsModule('stock_bt', '종목 백테스팅', stock_backtest_employee, render_stock_backtest_panel),
-            AnalyticsModule('adv', '고급 분석', advanced_research_employee, render_advanced_research_panel),
+            AnalyticsModule('factor_bt', '팩터 백테스트', factor_backtest_status, render_factor_backtest_panel),
+            AnalyticsModule('stock_bt', '종목 백테스팅', stock_backtest_status, render_stock_backtest_panel),
+            AnalyticsModule('adv', '고급 분석', advanced_research_status, render_advanced_research_panel),
         ], render_universe_picker),
         ModuleGroup('ops', '운영 · 리스크', '⚙️', [
-            AnalyticsModule('exec', '실행 모드', execution_mode_employee, render_execution_mode_panel),
-            AnalyticsModule('sig', '시그널 파이프라인', signal_pipeline_employee),
-            AnalyticsModule('risk', '리스크 가드레일', risk_guardrail_employee, render_risk_guardrail_panel),
-            AnalyticsModule('eq', '계좌 현황', equity_log_employee),
+            AnalyticsModule('exec', '실행 모드', execution_mode_status, render_execution_mode_panel),
+            AnalyticsModule('sig', '시그널 파이프라인', signal_pipeline_status),
+            AnalyticsModule('risk', '리스크 가드레일', risk_guardrail_status, render_risk_guardrail_panel),
+            AnalyticsModule('eq', '계좌 현황', equity_log_status),
         ]),
     ]
 
