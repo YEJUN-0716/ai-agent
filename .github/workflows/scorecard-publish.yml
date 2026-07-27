@@ -41,6 +41,10 @@ jobs:
         run: python scorecard_worker.py
 
       - name: 발행 이력 커밋 (변경 있을 때만)
+        # always() 인 이유: 지평 하나가 실패해 스텝이 빨갛게 끝나도, 그 전에
+        # 성공한 지평의 발행 기록은 반드시 커밋돼야 한다. 이걸 빠뜨리면 러너가
+        # 사라질 때 기록도 같이 사라지고, 다음날 같은 판정을 다시 보낸다.
+        if: always()
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"

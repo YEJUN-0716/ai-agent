@@ -67,3 +67,15 @@ def test_top_by_slug_skips_absent_slug():
 
     assert top["chart"] == [("AAPL", 73.8)]
     assert top["ict"] == [("MSFT", 50.0)]
+
+
+def test_main_fails_loudly_when_record_message_send_fails(monkeypatch):
+    """오늘의 기록 발송 실패는 조용히 넘어가지 않는다 — 워크플로가 실패해야 한다."""
+    sw = _sw()
+    monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
+        {"date": "2026-07-28", "regime": "bull",
+         "scores": {"AAPL": {"chart": 70.0}}},
+    ])
+    monkeypatch.setattr(sw, "send_tg", lambda msg: False)
+
+    assert sw.main() != 0

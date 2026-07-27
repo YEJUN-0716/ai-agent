@@ -85,9 +85,11 @@ def main():
         return 1
 
     latest = days[-1]
-    send_tg(scorecard_message.build_record_message(
-        latest.get("date", ""), latest.get("regime", "unknown"),
-        top_by_slug(latest)))
+    if not send_tg(scorecard_message.build_record_message(
+            latest.get("date", ""), latest.get("regime", "unknown"),
+            top_by_slug(latest))):
+        print("오늘의 기록 발송 실패", file=sys.stderr)
+        return 1
 
     tickers = sorted({t for d in days for t in d.get("scores", {})})
     end = datetime.now()
