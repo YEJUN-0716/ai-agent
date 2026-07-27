@@ -4288,6 +4288,35 @@ div[class*="st-key-cmd_bar"] input::placeholder { color: #4a525f !important; }
 .tape .chg { font-size: 11px; font-weight: 600; }
 .tape .spacer { flex: 1 1 auto; border-right: none; }
 
+/* ── 마켓 보드(초기 화면 주요 지수) ── */
+.mboard-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+    gap: 8px; margin-bottom: 8px;
+}
+.mboard-label {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 10px; font-weight: 800; color: var(--text-4);
+    letter-spacing: 1.2px; text-transform: uppercase; margin: 10px 0 5px 0;
+}
+.mcard {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--border2); border-radius: 4px; padding: 9px 11px;
+}
+.mcard .mname {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 10.5px; font-weight: 700; color: var(--text-3); letter-spacing: .7px;
+}
+.mcard .mval {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 14px; font-weight: 800; line-height: 1.25;
+}
+.mcard .mchg {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 10.5px; font-weight: 600;
+}
+.mcard svg { flex-shrink: 0; opacity: .95; }
+
 /* ── 스캔 진행 스트립(분석 실행 중) ── */
 @keyframes scan-sweep { 0% { left: -34%; } 100% { left: 104%; } }
 .scan-strip {
@@ -4390,49 +4419,98 @@ def render_scan_strip(placeholder, label="ANALYZING · 전 모듈 스캔 중"):
         f'<div class="scan-strip">▚ {label}</div>', unsafe_allow_html=True)
 
 
+# 초기 화면 마켓 보드 — 증권사 시황판처럼 권역별로 묶는다. (심볼, 표시명, 소수점)
+_MARKET_BOARD = [
+    ("국내", [("^KS11", "KOSPI", 2), ("^KQ11", "KOSDAQ", 2), ("KRW=X", "USD/KRW", 2)]),
+    ("미국", [("^GSPC", "S&P 500", 2), ("^IXIC", "NASDAQ", 2),
+              ("^DJI", "DOW", 2), ("^RUT", "RUSSELL 2K", 2)]),
+    ("리스크 · 금리", [("^VIX", "VIX", 2), ("^TNX", "US 10Y", 3)]),
+    ("원자재 · 크립토", [("GC=F", "GOLD", 1), ("CL=F", "WTI", 2), ("BTC-USD", "BITCOIN", 0)]),
+]
+
+
 @st.cache_data(ttl=900, show_spinner=False)
-def _market_tape():
-    """상단 티커 테이프용 지수 스냅샷(종가·전일대비 %). 15분 캐시, 실패 시 빈 리스트."""
-    syms = [('SPY', 'SPY'), ('QQQ', 'QQQ'), ('IWM', 'IWM'), ('^VIX', 'VIX')]
+def _market_board_data():
+    """마켓 보드용 지수 스냅샷 — 종가·전일대비 %·최근 22거래일 종가(스파크라인).
+    12개 심볼을 한 번에 받아 15분 캐시. 실패하면 빈 dict(보드는 조용히 생략)."""
+    syms = [s for _, row in _MARKET_BOARD for s, _, _ in row]
     try:
-        data = yf.download([s for s, _ in syms], period='7d', interval='1d',
+        data = yf.download(syms, period='2mo', interval='1d',
                            progress=False, auto_adjust=True)['Close']
-        out = []
-        for sym, label in syms:
-            c = data[sym].dropna()
-            if len(c) < 2:
-                continue
-            last, prev = float(c.iloc[-1]), float(c.iloc[-2])
-            out.append({'sym': label, 'last': last,
-                        'chg': (last - prev) / prev * 100 if prev else 0.0})
-        return out
     except Exception:
-        return []
+        return {}
+    out = {}
+    for sym in syms:
+        try:
+            c = data[sym].dropna()
+        except Exception:
+            continue
+        if len(c) < 2:
+            continue
+        last, prev = float(c.iloc[-1]), float(c.iloc[-2])
+        out[sym] = {'last': last,
+                    'chg': (last - prev) / prev * 100 if prev else 0.0,
+                    'spark': [float(x) for x in c.tail(22)]}
+    return out
+
+
+def _sparkline_svg(vals, color, w=74, h=22):
+    """최근 추이 스파크라인을 인라인 SVG로. plotly 12개를 그리는 것보다 훨씬 가볍다."""
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    step = w / (len(vals) - 1)
+    pts = " ".join(f"{i*step:.1f},{h - (v-lo)/rng*(h-3) - 1.5:.1f}" for i, v in enumerate(vals))
+    return (f"<svg width='{w}' height='{h}' viewBox='0 0 {w} {h}'>"
+            f"<polyline points='{pts}' fill='none' stroke='{color}' stroke-width='1.4' "
+            f"stroke-linejoin='round' stroke-linecap='round'/></svg>")
 
 
 def render_market_tape():
-    """터미널 상단 티커 테이프 — 지수 시세 + 시장 레짐 + 운영 모드."""
+    """상단 상태 스트립 — 시장 레짐 + 갱신 시각 + 운영 모드(시세는 마켓 보드가 담당)."""
     regime = _get_market_regime()
     r_color = {'bull': '#26a69a', 'bear': '#ef5350',
                'mixed': '#f0b90b', 'unknown': '#5d6673'}.get(regime, '#5d6673')
     r_label = {'bull': 'BULL · SPY·QQQ 200일선 위', 'bear': 'BEAR · SPY·QQQ 200일선 아래',
                'mixed': 'MIXED · 엇갈림', 'unknown': 'N/A'}.get(regime, 'N/A')
-
-    cells = []
-    for q in _market_tape():
-        c = '#26a69a' if q['chg'] >= 0 else '#ef5350'
-        cells.append(
-            f"<div class='cell'><span class='sym'>{q['sym']}</span>"
-            f"<span class='val' style='color:{c}'>{q['last']:,.2f}</span>"
-            f"<span class='chg' style='color:{c}'>{q['chg']:+.2f}%</span></div>")
-    cells.append(
+    st.markdown(
+        "<div class='tape'>"
         f"<div class='cell'><span class='sym'>REGIME</span>"
-        f"<span class='val' style='color:{r_color}'>{r_label}</span></div>")
-    cells.append("<div class='cell spacer'></div>")
-    cells.append(
+        f"<span class='val' style='color:{r_color}'>{r_label}</span></div>"
+        f"<div class='cell'><span class='sym'>QUOTES</span>"
+        f"<span class='val' style='color:#787b86'>{datetime.now().strftime('%H:%M')} 기준 · 15분 캐시</span></div>"
+        "<div class='cell spacer'></div>"
         "<div class='cell'><span class='sym'>MODE</span>"
-        "<span class='val' style='color:#787b86'>SIGNAL ONLY · 자동주문 없음</span></div>")
-    st.markdown(f"<div class='tape'>{''.join(cells)}</div>", unsafe_allow_html=True)
+        "<span class='val' style='color:#787b86'>SIGNAL ONLY · 자동주문 없음</span></div>"
+        "</div>", unsafe_allow_html=True)
+
+
+def render_market_board():
+    """초기 화면 시황판 — 국내·미국 지수, 변동성·금리, 원자재·크립토를 한눈에."""
+    quotes = _market_board_data()
+    if not quotes:
+        st.caption("시세를 불러오지 못했습니다 — 네트워크를 확인하세요.")
+        return
+    html = []
+    for group_name, row in _MARKET_BOARD:
+        cards = []
+        for sym, label, dp in row:
+            q = quotes.get(sym)
+            if not q:
+                continue
+            color = '#26a69a' if q['chg'] >= 0 else '#ef5350'
+            arrow = '▲' if q['chg'] >= 0 else '▼'
+            cards.append(
+                f"<div class='mcard' style='border-left-color:{color}'>"
+                f"<div><div class='mname'>{label}</div>"
+                f"<div class='mval' style='color:{color}'>{q['last']:,.{dp}f}</div>"
+                f"<div class='mchg' style='color:{color}'>{arrow} {q['chg']:+.2f}%</div></div>"
+                f"{_sparkline_svg(q['spark'], color)}</div>")
+        if cards:
+            html.append(f"<div class='mboard-label'>{group_name}</div>"
+                        f"<div class='mboard-row'>{''.join(cards)}</div>")
+    st.markdown(''.join(html), unsafe_allow_html=True)
 
 
 def render_desk_status():
@@ -4652,9 +4730,17 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
-    # ── 상단 티커 테이프 (지수 · 레짐 · 운영 모드) + 커맨드 바 ──────────────────
+    # ── 상단 상태 스트립 + 커맨드 바 + 시황판 ──────────────────
     render_market_tape()
     render_command_bar()
+
+    st.markdown("""
+<div style="display:flex;align-items:baseline;gap:10px;margin:16px 0 2px 0">
+  <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
+               font-family:'JetBrains Mono',ui-monospace,monospace">MARKET OVERVIEW</span>
+  <span style="font-size:10.5px;color:var(--text-4)">주요 지수 · 변동성 · 금리 · 원자재 (전일 대비, 최근 1개월 추이)</span>
+</div>""", unsafe_allow_html=True)
+    render_market_board()
 
     # ── 애널리스트 그룹 공용 패널: 단일 종목 분석 ──────
     def render_stock_analysis_panel():
