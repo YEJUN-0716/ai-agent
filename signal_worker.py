@@ -380,17 +380,5 @@ def save_signal_log(actions):
         print("signal_log.json: 당일 신규 시그널 없음 (중복 스킵).")
 
 
-def _cli_entry(argv):
-    """--record-only 면 기록만 돌린다 — 텔레그램 발송 경로를 타지 않는다.
-
-    매수를 추천할지와 "누가 잘 맞히나" 를 잴지는 별개의 결정이다.
-    signal-alerts 의 크론이 꺼진 뒤에도 성적표 재료는 쌓여야 한다.
-    """
-    if "--record-only" in argv:
-        return record_only_main()
-    main()
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(_cli_entry(sys.argv))
+    main()
