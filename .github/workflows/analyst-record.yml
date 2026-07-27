@@ -1,0 +1,58 @@
+name: 애널리스트 점수 기록 (발송 없음)
+
+on:
+  # 미국 장마감 후. paper-trade-us(21:30 UTC) 완료 여유를 두고 22:30 UTC.
+  #
+  # signal-alerts 와 분리한 이유: 기록이 발송에 묶여 있어서, 팩터에 알파가
+  # 없어 매수 알림을 끄자 성적표 재료까지 같이 끊겼다(2026-07-20 ~ 07-25).
+  # 이 워크플로는 TELEGRAM_TOKEN 을 주입받지 않는다 — 발송 경로를 물리적으로
+  # 막는다.
+  schedule:
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: analyst-record
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v5
+
+      - name: Python 설정
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 애널리스트 점수 기록
+        env:
+          PYTHONUTF8:   "1"
+          # KRX 유니버스용. 없으면 퀄리티 팩터가 조용히 죽는다.
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          UNIVERSE:     "S&P 500 전체 (500종목)"
+        run: python signal_worker.py --record-only
+
+      - name: 기록 커밋 (변경 있을 때만)
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add data/analyst_log
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: analyst log $(date -u +%Y-%m-%d)"
+            git pull --rebase origin main
+            git push
+          else
+            echo "기록 변경 없음 — 커밋 생략"
+          fi
