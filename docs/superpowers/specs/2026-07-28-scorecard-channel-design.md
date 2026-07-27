@@ -109,7 +109,10 @@
 전체를 다시 계산한다 — 기록이 하루 한 줄이라 재계산 비용이 무시할 수준이다.
 
 **중복 발행만 막는다.** 저장이 필요한 것은 "무엇을 이미 발행했는가" 하나뿐이다.
-`data/analyst_log/published_YYYY.jsonl` 에 지평별 마지막 발행 표본 수를 남긴다:
+`data/publish_log/published_YYYY.jsonl` 에 지평별 마지막 발행 표본 수를 남긴다.
+**디렉터리를 `analyst_log` 와 나눈 것은 의도적이다** — `analyst_log.load_days()`
+는 자기 디렉터리의 `.jsonl` 을 파일명과 무관하게 전부 읽으므로, 같이 두면
+발행 이력이 일별 기록으로 섞여 들어가 `app.py` 의 성적표 화면이 죽는다.
 
 ```
 {"published_at": "2026-07-30", "horizon": 5, "n": 1}

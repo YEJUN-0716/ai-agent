@@ -44,7 +44,7 @@
 ```python
 """발행 이력 — 같은 판정을 두 번 보내지 않기 위한 최소 상태.
 
-실제 data/analyst_log/ 는 건드리지 않는다. 전부 tmp_path 안에서 돈다.
+실제 data/publish_log/ 는 건드리지 않는다. 전부 tmp_path 안에서 돈다.
 """
 from modules import publish_log as pl
 
@@ -94,7 +94,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'modules.publish_log'`
 `modules/publish_log.py` 생성:
 
 ```python
-"""발행 이력 — data/analyst_log/published_YYYY.jsonl.
+"""발행 이력 — data/publish_log/published_YYYY.jsonl.
 
 성적은 저장하지 않는다. analyst_log 와 가격이 유일한 진실이고 성적은
 그것의 함수다. 중간 결과를 저장하면 원본과 어긋날 자리만 생긴다.
@@ -105,7 +105,12 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'modules.publish_log'`
 import json
 import os
 
-LOG_DIRNAME = os.path.join("data", "analyst_log")
+# analyst_log 와 디렉터리를 나눈다. analyst_log.load_days() 는 자기 디렉터리의
+# .jsonl 을 파일명과 무관하게 전부 읽어들이므로(modules/analyst_log.py:71),
+# 같은 곳에 두면 발행 이력이 일별 기록으로 섞인다. 발행 레코드에는 "date" 가
+# 없고 정렬 키가 d.get("date", "") 라서 그 줄이 days[0] 이 되고, app.py 의
+# days[0]['date'] 가 KeyError 로 죽는다. 두 디렉터리를 합치지 말 것.
+LOG_DIRNAME = os.path.join("data", "publish_log")
 FILE_PREFIX = "published_"
 
 
@@ -637,7 +642,10 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add data/analyst_log
+          # data/analyst_log 가 아니다. 발행 이력은 별도 디렉터리에 산다 —
+          # analyst_log.load_days() 가 자기 디렉터리의 .jsonl 을 전부 읽기
+          # 때문이다. modules/publish_log.py 의 LOG_DIRNAME 주석 참고.
+          git add data/publish_log
           if ! git diff --staged --quiet; then
             git commit -m "chore: 발행 이력 $(date -u +%Y-%m-%d)"
             git pull --rebase origin main
