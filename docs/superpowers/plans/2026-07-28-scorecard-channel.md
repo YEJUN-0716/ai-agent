@@ -645,6 +645,12 @@ jobs:
           # data/analyst_log 가 아니다. 발행 이력은 별도 디렉터리에 산다 —
           # analyst_log.load_days() 가 자기 디렉터리의 .jsonl 을 전부 읽기
           # 때문이다. modules/publish_log.py 의 LOG_DIRNAME 주석 참고.
+          #
+          # mkdir 이 필요한 이유: 발행할 판정이 없는 날은 publish_log 가
+          # 아무것도 쓰지 않아 디렉터리가 없을 수 있고, 없는 경로에 git add 를
+          # 하면 exit 128 로 스텝이 죽는다. 빈 디렉터리는 git 이 무시하므로
+          # 아래 --quiet 검사에서 자연히 "변경 없음"으로 빠진다.
+          mkdir -p data/publish_log
           git add data/publish_log
           if ! git diff --staged --quiet; then
             git commit -m "chore: 발행 이력 $(date -u +%Y-%m-%d)"
