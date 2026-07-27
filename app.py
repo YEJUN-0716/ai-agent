@@ -4682,6 +4682,104 @@ def trade_plan_report():
          plan['signals'][0] if plan['signals'] else ''])
 
 
+def render_signal_scorecard(signals):
+    """시그널 성적표 — 승률만이 아니라 기대값·손익비·낙폭·유의성까지 함께 보여준다.
+    계산은 modules/signal_scorecard 가 소유한다(앱은 표시만)."""
+    from modules import signal_scorecard as _sc
+    s = _sc.summarize_signals(signals)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("완료 시그널", f"{s['n']}건", f"대기 {s['pending']}건")
+    c2.metric("승률", f"{s['hit_rate']:.0f}%", help="21일 후 수익 > 0인 비율")
+    c3.metric("기대값", f"{s['expectancy']:+.2f}%", help="1회 진입당 평균 수익률")
+    c4.metric("손익비", "∞" if s['profit_factor'] == float('inf') else f"{s['profit_factor']:.2f}",
+              help="총이익 ÷ 총손실. 1 미만이면 따라갈수록 잃는다")
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("평균 수익", f"{s['avg_win']:+.2f}%")
+    c6.metric("평균 손실", f"{s['avg_loss']:+.2f}%")
+    c7.metric("최대낙폭", f"{s['max_drawdown']:.1f}%", help="시그널을 순서대로 따라갔을 때")
+    c8.metric("t값", f"{s['t_stat']:+.2f}", help="±2 를 넘어야 우연이 아니라고 말할 수 있다")
+
+    _vc = ('#26a69a' if '유의한 양' in s['verdict']
+           else '#ef5350' if '유의한 음' in s['verdict'] else '#f0b90b')
+    st.markdown(
+        f"<div style='background:{_vc}0d;border-left:3px solid {_vc};border-radius:4px;"
+        f"padding:10px 14px;margin:8px 0;font-size:12.5px;color:var(--text-2)'>"
+        f"<b>판정</b> · {s['verdict']}</div>", unsafe_allow_html=True)
+    if s['alpha_vs_benchmark'] is not None:
+        st.caption(f"벤치마크 대비 초과수익 {s['alpha_vs_benchmark']:+.2f}%p")
+
+    buckets = [b for b in _sc.by_score_bucket(signals) if b['n']]
+    if buckets:
+        st.markdown("**점수 구간별 성과** — 점수가 높을수록 잘 맞아야 정상입니다(단조성)")
+        st.dataframe(pd.DataFrame(buckets).rename(columns={
+            'bucket': '점수 구간', 'n': '건수', 'hit_rate': '승률(%)',
+            'avg_return': '평균 수익률(%)'}), width='stretch', hide_index=True)
+
+
+def render_walkforward_panel():
+    """워크포워드 검증 결과 표시 — 계산은 scripts/measure_weight_walkforward.py 가 하고
+    앱은 저장된 결과만 읽는다(측정에 수 분 걸리므로 화면에서 재계산하지 않는다)."""
+    path = os.path.join(os.path.dirname(__file__), 'data', 'walkforward_result.json')
+    if not os.path.exists(path):
+        st.info("아직 측정 결과가 없습니다.\n\n"
+                "터미널에서 `python scripts/measure_weight_walkforward.py --years 5` 를 "
+                "실행하면 이 자리에 결과가 표시됩니다.")
+        return
+    with open(path, encoding='utf-8') as f:
+        d = json.load(f)
+    s = d['summary']
+    st.caption(f"측정 {d['updated'][:10]} · 유니버스 {d['universe_size']}종목 · "
+               f"{d['lookback_years']}년 · 관측 {d['n_periods']}기간(검증 {s['oos']['n']})")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("OOS 평균 IC", f"{s['oos']['mean_ic']:+.4f}",
+              f"t {s['oos']['t_stat']:+.2f}", help="과거 관측만으로 정한 가중치의 실제 예측력")
+    c2.metric("IS 평균 IC", f"{s['in_sample']['mean_ic']:+.4f}",
+              f"t {s['in_sample']['t_stat']:+.2f}", help="전체 구간을 다 보고 정한 가중치(미래 참조)")
+    c3.metric("과최적화 폭", f"{s['overfit_gap']:+.4f}",
+              help="IS − OOS. 클수록 백테스트 성과가 부풀려진 것")
+
+    _wc = '#26a69a' if s['oos']['mean_ic'] > 0 and abs(s['oos']['t_stat']) >= 2 else '#f0b90b'
+    st.markdown(
+        f"<div style='background:{_wc}0d;border-left:3px solid {_wc};border-radius:4px;"
+        f"padding:10px 14px;margin:8px 0;font-size:12.5px;color:var(--text-2)'>"
+        f"<b>판정</b> · {s['verdict']}</div>", unsafe_allow_html=True)
+
+    if d.get('oos') and d.get('in_sample'):
+        _fig = go.Figure()
+        _fig.add_scatter(y=d['oos'], name='OOS (워크포워드)', line=dict(color='#26a69a', width=1.6))
+        _fig.add_scatter(y=d['in_sample'], name='IS (전체구간 가중치)',
+                         line=dict(color='#787b86', width=1.2, dash='dot'))
+        _fig.add_hline(y=0, line_color='#555', line_width=1)
+        _fig.update_layout(height=260, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                           font=dict(color=TV_TEXT), margin=dict(l=0, r=0, t=10, b=0),
+                           xaxis=dict(title='검증 기간', gridcolor=TV_GRID),
+                           yaxis=dict(title='합성 IC', gridcolor=TV_GRID))
+        st.plotly_chart(_fig, width='stretch')
+
+
+def walkforward_report():
+    """워크포워드 모듈 카드 — 저장된 결과의 판정을 요약한다."""
+    path = os.path.join(os.path.dirname(__file__), 'data', 'walkforward_result.json')
+    if not os.path.exists(path):
+        return build_ops_report('워크포워드 검증', '🧪', '대기',
+                                ['측정 미실행 — scripts/measure_weight_walkforward.py'])
+    try:
+        with open(path, encoding='utf-8') as f:
+            s = json.load(f)['summary']
+    except Exception as e:
+        return build_ops_report('워크포워드 검증', '🧪', '경고', [f'결과 파일 읽기 실패: {e}'])
+    oos, gap = s['oos'], s['overfit_gap']
+    status = ('정상' if oos['mean_ic'] > 0 and abs(oos['t_stat']) >= 2
+              else '주의' if oos['mean_ic'] > 0 else '경고')
+    return build_ops_report(
+        '워크포워드 검증', '🧪', status,
+        [f"OOS 평균 IC {oos['mean_ic']:+.4f} (t {oos['t_stat']:+.2f}, n {oos['n']})",
+         f"과최적화 폭 {gap:+.4f} — 백테스트가 이만큼 부풀려져 있음",
+         s['verdict'][:80]])
+
+
 def analyst_modules():
     """애널리스트 그룹의 모듈 목록 — 마지막으로 분석한 종목 스냅샷 기반.
     아직 분석 이력이 없으면 None."""
@@ -6278,15 +6376,7 @@ def main():
                     _sl_done = [s for s in _sl_data if s.get("return_pct") is not None]
                     _sl_pend = [s for s in _sl_data if s.get("return_pct") is None]
                     if _sl_done:
-                        _rets = [s["return_pct"] for s in _sl_done]
-                        _wins = [r for r in _rets if r > 0]
-                        _sl_c1, _sl_c2, _sl_c3, _sl_c4 = st.columns(4)
-                        _sl_c1.metric("완료 시그널", f"{len(_sl_done)}건")
-                        _sl_c2.metric("승률", f"{len(_wins)/len(_sl_done)*100:.0f}%",
-                                      help="21일 후 수익 > 0인 비율")
-                        _sl_c3.metric("평균 수익률", f"{float(np.mean(_rets)):+.1f}%")
-                        _sl_c4.metric("대기 중", f"{len(_sl_pend)}건",
-                                      help="아직 21일이 지나지 않은 시그널")
+                        render_signal_scorecard(_sl_data)
                         # 수익률 분포 바차트
                         _sl_df = pd.DataFrame(_sl_done).sort_values("entry_date")
                         _fig_sl = go.Figure()
@@ -7535,6 +7625,7 @@ def main():
             AnalyticsModule('factor_bt', '팩터 백테스트', factor_backtest_status, render_factor_backtest_panel),
             AnalyticsModule('stock_bt', '종목 백테스팅', stock_backtest_status, render_stock_backtest_panel),
             AnalyticsModule('adv', '고급 분석', advanced_research_status, render_advanced_research_panel),
+            AnalyticsModule('wf', '워크포워드 검증', walkforward_report, render_walkforward_panel),
         ], render_universe_picker),
         ModuleGroup('ops', '운영 · 리스크', '⚙️', [
             AnalyticsModule('exec', '실행 모드', execution_mode_status, render_execution_mode_panel),
