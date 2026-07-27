@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 애널리스트 점수 기록을 매수 알림에서 떼어내 매 영업일 쌓이게 하고, 채점 결과를 공개 텔레그램 채널에 틀린 성적까지 그대로 발행한다.
+**Goal:** 이미 매 영업일 쌓이고 있는 애널리스트 점수를 채점해, 공개 텔레그램 채널에 틀린 성적까지 그대로 발행한다.
 
-**Architecture:** 워크플로 두 개로 분리한다. 기록기(22:30 UTC)는 이미 구현된 `record_only_main()` 을 부르며 텔레그램 토큰을 아예 주입받지 않는다. 발행기(23:45 UTC)는 `analyst_log` 와 가격에서 매번 성적을 다시 계산하고, 지평별 표본 수가 늘었을 때만 발행한다. 성적은 저장하지 않는다 — 저장하는 것은 발행 이력뿐이다.
+**Architecture:** 기록 파이프라인(`analyst-log.yml` → `scripts/record_analyst_scores.py` → `record_only_main()`)은 이미 돌고 있으므로 손대지 않는다. 새로 만드는 것은 발행 경로 하나다: 발행기(23:45 UTC)가 `analyst_log` 와 가격에서 매번 성적을 다시 계산하고, 지평별 표본 수가 늘었을 때만 발행한다. 성적은 저장하지 않는다 — 저장하는 것은 발행 이력뿐이다.
 
 **Tech Stack:** Python 3.12, pytest, numpy/scipy(기존), requests, GitHub Actions
 
@@ -15,7 +15,7 @@
 - 발행문에 **종목별 매수·매도·목표가 표현을 쓰지 않는다.** 점수·순위·사후 채점 결과만 발행한다. (유사투자자문업 회피)
 - 모든 발행 메시지 하단에 면책 문구를 **항상** 붙인다. 옵션으로 만들지 않는다. 문구 원문:
   `이 채널은 예측 기록과 사후 채점을 공개합니다. 투자 자문이나 매매 권유가 아니며, 투자 판단과 그 결과는 본인에게 귀속됩니다.`
-- 기록 워크플로에 `TELEGRAM_TOKEN` 을 **주입하지 않는다.** 발송 경로를 물리적으로 막는 장치다.
+- **기록 파이프라인을 건드리지 않는다.** `.github/workflows/analyst-log.yml`, `scripts/record_analyst_scores.py`, `signal_worker.py` 는 이 계획에서 수정 대상이 아니다. 이미 매 영업일 23:00 UTC 에 정상 동작 중이다.
 - 발행 대상은 새 시크릿 `TELEGRAM_PUBLIC_CHANNEL_ID` 다. 기존 `TELEGRAM_CHAT_ID`(개인 P&L)와 절대 섞지 않는다.
 - 채점은 유니버스 전 종목으로 하고, 발행 노출은 애널리스트별 **상위 5종목**만 한다.
 - 통계적 판정은 `n` 이 아니라 **`effective_n`**(겹침 보정 유효 표본)으로 한다.
@@ -24,185 +24,7 @@
 
 ---
 
-### Task 1: 기록 진입점과 워크플로
-
-기록이 07-25 에서 끊겨 있다. 매일 결손이 쌓이므로 가장 먼저 복구한다.
-
-**Files:**
-- Modify: `signal_worker.py:383-384` (`__main__` 블록)
-- Create: `.github/workflows/analyst-record.yml`
-- Test: `tests/test_signal_worker_cli.py`
-
-**Interfaces:**
-- Consumes: `signal_worker.record_only_main()` — 기존 구현, `int` 반환(0=성공, 1=실패)
-- Consumes: `signal_worker.main()` — 기존 구현, 반환값 없음(`None`), 실패 시 `sys.exit(1)`
-- Produces: `signal_worker._cli_entry(argv: list) -> int`
-
-- [ ] **Step 1: 실패 테스트를 쓴다**
-
-`tests/test_signal_worker_cli.py` 생성:
-
-```python
-"""CLI 분기 — --record-only 는 발송 경로를 타지 않는다.
-
-매수 알림을 켜는 것과 성적표 재료를 쌓는 것은 별개의 결정이다. 한쪽을
-멈춰도 다른 쪽은 돌아야 한다.
-
-signal_worker 는 함수 안에서 import 한다 — 최상단에서 끌어오면 core·yfinance
-까지 따라온다. tests/test_analyst_log.py 가 쓰는 패턴을 그대로 따른다.
-"""
-
-
-def _stubs(monkeypatch):
-    import signal_worker
-
-    called = {}
-
-    def fake_record():
-        called["record"] = True
-        return 0
-
-    def fake_main():
-        called["full"] = True
-
-    monkeypatch.setattr(signal_worker, "record_only_main", fake_record)
-    monkeypatch.setattr(signal_worker, "main", fake_main)
-    return signal_worker, called
-
-
-def test_record_only_flag_skips_full_scan(monkeypatch):
-    sw, called = _stubs(monkeypatch)
-
-    rc = sw._cli_entry(["signal_worker.py", "--record-only"])
-
-    assert rc == 0
-    assert called == {"record": True}
-
-
-def test_no_flag_runs_full_scan(monkeypatch):
-    sw, called = _stubs(monkeypatch)
-
-    rc = sw._cli_entry(["signal_worker.py"])
-
-    assert rc == 0
-    assert called == {"full": True}
-
-
-def test_record_failure_propagates_exit_code(monkeypatch):
-    """0종목 기록은 성공이 아니다 — 워크플로가 빨갛게 죽어야 안다."""
-    import signal_worker
-
-    monkeypatch.setattr(signal_worker, "record_only_main", lambda: 1)
-
-    assert signal_worker._cli_entry(["signal_worker.py", "--record-only"]) == 1
-```
-
-- [ ] **Step 2: 실패를 확인한다**
-
-Run: `python -m pytest tests/test_signal_worker_cli.py -v`
-Expected: FAIL — `AttributeError: module 'signal_worker' has no attribute '_cli_entry'`
-
-- [ ] **Step 3: `_cli_entry` 를 구현한다**
-
-`signal_worker.py` 파일 맨 끝의 `if __name__ == "__main__":` 블록을 다음으로 교체:
-
-```python
-def _cli_entry(argv):
-    """--record-only 면 기록만 돌린다 — 텔레그램 발송 경로를 타지 않는다.
-
-    매수를 추천할지와 "누가 잘 맞히나" 를 잴지는 별개의 결정이다.
-    signal-alerts 의 크론이 꺼진 뒤에도 성적표 재료는 쌓여야 한다.
-    """
-    if "--record-only" in argv:
-        return record_only_main()
-    main()
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(_cli_entry(sys.argv))
-```
-
-- [ ] **Step 4: 통과를 확인한다**
-
-Run: `python -m pytest tests/test_signal_worker_cli.py -v`
-Expected: PASS (3 passed)
-
-- [ ] **Step 5: 기록 워크플로를 만든다**
-
-`.github/workflows/analyst-record.yml` 생성:
-
-```yaml
-name: 애널리스트 점수 기록 (발송 없음)
-
-on:
-  # 미국 장마감 후. paper-trade-us(21:30 UTC) 완료 여유를 두고 22:30 UTC.
-  #
-  # signal-alerts 와 분리한 이유: 기록이 발송에 묶여 있어서, 팩터에 알파가
-  # 없어 매수 알림을 끄자 성적표 재료까지 같이 끊겼다(2026-07-20 ~ 07-25).
-  # 이 워크플로는 TELEGRAM_TOKEN 을 주입받지 않는다 — 발송 경로를 물리적으로
-  # 막는다.
-  schedule:
-    - cron: "30 22 * * 1-5"
-  workflow_dispatch:
-
-concurrency:
-  group: analyst-record
-  cancel-in-progress: false
-
-permissions:
-  contents: write
-
-jobs:
-  record:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: 저장소 체크아웃
-        uses: actions/checkout@v5
-
-      - name: Python 설정
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: 의존성 설치
-        run: pip install -r requirements.txt
-
-      - name: 애널리스트 점수 기록
-        env:
-          PYTHONUTF8:   "1"
-          # KRX 유니버스용. 없으면 퀄리티 팩터가 조용히 죽는다.
-          DART_API_KEY: ${{ secrets.DART_API_KEY }}
-          UNIVERSE:     "S&P 500 전체 (500종목)"
-        run: python signal_worker.py --record-only
-
-      - name: 기록 커밋 (변경 있을 때만)
-        run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-          git add data/analyst_log
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: analyst log $(date -u +%Y-%m-%d)"
-            git pull --rebase origin main
-            git push
-          else
-            echo "기록 변경 없음 — 커밋 생략"
-          fi
-```
-
-- [ ] **Step 6: 커밋한다**
-
-```bash
-git add tests/test_signal_worker_cli.py signal_worker.py .github/workflows/analyst-record.yml
-git commit -m "feat: 기록 전용 CLI 진입점과 워크플로 — 발송에서 분리"
-```
-
----
-
-### Task 2: 발행 이력 저장소
+### Task 1: 발행 이력 저장소
 
 같은 판정을 두 번 보내지 않기 위한 최소 상태다. 성적은 저장하지 않는다.
 
@@ -346,7 +168,7 @@ git commit -m "feat: 발행 이력 저장소 — 중복 발행 차단"
 
 ---
 
-### Task 3: 메시지 조립기
+### Task 2: 메시지 조립기
 
 숫자를 문장으로 바꾼다. 계산도 네트워크도 하지 않으므로 전부 단위 테스트로 고정된다.
 
@@ -531,7 +353,7 @@ git commit -m "feat: 발행 메시지 조립기 — 면책 고정, 표본 부족
 
 ---
 
-### Task 4: 발행 진입점과 워크플로
+### Task 3: 발행 진입점과 워크플로
 
 **Files:**
 - Create: `scorecard_worker.py`
@@ -860,11 +682,10 @@ git commit -m "feat: 성적표 발행기와 워크플로 — 채점 후 공개 �
 
 1. 텔레그램 공개 채널을 만들고 기존 봇을 **관리자**로 추가한다 (채널은 관리자만 발행할 수 있다).
 2. 채널 ID 를 저장소 시크릿 `TELEGRAM_PUBLIC_CHANNEL_ID` 로 등록한다. 공개 채널은 `@채널명` 형태도 받는다.
-3. `analyst-record.yml` 을 `workflow_dispatch` 로 한 번 수동 실행해 기록이 쌓이는지 확인한다.
-4. `scorecard-publish.yml` 을 수동 실행해 채널에 메시지가 도착하는지 확인한다.
+3. `scorecard-publish.yml` 을 수동 실행해 채널에 메시지가 도착하는지 확인한다.
 
 ## 완료 판정
 
-- 기록이 매 영업일 자동으로 쌓인다 (연속 10영업일 결손 0)
 - 첫 5일 지평 채점 결과가 채널에 발행되고, 같은 판정이 다음날 다시 발행되지 않는다
 - 발송 실패 시 워크플로가 실패로 끝난다 (조용히 넘어가지 않는다)
+- 기록 파이프라인이 이 변경 이후에도 그대로 돈다 (건드리지 않았으므로)
