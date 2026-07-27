@@ -538,10 +538,17 @@ def run_per_factor_ic_analysis(
     forward_days: int = 21,
     progress_cb=None,
     include_prod_defs: bool = False,
+    return_periods: bool = False,
 ) -> dict:
     """
     팩터별 walk-forward IC 분석.
     ic_weight_updater.py 가 호출하여 ic_weights.json을 생성할 때 사용.
+
+    return_periods=True 면 집계와 함께 기간별 IC 관측을 돌려준다
+    ({"factors": {...}, "periods": [{"date","ics"}, ...]}). 가중치 워크포워드
+    검증(modules/weight_walkforward.py)이 "t 이전 관측만으로 가중치 결정"을
+    재현하려면 집계값이 아니라 기간별 계열이 필요하다. 기본값(False)에서는
+    반환 형태가 그대로라 기존 호출부는 영향받지 않는다.
 
     include_prod_defs=True 면 프로덕션 스캔이 실제로 쓰는 정의
     (`mom_12_1`, `low_vol_252`)의 IC 도 함께 낸다. 프로덕션 가중치를
@@ -583,6 +590,7 @@ def run_per_factor_ic_analysis(
     if include_prod_defs:
         FACTORS = FACTORS + PRODUCTION_FACTORS
     factor_ics = {f: [] for f in FACTORS}
+    period_rows = []          # return_periods=True 일 때만 쓰이는 기간별 IC 관측
 
     for step_i, idx in enumerate(rebal_indices):
         if progress_cb:
@@ -605,6 +613,8 @@ def run_per_factor_ic_analysis(
                                     as_of, fwd_date, FACTORS)
         for factor, ic in period.items():
             factor_ics[factor].append(ic)
+        period_rows.append({"date": str(getattr(as_of, 'date', lambda: as_of)()),
+                            "ics": dict(period)})
 
     result = {}
     for factor, ics in factor_ics.items():
@@ -622,6 +632,8 @@ def run_per_factor_ic_analysis(
             "pct_positive": round(float((arr > 0).mean() * 100), 1),
             "n":            len(ics),
         }
+    if return_periods:
+        return {"factors": result, "periods": period_rows}
     return result
 
 

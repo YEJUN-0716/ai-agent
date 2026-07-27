@@ -22,6 +22,9 @@ watchlist.json
 # 워크플로가 커밋해 돌려놔야 한다 (signal_log.json·ic_weights.json 과 같은 부류).
 data/*
 !data/analyst_log/
+# 워크포워드 측정 결과도 앱이 읽는 유일한 재료다 — 측정에 수 분 걸리므로
+# 결과를 저장소에 남겨 어디서 열어도 같은 판정을 보게 한다.
+!data/walkforward_result.json
 .pytest_cache/
 
 # 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다
