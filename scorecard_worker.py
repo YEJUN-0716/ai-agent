@@ -158,8 +158,15 @@ def main():
     earliest = datetime.strptime(dates[0], "%Y-%m-%d")
     end = datetime.now()
     try:
+        # min_trading_days 를 낮추는 이유: 기본값 80거래일은 400일 패널에서
+        # 신규상장 종목을 걸러내려고 만든 값이다. 여기 구간은 기록 첫날에서
+        # 역산하므로 기록이 쌓이기 전에는 영업일 수십 일밖에 안 되고, 그러면
+        # 전 종목이 문턱에 걸려 "확보율 0/276" 으로 매일 죽는다 (2026-07-28).
+        # 채점에 필요한 것은 기록일 종가와 그 며칠 뒤 종가뿐이고, 선행 구간이
+        # 모자란 종목은 build_forward_returns 가 알아서 뺀다.
         prices, _ = price_panel.load_panel(
-            tickers, earliest - timedelta(days=WARMUP_DAYS), end)
+            tickers, earliest - timedelta(days=WARMUP_DAYS), end,
+            min_trading_days=price_panel.MIN_TRADING_DAYS_SCORING)
     except Exception as e:
         print(f"가격 패널 로드 실패 — 채점 불가: {e}", file=sys.stderr)
         return 1

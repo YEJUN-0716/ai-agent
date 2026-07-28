@@ -13,8 +13,16 @@ import yfinance as yf
 CACHE_PATH       = "data/price_panel_v1.parquet"
 MIN_SUCCESS_RATE = 0.80
 CHUNK_SIZE       = 100
-MIN_TRADING_DAYS = 80
 FIELDS           = ["Open", "High", "Low", "Close", "Volume"]
+
+# 이력이 이만큼 안 되는 종목은 버린다. 신규상장·거래부진 종목이 IC 계산에
+# 섞이는 것을 막으려고 넣은 값이고, 그 호출자들은 400일 이상을 요청한다.
+MIN_TRADING_DAYS = 80
+
+# 채점처럼 "기록일과 그 며칠 뒤 종가"만 있으면 되는 호출자를 위한 값.
+# 이력 길이로 종목을 거르지 않고, 쓸 수 있는지는 채점기가 스스로 판단한다
+# (analyst_scorecard.build_forward_returns 가 선행 구간이 모자란 종목을 뺀다).
+MIN_TRADING_DAYS_SCORING = 1
 
 # 캐시 최종일이 요청 종료일보다 이만큼 뒤처져도 재다운로드하지 않는다.
 # 주말(2일)에 연휴가 붙으면 거래 공백이 4일까지 벌어지므로 5일로 둔다.
@@ -54,7 +62,8 @@ def _download_chunked(tickers: list, start, end) -> pd.DataFrame:
     return pd.concat(frames, axis=1)
 
 
-def _split_panel(panel: pd.DataFrame, tickers: list) -> tuple:
+def _split_panel(panel: pd.DataFrame, tickers: list,
+                 min_trading_days: int = MIN_TRADING_DAYS) -> tuple:
     """wide 패널을 기존 루프와 같은 (prices_dict, ohlcv_dict)로 분해한다."""
     prices_dict, ohlcv_dict = {}, {}
     available = set(panel.columns.get_level_values(1)) if not panel.empty else set()
@@ -69,7 +78,7 @@ def _split_panel(panel: pd.DataFrame, tickers: list) -> tuple:
         if "Close" not in sub.columns:
             continue
         sub = sub.dropna(subset=["Close"])
-        if len(sub) < MIN_TRADING_DAYS:
+        if len(sub) < min_trading_days:
             continue
         prices_dict[tk] = sub["Close"].dropna()
         ohlcv_dict[tk]  = sub
@@ -145,26 +154,58 @@ def _merge_panels(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return merged.sort_index()
 
 
-def load_panel(tickers: list, start, end, cache_path: str = None) -> tuple:
+def _assert_window_fits(start_ts, end_ts, min_trading_days: int) -> None:
+    """요청 구간이 문턱보다 짧으면 받아보기 전에 멈춘다.
+
+    구간 안의 영업일 수가 min_trading_days 보다 적으면 어떤 종목도 문턱을
+    넘을 수 없다 — 다운로드가 완벽해도 결과는 반드시 0종목이다. 그런데도
+    끝까지 진행하면 "데이터 확보율 0/276 (0%)" 만 남아, 원인이 구간 길이인데
+    네트워크 장애처럼 읽힌다. 2026-07-28 성적표 워커가 정확히 이렇게 죽었고
+    yfinance 를 의심하느라 시간을 버렸다. 276종목을 헛되이 받는 비용도 같이
+    없앤다. 영업일은 휴장일을 빼지 않으므로 실제 거래일은 이보다 적다 —
+    즉 이 검사는 "확실히 불가능할 때만" 걸린다.
+    """
+    bdays = len(pd.bdate_range(start_ts.normalize(), end_ts.normalize()))
+    if bdays < min_trading_days:
+        raise PanelCoverageError(
+            f"요청 구간이 너무 짧다 — {start_ts:%Y-%m-%d}~{end_ts:%Y-%m-%d} "
+            f"영업일 {bdays}일 < 최소 거래일 {min_trading_days}일. "
+            f"구간을 늘리거나 min_trading_days 를 낮춰 호출해야 한다."
+        )
+
+
+def load_panel(tickers: list, start, end, cache_path: str = None,
+               min_trading_days: int = None) -> tuple:
     """
     tickers의 OHLCV를 반환한다.
+
+    Parameters
+    ----------
+    min_trading_days : 이 거래일 수에 못 미치는 티커는 버린다.
+        생략하면 MIN_TRADING_DAYS(80) — 신규상장 종목을 걸러야 하는
+        IC·팩터 호출자용 기본값이다. 짧은 구간만 필요한 채점기는
+        MIN_TRADING_DAYS_SCORING 을 넘긴다.
 
     Returns
     -------
     (prices_dict, ohlcv_dict)
         prices_dict : {ticker: Close Series}
         ohlcv_dict  : {ticker: OHLCV DataFrame}
-        거래일 MIN_TRADING_DAYS 미만인 티커는 양쪽에서 제외된다.
+        거래일 min_trading_days 미만인 티커는 양쪽에서 제외된다.
 
     Raises
     ------
-    PanelCoverageError : 확보율이 MIN_SUCCESS_RATE 미만
+    PanelCoverageError : 확보율이 MIN_SUCCESS_RATE 미만이거나,
+        요청 구간이 min_trading_days 를 애초에 채울 수 없을 때
     """
     global _last_coverage
     cache_path = cache_path or CACHE_PATH
     tickers    = list(dict.fromkeys(tickers))  # 중복 제거, 순서 유지
+    min_trading_days = (MIN_TRADING_DAYS if min_trading_days is None
+                        else int(min_trading_days))
 
     start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+    _assert_window_fits(start_ts, end_ts, min_trading_days)
 
     cached  = _read_cache(cache_path)
     missing, needs_extension = _missing_tickers(cached, tickers, start_ts, end_ts)
@@ -179,7 +220,7 @@ def load_panel(tickers: list, start, end, cache_path: str = None) -> tuple:
 
     window = cached.loc[(cached.index >= start_ts) & (cached.index <= end_ts)] \
         if not cached.empty else cached
-    prices_dict, ohlcv_dict = _split_panel(window, tickers)
+    prices_dict, ohlcv_dict = _split_panel(window, tickers, min_trading_days)
 
     failed = [t for t in tickers if t not in prices_dict]
     _last_coverage = {

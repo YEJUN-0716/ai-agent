@@ -3692,7 +3692,13 @@ def render_analyst_scorecard():
         start = pd.Timestamp(days[0]['date']) - pd.Timedelta(days=30)
         end = pd.Timestamp(days[-1]['date']) + pd.Timedelta(
             days=_SCORECARD_PANEL_EXTRA_DAYS)
-        prices, _ = _panel.load_panel(tickers, start, min(end, pd.Timestamp.today()))
+        # 문턱을 낮추지 않으면 기록이 얼마 없는 초반에 이 화면이 통째로 죽는다.
+        # 기본값 80거래일은 400일 패널을 쓰는 IC 호출자용이고, 여기 구간은
+        # 기록 첫날 기준 30일이라 그 문턱을 넘을 수가 없다. 채점에 필요한 것은
+        # 기록일과 그 며칠 뒤 종가뿐이다.
+        prices, _ = _panel.load_panel(
+            tickers, start, min(end, pd.Timestamp.today()),
+            min_trading_days=_panel.MIN_TRADING_DAYS_SCORING)
     except Exception as e:
         st.warning(f"가격 데이터를 받지 못했습니다: {e}")
         return

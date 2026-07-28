@@ -6,9 +6,9 @@ import pytest
 from modules import price_panel
 
 
-def _fake_ohlcv(tickers, n_days=200):
+def _fake_ohlcv(tickers, n_days=200, start="2025-01-01"):
     """yf.download가 여러 티커에 대해 돌려주는 MultiIndex 컬럼 형태를 흉내낸다."""
-    idx = pd.date_range("2025-01-01", periods=n_days, freq="B")
+    idx = pd.date_range(start, periods=n_days, freq="B")
     cols = pd.MultiIndex.from_product(
         [["Open", "High", "Low", "Close", "Volume"], tickers]
     )
@@ -177,3 +177,74 @@ def test_weekend_gap_is_still_a_cache_hit(tmp_path, monkeypatch):
     price_panel.load_panel(["AAPL", "MSFT"], start="2025-01-01",
                            end=pd.Timestamp("2025-10-06 09:30"), cache_path=cache)
     assert len(calls) == 1, "주말 공백을 캐시 미스로 오판했다"
+
+
+# --- 짧은 구간: 성적표 채점이 밟은 지뢰 -------------------------------------
+#
+# MIN_TRADING_DAYS(80)는 400일짜리 패널에서 신규상장·거래부진 종목을 걸러내려고
+# 넣은 값이다. 그런데 성적표 채점기는 구간을 "기록 첫날 - 워밍업"으로 잡는다.
+# 기록이 4일치뿐이던 2026-07-28, 요청 구간은 영업일 14일이었고 80일 문턱에
+# 276종목이 전원 탈락해 "데이터 확보율 0/276 (0%)"만 남았다. 다운로드는 멀쩡했다.
+# 원인이 구간 길이라는 사실이 메시지에 없어 네트워크 장애로 오인됐다.
+
+SHORT_START, SHORT_END = "2026-07-09", "2026-07-28"   # 영업일 14일
+
+
+def test_short_window_fails_fast_and_blames_the_window(tmp_path, monkeypatch):
+    """구간이 문턱보다 짧으면 받아보기 전에, 구간 탓이라고 말하며 멈춘다."""
+    calls = []
+
+    def fake_download(tickers, **kwargs):
+        calls.append(list(tickers))
+        return _fake_ohlcv(list(tickers), n_days=14, start=SHORT_START)
+
+    monkeypatch.setattr(price_panel.yf, "download", fake_download)
+
+    with pytest.raises(price_panel.PanelCoverageError) as err:
+        price_panel.load_panel(["AAPL", "MSFT"], start=SHORT_START, end=SHORT_END,
+                               cache_path=str(tmp_path / "p.parquet"))
+
+    msg = str(err.value)
+    assert "구간" in msg, f"구간 탓임을 말하지 않는다: {msg}"
+    assert "14" in msg and "80" in msg, f"영업일/문턱 수치가 없다: {msg}"
+    assert calls == [], "실패가 확정된 구간인데 276종목을 받으러 갔다"
+
+
+def test_short_window_works_when_caller_lowers_threshold(tmp_path, monkeypatch):
+    """채점은 기록일과 며칠 뒤 종가만 필요하다 — 긴 과거가 없어도 돌아야 한다."""
+    monkeypatch.setattr(
+        price_panel.yf, "download",
+        lambda tickers, **kw: _fake_ohlcv(list(tickers), n_days=14,
+                                          start=SHORT_START),
+    )
+
+    prices, ohlcv = price_panel.load_panel(
+        ["AAPL", "MSFT"], start=SHORT_START, end=SHORT_END,
+        cache_path=str(tmp_path / "p.parquet"),
+        min_trading_days=price_panel.MIN_TRADING_DAYS_SCORING,
+    )
+
+    assert set(prices) == {"AAPL", "MSFT"}
+    assert len(prices["AAPL"]) == 14
+    assert set(ohlcv) == {"AAPL", "MSFT"}
+
+
+def test_default_threshold_still_drops_thin_history(tmp_path, monkeypatch):
+    """기본 문턱은 80 그대로다 — IC 파이프라인의 품질 보증을 건드리지 않는다."""
+    def fake_download(tickers, **kwargs):
+        panel = _fake_ohlcv(list(tickers))
+        # THIN 은 마지막 30영업일에만 종가가 있다 (신규상장 흉내)
+        panel.loc[panel.index[:-30], ("Close", "THIN")] = np.nan
+        return panel
+
+    monkeypatch.setattr(price_panel.yf, "download", fake_download)
+
+    prices, _ = price_panel.load_panel(
+        ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "THIN"],
+        start="2025-01-01", end="2025-10-01",
+        cache_path=str(tmp_path / "p.parquet"),
+    )
+
+    assert price_panel.MIN_TRADING_DAYS == 80
+    assert "THIN" not in prices, "기본 문턱이 느슨해졌다"
+    assert set(prices) == {"AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"}
