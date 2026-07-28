@@ -28,6 +28,17 @@ def _slug_name(slug):
     return SLUG_NAMES.get(slug, slug)
 
 
+def _missing_slug_lines(missing_slugs):
+    """미기록 슬러그 공개 문구 — 조용히 빼지 않는다.
+
+    두 발행문(성적표·오늘의 기록) 모두에서 쓴다. 슬러그를 빼고 두 개만
+    보여주면 성적표/기록이 완전한 것처럼 보인다.
+    """
+    return [f"※ {_slug_name(slug)}는 아직 기록하지 않음 — "
+            f"{MISSING_REASON.get(slug, '기록 없음')}"
+            for slug in missing_slugs]
+
+
 def build_scorecard_message(horizon, stats, missing_slugs):
     """N일 지평 성적표. stats 는 score_analysts() 의 반환값."""
     lines = [f"📊 {horizon}일 지평 성적표", ""]
@@ -38,24 +49,28 @@ def build_scorecard_message(horizon, stats, missing_slugs):
         lines.append(f"*{_slug_name(slug)}*")
         lines.append(f"  평균 IC {s['mean_ic']:+.4f} · 적중률 {s['hit_rate']:.1f}%")
 
-        if effective_n < MIN_EFFECTIVE_N:
+        t_stat = s.get("t_stat")
+        if effective_n < MIN_EFFECTIVE_N or t_stat is None:
             lines.append(
                 f"  판정 표본 n={s['n']} (유효 {effective_n:.1f}) — 통계적 판단 불가")
         else:
-            lines.append(f"  t={s['t_stat']} · 유효표본 {effective_n:.1f}")
+            lines.append(f"  t={t_stat} · 유효표본 {effective_n:.1f}")
         lines.append("")
 
-    for slug in missing_slugs:
-        reason = MISSING_REASON.get(slug, "기록 없음")
-        lines.append(f"※ {_slug_name(slug)}는 아직 기록하지 않음 — {reason}")
+    lines.extend(_missing_slug_lines(missing_slugs))
 
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
 
-def build_record_message(date_str, regime, top_by_slug):
-    """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}."""
+def build_record_message(date_str, regime, top_by_slug, missing_slugs):
+    """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}.
+
+    missing_slugs 는 build_scorecard_message 와 같은 이유로 필요하다 —
+    이 메시지는 매 영업일 나가고 구독자가 실제로 보는 것은 이쪽이다.
+    슬러그를 조용히 빼고 두 개만 보여주면 기록이 완전한 것처럼 보인다.
+    """
     lines = [f"🧬 {date_str} 예측 기록 (국면: {regime})", ""]
 
     for slug in sorted(top_by_slug):
@@ -66,6 +81,8 @@ def build_record_message(date_str, regime, top_by_slug):
         for ticker, score in entries:
             lines.append(f"  {ticker} {score:.1f}")
         lines.append("")
+
+    lines.extend(_missing_slug_lines(missing_slugs))
 
     lines.append("이 기록은 5·21·63일 뒤 채점됩니다.")
     lines.append("")

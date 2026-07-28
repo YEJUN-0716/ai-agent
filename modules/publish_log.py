@@ -4,7 +4,9 @@
 그것의 함수다. 중간 결과를 저장하면 원본과 어긋날 자리만 생긴다.
 
 여기 남기는 것은 "무엇을 이미 보냈는가" 하나뿐이다. 지평별 마지막 표본 수를
-비교해, 늘었으면 새로 판정된 날이 생긴 것으로 본다.
+비교해, 늘었으면 새로 판정된 날이 생긴 것으로 본다. "오늘의 기록" 발행은
+표본이 아니라 로그 날짜로 같은 방식으로 판별한다 — kind 필드로 두 종류를
+한 파일 안에서 구분한다.
 """
 import json
 import os
@@ -43,10 +45,16 @@ def _read_all(root):
 
 
 def last_published_n(horizon, root=LOG_DIRNAME):
-    """그 지평에서 마지막으로 발행한 표본 수. 발행한 적 없으면 None."""
+    """그 지평에서 마지막으로 발행한 표본 수. 발행한 적 없으면 None.
+
+    "오늘의 기록"(kind="record") 항목은 절대 세지 않는다. 기존 성적표
+    항목에는 kind 키가 아예 없으므로, 없는 경우를 "scorecard"로 본다 —
+    이 기본값이 없으면 이 브랜치 이전에 쌓인 파일이 전부 무효가 된다.
+    """
     horizon = int(horizon)
     ns = [r["n"] for r in _read_all(root)
-          if r.get("horizon") == horizon and isinstance(r.get("n"), int)]
+          if r.get("kind", "scorecard") == "scorecard"
+          and r.get("horizon") == horizon and isinstance(r.get("n"), int)]
     return max(ns) if ns else None
 
 
@@ -58,5 +66,28 @@ def record_published(date_str, horizon, n, root=LOG_DIRNAME):
         os.makedirs(parent, exist_ok=True)
 
     record = {"published_at": date_str, "horizon": int(horizon), "n": int(n)}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def last_published_record_date(root=LOG_DIRNAME):
+    """마지막으로 발행한 '오늘의 기록'의 로그 날짜. 발행한 적 없으면 None."""
+    dates = [r["log_date"] for r in _read_all(root)
+             if r.get("kind") == "record" and isinstance(r.get("log_date"), str)]
+    return max(dates) if dates else None
+
+
+def record_published_record(published_at, log_date, root=LOG_DIRNAME):
+    """오늘의 기록 발행 1건을 남긴다.
+
+    성적표 항목(kind 없음)과 같은 파일에 섞여도 무방하다 — kind 로
+    구분하므로 last_published_n() 의 지평별 집계를 오염시키지 않는다.
+    """
+    path = _year_path(root, published_at[:4])
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    record = {"published_at": published_at, "kind": "record", "log_date": log_date}
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")

@@ -20,8 +20,11 @@ from modules import (analyst_log, analyst_scorecard, price_panel,
 TG_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHANNEL_ID = os.environ.get("TELEGRAM_PUBLIC_CHANNEL_ID", "")
 
-# 선행수익률 계산에 필요한 과거 구간. 최장 지평(63봉) + 여유.
-PANEL_DAYS = 400
+# 가격 패널의 시작점은 고정 일수가 아니라 기록의 첫 날짜에서 역산한다
+# (건별 이유는 main() 참고). 이 여유분은 첫 기록일 이전으로 얼마나 더
+# 당겨올지를 정한다 — 연휴 등으로 그 날짜 자체에 종가가 없어도
+# "그 날짜 이하 마지막 종가"를 찾을 수 있게, 있을 법한 연휴보다 넉넉히 둔다.
+WARMUP_DAYS = 14
 
 # 발행 노출 종목 수. 채점은 전 종목으로 하고 노출만 줄인다.
 TOP_N = 5
@@ -31,22 +34,33 @@ MISSING_SLUGS = ["quant"]
 
 
 def send_tg(msg):
-    """공개 채널로 발송한다. 개인 채팅(TELEGRAM_CHAT_ID)과 섞지 않는다."""
+    """공개 채널로 발송한다. 개인 채팅(TELEGRAM_CHAT_ID)과 섞지 않는다.
+
+    requests 의 연결 오류 메시지에는 요청 URL 전체(봇 토큰 포함)가 그대로
+    박힌다. 이 저장소는 공개이고 워크플로 로그도 공개로 읽히므로, 그
+    예외를 그대로 print 하면 토큰이 로그에 남는다. GitHub 의 시크릿
+    마스킹은 2차 방어일 뿐 유일한 방어여선 안 된다 — 예외 타입과 짧은
+    메시지만 남기고 원문은 버린다.
+    """
     if not TG_TOKEN or not TG_CHANNEL_ID:
         print("[TG] 환경변수 없음 — 발송 생략")
         return False
 
-    resp = requests.post(
-        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-        json={"chat_id": TG_CHANNEL_ID, "text": msg, "parse_mode": "Markdown"},
-        timeout=10,
-    )
-    if resp.status_code == 400 and "parse entities" in resp.text:
+    try:
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHANNEL_ID, "text": msg},
+            json={"chat_id": TG_CHANNEL_ID, "text": msg, "parse_mode": "Markdown"},
             timeout=10,
         )
+        if resp.status_code == 400 and "parse entities" in resp.text:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                json={"chat_id": TG_CHANNEL_ID, "text": msg},
+                timeout=10,
+            )
+    except requests.exceptions.RequestException as e:
+        print(f"[TG 오류] 요청 실패 — {type(e).__name__}")
+        return False
 
     ok = resp.status_code == 200
     print("[TG] 발송 성공" if ok else f"[TG 오류] {resp.text}")
@@ -74,7 +88,10 @@ def top_by_slug(day, limit=TOP_N):
         for slug, score in per_analyst.items():
             buckets.setdefault(slug, []).append((ticker, float(score)))
 
-    return {slug: sorted(rows, key=lambda r: r[1], reverse=True)[:limit]
+    # (-score, ticker): 점수만으로 정렬하면 동점일 때 dict 삽입 순서에 기대게
+    # 된다. ict 는 100.0 에서 자주 여러 종목이 동점(예: 2026-07-23, 19종목)
+    # 이라 티커를 2차 키로 둬야 같은 로그가 항상 같은 목록을 낸다.
+    return {slug: sorted(rows, key=lambda r: (-r[1], r[0]))[:limit]
             for slug, rows in buckets.items()}
 
 
@@ -84,30 +101,48 @@ def main():
         print("기록이 없다 — 발행할 것이 없다.", file=sys.stderr)
         return 1
 
+    today = datetime.now().strftime("%Y-%m-%d")
     latest = days[-1]
-    if not send_tg(scorecard_message.build_record_message(
-            latest.get("date", ""), latest.get("regime", "unknown"),
-            top_by_slug(latest))):
-        print("오늘의 기록 발송 실패", file=sys.stderr)
-        return 1
+    log_date = latest.get("date", "")
+
+    # 오늘의 기록은 로그 날짜로 중복을 막는다 — n 이 없으므로 new_horizons
+    # 의 표본 비교 방식을 못 쓴다. 수동 workflow_dispatch 로 스모크 테스트할
+    # 때마다 재발송되던 것, 그리고 기록기가 밀리거나 실패한 날 어제 날짜의
+    # 종목을 다시 내보내던 것 둘 다 이걸로 막는다.
+    if publish_log.last_published_record_date() == log_date:
+        print(f"오늘의 기록 이미 발행됨 (log_date={log_date}) — 발송 생략")
+    else:
+        if not send_tg(scorecard_message.build_record_message(
+                log_date, latest.get("regime", "unknown"),
+                top_by_slug(latest), MISSING_SLUGS)):
+            print("오늘의 기록 발송 실패", file=sys.stderr)
+            return 1
+        publish_log.record_published_record(today, log_date)
+        print(f"오늘의 기록 발행 (log_date={log_date})")
 
     tickers = sorted({t for d in days for t in d.get("scores", {})})
+    dates = [d["date"] for d in days]
+
+    # 고정 일수(예전 PANEL_DAYS=400) 대신 기록의 첫 날짜에서 역산한다.
+    # 고정폭이면 로그가 그 폭을 넘어서는 순간 오래된 기록일이 패널
+    # 밖으로 밀려나 build_forward_returns 가 그 날들을 조용히 버리고,
+    # n 이 늘지 않아(줄지도 모르고) 성적표 발행이 영구히 멈춘다 —
+    # 그린 워크플로 위에서 티 안 나게.
+    earliest = datetime.strptime(dates[0], "%Y-%m-%d")
     end = datetime.now()
     try:
         prices, _ = price_panel.load_panel(
-            tickers, end - timedelta(days=PANEL_DAYS), end)
+            tickers, earliest - timedelta(days=WARMUP_DAYS), end)
     except Exception as e:
         print(f"가격 패널 로드 실패 — 채점 불가: {e}", file=sys.stderr)
         return 1
 
-    dates = [d["date"] for d in days]
     stats_by_horizon = {}
     for horizon in analyst_scorecard.HORIZONS:
         fwd = analyst_scorecard.build_forward_returns(prices, dates, horizon)
         stats_by_horizon[horizon] = analyst_scorecard.score_analysts(
             days, fwd, horizon)
 
-    today = datetime.now().strftime("%Y-%m-%d")
     for horizon in new_horizons(stats_by_horizon):
         stats = stats_by_horizon[horizon]
         if not send_tg(scorecard_message.build_scorecard_message(

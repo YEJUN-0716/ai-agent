@@ -82,6 +82,59 @@ def test_broken_line_is_skipped(tmp_path):
                     encoding="utf-8")
 
     assert pl.last_published_n(5, root=tmp_path) == 2
+
+
+# --- 오늘의 기록(kind="record") 발행 — 성적표(kind 없음)와 한 파일을
+# 공유하지만 조회는 섞이지 않아야 한다. 최종 수정 라운드(2026-07-28)에서
+# 추가됨 — FIX 6: 오늘의 기록에 중복 발행 방지가 없었다.
+
+def test_record_date_never_published_returns_none(tmp_path):
+    assert pl.last_published_record_date(root=tmp_path) is None
+
+
+def test_record_date_round_trip(tmp_path):
+    pl.record_published_record("2026-07-28", "2026-07-28", root=tmp_path)
+
+    assert pl.last_published_record_date(root=tmp_path) == "2026-07-28"
+
+
+def test_rerunning_with_same_log_date_reports_already_published(tmp_path):
+    """workflow_dispatch 로 같은 로그 날짜에 다시 돌려도 같은 판정이 나와야
+    한다 — 그래야 워커가 재발송을 건너뛸 수 있다."""
+    pl.record_published_record("2026-07-28", "2026-07-25", root=tmp_path)
+
+    # 재실행 시점의 published_at 은 다를 수 있어도(예: 다음날 새벽 재시도),
+    # 비교 기준은 log_date 다.
+    assert pl.last_published_record_date(root=tmp_path) == "2026-07-25"
+    pl.record_published_record("2026-07-29", "2026-07-25", root=tmp_path)
+    assert pl.last_published_record_date(root=tmp_path) == "2026-07-25"
+
+
+def test_scorecard_entries_do_not_leak_into_record_query(tmp_path):
+    """kind 가 없는(성적표) 항목은 last_published_record_date() 에 잡히지
+    않는다 — 두 종류가 같은 파일에 섞여도 서로의 조회를 오염시키면 안 된다."""
+    pl.record_published("2026-07-30", 5, 3, root=tmp_path)
+
+    assert pl.last_published_record_date(root=tmp_path) is None
+
+
+def test_record_entries_do_not_leak_into_scorecard_query(tmp_path):
+    """kind="record" 항목은 last_published_n() 의 지평별 집계에 들어가면
+    안 된다 — n 도 horizon 도 없는 다른 종류의 발행이다."""
+    pl.record_published_record("2026-07-28", "2026-07-28", root=tmp_path)
+
+    assert pl.last_published_n(5, root=tmp_path) is None
+
+
+def test_legacy_entries_without_kind_still_count_as_scorecard(tmp_path):
+    """이 브랜치 이전에 쌓인 published_YYYY.jsonl 에는 kind 키가 아예 없다.
+    fallback 이 없으면 기존 파일 전체가 무효가 된다."""
+    path = tmp_path / "published_2026.jsonl"
+    path.write_text(
+        '{"published_at": "2026-07-30", "horizon": 5, "n": 4}\n',
+        encoding="utf-8")
+
+    assert pl.last_published_n(5, root=tmp_path) == 4
 ```
 
 - [ ] **Step 2: 실패를 확인한다**
@@ -140,10 +193,16 @@ def _read_all(root):
 
 
 def last_published_n(horizon, root=LOG_DIRNAME):
-    """그 지평에서 마지막으로 발행한 표본 수. 발행한 적 없으면 None."""
+    """그 지평에서 마지막으로 발행한 표본 수. 발행한 적 없으면 None.
+
+    "오늘의 기록"(kind="record") 항목은 절대 세지 않는다. 기존 성적표
+    항목에는 kind 키가 아예 없으므로, 없는 경우를 "scorecard"로 본다 —
+    이 기본값이 없으면 이 브랜치 이전에 쌓인 파일이 전부 무효가 된다.
+    """
     horizon = int(horizon)
     ns = [r["n"] for r in _read_all(root)
-          if r.get("horizon") == horizon and isinstance(r.get("n"), int)]
+          if r.get("kind", "scorecard") == "scorecard"
+          and r.get("horizon") == horizon and isinstance(r.get("n"), int)]
     return max(ns) if ns else None
 
 
@@ -157,12 +216,41 @@ def record_published(date_str, horizon, n, root=LOG_DIRNAME):
     record = {"published_at": date_str, "horizon": int(horizon), "n": int(n)}
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def last_published_record_date(root=LOG_DIRNAME):
+    """마지막으로 발행한 '오늘의 기록'의 로그 날짜. 발행한 적 없으면 None."""
+    dates = [r["log_date"] for r in _read_all(root)
+             if r.get("kind") == "record" and isinstance(r.get("log_date"), str)]
+    return max(dates) if dates else None
+
+
+def record_published_record(published_at, log_date, root=LOG_DIRNAME):
+    """오늘의 기록 발행 1건을 남긴다.
+
+    성적표 항목(kind 없음)과 같은 파일에 섞여도 무방하다 — kind 로
+    구분하므로 last_published_n() 의 지평별 집계를 오염시키지 않는다.
+    """
+    path = _year_path(root, published_at[:4])
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    record = {"published_at": published_at, "kind": "record", "log_date": log_date}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 ```
+
+> **최종 수정 라운드(2026-07-28) 갱신.** 위 두 함수(`last_published_record_date`,
+> `record_published_record`)는 최초 구현 이후 FIX 6 으로 추가됐다 — "오늘의
+> 기록"에 중복 발행 방지가 없어 `workflow_dispatch` 스모크 테스트마다
+> 재발송되던 문제. `last_published_n` 도 `kind` 필드로 성적표 항목만
+> 세도록 같이 바뀌었다.
 
 - [ ] **Step 4: 통과를 확인한다**
 
 Run: `python -m pytest tests/test_publish_log.py -v`
-Expected: PASS (5 passed)
+Expected: PASS (11 passed)
 
 - [ ] **Step 5: 커밋한다**
 
@@ -199,26 +287,55 @@ git commit -m "feat: 발행 이력 저장소 — 중복 발행 차단"
 
 이 채널의 유일한 차별화는 틀린 것을 그대로 보여주는 것이다. 그래서
 음수 IC 표기와 표본 부족 표기를 테스트로 고정한다.
+
+매수·매도·목표가 금지어와 면책 문구는 이 채널의 유일한 법적 보호막(유사
+투자자문업 회피)이다 — 두 발행 경로(성적표·오늘의 기록) 모두에 적용해야
+하므로 parametrize 로 같이 고정한다. 세 번째 발행 경로가 생기면 아래
+_ALL_MESSAGES 에 한 줄만 추가하면 된다.
 """
+import pytest
+
 from modules import scorecard_message as sm
 
 _SMALL = {"chart": {"mean_ic": -0.03, "se": None, "t_stat": None,
                     "n": 1, "effective_n": 1.0, "hit_rate": 0.0}}
 _BIG = {"quant": {"mean_ic": -0.094, "se": 0.02, "t_stat": -4.7,
                   "n": 60, "effective_n": 12.0, "hit_rate": 35.0}}
+# newey_west_se() 는 0.0 을 돌려줄 수 있다 — 그러면 se 는 truthy 가 아니라서
+# score_analysts() 가 t_stat=None 을 내는데, effective_n 은 n 으로 그대로
+# 폴백해 MIN_EFFECTIVE_N 을 가뿐히 넘는다. 표를 그대로 찍으면 "t=None" 이
+# 발행된다.
+_NONE_T_STAT_SUFFICIENT_N = {
+    "chart": {"mean_ic": 0.0, "se": 0.0, "t_stat": None,
+              "n": 30, "effective_n": 30.0, "hit_rate": 50.0},
+}
 
 
-def test_scorecard_always_carries_disclaimer():
-    msg = sm.build_scorecard_message(5, _SMALL, [])
+def _all_messages():
+    """규제 제약을 받는 모든 발행문 — 정상 입력과 퇴화 입력(빈 stats/top) 둘 다."""
+    return {
+        "scorecard/normal": sm.build_scorecard_message(5, _BIG, ["quant"]),
+        "scorecard/empty": sm.build_scorecard_message(5, {}, []),
+        "record/normal": sm.build_record_message(
+            "2026-07-28", "bull", {"chart": [("AAPL", 73.8)]}, ["quant"]),
+        "record/empty": sm.build_record_message(
+            "2026-07-28", "bull", {}, []),
+    }
 
-    assert sm.DISCLAIMER in msg
+
+_ALL_MESSAGES = list(_all_messages().items())
 
 
-def test_record_message_always_carries_disclaimer():
-    msg = sm.build_record_message("2026-07-28", "bull",
-                                  {"chart": [("AAPL", 73.8)]})
+@pytest.mark.parametrize("label, msg", _ALL_MESSAGES)
+def test_disclaimer_always_present(label, msg):
+    assert sm.DISCLAIMER in msg, f"{label}: 면책 문구 없음"
 
-    assert sm.DISCLAIMER in msg
+
+@pytest.mark.parametrize("label, msg", _ALL_MESSAGES)
+def test_no_buy_sell_wording(label, msg):
+    """매수·매도·목표가·추천 표현은 유사투자자문업 신고 대상이 된다."""
+    for banned in ("매수", "매도", "목표가", "추천"):
+        assert banned not in msg, f"{label}: 금지어 {banned!r} 발견"
 
 
 def test_small_sample_is_flagged_as_undecidable():
@@ -233,6 +350,15 @@ def test_sufficient_sample_shows_t_stat():
 
     assert "통계적 판단 불가" not in msg
     assert "-4.7" in msg
+
+
+def test_none_t_stat_with_sufficient_n_is_still_undecidable():
+    """se=0.0 → t_stat=None 인데 effective_n 은 충분한 경우, "None" 을 그대로
+    찍지 않고 통계적 판단 불가로 처리해야 한다."""
+    msg = sm.build_scorecard_message(5, _NONE_T_STAT_SUFFICIENT_N, [])
+
+    assert "None" not in msg
+    assert "통계적 판단 불가" in msg
 
 
 def test_negative_ic_is_shown_signed():
@@ -250,14 +376,21 @@ def test_missing_slug_is_disclosed_with_reason():
     assert "일별 펀더멘털 수집 미구축" in msg
 
 
-def test_no_buy_sell_wording_in_record_message():
-    """매수·매도 표현은 유사투자자문업 신고 대상이 된다."""
+def test_record_message_also_discloses_missing_slug():
+    """오늘의 기록은 매 영업일 나가는 쪽이라, 슬러그 누락을 감추면 안 되는
+    이유가 성적표보다 오히려 강하다."""
     msg = sm.build_record_message("2026-07-28", "bull",
-                                  {"chart": [("AAPL", 73.8)]})
+                                  {"chart": [("AAPL", 73.8)]}, ["quant"])
 
-    for banned in ("매수", "매도", "목표가", "추천"):
-        assert banned not in msg
+    assert "퀀트+재무" in msg
+    assert "일별 펀더멘털 수집 미구축" in msg
 ```
+
+> **최종 수정 라운드(2026-07-28) 갱신.** 최초 구현 이후 FIX 3(t_stat=None
+> 이 그대로 발행되던 결함), FIX 4(`build_record_message` 에 누락 슬러그
+> 공개 추가), FIX 5(금지어·면책 검증을 두 빌더 모두에 적용)가 이 파일에
+> 반영됐다. 위 코드가 최종 상태다 — 원래 7개였던 테스트가 14개(파라미터화
+> 포함)로 늘었다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
@@ -299,6 +432,17 @@ def _slug_name(slug):
     return SLUG_NAMES.get(slug, slug)
 
 
+def _missing_slug_lines(missing_slugs):
+    """미기록 슬러그 공개 문구 — 조용히 빼지 않는다.
+
+    두 발행문(성적표·오늘의 기록) 모두에서 쓴다. 슬러그를 빼고 두 개만
+    보여주면 성적표/기록이 완전한 것처럼 보인다.
+    """
+    return [f"※ {_slug_name(slug)}는 아직 기록하지 않음 — "
+            f"{MISSING_REASON.get(slug, '기록 없음')}"
+            for slug in missing_slugs]
+
+
 def build_scorecard_message(horizon, stats, missing_slugs):
     """N일 지평 성적표. stats 는 score_analysts() 의 반환값."""
     lines = [f"📊 {horizon}일 지평 성적표", ""]
@@ -309,24 +453,28 @@ def build_scorecard_message(horizon, stats, missing_slugs):
         lines.append(f"*{_slug_name(slug)}*")
         lines.append(f"  평균 IC {s['mean_ic']:+.4f} · 적중률 {s['hit_rate']:.1f}%")
 
-        if effective_n < MIN_EFFECTIVE_N:
+        t_stat = s.get("t_stat")
+        if effective_n < MIN_EFFECTIVE_N or t_stat is None:
             lines.append(
                 f"  판정 표본 n={s['n']} (유효 {effective_n:.1f}) — 통계적 판단 불가")
         else:
-            lines.append(f"  t={s['t_stat']} · 유효표본 {effective_n:.1f}")
+            lines.append(f"  t={t_stat} · 유효표본 {effective_n:.1f}")
         lines.append("")
 
-    for slug in missing_slugs:
-        reason = MISSING_REASON.get(slug, "기록 없음")
-        lines.append(f"※ {_slug_name(slug)}는 아직 기록하지 않음 — {reason}")
+    lines.extend(_missing_slug_lines(missing_slugs))
 
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
 
-def build_record_message(date_str, regime, top_by_slug):
-    """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}."""
+def build_record_message(date_str, regime, top_by_slug, missing_slugs):
+    """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}.
+
+    missing_slugs 는 build_scorecard_message 와 같은 이유로 필요하다 —
+    이 메시지는 매 영업일 나가고 구독자가 실제로 보는 것은 이쪽이다.
+    슬러그를 조용히 빼고 두 개만 보여주면 기록이 완전한 것처럼 보인다.
+    """
     lines = [f"🧬 {date_str} 예측 기록 (국면: {regime})", ""]
 
     for slug in sorted(top_by_slug):
@@ -338,16 +486,22 @@ def build_record_message(date_str, regime, top_by_slug):
             lines.append(f"  {ticker} {score:.1f}")
         lines.append("")
 
+    lines.extend(_missing_slug_lines(missing_slugs))
+
     lines.append("이 기록은 5·21·63일 뒤 채점됩니다.")
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 ```
 
+> **최종 수정 라운드(2026-07-28) 갱신.** `_missing_slug_lines` 추출(FIX 4,
+> 중복 없이 두 빌더가 공유), `t_stat is None` 가드(FIX 3), `build_record_message`
+> 의 `missing_slugs` 매개변수(FIX 4)가 반영된 최종 코드다.
+
 - [ ] **Step 4: 통과를 확인한다**
 
 Run: `python -m pytest tests/test_scorecard_message.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (14 passed)
 
 - [ ] **Step 5: 커밋한다**
 
@@ -449,7 +603,68 @@ def test_top_by_slug_skips_absent_slug():
 
     assert top["chart"] == [("AAPL", 73.8)]
     assert top["ict"] == [("MSFT", 50.0)]
+
+
+def test_top_by_slug_tiebreaks_by_ticker_when_scores_equal():
+    """ict 는 100.0 에서 자주 동점이 난다(2026-07-23, 19종목). 점수만으로
+    정렬하면 dict 삽입 순서에 기대게 되어 같은 로그가 실행마다 다른 목록을
+    낼 수 있다 — 티커를 2차 키로 둬 결정론적으로 만든다."""
+    day = {"scores": {
+        "NVDA": {"ict": 100.0},
+        "AAPL": {"ict": 100.0},
+        "MSFT": {"ict": 100.0},
+    }}
+
+    top = _sw().top_by_slug(day, limit=5)
+
+    assert top["ict"] == [("AAPL", 100.0), ("MSFT", 100.0), ("NVDA", 100.0)]
+
+
+def test_main_fails_loudly_when_record_message_send_fails(monkeypatch):
+    """오늘의 기록 발송 실패는 조용히 넘어가지 않는다 — 워크플로가 실패해야 한다."""
+    sw = _sw()
+    monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
+        {"date": "2026-07-28", "regime": "bull",
+         "scores": {"AAPL": {"chart": 70.0}}},
+    ])
+    monkeypatch.setattr(sw, "send_tg", lambda msg: False)
+    # 이 지평의 발행 이력이 없다는 것을 명시적으로 고정한다 — 실제
+    # data/publish_log 상태에 테스트 결과가 좌우되지 않게 한다.
+    monkeypatch.setattr(sw.publish_log, "last_published_record_date",
+                        lambda root=sw.publish_log.LOG_DIRNAME: None)
+
+    assert sw.main() != 0
+
+
+def test_main_skips_record_send_without_failing_when_already_published(monkeypatch):
+    """같은 log_date 가 이미 발행돼 있으면 발송을 건너뛰되, 이것은 실패가
+    아니다 — workflow_dispatch 스모크 테스트가 매번 중복 발행하던 문제,
+    그리고 기록기가 밀린 날 어제 날짜를 재발송하던 문제 둘 다 이걸로 막는다."""
+    sw = _sw()
+    monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
+        {"date": "2026-07-28", "regime": "bull",
+         "scores": {"AAPL": {"chart": 70.0}}},
+    ])
+    monkeypatch.setattr(sw.publish_log, "last_published_record_date",
+                        lambda root=sw.publish_log.LOG_DIRNAME: "2026-07-28")
+    # 가격 패널을 빈 것으로 둬 채점 경로가 네트워크 없이 안전하게 "새 판정
+    # 없음"으로 끝나게 한다 — 이 테스트가 보려는 것은 오직 기록 스킵이다.
+    monkeypatch.setattr(sw.price_panel, "load_panel", lambda *a, **k: ({}, {}))
+
+    calls = []
+    monkeypatch.setattr(sw, "send_tg", lambda msg: calls.append(msg) or True)
+
+    result = sw.main()
+
+    assert calls == []   # 오늘의 기록은 발송되지 않았다
+    assert result == 0   # 스킵은 실패가 아니다
 ```
+
+> **최종 수정 라운드(2026-07-28) 갱신.** 원래 이 Step 은 7개 테스트로
+> 끝났다. 이후 두 차례 수정으로 늘었다 — 우선 `test_main_fails_loudly_...`
+> 가 추가돼(기록 발송 실패를 발행 실패로 처리) 8개가 됐고, 이번 최종
+> 수정 라운드에서 FIX 6(오늘의 기록 중복 발행 방지)과 FIX 7(동점 결정론
+> 정렬) 테스트가 더해져 10개가 됐다. 최종 코드는 위 상태다.
 
 - [ ] **Step 2: 실패를 확인한다**
 
@@ -591,7 +806,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 통과를 확인한다**
 
 Run: `python -m pytest tests/test_scorecard_worker.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (10 passed)
 
 - [ ] **Step 5: 발행 워크플로를 만든다**
 
@@ -602,7 +817,7 @@ name: 성적표 공개 채널 발행
 
 on:
   # 23:45 UTC = KST 08:45. daily-report(23:30 UTC)와 15분 간격을 둔다.
-  # 기록기(22:30 UTC)가 끝난 뒤다.
+  # 기록기(analyst-log.yml, 23:00 UTC)가 끝난 뒤다 — 실제 여유는 45분.
   schedule:
     - cron: "45 23 * * 1-5"
   workflow_dispatch:
@@ -670,7 +885,7 @@ jobs:
 - [ ] **Step 6: 전체 테스트를 돌린다**
 
 Run: `python -m pytest tests/ -q`
-Expected: 기존 테스트 전부 통과 + 신규 22건 통과. 실패가 있으면 신규 코드가 기존 동작을 깬 것이므로 고친다.
+Expected: 기존 테스트 전부 통과 + 신규 35건 통과 (publish_log 11 · scorecard_message 14 · scorecard_worker 10). 실패가 있으면 신규 코드가 기존 동작을 깬 것이므로 고친다.
 
 - [ ] **Step 7: 커밋한다**
 

@@ -2,7 +2,7 @@ name: 성적표 공개 채널 발행
 
 on:
   # 23:45 UTC = KST 08:45. daily-report(23:30 UTC)와 15분 간격을 둔다.
-  # 기록기(22:30 UTC)가 끝난 뒤다.
+  # 기록기(analyst-log.yml, 23:00 UTC)가 끝난 뒤다 — 실제 여유는 45분.
   schedule:
     - cron: "45 23 * * 1-5"
   workflow_dispatch:

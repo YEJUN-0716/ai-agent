@@ -69,6 +69,21 @@ def test_top_by_slug_skips_absent_slug():
     assert top["ict"] == [("MSFT", 50.0)]
 
 
+def test_top_by_slug_tiebreaks_by_ticker_when_scores_equal():
+    """ict 는 100.0 에서 자주 동점이 난다(2026-07-23, 19종목). 점수만으로
+    정렬하면 dict 삽입 순서에 기대게 되어 같은 로그가 실행마다 다른 목록을
+    낼 수 있다 — 티커를 2차 키로 둬 결정론적으로 만든다."""
+    day = {"scores": {
+        "NVDA": {"ict": 100.0},
+        "AAPL": {"ict": 100.0},
+        "MSFT": {"ict": 100.0},
+    }}
+
+    top = _sw().top_by_slug(day, limit=5)
+
+    assert top["ict"] == [("AAPL", 100.0), ("MSFT", 100.0), ("NVDA", 100.0)]
+
+
 def test_main_fails_loudly_when_record_message_send_fails(monkeypatch):
     """오늘의 기록 발송 실패는 조용히 넘어가지 않는다 — 워크플로가 실패해야 한다."""
     sw = _sw()
@@ -77,5 +92,33 @@ def test_main_fails_loudly_when_record_message_send_fails(monkeypatch):
          "scores": {"AAPL": {"chart": 70.0}}},
     ])
     monkeypatch.setattr(sw, "send_tg", lambda msg: False)
+    # 이 지평의 발행 이력이 없다는 것을 명시적으로 고정한다 — 실제
+    # data/publish_log 상태에 테스트 결과가 좌우되지 않게 한다.
+    monkeypatch.setattr(sw.publish_log, "last_published_record_date",
+                        lambda root=sw.publish_log.LOG_DIRNAME: None)
 
     assert sw.main() != 0
+
+
+def test_main_skips_record_send_without_failing_when_already_published(monkeypatch):
+    """같은 log_date 가 이미 발행돼 있으면 발송을 건너뛰되, 이것은 실패가
+    아니다 — workflow_dispatch 스모크 테스트가 매번 중복 발행하던 문제,
+    그리고 기록기가 밀린 날 어제 날짜를 재발송하던 문제 둘 다 이걸로 막는다."""
+    sw = _sw()
+    monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
+        {"date": "2026-07-28", "regime": "bull",
+         "scores": {"AAPL": {"chart": 70.0}}},
+    ])
+    monkeypatch.setattr(sw.publish_log, "last_published_record_date",
+                        lambda root=sw.publish_log.LOG_DIRNAME: "2026-07-28")
+    # 가격 패널을 빈 것으로 둬 채점 경로가 네트워크 없이 안전하게 "새 판정
+    # 없음"으로 끝나게 한다 — 이 테스트가 보려는 것은 오직 기록 스킵이다.
+    monkeypatch.setattr(sw.price_panel, "load_panel", lambda *a, **k: ({}, {}))
+
+    calls = []
+    monkeypatch.setattr(sw, "send_tg", lambda msg: calls.append(msg) or True)
+
+    result = sw.main()
+
+    assert calls == []   # 오늘의 기록은 발송되지 않았다
+    assert result == 0   # 스킵은 실패가 아니다
