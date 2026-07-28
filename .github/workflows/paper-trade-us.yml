@@ -71,12 +71,8 @@ jobs:
       - name: 저장소 체크아웃
         uses: actions/checkout@v5
 
-      - name: Python 설정
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
+      # setup-python은 쓰지 않는다. self-hosted(Windows) 러너에서 파이썬 설치
+      # 관리자 권한이 없어 실패한다. PC에 설치된 시스템 파이썬을 그대로 쓴다.
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
