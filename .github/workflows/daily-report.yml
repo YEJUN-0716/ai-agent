@@ -29,11 +29,6 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
-      # 토스 오픈API는 IP 화이트리스트를 적용한다. self-hosted(자택 고정 IP) →
-      # ubuntu-latest 전환(40b1790) 이후 403이 발생해, 러너 외부 IP를 기록해 둔다.
-      - name: 러너 외부 IP 확인 (진단용)
-        run: curl -s --max-time 10 https://api.ipify.org || echo "IP 조회 실패"
-
       - name: 토스 일별 P&L 리포트 발송
         env:
           PYTHONUTF8:         "1"
