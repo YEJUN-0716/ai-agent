@@ -46,13 +46,26 @@ from modules.portfolio_allocator import (
     risk_parity_position_scale,
     portfolio_correlation_report,
 )
-from modules.toss_trading import (
-    place_notional_buy as _pm_notional_buy,
-    place_market_sell  as _pm_market_sell,
-    wait_for_fill      as _pm_wait_fill,
-    get_account        as _pt_get_account,
-    get_positions      as _pt_get_positions,
-)
+# 계좌만 갈아끼운다. BROKER=virtual 이면 실주문 없이 장부로만 체결하고,
+# 전략·매도조건 등 나머지 로직은 실매매와 완전히 동일한 경로를 탄다.
+BROKER = os.environ.get("BROKER", "toss").strip().lower()
+
+if BROKER == "virtual":
+    from modules.virtual_broker import (
+        place_notional_buy as _pm_notional_buy,
+        place_market_sell  as _pm_market_sell,
+        wait_for_fill      as _pm_wait_fill,
+        get_account        as _pt_get_account,
+        get_positions      as _pt_get_positions,
+    )
+else:
+    from modules.toss_trading import (
+        place_notional_buy as _pm_notional_buy,
+        place_market_sell  as _pm_market_sell,
+        wait_for_fill      as _pm_wait_fill,
+        get_account        as _pt_get_account,
+        get_positions      as _pt_get_positions,
+    )
 
 try:
     from modules.ops_safety import KillSwitch as _KillSwitch
@@ -423,7 +436,12 @@ def reconcile_positions(peaks: dict, actual_positions: list,
 def append_signals_to_log(new_signals: list, existing_log: list) -> list:
     """매수 시그널을 로그에 추가 (같은 날 중복 제외)."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    existing_ids = {s["id"] for s in existing_log}
+    # signal-alerts 워크플로가 남기는 항목에는 id가 없다. 없는 항목은
+    # symbol-entry_date 조합으로 같은 키를 만들어 중복 판정에 참여시킨다.
+    existing_ids = {
+        s.get("id") or f"{s.get('symbol', '')}-{s.get('entry_date', '')}"
+        for s in existing_log
+    }
     for sig in new_signals:
         if sig.get("action") != "매수":
             continue
@@ -621,20 +639,32 @@ def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
 # ── 메인 ────────────────────────────────────────────────────────────────
 def main():
     run_ts   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    mode_tag = "[TOSS]"
+    mode_tag = "[가상장부]" if BROKER == "virtual" else "[TOSS]"
     print(f"\n{'='*60}")
-    print(f"  자동매매 실행  {run_ts}  [TOSS]")
+    print(f"  자동매매 실행  {run_ts}  {mode_tag}")
     print(f"  DRY_RUN={DRY_RUN}  UNIVERSE={UNIVERSE_NAME}  TOP_N={TOP_N}")
     print(f"  CAPITAL_KRW={CAPITAL_KRW}  CAPITAL_USD={CAPITAL_USD}  MAX_POS={MAX_POSITIONS}")
     print(f"  DD_STOP={PORTFOLIO_DD_STOP_PCT}%  MAX_SECTOR={MAX_SECTOR_POSITIONS}")
     print(f"{'='*60}\n")
 
-    if not TOSS_CLIENT_ID or not TOSS_CLIENT_SECRET or not TOSS_ACCOUNT_SEQ:
+    # 가상 브로커는 토스 API를 호출하지 않으므로 자격증명이 필요 없다.
+    if BROKER != "virtual" and (
+        not TOSS_CLIENT_ID or not TOSS_CLIENT_SECRET or not TOSS_ACCOUNT_SEQ
+    ):
         print("[오류] TOSS_CLIENT_ID / TOSS_CLIENT_SECRET / TOSS_ACCOUNT_SEQ 환경변수가 없습니다.")
         sys.exit(1)
 
     # 0-0. 실시간 환율 (미국 종목 매수여력 원화 환산용)
     _KRW_PER_USD = _fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400")))
+
+    # 0-1. 지난 실행에서 예약된 가상 주문을 다음 거래일 시가로 체결한다.
+    if BROKER == "virtual":
+        from modules.virtual_broker import (
+            load_state, save_state, set_fx, settle_pending,
+        )
+        set_fx(_KRW_PER_USD)
+        _vstate = settle_pending(load_state(), _KRW_PER_USD)
+        save_state(_vstate)
 
     # 0. 시장 레짐 감지
     print("시장 레짐 감지 중...")
