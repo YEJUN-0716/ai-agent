@@ -13,7 +13,11 @@ concurrency:
 
 jobs:
   toss-report:
-    runs-on: ubuntu-latest
+    # 토스 오픈API는 IP 화이트리스트를 적용한다. 자택 IP만 등록돼 있으므로
+    # 클라우드 러너로 옮기면 oauth2/token이 403 access_denied로 거부된다.
+    # (40b1790에서 ubuntu-latest로 옮겼다가 07-17~28 12일간 전량 실패)
+    # 클라우드로 되돌리려면 먼저 해당 러너의 고정 IP를 토스에 등록할 것.
+    runs-on: [self-hosted, Windows]
     timeout-minutes: 5
 
     steps:

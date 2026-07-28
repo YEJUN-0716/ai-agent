@@ -61,7 +61,10 @@ permissions:
 
 jobs:
   run-paper-trade-us:
-    runs-on: ubuntu-latest
+    # 토스 오픈API는 IP 화이트리스트를 적용한다. 자택 IP만 등록돼 있으므로
+    # 클라우드 러너로 옮기면 oauth2/token이 403 access_denied로 거부된다.
+    # 클라우드로 되돌리려면 먼저 해당 러너의 고정 IP를 토스에 등록할 것.
+    runs-on: [self-hosted, Windows]
     timeout-minutes: 30
 
     steps:
@@ -102,6 +105,9 @@ jobs:
         run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널 로그)
+        # Windows 러너의 기본 셸은 PowerShell이라 아래 bash 문법이 통하지 않는다.
+        # Git for Windows의 bash를 명시적으로 지정한다.
+        shell: bash
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
