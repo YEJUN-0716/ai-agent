@@ -99,3 +99,28 @@ def test_record_message_also_discloses_missing_slug():
 
     assert "퀀트+재무" in msg
     assert "일별 펀더멘털 수집 미구축" in msg
+
+
+def test_record_message_discloses_truncated_ties():
+    """동점으로 잘린 종목이 있으면 밝힌다 — 안 밝히면 순위가 아닌 것을
+    순위처럼 보여주게 된다."""
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"ict": [("AAA", 100.0), ("BBB", 100.0)]},
+        [], {"ict": 17})
+
+    assert "동점 17종목" in msg
+
+
+def test_record_message_omits_tie_note_when_nothing_cut():
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [], {})
+
+    assert "동점" not in msg
+
+
+def test_record_message_tie_notes_defaults_to_none():
+    """기존 4인자 호출이 그대로 동작해야 한다."""
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [])
+
+    assert "동점" not in msg

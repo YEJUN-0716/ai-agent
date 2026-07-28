@@ -122,3 +122,34 @@ def test_main_skips_record_send_without_failing_when_already_published(monkeypat
 
     assert calls == []   # 오늘의 기록은 발송되지 않았다
     assert result == 0   # 스킵은 실패가 아니다
+
+
+# --- 동점 절단 공개 — "상위 5" 가 순위가 아니라 동점 무리의 임의
+# 부분집합일 때 그 사실을 밝힌다. 최종 리뷰 지적(2026-07-28).
+
+def test_cut_tie_counts_reports_truncated_ties():
+    """ict 는 100.0 에서 포화된다 — 5개를 보여줘도 뒤에 더 있으면 밝힌다."""
+    day = {"scores": {t: {"ict": 100.0} for t in
+                      ("AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG")}}
+
+    top = _sw().top_by_slug(day, limit=5)
+
+    assert _sw().cut_tie_counts(day, top) == {"ict": 2}
+
+
+def test_cut_tie_counts_silent_when_nothing_truncated():
+    day = {"scores": {"AAA": {"ict": 90.0}, "BBB": {"ict": 80.0}}}
+
+    top = _sw().top_by_slug(day, limit=5)
+
+    assert _sw().cut_tie_counts(day, top) == {}
+
+
+def test_cut_tie_counts_only_counts_the_boundary_score():
+    """경계 점수와 같은 것만 센다 — 그 위 점수들은 잘린 게 아니다."""
+    day = {"scores": {"AAA": {"ict": 100.0}, "BBB": {"ict": 90.0},
+                      "CCC": {"ict": 90.0}, "DDD": {"ict": 90.0}}}
+
+    top = _sw().top_by_slug(day, limit=2)   # AAA(100), BBB(90)
+
+    assert _sw().cut_tie_counts(day, top) == {"ict": 2}

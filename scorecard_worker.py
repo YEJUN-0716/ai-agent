@@ -95,6 +95,32 @@ def top_by_slug(day, limit=TOP_N):
             for slug, rows in buckets.items()}
 
 
+def cut_tie_counts(day, top):
+    """표시에서 잘려나간 동점 종목 수 — {slug: n}. 잘린 게 없으면 키가 없다.
+
+    상위 N 으로 자를 때 경계 점수가 그 아래로도 이어지면, 보이는 목록은
+    순위가 아니라 동점 무리에서 임의로 고른 부분집합이다. ict 는 100.0 에서
+    자주 포화되고(2026-07-23 기준 19종목) 그때 "상위 5" 는 19개 중 5개를
+    티커순으로 자른 것에 지나지 않는다.
+
+    몇 개가 같은 점수로 잘렸는지 밝히지 않으면 순위가 아닌 것을 순위처럼
+    보여주게 된다 — 음수 IC 를 숨기는 것과 같은 종류의 분식이다.
+    """
+    out = {}
+    scores = day.get("scores", {})
+    for slug, rows in top.items():
+        if not rows:
+            continue
+        cutoff = rows[-1][1]
+        total_at_cutoff = sum(
+            1 for per_analyst in scores.values()
+            if slug in per_analyst and float(per_analyst[slug]) == cutoff)
+        shown_at_cutoff = sum(1 for _, score in rows if score == cutoff)
+        if total_at_cutoff > shown_at_cutoff:
+            out[slug] = total_at_cutoff - shown_at_cutoff
+    return out
+
+
 def main():
     days = analyst_log.load_days()
     if not days:
@@ -112,9 +138,10 @@ def main():
     if publish_log.last_published_record_date() == log_date:
         print(f"오늘의 기록 이미 발행됨 (log_date={log_date}) — 발송 생략")
     else:
+        top = top_by_slug(latest)
         if not send_tg(scorecard_message.build_record_message(
                 log_date, latest.get("regime", "unknown"),
-                top_by_slug(latest), MISSING_SLUGS)):
+                top, MISSING_SLUGS, cut_tie_counts(latest, top))):
             print("오늘의 기록 발송 실패", file=sys.stderr)
             return 1
         publish_log.record_published_record(today, log_date)

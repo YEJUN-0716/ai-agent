@@ -64,13 +64,20 @@ def build_scorecard_message(horizon, stats, missing_slugs):
     return "\n".join(lines)
 
 
-def build_record_message(date_str, regime, top_by_slug, missing_slugs):
+def build_record_message(date_str, regime, top_by_slug, missing_slugs,
+                         tie_notes=None):
     """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}.
 
     missing_slugs 는 build_scorecard_message 와 같은 이유로 필요하다 —
     이 메시지는 매 영업일 나가고 구독자가 실제로 보는 것은 이쪽이다.
     슬러그를 조용히 빼고 두 개만 보여주면 기록이 완전한 것처럼 보인다.
+
+    tie_notes({slug: 잘린 동점 종목 수})가 있으면 그 사실을 함께 적는다.
+    경계 점수에서 잘린 종목이 있으면 보이는 목록은 순위가 아니라 동점
+    무리의 임의 부분집합이다. 밝히지 않으면 순위가 아닌 것을 순위처럼
+    보여주게 된다.
     """
+    tie_notes = tie_notes or {}
     lines = [f"🧬 {date_str} 예측 기록 (국면: {regime})", ""]
 
     for slug in sorted(top_by_slug):
@@ -80,6 +87,10 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs):
         lines.append(f"*{_slug_name(slug)}* 상위 {len(entries)}")
         for ticker, score in entries:
             lines.append(f"  {ticker} {score:.1f}")
+        cut = tie_notes.get(slug, 0)
+        if cut:
+            lines.append(f"  ↳ {entries[-1][1]:.1f}점 동점 {cut}종목이 더 "
+                         f"있습니다 — 티커순으로 잘랐습니다")
         lines.append("")
 
     lines.extend(_missing_slug_lines(missing_slugs))
