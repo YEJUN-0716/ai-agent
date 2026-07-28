@@ -85,7 +85,14 @@ def _get_token(client_id: str, client_secret: str) -> str:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=15,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            # 토스는 실패 사유(자격증명 오류 / IP 미허용 / 권한 없음)를 응답 본문에 담아 보낸다.
+            # raise_for_status()는 본문을 버려 원인 파악이 불가능하므로 붙여서 올린다.
+            raise requests.HTTPError(
+                f"{resp.status_code} {resp.reason} for {_BASE}/oauth2/token"
+                f" — 응답: {resp.text[:500]}",
+                response=resp,
+            )
         data = resp.json()
 
         _token_cache[client_id] = {
