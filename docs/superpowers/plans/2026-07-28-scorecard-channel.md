@@ -501,7 +501,7 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs):
 - [ ] **Step 4: 통과를 확인한다**
 
 Run: `python -m pytest tests/test_scorecard_message.py -v`
-Expected: PASS (14 passed)
+Expected: PASS (17 passed)
 
 - [ ] **Step 5: 커밋한다**
 
@@ -806,7 +806,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 통과를 확인한다**
 
 Run: `python -m pytest tests/test_scorecard_worker.py -v`
-Expected: PASS (10 passed)
+Expected: PASS (13 passed)
 
 - [ ] **Step 5: 발행 워크플로를 만든다**
 
@@ -885,7 +885,7 @@ jobs:
 - [ ] **Step 6: 전체 테스트를 돌린다**
 
 Run: `python -m pytest tests/ -q`
-Expected: 기존 테스트 전부 통과 + 신규 35건 통과 (publish_log 11 · scorecard_message 14 · scorecard_worker 10). 실패가 있으면 신규 코드가 기존 동작을 깬 것이므로 고친다.
+Expected: 기존 테스트 전부 통과 + 신규 41건 통과 (publish_log 11 · scorecard_message 17 · scorecard_worker 13). 실패가 있으면 신규 코드가 기존 동작을 깬 것이므로 고친다.
 
 - [ ] **Step 7: 커밋한다**
 
