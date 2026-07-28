@@ -22,6 +22,10 @@ watchlist.json
 # 워크플로가 커밋해 돌려놔야 한다 (signal_log.json·ic_weights.json 과 같은 부류).
 data/*
 !data/analyst_log/
+# 발행 이력도 마찬가지다 — 이 디렉터리가 러너를 못 넘기면 last_published_n
+# 이 매번 None 을 돌려주고, 중복 발행 차단이 무력화돼 같은 판정이 매일
+# 다시 발행된다 (워크플로가 커밋해 돌려놔야 하는 이유는 analyst_log 와 같다).
+!data/publish_log/
 # 워크포워드 측정 결과도 앱이 읽는 유일한 재료다 — 측정에 수 분 걸리므로
 # 결과를 저장소에 남겨 어디서 열어도 같은 판정을 보게 한다.
 !data/walkforward_result.json
