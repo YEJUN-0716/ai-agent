@@ -124,3 +124,34 @@ def test_record_message_tie_notes_defaults_to_none():
         "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [])
 
     assert "동점" not in msg
+
+
+def test_combine_note_present_in_both_messages():
+    """합성 방식을 감추면 순위의 의미를 알 수 없다."""
+    record = sm.build_record_message(
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [])
+    scorecard = sm.build_scorecard_message(5, _BIG, [])
+
+    assert sm.COMBINE_NOTE in record
+    assert sm.COMBINE_NOTE in scorecard
+
+
+def test_record_message_discloses_dropped_tickers():
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [], None, 7)
+
+    assert "7종목은 한쪽 점수가 없어" in msg
+
+
+def test_record_message_omits_dropped_line_when_zero():
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [], None, 0)
+
+    assert "종합에서 빠졌습니다" not in msg
+
+
+def test_combined_slug_renders_as_korean_name():
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [])
+
+    assert "*종합* 상위 1" in msg

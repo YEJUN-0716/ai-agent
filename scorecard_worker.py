@@ -32,6 +32,57 @@ TOP_N = 5
 # 아직 기록하지 않는 슬러그 — 조용히 빼지 않고 발행문에 사유를 밝힌다.
 MISSING_SLUGS = ["quant"]
 
+# 종합 점수에 들어가는 애널리스트와, 그 결과를 담을 슬러그 이름.
+#
+# 단순 평균(50:50)인 이유: 실측 성적(IC) 표본이 아직 없다(첫 5일 판정이
+# 2026-07-30 도래, n=1). 유일한 대안인 analyst_weights.load_analyst_weights()
+# 는 실측이 아니라 ic_weights.json 의 팩터 IC 를 대리 지표로 쓰는데, 그
+# 팩터들이 바로 |ICIR| < 0.1 로 판정돼 시그널 봇을 끄게 만든 것들이다.
+# 근거 없는 가중치보다 균등이 정직하다. IC 가 쌓이면 그때 근거를 갖고 바꾼다.
+COMBINE_SLUGS = ("chart", "ict")
+COMBINED_SLUG = "combined"
+
+
+def combined_day(day):
+    """하루치 기록을 종합 점수 한 줄로 바꾼다 — scores 가 {티커: {"combined": x}}.
+
+    COMBINE_SLUGS 를 **모두** 가진 종목만 넣는다. 한쪽이 없다고 중립값
+    50 으로 채우면 '계산 불가'가 '중립 판단'으로 성적에 섞인다 —
+    analyst_log 가 값 없는 슬러그의 키를 아예 빼는 것과 같은 규칙이다.
+
+    한쪽만 있는 점수를 그대로 쓰는 것도 안 된다. 다른 종목은 두 축의
+    평균인데 그 종목만 한 축이면 같은 자로 잰 값이 아니다.
+    """
+    out = {}
+    for ticker, per_analyst in day.get("scores", {}).items():
+        vals = [per_analyst[slug] for slug in COMBINE_SLUGS
+                if slug in per_analyst]
+        if len(vals) != len(COMBINE_SLUGS):
+            continue
+        out[ticker] = {COMBINED_SLUG: sum(float(v) for v in vals) / len(vals)}
+
+    return {"date": day.get("date", ""), "regime": day.get("regime", ""),
+            "scores": out}
+
+
+def combined_days(days):
+    """기록 전체를 종합 점수로 바꾼다. 남는 종목이 없는 날은 버린다.
+
+    빈 날을 남기면 표본으로 세지지는 않지만 dates 목록만 길어져 가격
+    패널을 쓸데없이 넓게 잡는다.
+    """
+    converted = [combined_day(day) for day in days]
+    return [day for day in converted if day["scores"]]
+
+
+def dropped_ticker_count(day, combined):
+    """종합에서 빠진 종목 수 — 한쪽 점수가 없어 제외된 것.
+
+    0 이 아니면 발행문에 밝힌다. 종목이 조용히 사라지면 순위가 무엇으로
+    매겨졌는지 알 수 없게 된다.
+    """
+    return len(day.get("scores", {})) - len(combined.get("scores", {}))
+
 
 def send_tg(msg):
     """공개 채널로 발송한다. 개인 채팅(TELEGRAM_CHAT_ID)과 섞지 않는다.
@@ -138,14 +189,24 @@ def main():
     if publish_log.last_published_record_date() == log_date:
         print(f"오늘의 기록 이미 발행됨 (log_date={log_date}) — 발송 생략")
     else:
-        top = top_by_slug(latest)
+        latest_combined = combined_day(latest)
+        top = top_by_slug(latest_combined)
         if not send_tg(scorecard_message.build_record_message(
                 log_date, latest.get("regime", "unknown"),
-                top, MISSING_SLUGS, cut_tie_counts(latest, top))):
+                top, MISSING_SLUGS, cut_tie_counts(latest_combined, top),
+                dropped_ticker_count(latest, latest_combined))):
             print("오늘의 기록 발송 실패", file=sys.stderr)
             return 1
         publish_log.record_published_record(today, log_date)
         print(f"오늘의 기록 발행 (log_date={log_date})")
+
+    # 채점도 종합 점수로 한다. score_analysts 는 scores 안의 슬러그를 그대로
+    # 집계하므로, 변환한 기록을 넘기면 {"combined": {...}} 하나만 돌아온다 —
+    # 채점 산식은 건드릴 필요가 없다.
+    days = combined_days(days)
+    if not days:
+        print("종합 점수를 낼 수 있는 기록이 없다.", file=sys.stderr)
+        return 1
 
     tickers = sorted({t for d in days for t in d.get("scores", {})})
     dates = [d["date"] for d in days]

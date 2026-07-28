@@ -16,12 +16,18 @@ DISCLAIMER = (
 MIN_EFFECTIVE_N = 10
 
 SLUG_NAMES = {
-    "chart": "차트+파동+모멘텀",
-    "quant": "퀀트+재무",
-    "ict":   "ICT+CRT",
+    "chart":    "차트+파동+모멘텀",
+    "quant":    "퀀트+재무",
+    "ict":      "ICT+CRT",
+    "combined": "종합",
 }
 
 MISSING_REASON = {"quant": "일별 펀더멘털 수집 미구축"}
+
+# 종합 점수가 무엇의 평균인지 밝힌다. 합성 방식을 감추면 순위의 의미를
+# 알 수 없고, 나중에 가중치를 바꿨을 때 구독자가 알아챌 방법도 없다.
+COMBINE_NOTE = ("종합 점수는 차트+파동+모멘텀과 ICT+CRT 의 단순 평균입니다 "
+                "— 두 점수가 모두 있는 종목만 순위에 넣습니다.")
 
 
 def _slug_name(slug):
@@ -60,12 +66,14 @@ def build_scorecard_message(horizon, stats, missing_slugs):
     lines.extend(_missing_slug_lines(missing_slugs))
 
     lines.append("")
+    lines.append(COMBINE_NOTE)
+    lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
 
 def build_record_message(date_str, regime, top_by_slug, missing_slugs,
-                         tie_notes=None):
+                         tie_notes=None, dropped=0):
     """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}.
 
     missing_slugs 는 build_scorecard_message 와 같은 이유로 필요하다 —
@@ -76,6 +84,10 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs,
     경계 점수에서 잘린 종목이 있으면 보이는 목록은 순위가 아니라 동점
     무리의 임의 부분집합이다. 밝히지 않으면 순위가 아닌 것을 순위처럼
     보여주게 된다.
+
+    dropped 는 한쪽 점수가 없어 종합에서 빠진 종목 수다. 0 이 아니면
+    밝힌다 — 종목이 조용히 사라지면 순위가 무엇을 대상으로 매겨졌는지
+    알 수 없다.
     """
     tie_notes = tie_notes or {}
     lines = [f"🧬 {date_str} 예측 기록 (국면: {regime})", ""]
@@ -94,7 +106,11 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs,
         lines.append("")
 
     lines.extend(_missing_slug_lines(missing_slugs))
+    if dropped:
+        lines.append(f"※ {dropped}종목은 한쪽 점수가 없어 종합에서 빠졌습니다")
 
+    lines.append("")
+    lines.append(COMBINE_NOTE)
     lines.append("이 기록은 5·21·63일 뒤 채점됩니다.")
     lines.append("")
     lines.append(DISCLAIMER)

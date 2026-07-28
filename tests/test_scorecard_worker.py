@@ -105,9 +105,12 @@ def test_main_skips_record_send_without_failing_when_already_published(monkeypat
     아니다 — workflow_dispatch 스모크 테스트가 매번 중복 발행하던 문제,
     그리고 기록기가 밀린 날 어제 날짜를 재발송하던 문제 둘 다 이걸로 막는다."""
     sw = _sw()
+    # chart·ict 를 둘 다 준다 — 종합 점수는 두 점수가 모두 있는 종목만
+    # 쓰므로, 한쪽만 있는 기록은 채점 대상이 0건이 돼 이 테스트가 보려는
+    # 것과 무관한 이유로 실패한다.
     monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
         {"date": "2026-07-28", "regime": "bull",
-         "scores": {"AAPL": {"chart": 70.0}}},
+         "scores": {"AAPL": {"chart": 70.0, "ict": 50.0}}},
     ])
     monkeypatch.setattr(sw.publish_log, "last_published_record_date",
                         lambda root=sw.publish_log.LOG_DIRNAME: "2026-07-28")
@@ -153,3 +156,60 @@ def test_cut_tie_counts_only_counts_the_boundary_score():
     top = _sw().top_by_slug(day, limit=2)   # AAA(100), BBB(90)
 
     assert _sw().cut_tie_counts(day, top) == {"ict": 2}
+
+
+# --- 종합 점수 — chart·ict 를 단순 평균해 하나의 순위로 낸다.
+# 기록(analyst_log)은 슬러그별로 그대로 남고, 합산은 발행 시점에만 한다.
+
+def test_combined_day_averages_both_analysts():
+    day = {"date": "2026-07-28", "regime": "bull",
+           "scores": {"AAPL": {"chart": 80.0, "ict": 60.0}}}
+
+    out = _sw().combined_day(day)
+
+    assert out["scores"]["AAPL"] == {"combined": 70.0}
+    assert out["date"] == "2026-07-28"
+    assert out["regime"] == "bull"
+
+
+def test_combined_day_drops_ticker_missing_one_analyst():
+    """한쪽만 있으면 뺀다 — 중립값으로 채우면 계산 불가가 중립 판단으로
+    섞이고, 한 축 점수를 그대로 쓰면 다른 종목과 같은 자로 잰 게 아니다."""
+    day = {"scores": {"AAPL": {"chart": 80.0, "ict": 60.0},
+                      "MSFT": {"chart": 90.0},
+                      "NVDA": {"ict": 90.0}}}
+
+    out = _sw().combined_day(day)
+
+    assert set(out["scores"]) == {"AAPL"}
+
+
+def test_dropped_ticker_count_reports_the_gap():
+    day = {"scores": {"AAPL": {"chart": 80.0, "ict": 60.0},
+                      "MSFT": {"chart": 90.0}}}
+
+    assert _sw().dropped_ticker_count(day, _sw().combined_day(day)) == 1
+
+
+def test_combined_days_discards_days_with_nothing_left():
+    days = [{"date": "2026-07-27", "scores": {"AAPL": {"chart": 1.0}}},
+            {"date": "2026-07-28",
+             "scores": {"AAPL": {"chart": 80.0, "ict": 60.0}}}]
+
+    out = _sw().combined_days(days)
+
+    assert [d["date"] for d in out] == ["2026-07-28"]
+
+
+def test_combined_output_feeds_existing_ranking_unchanged():
+    """변환 결과를 top_by_slug 에 그대로 넣을 수 있어야 한다 — 순위·동점
+    공개 코드를 종합용으로 따로 만들지 않는다."""
+    day = {"scores": {"AAA": {"chart": 100.0, "ict": 100.0},
+                      "BBB": {"chart": 100.0, "ict": 100.0},
+                      "CCC": {"chart": 10.0, "ict": 10.0}}}
+    combined = _sw().combined_day(day)
+
+    top = _sw().top_by_slug(combined, limit=1)
+
+    assert top["combined"] == [("AAA", 100.0)]
+    assert _sw().cut_tie_counts(combined, top) == {"combined": 1}
