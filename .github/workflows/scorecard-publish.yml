@@ -1,0 +1,67 @@
+name: 성적표 공개 채널 발행
+
+on:
+  # 23:45 UTC = KST 08:45. daily-report(23:30 UTC)와 15분 간격을 둔다.
+  # 기록기(analyst-log.yml, 23:00 UTC)가 끝난 뒤다 — 실제 여유는 45분.
+  schedule:
+    - cron: "45 23 * * 1-5"
+  workflow_dispatch:
+
+concurrency:
+  group: scorecard-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v5
+
+      - name: Python 설정
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 채점 후 공개 채널 발행
+        env:
+          PYTHONUTF8:                 "1"
+          TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
+          # 개인 P&L 채팅(TELEGRAM_CHAT_ID)과 분리된 공개 채널이다.
+          TELEGRAM_PUBLIC_CHANNEL_ID: ${{ secrets.TELEGRAM_PUBLIC_CHANNEL_ID }}
+        run: python scorecard_worker.py
+
+      - name: 발행 이력 커밋 (변경 있을 때만)
+        # always() 인 이유: 지평 하나가 실패해 스텝이 빨갛게 끝나도, 그 전에
+        # 성공한 지평의 발행 기록은 반드시 커밋돼야 한다. 이걸 빠뜨리면 러너가
+        # 사라질 때 기록도 같이 사라지고, 다음날 같은 판정을 다시 보낸다.
+        if: always()
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          # data/analyst_log 가 아니다. 발행 이력은 별도 디렉터리에 산다 —
+          # analyst_log.load_days() 가 자기 디렉터리의 .jsonl 을 전부 읽기
+          # 때문이다. modules/publish_log.py 의 LOG_DIRNAME 주석 참고.
+          #
+          # mkdir 이 필요한 이유: 발행할 판정이 없는 날은 publish_log 가
+          # 아무것도 쓰지 않아 디렉터리가 없을 수 있고, 없는 경로에 git add 를
+          # 하면 exit 128 로 스텝이 죽는다. 빈 디렉터리는 git 이 무시하므로
+          # 아래 --quiet 검사에서 자연히 "변경 없음"으로 빠진다.
+          mkdir -p data/publish_log
+          git add data/publish_log
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: 발행 이력 $(date -u +%Y-%m-%d)"
+            git pull --rebase origin main
+            git push
+          else
+            echo "발행 이력 변경 없음 — 커밋 생략"
+          fi
