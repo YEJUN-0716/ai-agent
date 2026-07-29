@@ -122,3 +122,78 @@ def test_empty_symbol_is_rejected(settings):
     # Act / Assert
     with pytest.raises(ValueError, match="종목 코드"):
         add_watchlist(settings, "  ")
+
+
+def test_add_note_normalizes_symbol_with_whitespace(settings):
+    # Act — lowercase and whitespace-padded symbol
+    add_note(settings, "  aapl  ", "테스트 메모")
+
+    # Assert — symbol is stored normalized as "AAPL"
+    result = list_notes(settings)
+    assert len(result) == 1
+    assert result[0]["symbol"] == "AAPL"
+    assert result[0]["note"] == "테스트 메모"
+
+
+def test_duplicate_add_watchlist_no_audit_entry(settings):
+    # Arrange
+    add_watchlist(settings, "AAPL", reason="첫 번째")
+    initial_log = read_audit_log(settings)
+    initial_count = len(initial_log)
+
+    # Act — add same symbol again
+    add_watchlist(settings, "AAPL", reason="두 번째")
+
+    # Assert — audit log should not have a new entry for duplicate
+    final_log = read_audit_log(settings)
+    assert len(final_log) == initial_count
+
+
+def test_remove_absent_symbol_no_audit_entry(settings):
+    # Arrange
+    initial_log = read_audit_log(settings)
+    initial_count = len(initial_log)
+
+    # Act — remove symbol that was never added
+    remove_watchlist(settings, "TSLA")
+
+    # Assert — audit log should not have a new entry for absent symbol
+    final_log = read_audit_log(settings)
+    assert len(final_log) == initial_count
+
+
+def test_corrupt_watchlist_file_is_preserved(settings):
+    # Arrange — create a corrupt watchlist.json
+    watchlist_path = settings.assistant_data_dir / "watchlist.json"
+    watchlist_path.parent.mkdir(parents=True, exist_ok=True)
+    watchlist_path.write_text("{ invalid json", encoding="utf-8")
+
+    # Act — try to load the corrupt file
+    result = list_watchlist(settings)
+
+    # Assert — returns empty list, corrupt file is backed up, audit entry exists
+    assert result == []
+    corrupt_files = list(watchlist_path.parent.glob("watchlist.json.*.corrupt"))
+    assert len(corrupt_files) == 1
+    assert corrupt_files[0].read_text(encoding="utf-8") == "{ invalid json"
+
+    audit_lines = read_audit_log(settings)
+    assert any("file_corrupt" in line for line in audit_lines)
+
+
+def test_missing_notes_file_no_backup_no_audit(settings):
+    # Arrange — notes.json does not exist
+    notes_path = settings.assistant_data_dir / "notes.json"
+    assert not notes_path.exists()
+    initial_log = read_audit_log(settings)
+    initial_count = len(initial_log)
+
+    # Act — try to load missing notes file
+    result = list_notes(settings)
+
+    # Assert — returns empty list, no backup file created, no audit entry
+    assert result == []
+    corrupt_files = list(notes_path.parent.glob("notes.json.*.corrupt"))
+    assert len(corrupt_files) == 0
+    final_log = read_audit_log(settings)
+    assert len(final_log) == initial_count

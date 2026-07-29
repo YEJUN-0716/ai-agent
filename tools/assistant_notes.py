@@ -19,15 +19,33 @@ def now_kst() -> datetime:
     return datetime.now(KST)
 
 
-def _load_list(path: Path) -> list[dict]:
+def _load_list(settings: Settings, path: Path) -> list[dict]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        # 비서 소유 파일이 망가지면 빈 목록으로 새로 시작한다.
+        content = path.read_text(encoding="utf-8")
+        data = json.loads(content)
+        if isinstance(data, list):
+            return data
+        else:
+            # Valid JSON but not a list - treat as corruption
+            raise ValueError("Expected list, got non-list data")
+    except (json.JSONDecodeError, OSError, ValueError):
+        # File exists but is corrupt - preserve it with timestamped backup
+        corrupt_timestamp = now_kst().strftime("%Y%m%dT%H%M%S%z")
+        corrupt_path = path.parent / f"{path.name}.{corrupt_timestamp}.corrupt"
+
+        try:
+            original_content = path.read_text(encoding="utf-8")
+            corrupt_path.write_text(original_content, encoding="utf-8")
+        except OSError:
+            # Can't read or write backup, but continue anyway
+            pass
+
+        # Record corruption in audit log
+        record_audit(settings, "file_corrupt", f"{path.name} -> {corrupt_path.name}")
+
         return []
-    return data if isinstance(data, list) else []
 
 
 def _save_list(path: Path, items: list[dict]) -> None:
@@ -74,7 +92,7 @@ def add_watchlist(settings: Settings, symbol: str, reason: str = "") -> dict:
     """관심종목에 추가한다. 이미 있으면 그대로 둔다."""
     sym = _normalize_symbol(symbol)
     path = _watchlist_path(settings)
-    items = _load_list(path)
+    items = _load_list(settings, path)
 
     if any(item.get("symbol") == sym for item in items):
         return {"symbol": sym, "already_present": True}
@@ -94,7 +112,7 @@ def remove_watchlist(settings: Settings, symbol: str) -> dict:
     """관심종목에서 뺀다."""
     sym = _normalize_symbol(symbol)
     path = _watchlist_path(settings)
-    items = _load_list(path)
+    items = _load_list(settings, path)
     remaining = [item for item in items if item.get("symbol") != sym]
 
     if len(remaining) == len(items):
@@ -107,7 +125,7 @@ def remove_watchlist(settings: Settings, symbol: str) -> dict:
 
 def list_watchlist(settings: Settings) -> list[dict]:
     """관심종목 전체."""
-    return _load_list(_watchlist_path(settings))
+    return _load_list(settings, _watchlist_path(settings))
 
 
 def add_note(settings: Settings, symbol: str, note: str) -> dict:
@@ -118,7 +136,7 @@ def add_note(settings: Settings, symbol: str, note: str) -> dict:
         raise ValueError("메모 내용이 비어 있습니다.")
 
     path = _notes_path(settings)
-    items = _load_list(path)
+    items = _load_list(settings, path)
     entry = {
         "symbol": sym,
         "note": text,
@@ -134,7 +152,7 @@ def list_notes(
     settings: Settings, symbol: str | None = None, limit: int = 20
 ) -> list[dict]:
     """메모를 최신순으로. symbol을 주면 그 종목만."""
-    items = _load_list(_notes_path(settings))
+    items = _load_list(settings, _notes_path(settings))
     if symbol:
         sym = _normalize_symbol(symbol)
         items = [item for item in items if item.get("symbol") == sym]
