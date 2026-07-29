@@ -984,17 +984,28 @@ class FakeExecutor:
 
 
 def test_request_does_not_execute_anything(settings):
-    # Arrange
-    executor = FakeExecutor()
+    # Arrange — request_trade는 executor를 아예 받지 않는다. 그러니
+    # "브로커가 안 불렸다"는 브로커가 남기는 흔적이 없다는 것으로 증명한다.
 
     # Act — 제안만 한다
     result = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
 
-    # Assert — 브로커는 한 번도 불리지 않았다
-    assert executor.calls == []
+    # Assert — 가상 브로커 상태 파일이 생기지 않았다 (주문이 안 나갔다)
+    assert not (settings.stock_analyzer_path / "virtual_portfolio.json").exists()
     assert result["status"] == "confirmation_required"
     assert result["request_id"]
     assert len(list_pending_requests(settings)) == 1
+
+
+def test_request_trade_signature_has_no_executor():
+    # Arrange — 실행 경로가 제안 함수에 존재하지 않아야 한다
+    import inspect
+
+    # Act
+    params = inspect.signature(request_trade).parameters
+
+    # Assert
+    assert "executor" not in params
 
 
 def test_approval_executes_buy_through_broker(settings):
@@ -1303,7 +1314,7 @@ def reject_request(settings: Settings, request_id: str) -> dict:
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `pytest tests/test_virtual_trade.py -v`
-Expected: PASS (11 passed)
+Expected: PASS (12 passed)
 
 - [ ] **Step 5: 커밋**
 
