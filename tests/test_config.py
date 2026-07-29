@@ -63,6 +63,31 @@ def test_raises_when_stock_analyzer_path_does_not_exist(tmp_path, monkeypatch):
         load_settings()
 
 
+def test_non_loopback_web_host_is_rejected_at_startup(tmp_path, monkeypatch):
+    # Arrange — 외부에 웹을 여는 것은 설계에서 제외했다. 예전에는 이 값을
+    # 통과시킨 뒤 모든 요청이 400이 나서 왜 안 되는지 알 수 없었다.
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("ASSISTANT_WEB_HOST", "0.0.0.0")
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="ASSISTANT_WEB_HOST"):
+        load_settings()
+
+
+def test_loopback_web_host_is_accepted(tmp_path, monkeypatch):
+    # Arrange
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("ASSISTANT_WEB_HOST", "localhost")
+
+    # Act
+    settings = load_settings()
+
+    # Assert
+    assert settings.web_host == "localhost"
+
+
 def test_effort_can_be_overridden(tmp_path, monkeypatch):
     # Arrange
     for key, value in _base_env(tmp_path).items():

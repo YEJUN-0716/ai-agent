@@ -17,6 +17,11 @@ DEFAULT_WEB_HOST = "127.0.0.1"
 DEFAULT_WEB_PORT = 8765
 VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
+# 웹 창구는 이 PC 안에서만 연다. 설계 단계에서 외부 통로를 열지 않기로 했고
+# 웹 계층의 Host 검증도 이 목록에 맞춰져 있다. 다른 값을 넣으면 서버는 뜨지만
+# 모든 요청이 400이 되므로, 조용히 고장나게 두지 말고 시작할 때 알린다.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
 
 class ConfigError(RuntimeError):
     """설정이 잘못됐을 때. 메시지는 사람이 읽고 바로 고칠 수 있어야 한다."""
@@ -102,6 +107,16 @@ def load_settings() -> Settings:
     ).expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    web_host = os.environ.get("ASSISTANT_WEB_HOST", DEFAULT_WEB_HOST).strip()
+    if web_host not in LOOPBACK_HOSTS:
+        raise ConfigError(
+            f"ASSISTANT_WEB_HOST는 이 PC 안에서만 여는 주소여야 합니다: "
+            f"{web_host!r}는 쓸 수 없습니다. "
+            f"가능한 값: {', '.join(sorted(LOOPBACK_HOSTS))}. "
+            "휴대폰에서 쓰시려면 웹이 아니라 텔레그램을 이용하세요 — "
+            "외부에 웹을 여는 것은 설계에서 제외했습니다."
+        )
+
     effort = os.environ.get("ASSISTANT_EFFORT", DEFAULT_EFFORT).strip()
     if effort not in VALID_EFFORTS:
         raise ConfigError(
@@ -117,7 +132,7 @@ def load_settings() -> Settings:
         assistant_data_dir=data_dir,
         model=os.environ.get("ASSISTANT_MODEL", DEFAULT_MODEL).strip(),
         effort=effort,
-        web_host=os.environ.get("ASSISTANT_WEB_HOST", DEFAULT_WEB_HOST).strip(),
+        web_host=web_host,
         web_port=_parse_int("ASSISTANT_WEB_PORT", DEFAULT_WEB_PORT),
         history_limit=_parse_int("ASSISTANT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT),
     )

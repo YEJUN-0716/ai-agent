@@ -7,6 +7,7 @@ stock-analyzer에는 저장된 관심종목 목록이 없다 (매일 점수로 �
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -88,11 +89,21 @@ def _quarantine(settings: Settings, path: Path, content: str) -> None:
     record_audit(settings, "file_corrupt", f"{path.name} → {backup.name}")
 
 
-def _save_list(path: Path, items: list[dict]) -> None:
+def save_json_list(path: Path, items: list[dict]) -> None:
+    """JSON 리스트를 원자적으로 저장한다.
+
+    원본을 직접 덮어쓰면 상시 가동 PC에서 정전·강제종료가 쓰기 도중에 걸릴 때
+    파일이 잘린다. 임시 파일에 다 쓴 뒤 이름을 바꾸면 파일은 항상 '이전 내용'
+    아니면 '새 내용'이고, 반쪽짜리 상태가 없다.
+
+    비서가 소유하는 모든 JSON 리스트 파일이 이 함수를 쓴다.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(
         json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(tmp, path)
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -166,7 +177,7 @@ def add_watchlist(settings: Settings, symbol: str, reason: str = "") -> dict:
         "reason": reason.strip(),
     }
     items.append(entry)
-    _save_list(path, items)
+    save_json_list(path, items)
     record_audit(settings, "watchlist_add", sym)
     return {"symbol": sym, "already_present": False, "entry": entry}
 
@@ -181,7 +192,7 @@ def remove_watchlist(settings: Settings, symbol: str) -> dict:
     if len(remaining) == len(items):
         return {"symbol": sym, "removed": False}
 
-    _save_list(path, remaining)
+    save_json_list(path, remaining)
     record_audit(settings, "watchlist_remove", sym)
     return {"symbol": sym, "removed": True}
 
@@ -206,7 +217,7 @@ def add_note(settings: Settings, symbol: str, note: str) -> dict:
         "created_at": now_kst().isoformat(timespec="seconds"),
     }
     items.append(entry)
-    _save_list(path, items)
+    save_json_list(path, items)
     record_audit(settings, "note_add", f"{sym}: {text[:60]}")
     return entry
 

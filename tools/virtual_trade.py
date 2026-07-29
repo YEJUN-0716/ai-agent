@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Protocol
 
 from assistant.config import Settings
-from tools.assistant_notes import load_json_list, now_kst, record_audit
+from tools.assistant_notes import (
+    load_json_list,
+    now_kst,
+    record_audit,
+    save_json_list,
+)
 
 VALID_SIDES = ("buy", "sell")
 
@@ -45,7 +50,10 @@ class VirtualBrokerExecutor:
     def _module(self):
         path = str(self._settings.stock_analyzer_path)
         if path not in sys.path:
-            sys.path.insert(0, path)
+            # 맨 앞이 아니라 뒤에 붙인다. stock-analyzer 루트에는 app.py 같은
+            # 흔한 이름의 최상위 모듈이 있어서, 앞에 넣으면 이후 같은 이름의
+            # import가 의도치 않게 그쪽으로 잡힌다.
+            sys.path.append(path)
         try:
             from modules import virtual_broker  # noqa: PLC0415
         except ImportError as exc:
@@ -76,11 +84,8 @@ def _load_pending(settings: Settings) -> list[dict]:
 
 
 def _save_pending(settings: Settings, items: list[dict]) -> None:
-    path = _pending_path(settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    """대기 목록을 저장한다. 쓰기 방식은 프로젝트 공통 정책을 따른다."""
+    save_json_list(_pending_path(settings), items)
 
 
 def _describe(request: dict) -> str:

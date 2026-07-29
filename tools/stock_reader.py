@@ -22,7 +22,7 @@ def _read_json(path: Path) -> Any | None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         raise StockDataError(
             f"{path.name} 파일을 읽지 못했습니다: {exc}"
         ) from exc
@@ -77,7 +77,7 @@ def get_analyst_scores(settings: Settings, limit: int = 5) -> list[dict]:
     for path in sorted(log_dir.glob("*.jsonl")):
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             raise StockDataError(
                 f"{path.name} 파일을 읽지 못했습니다: {exc}"
             ) from exc

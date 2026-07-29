@@ -1,6 +1,6 @@
 import pytest
 
-from assistant.brain import SYSTEM_PROMPT, Brain
+from assistant.brain import MAX_TOOL_ITERATIONS, SYSTEM_PROMPT, Brain
 from assistant.config import Settings
 from assistant.memory import init_db, load_history
 
@@ -192,6 +192,47 @@ def test_empty_reply_gets_a_readable_fallback(settings):
 
     # Assert — 빈 답을 그대로 내보내지 않는다
     assert "답변을 만들지 못했습니다" in answer
+
+
+class EndlessRunner:
+    """도구를 무한히 호출하며 맴도는 모델을 흉내낸다."""
+
+    def __init__(self) -> None:
+        self.yielded = 0
+
+    def __iter__(self):
+        while True:
+            self.yielded += 1
+            yield FakeMessage("계속 도구를 쓰는 중")
+
+
+class EndlessClient:
+    def __init__(self) -> None:
+        self.runner = EndlessRunner()
+        outer = self
+
+        class _Messages:
+            def tool_runner(self, **kwargs):
+                return outer.runner
+
+        class _Beta:
+            messages = _Messages()
+
+        self.beta = _Beta()
+
+
+def test_runaway_tool_loop_is_cut_off(settings):
+    # Arrange — 상한이 없으면 여기서 영원히 돌며 비용만 쌓인다
+    init_db(settings.db_path)
+    client = EndlessClient()
+    brain = Brain(settings, client=client)
+
+    # Act
+    answer = brain.ask("질문", channel="web")
+
+    # Assert — 멈추고, 왜 멈췄는지 사장님께 알린다
+    assert client.runner.yielded == MAX_TOOL_ITERATIONS
+    assert "멈췄습니다" in answer
 
 
 def test_history_respects_the_configured_limit(settings):

@@ -16,6 +16,11 @@ from tools import assistant_notes, stock_reader, virtual_trade
 
 MAX_TOKENS = 8000
 
+# 도구 호출 왕복 상한. 모델이 도구를 반복 호출하며 맴돌면 답도 못 내고
+# 비용만 쌓인다. 대화 한 번에 50~150원을 예상하고 만든 시스템이므로
+# 폭주를 방치하지 않고 끊은 뒤 사장님께 알린다.
+MAX_TOOL_ITERATIONS = 12
+
 SYSTEM_PROMPT = """당신은 사장님의 개인 업무 비서입니다. 한국어로 답합니다.
 
 원칙:
@@ -235,12 +240,25 @@ class Brain:
         )
 
         answer = ""
-        for message in runner:
+        hit_cap = False
+        for turn, message in enumerate(runner, start=1):
             text = _text_of(message)
             if text.strip():
                 answer = text
+            if turn >= MAX_TOOL_ITERATIONS:
+                hit_cap = True
+                break
 
-        answer = answer.strip() or "답변을 만들지 못했습니다. 다시 물어봐 주세요."
+        answer = answer.strip()
+        if hit_cap:
+            answer = (
+                (answer + "\n\n") if answer else ""
+            ) + (
+                f"(도구를 {MAX_TOOL_ITERATIONS}번 쓰고도 정리가 안 돼 여기서 "
+                "멈췄습니다. 질문을 좁혀서 다시 물어봐 주세요.)"
+            )
+        elif not answer:
+            answer = "답변을 만들지 못했습니다. 다시 물어봐 주세요."
 
         memory.append_message(settings.db_path, channel, "user", question)
         memory.append_message(settings.db_path, channel, "assistant", answer)
