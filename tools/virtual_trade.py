@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 from assistant.config import Settings
-from tools.assistant_notes import now_kst, record_audit
+from tools.assistant_notes import load_json_list, now_kst, record_audit
 
 VALID_SIDES = ("buy", "sell")
 
@@ -59,14 +59,12 @@ def _pending_path(settings: Settings) -> Path:
 
 
 def _load_pending(settings: Settings) -> list[dict]:
-    path = _pending_path(settings)
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data if isinstance(data, list) else []
+    """대기 중인 제안을 읽는다.
+
+    손상 파일 처리는 프로젝트 공통 정책(load_json_list)을 그대로 쓴다 —
+    망가진 파일은 조용히 버리지 않고 보관하고 감사 기록에 남긴다.
+    """
+    return load_json_list(settings, _pending_path(settings))
 
 
 def _save_pending(settings: Settings, items: list[dict]) -> None:
@@ -143,10 +141,19 @@ def list_pending_requests(settings: Settings) -> list[dict]:
     return _load_pending(settings)
 
 
+def _restore_request(settings: Settings, request: dict) -> None:
+    """꺼낸 제안을 대기 목록에 되돌려 놓는다. 실행이 실패했을 때만 쓴다."""
+    items = _load_pending(settings)
+    if any(item.get("request_id") == request["request_id"] for item in items):
+        return
+    items.append(request)
+    _save_pending(settings, items)
+
+
 def _pop_request(settings: Settings, request_id: str) -> dict:
     items = _load_pending(settings)
     for index, item in enumerate(items):
-        if item["request_id"] == request_id:
+        if item.get("request_id") == request_id:
             items.pop(index)
             _save_pending(settings, items)
             return item
@@ -166,10 +173,24 @@ def approve_request(
     request = _pop_request(settings, request_id)
     broker = executor or VirtualBrokerExecutor(settings)
 
-    if request["side"] == "buy":
-        result = broker.buy(request["symbol"], request["amount_krw"])
-    else:
-        result = broker.sell(request["symbol"], request["qty"])
+    try:
+        if request["side"] == "buy":
+            result = broker.buy(request["symbol"], request["amount_krw"])
+        else:
+            result = broker.sell(request["symbol"], request["qty"])
+    except Exception as exc:
+        # 제안은 이미 대기 목록에서 빠진 뒤다. 여기서 그냥 터지면 사장님이
+        # 승인한 제안이 흔적 없이 사라진다. 되돌려놓고 기록을 남긴 뒤 알린다.
+        _restore_request(settings, request)
+        record_audit(
+            settings,
+            "trade_approve_failed",
+            f"{request_id} {_describe(request)} — 브로커 실패: {exc}",
+        )
+        raise TradeError(
+            f"{_describe(request)} 주문을 넣지 못했습니다: {exc}. "
+            f"제안은 그대로 두었으니 '/승인 {request_id}'로 다시 시도할 수 있습니다."
+        ) from exc
 
     record_audit(
         settings, "trade_approve", f"{request_id} {_describe(request)}"

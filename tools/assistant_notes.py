@@ -19,46 +19,70 @@ def now_kst() -> datetime:
     return datetime.now(KST)
 
 
-def _load_list(settings: Settings, path: Path) -> list[dict]:
+def load_json_list(settings: Settings, path: Path) -> list[dict]:
+    """JSON 리스트 파일을 읽는다. 이 프로젝트의 유일한 손상 파일 정책.
+
+    없으면 조용히 빈 목록. 있는데 못 읽으면 원본을
+    `<이름>.<KST타임스탬프>.corrupt`로 옮기고 감사 기록에 남긴 뒤 빈 목록.
+    그냥 비우면 다음 쓰기가 덮어써서 기록이 영구히 사라지기 때문이다.
+
+    비서가 소유하는 모든 JSON 리스트 파일(관심종목·메모·대기 중 매매)이
+    이 함수를 쓴다. 정책이 갈라지지 않도록 여기 한 곳에만 둔다.
+    """
     if not path.exists():
         return []
+
     try:
         content = path.read_text(encoding="utf-8")
-        data = json.loads(content)
-        if isinstance(data, list):
-            return data
-        else:
-            # Valid JSON but not a list - treat as corruption
-            raise ValueError("Expected list, got non-list data")
-    except (json.JSONDecodeError, OSError, ValueError):
-        # File exists but is corrupt - quarantine it with timestamped backup
-        now = now_kst()
-        # Use microseconds to ensure collision-proof backup names
-        corrupt_timestamp = now.strftime("%Y%m%dT%H%M%S.%f%z")
-        corrupt_name = f"{path.name}.{corrupt_timestamp}.corrupt"
-        corrupt_path = path.parent / corrupt_name
-
-        # Step 1: Backup the corrupted file
-        try:
-            original_content = path.read_text(encoding="utf-8")
-            corrupt_path.write_text(original_content, encoding="utf-8")
-        except OSError:
-            # Failed to create backup
-            record_audit(settings, "file_corrupt_failed", f"{path.name}: cannot backup to {corrupt_name}")
-            return []
-
-        # Step 2: Remove the original file (make quarantine idempotent)
-        try:
-            path.unlink()
-        except OSError:
-            # Failed to remove the original, but backup exists
-            record_audit(settings, "file_corrupt_failed", f"{path.name}: backup created but original could not be removed")
-            return []
-
-        # Step 3: Record successful quarantine in audit log
-        record_audit(settings, "file_corrupt", f"{path.name} -> {corrupt_name}")
-
+    except OSError as exc:
+        # 읽지도 못하면 옮기는 것도 기대하기 어렵다. 기록만 남긴다.
+        record_audit(
+            settings, "file_corrupt_failed", f"{path.name}: 읽기 실패 ({exc})"
+        )
         return []
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        data = None
+
+    if isinstance(data, list):
+        return data
+
+    # 여기부터는 손상으로 본다 (JSON이 깨졌거나, 리스트가 아니거나).
+    _quarantine(settings, path, content)
+    return []
+
+
+def _quarantine(settings: Settings, path: Path, content: str) -> None:
+    """망가진 파일을 타임스탬프 붙은 이름으로 치우고 감사 기록에 남긴다.
+
+    마이크로초까지 넣어 같은 초에 두 번 실패해도 백업이 겹치지 않는다.
+    원본을 지워야 다음 읽기가 '없는 파일'로 조용히 넘어간다 — 안 지우면
+    읽을 때마다 백업이 하나씩 쌓인다.
+    """
+    stamp = now_kst().strftime("%Y%m%dT%H%M%S.%f%z")
+    backup = path.with_name(f"{path.name}.{stamp}.corrupt")
+
+    try:
+        backup.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        record_audit(
+            settings, "file_corrupt_failed", f"{path.name}: 보관 실패 ({exc})"
+        )
+        return
+
+    try:
+        path.unlink()
+    except OSError as exc:
+        record_audit(
+            settings,
+            "file_corrupt_failed",
+            f"{path.name}: {backup.name}에 보관했으나 원본 삭제 실패 ({exc})",
+        )
+        return
+
+    record_audit(settings, "file_corrupt", f"{path.name} → {backup.name}")
 
 
 def _save_list(path: Path, items: list[dict]) -> None:
@@ -105,7 +129,7 @@ def add_watchlist(settings: Settings, symbol: str, reason: str = "") -> dict:
     """관심종목에 추가한다. 이미 있으면 그대로 둔다."""
     sym = _normalize_symbol(symbol)
     path = _watchlist_path(settings)
-    items = _load_list(settings, path)
+    items = load_json_list(settings, path)
 
     if any(item.get("symbol") == sym for item in items):
         return {"symbol": sym, "already_present": True}
@@ -125,7 +149,7 @@ def remove_watchlist(settings: Settings, symbol: str) -> dict:
     """관심종목에서 뺀다."""
     sym = _normalize_symbol(symbol)
     path = _watchlist_path(settings)
-    items = _load_list(settings, path)
+    items = load_json_list(settings, path)
     remaining = [item for item in items if item.get("symbol") != sym]
 
     if len(remaining) == len(items):
@@ -138,7 +162,7 @@ def remove_watchlist(settings: Settings, symbol: str) -> dict:
 
 def list_watchlist(settings: Settings) -> list[dict]:
     """관심종목 전체."""
-    return _load_list(settings, _watchlist_path(settings))
+    return load_json_list(settings, _watchlist_path(settings))
 
 
 def add_note(settings: Settings, symbol: str, note: str) -> dict:
@@ -149,7 +173,7 @@ def add_note(settings: Settings, symbol: str, note: str) -> dict:
         raise ValueError("메모 내용이 비어 있습니다.")
 
     path = _notes_path(settings)
-    items = _load_list(settings, path)
+    items = load_json_list(settings, path)
     entry = {
         "symbol": sym,
         "note": text,
@@ -165,7 +189,7 @@ def list_notes(
     settings: Settings, symbol: str | None = None, limit: int = 20
 ) -> list[dict]:
     """메모를 최신순으로. symbol을 주면 그 종목만."""
-    items = _load_list(settings, _notes_path(settings))
+    items = load_json_list(settings, _notes_path(settings))
     if symbol:
         sym = _normalize_symbol(symbol)
         items = [item for item in items if item.get("symbol") == sym]

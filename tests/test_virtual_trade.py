@@ -159,6 +159,87 @@ def test_unknown_side_is_rejected(settings):
         request_trade(settings, "short", "AAPL", amount_krw=1_000_000)
 
 
+class BrokenExecutor:
+    """주문을 넣다가 실패하는 브로커."""
+
+    def buy(self, symbol: str, amount_krw: float) -> dict:
+        raise RuntimeError("연결 끊김")
+
+    def sell(self, symbol: str, qty: int) -> dict:
+        raise RuntimeError("연결 끊김")
+
+
+def test_broker_failure_keeps_the_proposal(settings):
+    # Arrange — 승인했는데 브로커가 실패하는 상황
+    request = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+
+    # Act
+    with pytest.raises(TradeError, match="연결 끊김"):
+        approve_request(
+            settings, request["request_id"], executor=BrokenExecutor()
+        )
+
+    # Assert — 제안이 사라지지 않고 그대로 남아 다시 승인할 수 있다
+    pending = list_pending_requests(settings)
+    assert len(pending) == 1
+    assert pending[0]["request_id"] == request["request_id"]
+
+
+def test_broker_failure_is_audited(settings):
+    # Arrange
+    request = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+
+    # Act
+    with pytest.raises(TradeError):
+        approve_request(
+            settings, request["request_id"], executor=BrokenExecutor()
+        )
+
+    # Assert — 실패도 기록에 남는다. 성공한 척하지 않는다.
+    actions = [line.split("|")[1].strip() for line in read_audit_log(settings)]
+    assert actions == ["trade_approve_failed", "trade_request"]
+
+
+def test_retry_after_broker_failure_succeeds(settings):
+    # Arrange — 실패한 뒤 브로커가 정상으로 돌아왔다
+    executor = FakeExecutor()
+    request = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+    with pytest.raises(TradeError):
+        approve_request(
+            settings, request["request_id"], executor=BrokenExecutor()
+        )
+
+    # Act — 같은 번호로 다시 승인
+    result = approve_request(
+        settings, request["request_id"], executor=executor
+    )
+
+    # Assert — 이번엔 나간다. 그리고 딱 한 번만 나간다.
+    assert result["executed"] is True
+    assert executor.calls == [("buy", "AAPL", 1_000_000.0)]
+    assert list_pending_requests(settings) == []
+
+
+def test_corrupt_pending_file_is_preserved_not_discarded(settings):
+    # Arrange — 대기 목록 파일이 망가졌다
+    pending_path = settings.assistant_data_dir / "pending_trades.json"
+    pending_path.write_text("{ 망가진 파일", encoding="utf-8")
+
+    # Act
+    result = list_pending_requests(settings)
+
+    # Assert — 빈 목록으로 넘어가되, 원본은 보관되고 기록이 남는다
+    assert result == []
+    backups = list(
+        settings.assistant_data_dir.glob("pending_trades.json.*.corrupt")
+    )
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "{ 망가진 파일"
+    assert not pending_path.exists()
+    actions = [line.split("|")[1].strip() for line in read_audit_log(settings)]
+    assert "file_corrupt" in actions
+
+
 def test_request_and_approval_are_both_audited(settings):
     # Arrange
     executor = FakeExecutor()
