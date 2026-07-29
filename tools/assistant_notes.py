@@ -31,19 +31,32 @@ def _load_list(settings: Settings, path: Path) -> list[dict]:
             # Valid JSON but not a list - treat as corruption
             raise ValueError("Expected list, got non-list data")
     except (json.JSONDecodeError, OSError, ValueError):
-        # File exists but is corrupt - preserve it with timestamped backup
-        corrupt_timestamp = now_kst().strftime("%Y%m%dT%H%M%S%z")
-        corrupt_path = path.parent / f"{path.name}.{corrupt_timestamp}.corrupt"
+        # File exists but is corrupt - quarantine it with timestamped backup
+        now = now_kst()
+        # Use microseconds to ensure collision-proof backup names
+        corrupt_timestamp = now.strftime("%Y%m%dT%H%M%S.%f%z")
+        corrupt_name = f"{path.name}.{corrupt_timestamp}.corrupt"
+        corrupt_path = path.parent / corrupt_name
 
+        # Step 1: Backup the corrupted file
         try:
             original_content = path.read_text(encoding="utf-8")
             corrupt_path.write_text(original_content, encoding="utf-8")
         except OSError:
-            # Can't read or write backup, but continue anyway
-            pass
+            # Failed to create backup
+            record_audit(settings, "file_corrupt_failed", f"{path.name}: cannot backup to {corrupt_name}")
+            return []
 
-        # Record corruption in audit log
-        record_audit(settings, "file_corrupt", f"{path.name} -> {corrupt_path.name}")
+        # Step 2: Remove the original file (make quarantine idempotent)
+        try:
+            path.unlink()
+        except OSError:
+            # Failed to remove the original, but backup exists
+            record_audit(settings, "file_corrupt_failed", f"{path.name}: backup created but original could not be removed")
+            return []
+
+        # Step 3: Record successful quarantine in audit log
+        record_audit(settings, "file_corrupt", f"{path.name} -> {corrupt_name}")
 
         return []
 

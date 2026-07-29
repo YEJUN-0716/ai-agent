@@ -162,23 +162,61 @@ def test_remove_absent_symbol_no_audit_entry(settings):
     assert len(final_log) == initial_count
 
 
-def test_corrupt_watchlist_file_is_preserved(settings):
+def test_corrupt_file_quarantine_is_idempotent(settings):
     # Arrange — create a corrupt watchlist.json
     watchlist_path = settings.assistant_data_dir / "watchlist.json"
     watchlist_path.parent.mkdir(parents=True, exist_ok=True)
     watchlist_path.write_text("{ invalid json", encoding="utf-8")
 
-    # Act — try to load the corrupt file
-    result = list_watchlist(settings)
+    # Act — read it twice
+    result1 = list_watchlist(settings)
+    result2 = list_watchlist(settings)
 
-    # Assert — returns empty list, corrupt file is backed up, audit entry exists
-    assert result == []
+    # Assert — both reads return empty, but only one backup and one audit entry
+    assert result1 == []
+    assert result2 == []
+
+    # Only one backup file should exist
     corrupt_files = list(watchlist_path.parent.glob("watchlist.json.*.corrupt"))
     assert len(corrupt_files) == 1
     assert corrupt_files[0].read_text(encoding="utf-8") == "{ invalid json"
 
+    # Original should be gone
+    assert not watchlist_path.exists()
+
+    # Only one audit entry for the corruption (not multiple)
     audit_lines = read_audit_log(settings)
-    assert any("file_corrupt" in line for line in audit_lines)
+    file_corrupt_lines = [l for l in audit_lines if "file_corrupt" in l and "failed" not in l]
+    assert len(file_corrupt_lines) == 1
+
+
+def test_two_quarantine_events_produce_distinct_backups(settings):
+    # Arrange — create a corrupt watchlist.json
+    watchlist_path = settings.assistant_data_dir / "watchlist.json"
+    watchlist_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # First corruption
+    watchlist_path.write_text("{ bad json 1", encoding="utf-8")
+
+    # Act — first read (quarantine)
+    list_watchlist(settings)
+
+    # Recreate with different corruption
+    watchlist_path.write_text("[ 123, not, an, object ]", encoding="utf-8")
+
+    # Second read (quarantine)
+    list_watchlist(settings)
+
+    # Assert — two distinct backup files with different contents
+    corrupt_files = sorted(watchlist_path.parent.glob("watchlist.json.*.corrupt"))
+    assert len(corrupt_files) == 2
+
+    content1 = corrupt_files[0].read_text(encoding="utf-8")
+    content2 = corrupt_files[1].read_text(encoding="utf-8")
+
+    assert content1 == "{ bad json 1"
+    assert content2 == "[ 123, not, an, object ]"
+    assert content1 != content2
 
 
 def test_missing_notes_file_no_backup_no_audit(settings):
