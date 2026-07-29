@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import uuid
 from pathlib import Path
 from typing import Protocol
@@ -17,6 +18,13 @@ from assistant.config import Settings
 from tools.assistant_notes import load_json_list, now_kst, record_audit
 
 VALID_SIDES = ("buy", "sell")
+
+# 대기 목록 파일의 읽기-수정-쓰기를 감싼다.
+#
+# 텔레그램과 웹이 한 프로세스에서 동시에 돌고, 웹은 요청을 스레드로 처리한다.
+# 잠금이 없으면 두 승인이 같은 제안을 각자 "내가 뺐다"고 판단해 브로커를 두 번
+# 부른다 — 사장님이 한 번 승인한 매매가 두 건의 주문이 된다. 실제로 재현됐다.
+_PENDING_LOCK = threading.Lock()
 
 
 class TradeError(RuntimeError):
@@ -117,9 +125,10 @@ def request_trade(
         "requested_at": now_kst().isoformat(timespec="seconds"),
     }
 
-    items = _load_pending(settings)
-    items.append(request)
-    _save_pending(settings, items)
+    with _PENDING_LOCK:
+        items = _load_pending(settings)
+        items.append(request)
+        _save_pending(settings, items)
     record_audit(
         settings, "trade_request", f"{request['request_id']} {_describe(request)}"
     )
@@ -143,20 +152,29 @@ def list_pending_requests(settings: Settings) -> list[dict]:
 
 def _restore_request(settings: Settings, request: dict) -> None:
     """꺼낸 제안을 대기 목록에 되돌려 놓는다. 실행이 실패했을 때만 쓴다."""
-    items = _load_pending(settings)
-    if any(item.get("request_id") == request["request_id"] for item in items):
-        return
-    items.append(request)
-    _save_pending(settings, items)
+    with _PENDING_LOCK:
+        items = _load_pending(settings)
+        if any(
+            item.get("request_id") == request["request_id"] for item in items
+        ):
+            return
+        items.append(request)
+        _save_pending(settings, items)
 
 
 def _pop_request(settings: Settings, request_id: str) -> dict:
-    items = _load_pending(settings)
-    for index, item in enumerate(items):
-        if item.get("request_id") == request_id:
-            items.pop(index)
-            _save_pending(settings, items)
-            return item
+    """제안을 대기 목록에서 꺼낸다. 꺼내는 데 성공한 쪽만 실행 자격을 갖는다.
+
+    찾기·제거·저장이 한 덩어리로 일어나야 한다. 잠금 없이 하면 동시에 들어온
+    두 승인이 같은 항목을 각자 찾아 각자 주문을 넣는다.
+    """
+    with _PENDING_LOCK:
+        items = _load_pending(settings)
+        for index, item in enumerate(items):
+            if item.get("request_id") == request_id:
+                items.pop(index)
+                _save_pending(settings, items)
+                return item
     raise TradeError(
         f"승인 대기 중인 요청 {request_id}를 찾지 못했습니다. "
         "이미 처리됐거나 잘못된 번호입니다."

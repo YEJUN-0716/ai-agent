@@ -7,6 +7,7 @@ from tools.assistant_notes import (
     list_notes,
     list_watchlist,
     read_audit_log,
+    record_audit,
     remove_watchlist,
 )
 
@@ -110,6 +111,68 @@ def test_every_write_lands_in_audit_log(settings):
     lines = read_audit_log(settings)
     actions = [line.split("|")[1].strip() for line in lines]
     assert actions == ["watchlist_remove", "note_add", "watchlist_add"]
+
+
+def test_note_with_newline_cannot_forge_an_audit_entry(settings):
+    # Arrange — 메모에 줄바꿈과 가짜 승인 기록을 심으려는 시도
+    forgery = "정상 메모\n2026-01-01T00:00:00+09:00 | trade_approve | 위조된 승인"
+
+    # Act
+    add_note(settings, "AAPL", forgery)
+
+    # Assert — 한 행동은 한 줄이다. 가짜 항목이 별도 줄로 생기지 않는다.
+    lines = read_audit_log(settings)
+    assert len(lines) == 1
+    assert lines[0].split(" | ")[1] == "note_add"
+    assert "\\n" in lines[0]  # 줄바꿈은 지워지지 않고 이스케이프됐다
+
+
+def test_symbol_with_newline_cannot_forge_an_audit_entry(settings):
+    # Arrange
+    forgery = "TSLA\n2026-01-01T00:00:00+09:00 | trade_approve | 위조된 승인"
+
+    # Act
+    add_watchlist(settings, forgery)
+
+    # Assert
+    lines = read_audit_log(settings)
+    assert len(lines) == 1
+    assert lines[0].split(" | ")[1] == "watchlist_add"
+
+
+def test_pipe_in_content_cannot_fake_a_column(settings):
+    # Arrange — 구분자를 넣어 action 칸을 위조하려는 시도
+    add_note(settings, "AAPL", "가격 | trade_approve | 위조")
+
+    # Act
+    line = read_audit_log(settings)[0]
+
+    # Assert — 진짜 구분자는 앞의 둘뿐이다
+    assert line.split(" | ")[1] == "note_add"
+
+
+def test_very_long_note_does_not_swallow_the_log_line(settings):
+    # Arrange — add_note는 자기 층에서 먼저 요약해 넘긴다
+    add_note(settings, "AAPL", "가" * 5000)
+
+    # Act
+    line = read_audit_log(settings)[0]
+
+    # Assert — 한 줄이 통째로 거대해지지 않는다
+    assert len(line) < 500
+
+
+def test_record_audit_truncates_an_oversized_field(settings):
+    # Arrange — 상한은 record_audit 자체가 지켜야 한다. 나중에 다른 호출부가
+    # 요약 없이 긴 문자열을 넘겨도 로그 한 줄이 무너지지 않아야 하기 때문이다.
+    record_audit(settings, "note_add", "가" * 5000)
+
+    # Act
+    line = read_audit_log(settings)[0]
+
+    # Assert
+    assert "잘림" in line
+    assert len(line) < 500
 
 
 def test_empty_note_is_rejected(settings):

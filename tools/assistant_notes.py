@@ -14,6 +14,9 @@ from assistant.config import Settings
 
 KST = timezone(timedelta(hours=9))
 
+# 감사 기록 한 칸의 최대 길이. 긴 메모가 로그 한 줄을 통째로 삼키지 않게 한다.
+MAX_AUDIT_FIELD = 200
+
 
 def now_kst() -> datetime:
     return datetime.now(KST)
@@ -99,11 +102,34 @@ def _normalize_symbol(symbol: str) -> str:
     return cleaned
 
 
+def _escape_audit_field(value: str) -> str:
+    """감사 기록 한 칸을 한 줄짜리 안전한 문자열로 만든다.
+
+    이스케이프하지 않으면 내용 안의 줄바꿈이 새 줄을 만들어 가짜 항목을
+    심을 수 있다. 실제로 재현됐다 — 메모에 줄바꿈과 함께
+    "... | trade_approve | ..." 를 넣으면 하지도 않은 매매 승인이 기록에
+    남고, 비서가 그것을 진짜로 읽어 사장님께 보고한다.
+
+    내용을 지우지 않고 되돌릴 수 있게 이스케이프만 한다. 역슬래시를 먼저
+    바꿔야 뒤이어 넣는 이스케이프와 섞이지 않는다.
+    """
+    escaped = value.replace("\\", "\\\\")
+    escaped = escaped.replace("\r", "\\r").replace("\n", "\\n")
+    escaped = escaped.replace("|", "\\|")
+    if len(escaped) > MAX_AUDIT_FIELD:
+        escaped = escaped[:MAX_AUDIT_FIELD] + "…(잘림)"
+    return escaped
+
+
 def record_audit(settings: Settings, action: str, detail: str) -> None:
-    """모든 쓰기 행동을 한 줄씩 남긴다."""
+    """모든 쓰기 행동을 한 줄씩 남긴다. 한 행동은 반드시 한 줄이다."""
     path = settings.audit_log_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = f"{now_kst().isoformat(timespec='seconds')} | {action} | {detail}\n"
+    line = (
+        f"{now_kst().isoformat(timespec='seconds')}"
+        f" | {_escape_audit_field(action)}"
+        f" | {_escape_audit_field(detail)}\n"
+    )
     with path.open("a", encoding="utf-8") as fh:
         fh.write(line)
 

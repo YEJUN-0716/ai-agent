@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from assistant.config import Settings
@@ -157,6 +159,53 @@ def test_unknown_side_is_rejected(settings):
     # Act / Assert
     with pytest.raises(TradeError, match="buy"):
         request_trade(settings, "short", "AAPL", amount_krw=1_000_000)
+
+
+class CountingExecutor:
+    """호출 횟수만 센다. 동시 호출에도 정확하도록 자체 잠금을 쓴다."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def _count(self) -> dict:
+        with self._lock:
+            self.calls += 1
+        return {"ok": True}
+
+    def buy(self, symbol: str, amount_krw: float) -> dict:
+        return self._count()
+
+    def sell(self, symbol: str, qty: int) -> dict:
+        return self._count()
+
+
+def test_simultaneous_approvals_execute_the_order_only_once(settings):
+    # Arrange — 폰과 PC에서 같은 제안을 동시에 승인하는 상황.
+    # 텔레그램과 웹은 한 프로세스에서 스레드로 동시에 돈다.
+    executor = CountingExecutor()
+    request = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+    start = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def approve() -> None:
+        start.wait()
+        try:
+            approve_request(settings, request["request_id"], executor=executor)
+        except TradeError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=approve) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Assert — 주문은 딱 한 번 나가고, 진 쪽은 이유를 받는다
+    assert executor.calls == 1
+    assert len(errors) == 1
+    assert "찾지 못했습니다" in str(errors[0])
+    assert list_pending_requests(settings) == []
 
 
 class BrokenExecutor:
