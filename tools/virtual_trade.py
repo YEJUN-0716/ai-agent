@@ -1,0 +1,190 @@
+"""가상 브로커 매매 — 제안과 실행을 분리한다.
+
+비서(모델)에게는 request_trade만 준다. 실행 함수(approve_request)는
+모델의 도구 목록에 넣지 않고, 사용자가 승인 명령을 쳤을 때 채널이 직접 부른다.
+실제 돈이 오가는 주문 도구는 이 파일에 없고, 앞으로도 만들지 않는다.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import uuid
+from pathlib import Path
+from typing import Protocol
+
+from assistant.config import Settings
+from tools.assistant_notes import now_kst, record_audit
+
+VALID_SIDES = ("buy", "sell")
+
+
+class TradeError(RuntimeError):
+    """매매 요청·승인이 거부됐을 때. 메시지는 사용자에게 그대로 보여준다."""
+
+
+class TradeExecutor(Protocol):
+    def buy(self, symbol: str, amount_krw: float) -> dict: ...
+    def sell(self, symbol: str, qty: int) -> dict: ...
+
+
+class VirtualBrokerExecutor:
+    """stock-analyzer의 가상 브로커를 부른다. 상태 파일에 직접 손대지 않는다."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def _module(self):
+        path = str(self._settings.stock_analyzer_path)
+        if path not in sys.path:
+            sys.path.insert(0, path)
+        try:
+            from modules import virtual_broker  # noqa: PLC0415
+        except ImportError as exc:
+            raise TradeError(
+                "stock-analyzer의 가상 브로커를 불러오지 못했습니다: "
+                f"{exc}. STOCK_ANALYZER_PATH 설정을 확인하세요."
+            ) from exc
+        return virtual_broker
+
+    def buy(self, symbol: str, amount_krw: float) -> dict:
+        return self._module().place_notional_buy(symbol, amount_krw)
+
+    def sell(self, symbol: str, qty: int) -> dict:
+        return self._module().place_market_sell(symbol, qty)
+
+
+def _pending_path(settings: Settings) -> Path:
+    return settings.assistant_data_dir / "pending_trades.json"
+
+
+def _load_pending(settings: Settings) -> list[dict]:
+    path = _pending_path(settings)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_pending(settings: Settings, items: list[dict]) -> None:
+    path = _pending_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _describe(request: dict) -> str:
+    if request["side"] == "buy":
+        return f"{request['symbol']} {request['amount_krw']:,.0f}원어치 매수"
+    return f"{request['symbol']} {request['qty']}주 매도"
+
+
+def request_trade(
+    settings: Settings,
+    side: str,
+    symbol: str,
+    amount_krw: float | None = None,
+    qty: int | None = None,
+) -> dict:
+    """매매를 제안한다. 실행하지 않는다 — 사용자 승인이 있어야 나간다."""
+    side = side.strip().lower()
+    if side not in VALID_SIDES:
+        raise TradeError(f"side는 buy 또는 sell이어야 합니다: {side!r}")
+
+    sym = symbol.strip().upper()
+    if not sym:
+        raise TradeError("종목 코드가 비어 있습니다.")
+
+    if side == "buy":
+        if amount_krw is None:
+            raise TradeError("매수하려면 금액(amount_krw)이 필요합니다.")
+        if float(amount_krw) <= 0:
+            raise TradeError("금액은 0보다 커야 합니다.")
+    else:
+        if qty is None:
+            raise TradeError("매도하려면 수량(qty)이 필요합니다.")
+        if int(qty) <= 0:
+            raise TradeError("수량은 0보다 커야 합니다.")
+
+    request = {
+        "request_id": uuid.uuid4().hex[:8],
+        "side": side,
+        "symbol": sym,
+        "amount_krw": float(amount_krw) if amount_krw is not None else None,
+        "qty": int(qty) if qty is not None else None,
+        "requested_at": now_kst().isoformat(timespec="seconds"),
+    }
+
+    items = _load_pending(settings)
+    items.append(request)
+    _save_pending(settings, items)
+    record_audit(
+        settings, "trade_request", f"{request['request_id']} {_describe(request)}"
+    )
+
+    return {
+        "status": "confirmation_required",
+        "request_id": request["request_id"],
+        "summary": _describe(request),
+        "message": (
+            f"{_describe(request)}를 예약하려면 승인이 필요합니다. "
+            f"'/승인 {request['request_id']}'라고 답해주세요. "
+            "제가 직접 실행할 수는 없습니다."
+        ),
+    }
+
+
+def list_pending_requests(settings: Settings) -> list[dict]:
+    """승인 대기 중인 매매 제안."""
+    return _load_pending(settings)
+
+
+def _pop_request(settings: Settings, request_id: str) -> dict:
+    items = _load_pending(settings)
+    for index, item in enumerate(items):
+        if item["request_id"] == request_id:
+            items.pop(index)
+            _save_pending(settings, items)
+            return item
+    raise TradeError(
+        f"승인 대기 중인 요청 {request_id}를 찾지 못했습니다. "
+        "이미 처리됐거나 잘못된 번호입니다."
+    )
+
+
+def approve_request(
+    settings: Settings, request_id: str, executor: TradeExecutor | None = None
+) -> dict:
+    """사용자 승인 후 실제로 가상 브로커에 주문을 넣는다.
+
+    채널 계층 전용. 모델의 도구 목록에 넣지 말 것.
+    """
+    request = _pop_request(settings, request_id)
+    broker = executor or VirtualBrokerExecutor(settings)
+
+    if request["side"] == "buy":
+        result = broker.buy(request["symbol"], request["amount_krw"])
+    else:
+        result = broker.sell(request["symbol"], request["qty"])
+
+    record_audit(
+        settings, "trade_approve", f"{request_id} {_describe(request)}"
+    )
+    return {
+        "executed": True,
+        "request_id": request_id,
+        "summary": _describe(request),
+        "broker_result": result,
+    }
+
+
+def reject_request(settings: Settings, request_id: str) -> dict:
+    """제안을 버린다. 채널 계층 전용."""
+    request = _pop_request(settings, request_id)
+    record_audit(settings, "trade_reject", f"{request_id} {_describe(request)}")
+    return {"rejected": True, "request_id": request_id,
+            "summary": _describe(request)}
