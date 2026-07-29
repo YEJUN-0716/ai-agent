@@ -73,6 +73,18 @@ def _parse_chat_ids(raw: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _parse_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{name} 값이 숫자가 아닙니다: {value!r}"
+        ) from exc
+
+
 def load_settings() -> Settings:
     """환경변수를 읽어 검증된 설정을 만든다. 잘못됐으면 ConfigError."""
     api_key = _require("ANTHROPIC_API_KEY")
@@ -106,8 +118,6 @@ def load_settings() -> Settings:
         model=os.environ.get("ASSISTANT_MODEL", DEFAULT_MODEL).strip(),
         effort=effort,
         web_host=os.environ.get("ASSISTANT_WEB_HOST", DEFAULT_WEB_HOST).strip(),
-        web_port=int(os.environ.get("ASSISTANT_WEB_PORT", DEFAULT_WEB_PORT)),
-        history_limit=int(
-            os.environ.get("ASSISTANT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT)
-        ),
+        web_port=_parse_int("ASSISTANT_WEB_PORT", DEFAULT_WEB_PORT),
+        history_limit=_parse_int("ASSISTANT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT),
     )

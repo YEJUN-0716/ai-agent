@@ -19,6 +19,12 @@ def test_loads_settings_from_environment(tmp_path, monkeypatch):
     # Arrange
     for key, value in _base_env(tmp_path).items():
         monkeypatch.setenv(key, value)
+    # Isolate from any real .env file
+    monkeypatch.delenv("ASSISTANT_MODEL", raising=False)
+    monkeypatch.delenv("ASSISTANT_EFFORT", raising=False)
+    monkeypatch.delenv("ASSISTANT_WEB_HOST", raising=False)
+    monkeypatch.delenv("ASSISTANT_WEB_PORT", raising=False)
+    monkeypatch.delenv("ASSISTANT_HISTORY_LIMIT", raising=False)
 
     # Act
     settings = load_settings()
@@ -61,6 +67,11 @@ def test_effort_can_be_overridden(tmp_path, monkeypatch):
     # Arrange
     for key, value in _base_env(tmp_path).items():
         monkeypatch.setenv(key, value)
+    # Isolate from any real .env file (except ASSISTANT_EFFORT which we test)
+    monkeypatch.delenv("ASSISTANT_MODEL", raising=False)
+    monkeypatch.delenv("ASSISTANT_WEB_HOST", raising=False)
+    monkeypatch.delenv("ASSISTANT_WEB_PORT", raising=False)
+    monkeypatch.delenv("ASSISTANT_HISTORY_LIMIT", raising=False)
     monkeypatch.setenv("ASSISTANT_EFFORT", "low")
 
     # Act
@@ -68,3 +79,19 @@ def test_effort_can_be_overridden(tmp_path, monkeypatch):
 
     # Assert
     assert settings.effort == "low"
+
+
+def test_raises_when_web_port_is_not_numeric(tmp_path, monkeypatch):
+    # Arrange
+    env = _base_env(tmp_path)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("ASSISTANT_MODEL", raising=False)
+    monkeypatch.delenv("ASSISTANT_EFFORT", raising=False)
+    monkeypatch.delenv("ASSISTANT_WEB_HOST", raising=False)
+    monkeypatch.delenv("ASSISTANT_HISTORY_LIMIT", raising=False)
+    monkeypatch.setenv("ASSISTANT_WEB_PORT", "not-a-number")
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="ASSISTANT_WEB_PORT"):
+        load_settings()
