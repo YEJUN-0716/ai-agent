@@ -11,9 +11,16 @@ import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from assistant.config import Settings
 from tools import virtual_trade
+
+# 이 이름으로 온 요청만 받는다. localhost에만 바인딩해도 이 검사가 없으면
+# 사장님이 방문한 악성 사이트가 DNS 재바인딩으로 브라우저를 속여
+# 127.0.0.1의 /approve를 대신 호출할 수 있다 — 승인 명령 없이 주문이 나간다.
+# 재바인딩은 공격자 도메인 이름을 Host 헤더에 실어 보내므로 여기서 걸린다.
+ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 _PAGE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>업무 비서</title>
@@ -66,6 +73,9 @@ class ApproveRequest(BaseModel):
 
 def create_app(settings: Settings, brain, trade_executor=None) -> FastAPI:
     app = FastAPI(title="업무 비서")
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS)
+    )
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:

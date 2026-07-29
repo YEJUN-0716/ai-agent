@@ -26,6 +26,16 @@ def settings(tmp_path) -> Settings:
     )
 
 
+def make_client(app) -> TestClient:
+    """실제 접속과 같은 호스트로 테스트 클라이언트를 만든다.
+
+    기본값('testserver')으로 두면 Host 검증에 걸린다. 그 검증은
+    DNS 재바인딩을 막는 장치이므로 테스트를 위해 느슨하게 하지 않고,
+    테스트 쪽이 진짜 주소를 쓰게 한다.
+    """
+    return TestClient(app, base_url="http://127.0.0.1:8765")
+
+
 class FakeBrain:
     def __init__(self) -> None:
         self.asked: list[tuple[str, str]] = []
@@ -50,7 +60,7 @@ class FakeExecutor:
 
 def test_chat_page_is_served(settings):
     # Arrange
-    client = TestClient(create_app(settings, FakeBrain()))
+    client = make_client(create_app(settings, FakeBrain()))
 
     # Act
     response = client.get("/")
@@ -63,7 +73,7 @@ def test_chat_page_is_served(settings):
 def test_chat_endpoint_reaches_the_brain(settings):
     # Arrange
     brain = FakeBrain()
-    client = TestClient(create_app(settings, brain))
+    client = make_client(create_app(settings, brain))
 
     # Act
     response = client.post("/chat", json={"message": "관심종목 보여줘"})
@@ -77,7 +87,7 @@ def test_chat_endpoint_reaches_the_brain(settings):
 def test_whitespace_only_message_is_rejected(settings):
     # Arrange
     brain = FakeBrain()
-    client = TestClient(create_app(settings, brain))
+    client = make_client(create_app(settings, brain))
 
     # Act
     response = client.post("/chat", json={"message": "   "})
@@ -93,7 +103,7 @@ def test_brain_failure_returns_readable_error(settings):
         def ask(self, question: str, channel: str) -> str:
             raise RuntimeError("API 한도 초과")
 
-    client = TestClient(create_app(settings, BrokenBrain()))
+    client = make_client(create_app(settings, BrokenBrain()))
 
     # Act
     response = client.post("/chat", json={"message": "질문"})
@@ -105,7 +115,7 @@ def test_brain_failure_returns_readable_error(settings):
 
 def test_pending_endpoint_lists_proposals(settings):
     # Arrange
-    client = TestClient(create_app(settings, FakeBrain()))
+    client = make_client(create_app(settings, FakeBrain()))
     request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
 
     # Act
@@ -118,7 +128,7 @@ def test_pending_endpoint_lists_proposals(settings):
 def test_approve_endpoint_executes_the_trade(settings):
     # Arrange
     executor = FakeExecutor()
-    client = TestClient(
+    client = make_client(
         create_app(settings, FakeBrain(), trade_executor=executor)
     )
     proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
@@ -137,7 +147,7 @@ def test_approve_endpoint_executes_the_trade(settings):
 def test_approve_with_unknown_id_does_not_execute(settings):
     # Arrange
     executor = FakeExecutor()
-    client = TestClient(
+    client = make_client(
         create_app(settings, FakeBrain(), trade_executor=executor)
     )
 
@@ -149,10 +159,64 @@ def test_approve_with_unknown_id_does_not_execute(settings):
     assert "찾지 못했습니다" in response.json()["reply"]
 
 
+def test_request_from_a_foreign_hostname_is_refused(settings):
+    # Arrange — DNS 재바인딩으로 악성 사이트가 127.0.0.1의 승인 엔드포인트를
+    # 대신 호출하는 상황. 브라우저는 공격자 도메인을 Host에 실어 보낸다.
+    executor = FakeExecutor()
+    client = make_client(
+        create_app(settings, FakeBrain(), trade_executor=executor)
+    )
+    proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+
+    # Act
+    response = client.post(
+        "/approve",
+        json={"request_id": proposal["request_id"]},
+        headers={"Host": "evil.example.com"},
+    )
+
+    # Assert — 거부되고, 주문은 나가지 않고, 제안은 그대로 남는다
+    assert response.status_code == 400
+    assert executor.calls == []
+    assert len(list_pending_requests(settings)) == 1
+
+
+def test_chat_from_a_foreign_hostname_is_refused(settings):
+    # Arrange — 대화 엔드포인트도 같은 경로로 남용될 수 있다 (비용·정보 유출)
+    brain = FakeBrain()
+    client = make_client(create_app(settings, brain))
+
+    # Act
+    response = client.post(
+        "/chat",
+        json={"message": "관심종목 보여줘"},
+        headers={"Host": "evil.example.com"},
+    )
+
+    # Assert
+    assert response.status_code == 400
+    assert brain.asked == []
+
+
+def test_localhost_hostname_is_accepted(settings):
+    # Arrange — 정상 접속이 막히면 안 된다
+    client = make_client(create_app(settings, FakeBrain()))
+
+    # Act
+    response = client.post(
+        "/chat",
+        json={"message": "질문"},
+        headers={"Host": "localhost:8765"},
+    )
+
+    # Assert
+    assert response.status_code == 200
+
+
 def test_chat_endpoint_cannot_execute_a_trade(settings):
     # Arrange — 대화 경로로는 절대 주문이 나가면 안 된다
     executor = FakeExecutor()
-    client = TestClient(
+    client = make_client(
         create_app(settings, FakeBrain(), trade_executor=executor)
     )
     request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
