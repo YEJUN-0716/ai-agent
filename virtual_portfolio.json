@@ -50,6 +50,55 @@
       "notional_krw": 50.47,
       "placed_date": "2026-07-30",
       "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "KHC",
+      "notional_krw": 45.49,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "F",
+      "notional_krw": 43.91,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "RF",
+      "notional_krw": 34.59,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "PFE",
+      "notional_krw": 71.0,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "HPQ",
+      "notional_krw": 42.61,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "HPE",
+      "notional_krw": 45.49,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "VZ",
+      "notional_krw": 50.47,
+      "placed_date": "2026-07-30",
+      "market": "US"
     }
   ],
   "realized_pnl_krw": 0.0,
