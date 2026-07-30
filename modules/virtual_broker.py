@@ -250,17 +250,29 @@ def place_notional_buy(symbol: str, notional_amount: float,
                        client_id: str = "", client_secret: str = "",
                        account_seq: str = "", market: str = "US",
                        dry_run: bool = False) -> dict:
-    """주문을 대기열에 넣는다. 실제 체결은 다음 실행 때 다음 거래일 시가로."""
+    """주문을 대기열에 넣는다. 실제 체결은 다음 실행 때 다음 거래일 시가로.
+
+    notional_amount 의 단위는 시장을 따른다 — KRX는 원, 그 외는 달러.
+    러너와 toss_trading 이 그렇게 넘기기 때문이다. 장부는 원화로만
+    기록하므로 여기서 환산한다.
+
+    환산을 빼먹으면 달러 금액이 원화로 둔갑해 주문이 환율 배수만큼
+    작아지고, _fill_buy 에서 1주 값보다 작아 영원히 체결되지 않는다.
+    실제로 2026-07-30 검증에서 623달러가 623원으로 기록돼 매수 0건이었다.
+    """
+    amount = float(notional_amount)
+    notional_krw = amount if market == "KRX" else amount * _FX
+
     state = load_state()
     state["pending"].append({
         "side":         "buy",
         "symbol":       symbol,
-        "notional_krw": float(notional_amount),
+        "notional_krw": notional_krw,
         "placed_date":  date.today().isoformat(),
         "market":       market,
     })
     save_state(state)
-    print(f"  [가상] 매수 예약 {symbol} {notional_amount:,.0f}원 — 다음 거래일 시가 체결")
+    print(f"  [가상] 매수 예약 {symbol} {notional_krw:,.0f}원 — 다음 거래일 시가 체결")
     return {"ok": True, "id": f"virtual-buy-{symbol}-{date.today().isoformat()}",
             "virtual": True}
 
