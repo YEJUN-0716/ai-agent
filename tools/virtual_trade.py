@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import logging
 import sys
 import threading
 import uuid
@@ -30,6 +33,38 @@ VALID_SIDES = ("buy", "sell")
 # 잠금이 없으면 두 승인이 같은 제안을 각자 "내가 뺐다"고 판단해 브로커를 두 번
 # 부른다 — 사장님이 한 번 승인한 매매가 두 건의 주문이 된다. 실제로 재현됐다.
 _PENDING_LOCK = threading.Lock()
+
+# 브로커 호출을 한 번에 하나씩만 보낸다.
+#
+# virtual_broker는 주문마다 상태 파일을 통째로 읽고-고치고-쓴다. 잠금이 없으면
+# 동시에 들어온 두 주문 중 하나가 흔적 없이 사라진다. 그리고 아래에서 stdout을
+# 잠시 바꿔치기하므로, 그 구간이 겹치지 않게 하는 역할도 겸한다.
+_BROKER_LOCK = threading.Lock()
+
+log = logging.getLogger("assistant.trade")
+
+
+def _run_broker(func, *args, **kwargs) -> dict:
+    """브로커 함수를 부른다. 브로커가 찍는 글자가 거래를 망치지 못하게 한다.
+
+    virtual_broker는 주문을 **저장한 뒤** 진행 상황을 print한다. 한국어 윈도우
+    콘솔(cp949)은 그 줄의 '—'(U+2014)를 인코딩하지 못해 UnicodeEncodeError를
+    낸다. 저장이 끝난 뒤 터지므로 주문은 이미 나갔는데 호출자는 실패로 본다.
+    실제로 2026-07-30에 재현됐다 — 승인 한 번에 주문이 나가고도 제안이 되살아나,
+    안내대로 재승인하면 같은 주문이 두 건이 됐다.
+
+    그래서 브로커의 출력을 메모리 버퍼로 돌린다. 버퍼는 어떤 문자든 받으므로
+    콘솔 인코딩과 무관해지고, 내용은 로그로 남겨 잃지 않는다.
+    """
+    buffer = io.StringIO()
+    with _BROKER_LOCK:
+        with contextlib.redirect_stdout(buffer):
+            result = func(*args, **kwargs)
+
+    for line in buffer.getvalue().splitlines():
+        if line.strip():
+            log.info("%s", line.strip())
+    return result
 
 
 class TradeError(RuntimeError):
@@ -64,10 +99,21 @@ class VirtualBrokerExecutor:
         return virtual_broker
 
     def buy(self, symbol: str, amount_krw: float) -> dict:
-        return self._module().place_notional_buy(symbol, amount_krw)
+        """원화 금액으로 매수를 예약한다.
+
+        place_notional_buy 의 금액 단위는 시장을 따른다 — 미국 종목은 달러다.
+        비서는 늘 원화로 말하므로 여기서 환산해서 넘긴다. 환산을 빼먹으면
+        환율 배수(약 1,400배)만큼 부풀어, 체결 시점에 현금 부족으로 조용히
+        폐기된다. 사장님은 "예약했습니다"라는 답만 받는다.
+        """
+        broker = self._module()
+        amount_usd = amount_krw / broker.krw_per_usd()
+        return _run_broker(
+            broker.place_notional_buy, symbol, amount_usd, market="US"
+        )
 
     def sell(self, symbol: str, qty: int) -> dict:
-        return self._module().place_market_sell(symbol, qty)
+        return _run_broker(self._module().place_market_sell, symbol, qty)
 
 
 def _pending_path(settings: Settings) -> Path:
@@ -212,7 +258,9 @@ def approve_request(
         )
         raise TradeError(
             f"{_describe(request)} 주문을 넣지 못했습니다: {exc}. "
-            f"제안은 그대로 두었으니 '/승인 {request_id}'로 다시 시도할 수 있습니다."
+            f"제안은 되살려 두었습니다. 다시 시도하려면 '/승인 {request_id}'. "
+            "다만 주문이 이미 들어간 뒤에 실패했을 가능성이 있으니, "
+            "재승인 전에 보유 현황을 먼저 확인해 주세요."
         ) from exc
 
     record_audit(
