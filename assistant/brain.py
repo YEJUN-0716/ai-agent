@@ -39,6 +39,45 @@ SYSTEM_PROMPT = """당신은 사장님의 개인 업무 비서입니다. 한국�
 """
 
 
+class BrainError(RuntimeError):
+    """비서가 답을 만들지 못했을 때. 메시지는 사장님께 그대로 보여준다."""
+
+
+def _explain(exc: Exception) -> str:
+    """API 오류를 사장님이 읽고 바로 조치할 수 있는 말로 바꾼다.
+
+    원문은 영어 개발자용 메시지라 그대로 보여주면 무슨 일인지 알 수 없다.
+    무엇을 어디서 해야 하는지까지 적는다.
+    """
+    text = str(exc)
+
+    if "credit balance is too low" in text:
+        return (
+            "Claude API 크레딧이 떨어졌습니다. "
+            "console.anthropic.com → Plans & Billing에서 충전해 주세요. "
+            "(claude.ai 구독료와는 별개의 지갑입니다.)"
+        )
+    if isinstance(exc, anthropic.AuthenticationError):
+        return (
+            "API 키가 거절당했습니다. .env의 ANTHROPIC_API_KEY를 확인해 주세요. "
+            "console.anthropic.com → API keys에서 새로 만들 수 있습니다."
+        )
+    if isinstance(exc, anthropic.PermissionDeniedError):
+        return (
+            "이 API 키로는 접근할 수 없습니다. "
+            "console.anthropic.com에서 키의 권한과 사용 한도를 확인해 주세요."
+        )
+    if isinstance(exc, anthropic.RateLimitError):
+        return "요청이 잠시 몰렸습니다. 30초쯤 뒤에 다시 물어봐 주세요."
+    if isinstance(exc, anthropic.APIConnectionError):
+        return "앤트로픽 서버에 접속하지 못했습니다. 인터넷 연결을 확인해 주세요."
+    if isinstance(exc, anthropic.APIStatusError) and exc.status_code >= 500:
+        return "앤트로픽 서버가 불안정합니다. 잠시 뒤 다시 물어봐 주세요."
+
+    # 알려진 유형이 아니면 원문을 남긴다. 지어내는 것보다 낫다.
+    return f"예상치 못한 문제입니다: {text}"
+
+
 def _text_of(message) -> str:
     """응답에서 사용자에게 보여줄 텍스트만 이어붙인다."""
     return "".join(
@@ -241,13 +280,16 @@ class Brain:
 
         answer = ""
         hit_cap = False
-        for turn, message in enumerate(runner, start=1):
-            text = _text_of(message)
-            if text.strip():
-                answer = text
-            if turn >= MAX_TOOL_ITERATIONS:
-                hit_cap = True
-                break
+        try:
+            for turn, message in enumerate(runner, start=1):
+                text = _text_of(message)
+                if text.strip():
+                    answer = text
+                if turn >= MAX_TOOL_ITERATIONS:
+                    hit_cap = True
+                    break
+        except Exception as exc:  # noqa: BLE001 — 사장님이 조치할 수 있게 옮긴다
+            raise BrainError(_explain(exc)) from exc
 
         answer = answer.strip()
         if hit_cap:

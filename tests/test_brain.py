@@ -1,6 +1,11 @@
 import pytest
 
-from assistant.brain import MAX_TOOL_ITERATIONS, SYSTEM_PROMPT, Brain
+from assistant.brain import (
+    MAX_TOOL_ITERATIONS,
+    SYSTEM_PROMPT,
+    Brain,
+    BrainError,
+)
 from assistant.config import Settings
 from assistant.memory import init_db, load_history
 
@@ -192,6 +197,65 @@ def test_empty_reply_gets_a_readable_fallback(settings):
 
     # Assert — 빈 답을 그대로 내보내지 않는다
     assert "답변을 만들지 못했습니다" in answer
+
+
+class FailingRunner:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __iter__(self):
+        raise self._exc
+        yield  # pragma: no cover — 제너레이터로 만들기 위한 줄
+
+
+class FailingClient:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        outer = self
+
+        class _Messages:
+            def tool_runner(self, **kwargs):
+                return FailingRunner(outer._exc)
+
+        class _Beta:
+            messages = _Messages()
+
+        self.beta = _Beta()
+
+
+def test_credit_exhaustion_is_explained_in_plain_korean(settings):
+    # Arrange — 사장님이 처음 실행했을 때 실제로 만난 오류
+    init_db(settings.db_path)
+    raw = RuntimeError(
+        "Error code: 400 - {'type': 'error', 'error': {'type': "
+        "'invalid_request_error', 'message': 'Your credit balance is too low "
+        "to access the Anthropic API. Please go to Plans & Billing to upgrade "
+        "or purchase credits.'}}"
+    )
+    brain = Brain(settings, client=FailingClient(raw))
+
+    # Act
+    with pytest.raises(BrainError) as caught:
+        brain.ask("가상 브로커 얼마야?", channel="telegram")
+
+    # Assert — 무엇을 어디서 해야 하는지가 담기고, 개발자용 원문은 빠진다
+    message = str(caught.value)
+    assert "크레딧" in message
+    assert "Plans & Billing" in message
+    assert "Error code: 400" not in message
+
+
+def test_unknown_failure_keeps_the_original_text(settings):
+    # Arrange — 모르는 오류를 그럴듯하게 지어내지 않는다
+    init_db(settings.db_path)
+    brain = Brain(settings, client=FailingClient(RuntimeError("디스크 폭발")))
+
+    # Act
+    with pytest.raises(BrainError) as caught:
+        brain.ask("질문", channel="web")
+
+    # Assert
+    assert "디스크 폭발" in str(caught.value)
 
 
 class EndlessRunner:
