@@ -6,9 +6,18 @@ on:
   schedule:
     - cron: "30 21 * * 1-5"
   workflow_dispatch:
+  # 아래 기본값은 아래쪽 env 의 `|| 대체값` 과 반드시 같아야 한다.
+  # 수동 실행하면 GitHub가 이 기본값을 채워 넣어 `||` 가 무시되므로,
+  # 값이 어긋나면 수동 실행만 다른 조건으로 돌아 성적표가 오염된다.
+  # 실제로 2026-07-30 수동 검증에서 종목당 $100로 돌아 45원짜리
+  # 주문 14건이 장부에 남았다.
     inputs:
       dry_run:
-        description: "DRY_RUN (true=주문 없음, false=실제 주문)"
+        # 이 항목만 일부러 아래 `|| 'false'` 와 다르다. 예약 실행은 장부에
+        # 기록해야 하고(false), 수동 실행은 실수로 장부를 건드리지 않도록
+        # 기본을 true(기록 안 함)로 둔다. 수동으로 진짜 기록하려면
+        # -f dry_run=false 를 명시할 것.
+        description: "DRY_RUN (true=기록 안 함, false=장부에 기록)"
         required: false
         default: "true"
       universe:
@@ -18,11 +27,11 @@ on:
       top_n:
         description: "매수 상위 N개"
         required: false
-        default: "2"
+        default: "5"
       capital_usd:
         description: "미국 종목당 투입금 (달러)"
         required: false
-        default: "100"
+        default: "1370"
       krw_per_usd:
         description: "원/달러 환율 (매수여력 비교용)"
         required: false
