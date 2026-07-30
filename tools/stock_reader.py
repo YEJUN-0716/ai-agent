@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from assistant.config import Settings
+from tools import stock_sync
 
 
 class StockDataError(RuntimeError):
@@ -29,8 +30,14 @@ def _read_json(path: Path) -> Any | None:
 
 
 def get_virtual_portfolio(settings: Settings) -> dict:
-    """가상 브로커 보유 현황. 아직 한 번도 안 돌았으면 started=False."""
+    """가상 브로커 보유 현황. 아직 한 번도 안 돌았으면 started=False.
+
+    as_of는 데이터가 언제 것인지, sync_note는 최신화에 실패했을 때의 이유다.
+    둘 다 답할 때 함께 알려야 지난 숫자를 현재로 착각하지 않는다.
+    """
+    sync = stock_sync.refresh(settings)
     data = _read_json(settings.stock_analyzer_path / "virtual_portfolio.json")
+
     if data is None:
         return {
             "started": False,
@@ -38,6 +45,8 @@ def get_virtual_portfolio(settings: Settings) -> dict:
             "positions": {},
             "pending": [],
             "realized_pnl_krw": 0.0,
+            "as_of": sync["as_of"],
+            "sync_note": sync["note"],
             "note": "가상 브로커가 아직 한 번도 실행되지 않았습니다.",
         }
     return {
@@ -46,11 +55,19 @@ def get_virtual_portfolio(settings: Settings) -> dict:
         "positions": data.get("positions", {}),
         "pending": data.get("pending", []),
         "realized_pnl_krw": data.get("realized_pnl_krw", 0.0),
+        "as_of": sync["as_of"],
+        "sync_note": sync["note"],
     }
+
+
+def get_data_freshness(settings: Settings) -> dict:
+    """읽고 있는 stock-analyzer 데이터가 언제 것인지 알려준다."""
+    return stock_sync.refresh(settings)
 
 
 def get_equity_history(settings: Settings, limit: int = 30) -> list[dict]:
     """가상 브로커 자본 곡선. 최신 것부터 limit개."""
+    stock_sync.refresh(settings)
     data = _read_json(settings.stock_analyzer_path / "equity_log.json")
     if data is None:
         return []
@@ -60,6 +77,7 @@ def get_equity_history(settings: Settings, limit: int = 30) -> list[dict]:
 
 def get_recent_signals(settings: Settings, limit: int = 10) -> list[dict]:
     """매매 시그널 기록. 최신 것부터 limit개."""
+    stock_sync.refresh(settings)
     data = _read_json(settings.stock_analyzer_path / "signal_log.json")
     if data is None:
         return []
@@ -69,6 +87,7 @@ def get_recent_signals(settings: Settings, limit: int = 10) -> list[dict]:
 
 def get_analyst_scores(settings: Settings, limit: int = 5) -> list[dict]:
     """애널리스트 팀의 종목별 점수 기록. 최신 날짜부터 limit개."""
+    stock_sync.refresh(settings)
     log_dir = settings.stock_analyzer_path / "data" / "analyst_log"
     if not log_dir.is_dir():
         return []

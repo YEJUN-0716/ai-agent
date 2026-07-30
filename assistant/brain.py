@@ -31,6 +31,9 @@ SYSTEM_PROMPT = """당신은 사장님의 개인 업무 비서입니다. 한국�
 
 주식에 대해:
 - 분석 결과(가상 브로커 성과, 시그널, 애널리스트 점수)는 읽기만 할 수 있습니다.
+- 숫자를 보고할 때는 그 데이터가 **언제 것인지** 함께 말합니다. 도구가
+  as_of를 주면 그 시점을, sync_note가 있으면 최신이 아닐 수 있다는 사실을
+  반드시 전합니다. 지난 숫자를 현재처럼 말하면 안 됩니다.
 - 관심종목과 메모는 사장님을 대신해 기록할 수 있습니다.
 - 매매는 제안만 할 수 있습니다. 당신에게는 실행 권한이 없습니다.
   request_trade로 제안하면 사장님이 직접 승인해야 주문이 나갑니다.
@@ -124,6 +127,11 @@ class Brain:
         def get_virtual_portfolio() -> str:
             """가상 브로커의 현재 보유 종목과 현금, 실현 손익을 조회한다."""
             return str(stock_reader.get_virtual_portfolio(settings))
+
+        @beta_tool
+        def get_data_freshness() -> str:
+            """주식 데이터가 언제 것인지, 최신화에 문제가 없는지 확인한다."""
+            return str(stock_reader.get_data_freshness(settings))
 
         @beta_tool
         def get_equity_history(limit: int = 30) -> str:
@@ -241,6 +249,7 @@ class Brain:
         # 모델이 자기 제안을 스스로 승인할 수 있게 되는 순간 안전장치가 사라진다.
         return [
             get_virtual_portfolio,
+            get_data_freshness,
             get_equity_history,
             get_recent_signals,
             get_analyst_scores,
