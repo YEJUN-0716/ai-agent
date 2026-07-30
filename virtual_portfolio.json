@@ -1,7 +1,85 @@
 {
   "cash_krw": 10000000.0,
   "positions": {},
-  "pending": [],
+  "pending": [
+    {
+      "side": "buy",
+      "symbol": "KHC",
+      "notional_krw": 896024.5142578125,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "GM",
+      "notional_krw": 810217.802109375,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "COF",
+      "notional_krw": 712304.9821142579,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "BAC",
+      "notional_krw": 879418.1549194335,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "F",
+      "notional_krw": 865011.5990258789,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "CVS",
+      "notional_krw": 1130051.9696264649,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "CFG",
+      "notional_krw": 553746.6004833984,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "USB",
+      "notional_krw": 694490.8875512695,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "RF",
+      "notional_krw": 661982.6810888672,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "ALLY",
+      "notional_krw": 800340.2533081054,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    },
+    {
+      "side": "buy",
+      "symbol": "PFE",
+      "notional_krw": 1398471.1232958983,
+      "placed_date": "2026-07-30",
+      "market": "US"
+    }
+  ],
   "realized_pnl_krw": 0.0,
   "trades": []
 }
