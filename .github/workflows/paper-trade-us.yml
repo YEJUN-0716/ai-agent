@@ -107,16 +107,45 @@ jobs:
           DRY_RUN:               ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner_toss.py
 
-      - name: 추적 파일 커밋 (고점·시그널 로그)
-        # Windows 러너의 기본 셸은 PowerShell이라 아래 bash 문법이 통하지 않는다.
-        # Git for Windows의 bash를 명시적으로 지정한다.
-        shell: bash
+      - name: 추적 파일 커밋 (고점·시그널·자본·가상 포트폴리오)
+        # bash가 아니라 PowerShell을 쓴다. 자택 러너에 Git for Windows는
+        # 깔려 있지만 서비스 PATH에 bash.exe가 없어서, shell: bash 로 두면
+        # "bash: command not found"로 이 단계만 죽는다. 매매 계산은 멀쩡히
+        # 끝나고 결과만 사라지는 상태가 2026-07-15부터 이어졌다.
+        shell: powershell
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add peak_prices.json signal_log.json equity_log.json
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: US peak & signal & equity log update $(date -u +%Y-%m-%d)"
-          fi
+
+          # virtual_portfolio.json 은 첫 매매 전에는 없다. 없는 파일을
+          # git add 하면 pathspec 오류로 단계가 통째로 실패하므로 걸러낸다.
+          $tracked = @(
+            "peak_prices.json",
+            "signal_log.json",
+            "equity_log.json",
+            "virtual_portfolio.json"
+          ) | Where-Object { Test-Path $_ }
+
+          if (-not $tracked) {
+            Write-Host "커밋할 추적 파일이 없습니다."
+            exit 0
+          }
+
+          git add -- $tracked
+          git diff --staged --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "바뀐 내용이 없어 커밋하지 않았습니다."
+            exit 0
+          }
+
+          $stamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd")
+          git commit -m "chore: US peak/signal/equity/portfolio update $stamp"
+          if ($LASTEXITCODE -ne 0) { throw "git commit 실패" }
+
           git pull --rebase origin main
+          if ($LASTEXITCODE -ne 0) { throw "git pull --rebase 실패" }
+
           git push
+          if ($LASTEXITCODE -ne 0) { throw "git push 실패" }
+
+          Write-Host "커밋·푸시 완료: $($tracked -join ', ')"
