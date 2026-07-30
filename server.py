@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 import uvicorn
 
@@ -83,7 +84,24 @@ async def _main() -> None:
     )
 
 
+def _force_utf8_console() -> None:
+    """콘솔 출력을 UTF-8로 맞춘다. 실패해도 글자만 깨질 뿐 죽지 않게 한다.
+
+    한국어 윈도우의 기본 콘솔은 cp949라, 로그에 흔한 '—'나 이모지 한 글자가
+    UnicodeEncodeError를 낸다. 로그 한 줄 때문에 비서가 멈추면 안 된다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main() -> None:
+    _force_utf8_console()
     try:
         asyncio.run(_main())
     except ConfigError as exc:

@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 
@@ -6,11 +7,49 @@ from assistant.config import Settings
 from tools.assistant_notes import read_audit_log
 from tools.virtual_trade import (
     TradeError,
+    _run_broker,
     approve_request,
     list_pending_requests,
     reject_request,
     request_trade,
 )
+
+
+def test_broker_calls_never_overlap():
+    """브로커 호출은 한 번에 하나씩만 나가야 한다.
+
+    virtual_broker는 주문마다 상태 파일을 통째로 읽고-고치고-쓴다. 두 호출이
+    겹치면 나중에 저장한 쪽이 앞선 주문을 덮어써서, 사장님이 승인한 매매가
+    흔적 없이 사라진다. _run_broker가 stdout을 잠시 바꿔치기하는 구간이기도
+    해서, 겹치면 다른 창구의 출력까지 함께 삼킨다.
+    """
+    # Arrange — 실행 중인 호출 수를 세는 가짜 브로커 함수
+    concurrent: list[int] = []
+    peak: list[int] = []
+
+    def slow_broker_call(_symbol):
+        concurrent.append(1)
+        peak.append(len(concurrent))
+        time.sleep(0.01)      # 겹칠 틈을 넉넉히 준다
+        concurrent.pop()
+        return {"ok": True}
+
+    # Act — 여덟 창구가 동시에 브로커를 부른다
+    start = threading.Barrier(8)
+
+    def call() -> None:
+        start.wait()
+        _run_broker(slow_broker_call, "AAPL")
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Assert — 어느 순간에도 동시에 실행된 호출은 하나뿐
+    assert len(peak) == 8
+    assert max(peak) == 1
 
 
 @pytest.fixture

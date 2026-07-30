@@ -319,6 +319,7 @@ class Brain:
         elif not answer:
             answer = "답변을 만들지 못했습니다. 다시 물어봐 주세요."
 
-        memory.append_message(settings.db_path, channel, "user", question)
-        memory.append_message(settings.db_path, channel, "assistant", answer)
+        # 질문과 답은 반드시 함께 남긴다. 하나만 남으면 다음 대화의 기록이
+        # assistant로 시작해 API가 거절한다 — memory.append_exchange 참고.
+        memory.append_exchange(settings.db_path, channel, question, answer)
         return answer

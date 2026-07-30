@@ -1,4 +1,89 @@
-from assistant.memory import append_message, clear_history, init_db, load_history
+import sqlite3
+
+import pytest
+
+from assistant import memory
+from assistant.memory import (
+    append_exchange,
+    append_message,
+    clear_history,
+    init_db,
+    load_history,
+)
+
+
+def test_history_never_starts_with_an_assistant_message(tmp_path):
+    """API는 첫 메시지가 user가 아니면 거절한다.
+
+    limit이 홀수면 잘린 창이 assistant로 시작한다. 그대로 API에 실으면
+    사장님이 무엇을 물어도 오류가 나고, 원인을 알 방법이 없다.
+    """
+    # Arrange — 질문·답 세 쌍
+    db = tmp_path / "conversations.db"
+    init_db(db)
+    for i in range(3):
+        append_exchange(db, "telegram", f"질문{i}", f"답변{i}")
+
+    # Act / Assert — 어떤 limit이어도 user로 시작해야 한다
+    for limit in (1, 2, 3, 4, 5, 6, 10):
+        history = load_history(db, limit=limit)
+        if history:
+            assert history[0]["role"] == "user", f"limit={limit}"
+
+
+def test_history_recovers_from_a_question_saved_without_its_answer(tmp_path):
+    """저장 도중 죽어 짝이 없는 줄이 남아도 비서는 계속 답할 수 있어야 한다.
+
+    한 번 어긋나면 그 뒤 모든 대화가 assistant로 시작해, DB를 직접 고치기
+    전에는 영구히 먹통이 된다.
+    """
+    # Arrange — 질문만 남기고 죽은 상태를 만든다
+    db = tmp_path / "conversations.db"
+    init_db(db)
+    append_exchange(db, "telegram", "질문0", "답변0")
+    append_message(db, "telegram", "user", "답을 못 받은 질문")
+    append_exchange(db, "telegram", "질문1", "답변1")
+
+    # Act
+    history = load_history(db, limit=4)
+
+    # Assert
+    assert history[0]["role"] == "user"
+
+
+def test_exchange_is_saved_all_or_nothing(tmp_path, monkeypatch):
+    """질문은 들어갔는데 답이 못 들어간 채로 끝나면 안 된다.
+
+    질문 한 줄을 실제로 INSERT한 뒤 죽는 상황을 만든다. 커밋 전이므로
+    트랜잭션이 통째로 되감겨야 하고, 짝이 없는 줄이 남으면 안 된다.
+    """
+    # Arrange
+    db = tmp_path / "conversations.db"
+    init_db(db)
+    real_connect = memory._connect
+
+    class DiesAfterFirstRow:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def executemany(self, sql, rows):
+            self._conn.execute(sql, rows[0])   # 질문만 들어간다
+            raise sqlite3.OperationalError("저장 도중 중단")
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(
+        memory, "_connect", lambda path: DiesAfterFirstRow(real_connect(path))
+    )
+
+    # Act
+    with pytest.raises(sqlite3.OperationalError):
+        append_exchange(db, "telegram", "질문", "답변")
+    monkeypatch.undo()
+
+    # Assert — 반쪽짜리 기록이 남지 않았다
+    assert load_history(db, limit=10) == []
 
 
 def test_history_is_empty_before_any_message(tmp_path):
