@@ -1,3 +1,11 @@
 {
-  "records": []
+  "records": [
+    {
+      "date": "2026-07-30",
+      "equity": 10000000.0,
+      "spy_price": 729.46,
+      "unrealized_pnl": 0,
+      "n_positions": 0
+    }
+  ]
 }
