@@ -43,6 +43,17 @@ def set_fx(krw_per_usd: float) -> None:
     _FX = float(krw_per_usd)
 
 
+def krw_per_usd() -> float:
+    """현재 환산에 쓰는 원/달러.
+
+    place_notional_buy 의 금액 단위는 시장을 따르므로(미국은 달러), 원화
+    금액을 들고 있는 호출자는 넘기기 전에 직접 환산해야 한다. 그때 쓰라고
+    공개한다. 모듈 전역 _FX 를 밖에서 몰래 읽으면 set_fx() 로 갱신된 값과
+    어긋나기 쉽다.
+    """
+    return _FX
+
+
 # ── 상태 입출력 ────────────────────────────────────────────────────────
 def _empty_state() -> dict:
     return {
@@ -259,6 +270,10 @@ def place_notional_buy(symbol: str, notional_amount: float,
     환산을 빼먹으면 달러 금액이 원화로 둔갑해 주문이 환율 배수만큼
     작아지고, _fill_buy 에서 1주 값보다 작아 영원히 체결되지 않는다.
     실제로 2026-07-30 검증에서 623달러가 623원으로 기록돼 매수 0건이었다.
+
+    반대 방향 실수도 같은 날 나왔다. 원화 금액을 그대로 넘기면 여기서 환율이
+    곱해져 50만원이 7억원이 된다. 원화를 들고 있는 호출자는 krw_per_usd() 로
+    나눠서 넘길 것.
     """
     amount = float(notional_amount)
     notional_krw = amount if market == "KRX" else amount * _FX
