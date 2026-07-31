@@ -943,6 +943,13 @@ def main():
                 if fill_status == "filled":
                     buy_rec["fill_price"] = float(fill.get("filled_avg_price") or sig.get("price", 0))
                     print(f"    체결 확인 ✓ {buy_rec['fill_price']:.2f}")
+                elif fill_status == "pending_next_open":
+                    # 가상 브로커는 신호가 장 마감 후에 나오므로 다음 거래일
+                    # 시가에 체결한다. 지금 미체결인 것이 정상이고 주문은 이미
+                    # 장부에 예약됐다. 이걸 실패로 세면 n_bought 가 늘지 않아
+                    # MAX_POSITIONS 한도가 통째로 무력화된다 — 2026-07-31 실행에서
+                    # 5종목 한도인데 12종목이 예약됐다.
+                    print("    예약 확인 ✓ 다음 거래일 시가 체결")
                 else:
                     print(f"    ⚠️ 미체결: {fill_status}")
                     buy_rec["ok"] = False
