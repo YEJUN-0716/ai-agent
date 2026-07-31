@@ -148,6 +148,27 @@ def test_study_tools_are_available(settings):
         assert tool in names
 
 
+def test_vault_search_tools_are_available(settings):
+    """볼트 검색과 노트 읽기가 비서에게 보여야 한다 — 둘 다 공짜 경로다."""
+    # Arrange / Act
+    names = Brain(settings, client=object()).tool_names()
+
+    # Assert
+    assert "search_notes" in names
+    assert "read_note" in names
+
+
+def test_model_cannot_write_to_the_vault(settings):
+    """볼트는 읽기 전용이다. 노트를 고치거나 지우는 도구는 주지 않는다."""
+    # Arrange / Act
+    names = Brain(settings, client=object()).tool_names()
+
+    # Assert
+    assert not any(
+        n in names for n in ("write_note", "edit_note", "delete_note", "save_note")
+    )
+
+
 def test_model_cannot_delete_materials(settings):
     """지우는 도구는 주지 않는다. 원본 삭제는 사장님 몫이다."""
     # Arrange / Act

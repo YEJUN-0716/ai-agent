@@ -14,6 +14,7 @@ from assistant import memory
 from assistant.config import Settings
 from tools import (
     assistant_notes,
+    obsidian_search,
     stock_reader,
     study_materials,
     study_reader,
@@ -58,9 +59,17 @@ SYSTEM_PROMPT = """당신은 사장님의 개인 업무 비서입니다. 한국�
 - 자료를 정리하려면 먼저 list_new_materials로 무엇이 기다리는지 봅니다.
 - **정리는 비용이 듭니다(자료 1건에 수천 원).** 사장님이 정리를 요청했을 때만
   summarize_new_material을 씁니다. 물어보지 않았는데 미리 정리하지 마십시오.
-- 질문에 답할 때는 **먼저 list_materials와 요약 노트로 답해 보십시오.**
+- 질문에 답할 때는 **먼저 list_materials와 볼트 검색으로 답해 보십시오.**
   거기 없는 세부 내용일 때만 ask_material로 원본을 펼칩니다.
 - 원본 PDF는 지우지 않습니다. 사장님이 직접 정리하십니다.
+
+옵시디언 노트에 대해:
+- search_notes(검색)와 read_note(읽기)는 **공짜입니다.** 이 PC의 파일을 읽을 뿐입니다.
+  사장님이 예전에 적어둔 것이나 정리해 둔 자료의 내용은 여기서 먼저 찾으십시오.
+  비용이 드는 ask_material은 볼트에서 못 찾았을 때만 씁니다.
+- 노트는 읽기만 합니다. 고치거나 지우는 권한은 없습니다.
+- 검색해서 안 나오면 "볼트에 없다"고 말합니다. 노트에 없는 내용을 지어내지 마십시오.
+- 답할 때 어느 노트에서 봤는지 노트 제목을 함께 알려주십시오.
 """
 
 
@@ -285,6 +294,33 @@ class Brain:
                 return f"확인하지 못했습니다: {exc}"
 
         @beta_tool
+        def search_notes(query: str, limit: int = 5) -> str:
+            """옵시디언 볼트의 노트를 검색한다. 공짜다 — 여기부터 뒤진다.
+
+            사장님이 직접 쓴 노트와 정리해 둔 자료 요약이 모두 들어 있다.
+
+            Args:
+                query: 찾을 단어. 여러 개면 띄어쓰기로 구분한다.
+                limit: 가져올 노트 개수.
+            """
+            try:
+                return str(obsidian_search.search_notes(settings, query, limit))
+            except obsidian_search.SearchError as exc:
+                return f"검색하지 못했습니다: {exc}"
+
+        @beta_tool
+        def read_note(note_path: str) -> str:
+            """볼트의 노트 하나를 통째로 읽는다. 이것도 공짜다.
+
+            Args:
+                note_path: search_notes가 알려준 노트 경로.
+            """
+            try:
+                return str(obsidian_search.read_note(settings, note_path))
+            except obsidian_search.SearchError as exc:
+                return f"읽지 못했습니다: {exc}"
+
+        @beta_tool
         def request_trade(
             side: str, symbol: str, amount_krw: float = 0, qty: int = 0
         ) -> str:
@@ -332,6 +368,8 @@ class Brain:
             summarize_new_material,
             list_materials,
             ask_material,
+            search_notes,
+            read_note,
             request_trade,
             list_pending_requests,
         ]
