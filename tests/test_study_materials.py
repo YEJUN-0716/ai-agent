@@ -76,6 +76,22 @@ def test_skips_files_that_are_not_pdf(settings):
     assert [item["filename"] for item in waiting] == ["논문.pdf"]
 
 
+def test_a_folder_named_like_a_pdf_is_not_listed(settings):
+    """이름이 .pdf로 끝나는 폴더를 자료로 착각하면 안 된다.
+
+    압축을 풀면 이런 폴더가 생길 수 있다. 파일인 줄 알고 열면 터진다.
+    """
+    # Arrange
+    (settings.study_inbox / "압축풀린것.pdf").mkdir()
+    (settings.study_inbox / "진짜.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    # Act
+    waiting = list_new(settings)
+
+    # Assert
+    assert [item["filename"] for item in waiting] == ["진짜.pdf"]
+
+
 def test_marks_oversized_files_instead_of_hiding_them(settings):
     """32MB 초과도 목록에는 넣고 표시만 한다.
 

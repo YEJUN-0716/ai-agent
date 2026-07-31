@@ -86,11 +86,13 @@ material_id: a1b2c3d4
     "one_line": "이 자료가 무슨 얘기인지 한 줄로",
     "source_file": "처리완료/논문제목.pdf",
     "ingested_at": "2026-07-30T14:05:22+09:00",
-    "note_path": "학업/2026-07-30-논문제목.md",
-    "pages": 42
+    "note_path": "학업/2026-07-30-논문제목.md"
   }
 ]
 ```
+
+`pages`는 넣지 않는다. 미리 세려면 PDF 라이브러리가 필요한데 그것을 쓰지
+않기로 했고, 600쪽 초과는 API가 알려준다.
 
 `one_line`이 여기 있는 이유: `list_materials`가 어느 자료를 펼칠지 고를 때 쓴다.
 노트 본문을 전부 읽어야 목록을 만들 수 있으면, 자료가 늘수록 목록 한 번 보는 값이
@@ -104,10 +106,13 @@ material_id: a1b2c3d4
 | 도구 | 하는 일 |
 |---|---|
 | `list_new_materials` | 자료넣는곳에 무엇이 기다리는지 |
-| `read_new_material` | PDF를 비서에게 보여준다 (문서 블록으로 첨부) |
-| `save_material_note` | 노트 작성 + 원본 이동 + 목록 기록 (한 덩어리) |
+| `summarize_new_material` | PDF를 읽고 요약 → 노트 작성 + 원본 이동 + 목록 기록 |
 | `list_materials` | 정리된 자료 목록 (제목 + 한 줄 요약) |
-| `open_material` | 보관된 원본 PDF를 다시 펼친다 |
+| `ask_material` | 보관된 원본 PDF를 다시 펼쳐 세부 질문에 답한다 |
+
+> 구현하며 확정된 것: `tool_result`에는 문서 블록을 넣을 수 없어(텍스트와
+> 이미지만 된다) 도구가 자기 API 호출로 PDF를 첨부한다. 그래서 읽기와
+> 저장이 `summarize_new_material` 하나로 합쳐졌다.
 
 요약을 **쓰는 것은 비서**다. 도구는 파일만 다룬다. 요약 품질은 비서가 책임지고,
 파일이 깨지는 것은 테스트로 막는다.
