@@ -43,6 +43,40 @@ def set_fx(krw_per_usd: float) -> None:
     _FX = float(krw_per_usd)
 
 
+def market_date(now: datetime | None = None) -> date:
+    """주문을 찍을 기준 날짜 — 러너의 달력이 아니라 **미국 장의 날짜**.
+
+    date.today() 를 쓰면 한국 시각 기준 날짜가 찍힌다. 러너는 미국 장이 닫힌
+    직후(21:30 UTC)에 도는데 그 시각은 한국에서 이미 다음 날 새벽 06:30 이다.
+    그래서 7/30 장 신호로 낸 주문이 '7/31 주문'으로 기록되고, 체결 기준인
+    "다음 거래일 시가"가 7/31 이 아니라 8/3 으로 밀린다 — 늘 하루 늦게 산다.
+
+    실제로 2026-07-30 예약분이 이틀이 지나도 체결되지 않았다. 미국 동부
+    날짜로 찍으면 신호가 나온 장 날짜와 일치하고, 바로 다음 시가에 체결된다.
+    """
+    ts = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    return ts.tz_convert("America/New_York").date()
+
+
+def reserved_krw(state: dict) -> float:
+    """대기 중인 매수 주문이 이미 붙잡고 있는 현금."""
+    return sum(
+        float(o.get("notional_krw", 0.0))
+        for o in state.get("pending", [])
+        if o.get("side") == "buy"
+    )
+
+
+def available_krw(state: dict) -> float:
+    """새 주문에 쓸 수 있는 현금. 현금에서 예약분을 뺀 값이다.
+
+    예약은 체결 전까지 현금을 줄이지 않는다. 그래서 예약분을 빼지 않으면
+    러너가 매일 같은 1,000만원을 놓고 새로 주문을 내, 예약 합계가 현금을
+    넘어선다 — 2026-07-31 에 1,852만원 예약 대 현금 1,000만원이 됐다.
+    """
+    return float(state.get("cash_krw", 0.0)) - reserved_krw(state)
+
+
 def krw_per_usd() -> float:
     """현재 환산에 쓰는 원/달러.
 
@@ -234,7 +268,9 @@ def get_account(client_id: str = "", client_secret: str = "",
     )
     return {
         "equity":          state["cash_krw"] + stock_value,
-        "buying_power":    state["cash_krw"],
+        # 매수여력에서 예약분을 뺀다. 예약은 체결 전까지 현금을 줄이지 않으므로,
+        # 빼지 않으면 러너가 매일 같은 현금을 놓고 주문을 새로 낸다.
+        "buying_power":    available_krw(state),
         "account_blocked": False,
         "trading_blocked": False,
     }
@@ -279,16 +315,32 @@ def place_notional_buy(symbol: str, notional_amount: float,
     notional_krw = amount if market == "KRX" else amount * _FX
 
     state = load_state()
+
+    # 없는 돈은 예약하지 않는다.
+    #
+    # 예약은 체결될 때까지 현금을 줄이지 않는다. 그래서 막지 않으면 러너가
+    # 매일 같은 1,000만원을 놓고 주문을 새로 내고, 예약 합계만 불어난다.
+    # 그러다 체결 시점에 현금이 모자란 주문은 _fill_buy 가 조용히 버린다 —
+    # 사장님은 "예약했습니다"만 듣고 매수는 일어나지 않는다. 여기서 막는다.
+    # 러너·비서 모두 이 함수를 지나므로 한 곳만 막으면 된다.
+    available = available_krw(state)
+    if notional_krw > available:
+        raise ValueError(
+            f"{symbol} 매수 {notional_krw:,.0f}원을 예약할 수 없습니다 — "
+            f"가용 현금 {available:,.0f}원 "
+            f"(현금 {state['cash_krw']:,.0f}원 - 예약 {reserved_krw(state):,.0f}원)."
+        )
+
     state["pending"].append({
         "side":         "buy",
         "symbol":       symbol,
         "notional_krw": notional_krw,
-        "placed_date":  date.today().isoformat(),
+        "placed_date":  market_date().isoformat(),
         "market":       market,
     })
     save_state(state)
     print(f"  [가상] 매수 예약 {symbol} {notional_krw:,.0f}원 — 다음 거래일 시가 체결")
-    return {"ok": True, "id": f"virtual-buy-{symbol}-{date.today().isoformat()}",
+    return {"ok": True, "id": f"virtual-buy-{symbol}-{market_date().isoformat()}",
             "virtual": True}
 
 
@@ -301,12 +353,12 @@ def place_market_sell(symbol: str, qty: float,
         "side":        "sell",
         "symbol":      symbol,
         "qty":         int(qty),
-        "placed_date": date.today().isoformat(),
+        "placed_date": market_date().isoformat(),
         "market":      market,
     })
     save_state(state)
     print(f"  [가상] 매도 예약 {symbol} {int(qty)}주 — 다음 거래일 시가 체결")
-    return {"ok": True, "id": f"virtual-sell-{symbol}-{date.today().isoformat()}",
+    return {"ok": True, "id": f"virtual-sell-{symbol}-{market_date().isoformat()}",
             "virtual": True}
 
 
