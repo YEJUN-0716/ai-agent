@@ -22,6 +22,13 @@ VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 # 모든 요청이 400이 되므로, 조용히 고장나게 두지 말고 시작할 때 알린다.
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
+STUDY_INBOX_NAME = "자료넣는곳"
+
+# 자료넣는곳 안의 이 폴더는 '이미 정리한 것'이다. 새 자료를 훑을 때 건너뛴다.
+STUDY_DONE_NAME = "처리완료"
+# 볼트 안에서 비서가 노트를 쓰는 유일한 폴더. 사장님의 다른 노트는 건드리지 않는다.
+STUDY_NOTES_NAME = "학업"
+
 
 class ConfigError(RuntimeError):
     """설정이 잘못됐을 때. 메시지는 사람이 읽고 바로 고칠 수 있어야 한다."""
@@ -39,6 +46,8 @@ class Settings:
     web_host: str
     web_port: int
     history_limit: int
+    study_inbox: Path
+    obsidian_vault: Path
 
     @property
     def db_path(self) -> Path:
@@ -47,6 +56,30 @@ class Settings:
     @property
     def audit_log_path(self) -> Path:
         return self.assistant_data_dir / "audit.log"
+
+    @property
+    def study_done_dir(self) -> Path:
+        """정리를 마친 원본 PDF를 옮겨두는 곳. 지우지 않고 쌓아둔다."""
+        return self.study_inbox / STUDY_DONE_NAME
+
+    @property
+    def study_notes_dir(self) -> Path:
+        return self.obsidian_vault / STUDY_NOTES_NAME
+
+    @property
+    def materials_path(self) -> Path:
+        return self.assistant_data_dir / "materials.json"
+
+
+def _default_desktop() -> Path:
+    """사장님이 실제로 보는 바탕화면.
+
+    윈도우에서 OneDrive를 켜면 바탕화면이 ~/OneDrive/Desktop 으로 옮겨간다.
+    그때 ~/Desktop 은 남아 있어도 화면에 안 보이는 껍데기라, 거기에 폴더를
+    만들면 "만들었다는데 안 보인다"가 된다. OneDrive 쪽을 먼저 본다.
+    """
+    onedrive = Path.home() / "OneDrive" / "Desktop"
+    return onedrive if onedrive.is_dir() else Path.home() / "Desktop"
 
 
 def _require(name: str) -> str:
@@ -124,6 +157,21 @@ def load_settings() -> Settings:
             f"가능한 값: {', '.join(sorted(VALID_EFFORTS))}"
         )
 
+    vault = Path(_require("OBSIDIAN_VAULT")).expanduser()
+    if not vault.is_dir():
+        raise ConfigError(
+            f"OBSIDIAN_VAULT가 가리키는 폴더가 없습니다: {vault}. "
+            "옵시디언에서 볼트 폴더를 확인해 .env에 정확한 경로를 적어주세요."
+        )
+
+    # 받는 곳은 없으면 만든다. 볼트와 달리 비서가 소유하는 폴더다.
+    configured = os.environ.get("STUDY_INBOX", "").strip()
+    study_inbox = (
+        Path(configured).expanduser() if configured
+        else _default_desktop() / STUDY_INBOX_NAME
+    )
+    study_inbox.mkdir(parents=True, exist_ok=True)
+
     return Settings(
         anthropic_api_key=api_key,
         telegram_bot_token=bot_token,
@@ -135,4 +183,6 @@ def load_settings() -> Settings:
         web_host=web_host,
         web_port=_parse_int("ASSISTANT_WEB_PORT", DEFAULT_WEB_PORT),
         history_limit=_parse_int("ASSISTANT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT),
+        study_inbox=study_inbox,
+        obsidian_vault=vault,
     )

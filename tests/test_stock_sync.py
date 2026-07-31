@@ -23,6 +23,8 @@ def settings(tmp_path) -> Settings:
         web_host="127.0.0.1",
         web_port=8765,
         history_limit=40,
+        study_inbox=tmp_path,
+        obsidian_vault=tmp_path,
     )
 
 
