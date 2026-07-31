@@ -6,12 +6,16 @@ from assistant.config import ConfigError, load_settings
 def _base_env(tmp_path):
     stock_dir = tmp_path / "stock-analyzer"
     stock_dir.mkdir()
+    vault = tmp_path / "볼트"
+    vault.mkdir()
     return {
         "ANTHROPIC_API_KEY": "sk-test-key",
         "TELEGRAM_BOT_TOKEN": "123:abc",
         "TELEGRAM_ALLOWED_CHAT_IDS": "111, 222",
         "STOCK_ANALYZER_PATH": str(stock_dir),
         "ASSISTANT_DATA_DIR": str(tmp_path / "data" / "assistant"),
+        "OBSIDIAN_VAULT": str(vault),
+        "STUDY_INBOX": str(tmp_path / "자료넣는곳"),
     }
 
 
@@ -120,3 +124,60 @@ def test_raises_when_web_port_is_not_numeric(tmp_path, monkeypatch):
     # Act / Assert
     with pytest.raises(ConfigError, match="ASSISTANT_WEB_PORT"):
         load_settings()
+
+
+def test_study_folders_come_from_env(tmp_path, monkeypatch):
+    """자료 폴더와 볼트 경로를 .env로 바꿀 수 있어야 한다."""
+    # Arrange
+    env = _base_env(tmp_path)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    # Act
+    settings = load_settings()
+
+    # Assert
+    assert settings.study_inbox == tmp_path / "자료넣는곳"
+    assert settings.study_done_dir == tmp_path / "자료넣는곳" / "처리완료"
+    assert settings.study_notes_dir == tmp_path / "볼트" / "학업"
+    assert settings.materials_path == settings.assistant_data_dir / "materials.json"
+
+
+def test_missing_vault_is_reported_in_plain_korean(tmp_path, monkeypatch):
+    """볼트 경로가 없으면 시작할 때 막고, 무엇을 고쳐야 하는지 알려준다."""
+    # Arrange
+    env = _base_env(tmp_path)
+    del env["OBSIDIAN_VAULT"]
+    monkeypatch.delenv("OBSIDIAN_VAULT", raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="OBSIDIAN_VAULT"):
+        load_settings()
+
+
+def test_vault_folder_must_exist(tmp_path, monkeypatch):
+    """오타로 없는 폴더를 적으면 조용히 새로 만들지 않고 알린다."""
+    # Arrange
+    env = _base_env(tmp_path)
+    env["OBSIDIAN_VAULT"] = str(tmp_path / "없는볼트")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="OBSIDIAN_VAULT"):
+        load_settings()
+
+
+def test_study_inbox_is_created_if_missing(tmp_path, monkeypatch):
+    """받는 곳은 비서가 소유하는 폴더다. 없으면 만들어 준다."""
+    # Arrange
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+
+    # Act
+    settings = load_settings()
+
+    # Assert
+    assert settings.study_inbox.is_dir()
