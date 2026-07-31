@@ -137,6 +137,26 @@ def test_forbidden_sampling_parameters_are_never_sent(settings):
         assert forbidden not in call
 
 
+def test_study_tools_are_available(settings):
+    """네 가지 도구가 비서에게 보여야 한다."""
+    # Arrange / Act
+    names = Brain(settings, client=object()).tool_names()
+
+    # Assert
+    for tool in ("list_new_materials", "summarize_new_material",
+                 "list_materials", "ask_material"):
+        assert tool in names
+
+
+def test_model_cannot_delete_materials(settings):
+    """지우는 도구는 주지 않는다. 원본 삭제는 사장님 몫이다."""
+    # Arrange / Act
+    names = Brain(settings, client=object()).tool_names()
+
+    # Assert
+    assert not any("delete" in n or "remove_material" in n for n in names)
+
+
 def test_model_is_never_given_a_trade_execution_tool(settings):
     # Arrange — 이 프로젝트의 핵심 안전장치
     brain = Brain(settings, client=FakeClient())

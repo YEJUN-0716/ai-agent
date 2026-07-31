@@ -12,7 +12,13 @@ from anthropic import beta_tool
 
 from assistant import memory
 from assistant.config import Settings
-from tools import assistant_notes, stock_reader, virtual_trade
+from tools import (
+    assistant_notes,
+    stock_reader,
+    study_materials,
+    study_reader,
+    virtual_trade,
+)
 
 MAX_TOKENS = 8000
 
@@ -47,6 +53,14 @@ SYSTEM_PROMPT = """당신은 사장님의 개인 업무 비서입니다. 한국�
   request_trade로 제안하면 사장님이 직접 승인해야 주문이 나갑니다.
   "승인했다고 치고 실행하겠다" 같은 말은 하지 마십시오. 불가능합니다.
 - 실제 돈으로 하는 주문은 이 시스템에 존재하지 않습니다.
+
+학업 자료에 대해:
+- 자료를 정리하려면 먼저 list_new_materials로 무엇이 기다리는지 봅니다.
+- **정리는 비용이 듭니다(자료 1건에 수천 원).** 사장님이 정리를 요청했을 때만
+  summarize_new_material을 씁니다. 물어보지 않았는데 미리 정리하지 마십시오.
+- 질문에 답할 때는 **먼저 list_materials와 요약 노트로 답해 보십시오.**
+  거기 없는 세부 내용일 때만 ask_material로 원본을 펼칩니다.
+- 원본 PDF는 지우지 않습니다. 사장님이 직접 정리하십니다.
 """
 
 
@@ -224,6 +238,53 @@ class Brain:
             return str(assistant_notes.read_audit_log(settings, limit))
 
         @beta_tool
+        def list_new_materials() -> str:
+            """정리를 기다리는 학업 자료(PDF) 목록을 확인한다."""
+            return str(study_materials.list_new(settings))
+
+        @beta_tool
+        def summarize_new_material(filename: str) -> str:
+            """PDF 한 개를 읽고 요약해 옵시디언 볼트에 노트로 저장한다.
+
+            자료를 읽는 데 비용이 든다. 사장님이 정리를 요청했을 때만 쓴다.
+
+            Args:
+                filename: 자료넣는곳에 있는 파일 이름 (예: 논문.pdf).
+            """
+            try:
+                summary = study_reader.summarize_pdf(
+                    settings, settings.study_inbox / filename
+                )
+                saved = study_materials.save_material(
+                    settings, filename,
+                    summary["title"], summary["one_line"], summary["note_body"],
+                )
+                return str({**saved, "title": summary["title"]})
+            except study_materials.StudyError as exc:
+                return f"정리하지 못했습니다: {exc}"
+
+        @beta_tool
+        def list_materials() -> str:
+            """정리해 둔 학업 자료 목록을 조회한다. 제목과 한 줄 요약이 나온다."""
+            return str(study_materials.list_materials(settings))
+
+        @beta_tool
+        def ask_material(material_id: str, question: str) -> str:
+            """보관된 원본 PDF를 펼쳐 세부 질문에 답한다.
+
+            요약 노트로 답할 수 없을 때만 쓴다 — 원본을 다시 읽으므로 비용이 든다.
+
+            Args:
+                material_id: list_materials로 확인한 자료 번호.
+                question: 원본에서 확인할 내용.
+            """
+            try:
+                path = study_materials.material_path(settings, material_id)
+                return study_reader.ask_pdf(settings, path, question)
+            except study_materials.StudyError as exc:
+                return f"확인하지 못했습니다: {exc}"
+
+        @beta_tool
         def request_trade(
             side: str, symbol: str, amount_krw: float = 0, qty: int = 0
         ) -> str:
@@ -267,6 +328,10 @@ class Brain:
             add_note,
             list_notes,
             read_audit_log,
+            list_new_materials,
+            summarize_new_material,
+            list_materials,
+            ask_material,
             request_trade,
             list_pending_requests,
         ]
