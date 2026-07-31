@@ -32,57 +32,8 @@
     },
     {
       "side": "buy",
-      "symbol": "CFG",
-      "notional_krw": 547865.3888183594,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
       "symbol": "HPE",
       "notional_krw": 848423.71564209,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "ALLY",
-      "notional_krw": 773692.8295751953,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "USB",
-      "notional_krw": 739405.0423974609,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "RF",
-      "notional_krw": 678875.4413183593,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "CVS",
-      "notional_krw": 1128739.1697705078,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "HBAN",
-      "notional_krw": 603376.9182250976,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "T",
-      "notional_krw": 544325.7291967773,
       "placed_date": "2026-07-30",
       "market": "US"
     }
