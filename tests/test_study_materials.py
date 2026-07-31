@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 
 from assistant.config import Settings
-from tools.study_materials import MAX_PDF_BYTES, StudyError, list_new
+from tools.study_materials import (
+    MAX_PDF_BYTES,
+    StudyError,
+    list_materials,
+    list_new,
+    material_path,
+    save_material,
+)
 
 
 @pytest.fixture
@@ -95,3 +102,108 @@ def test_lists_alphabetically_for_a_stable_order(settings):
 
     # Assert
     assert [item["filename"] for item in waiting] == ["가.pdf", "나.pdf", "다.pdf"]
+
+
+def _put_pdf(settings, name="논문.pdf"):
+    path = settings.study_inbox / name
+    path.write_bytes(b"%PDF-1.4 fake")
+    return path
+
+
+def test_saving_writes_note_moves_original_and_records_index(settings):
+    """세 가지가 한 덩어리로 일어난다."""
+    # Arrange
+    _put_pdf(settings)
+
+    # Act
+    result = save_material(
+        settings, "논문.pdf", "논문제목", "한 줄 요약", "## 핵심\n내용"
+    )
+
+    # Assert
+    note = Path(result["note_path"])
+    assert note.exists()
+    assert "논문제목" in note.read_text(encoding="utf-8")
+    assert not (settings.study_inbox / "논문.pdf").exists()
+    assert (settings.study_done_dir / "논문.pdf").exists()
+    assert [m["title"] for m in list_materials(settings)] == ["논문제목"]
+
+
+def test_original_is_moved_not_deleted(settings):
+    """원본은 절대 사라지지 않는다. 지우는 것은 사장님 몫이다."""
+    # Arrange
+    _put_pdf(settings)
+    original = (settings.study_inbox / "논문.pdf").read_bytes()
+
+    # Act
+    save_material(settings, "논문.pdf", "제목", "한 줄", "본문")
+
+    # Assert
+    assert (settings.study_done_dir / "논문.pdf").read_bytes() == original
+
+
+def test_note_name_collision_does_not_overwrite(settings):
+    """같은 날 같은 제목이어도 앞의 노트를 덮어쓰지 않는다."""
+    # Arrange
+    _put_pdf(settings, "첫번째.pdf")
+    _put_pdf(settings, "두번째.pdf")
+
+    # Act
+    first = save_material(settings, "첫번째.pdf", "같은제목", "하나", "본문A")
+    second = save_material(settings, "두번째.pdf", "같은제목", "둘", "본문B")
+
+    # Assert
+    assert first["note_path"] != second["note_path"]
+    assert "본문A" in Path(first["note_path"]).read_text(encoding="utf-8")
+    assert "본문B" in Path(second["note_path"]).read_text(encoding="utf-8")
+
+
+def test_nothing_is_left_behind_when_the_move_fails(settings, monkeypatch):
+    """원본을 못 옮기면 노트도 목록도 남기지 않는다.
+
+    반쪽만 남으면 다음 실행이 같은 자료를 또 정리해 노트가 둘이 된다.
+    """
+    # Arrange
+    _put_pdf(settings)
+    import tools.study_materials as mod
+
+    def refuse_move(src, dst):
+        raise OSError("옮기지 못했습니다")
+
+    monkeypatch.setattr(mod.shutil, "move", refuse_move)
+
+    # Act
+    with pytest.raises(StudyError):
+        save_material(settings, "논문.pdf", "제목", "한 줄", "본문")
+
+    # Assert
+    assert (settings.study_inbox / "논문.pdf").exists()
+    assert list(settings.study_notes_dir.glob("*.md")) == []
+    assert list_materials(settings) == []
+
+
+def test_missing_source_is_reported_clearly(settings):
+    """없는 파일을 정리하라고 하면 분명히 말한다."""
+    # Act / Assert
+    with pytest.raises(StudyError) as exc:
+        save_material(settings, "없는파일.pdf", "제목", "한 줄", "본문")
+    assert "없는파일.pdf" in str(exc.value)
+
+
+def test_material_path_finds_the_archived_original(settings):
+    """나중에 세부 질문을 받으면 보관된 원본을 찾아야 한다."""
+    # Arrange
+    _put_pdf(settings)
+    result = save_material(settings, "논문.pdf", "제목", "한 줄", "본문")
+
+    # Act
+    found = material_path(settings, result["material_id"])
+
+    # Assert
+    assert found == settings.study_done_dir / "논문.pdf"
+
+
+def test_material_path_rejects_an_unknown_id(settings):
+    # Act / Assert
+    with pytest.raises(StudyError):
+        material_path(settings, "없는번호")
