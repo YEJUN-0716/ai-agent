@@ -258,6 +258,28 @@ def toss_get(path, params=None):
     return r.json()
 
 
+# 브로커가 주문을 확실히 거부했음을 뜻하는 상태들.
+_DEFINITIVE_FAIL = {"canceled", "rejected", "replaced",
+                    "cancel_rejected", "replace_rejected"}
+
+
+def order_accepted(fill_status: str | None) -> bool:
+    """이 주문이 매수여력과 보유 자리를 차지하는가.
+
+    "체결이 확인됐는가"와는 다른 질문이다. 체결 확인은 '얼마에 샀나'를 묻고,
+    이건 '이번 실행에서 주문을 몇 건 더 낼 수 있나'를 묻는다. 명백히 거부되지
+    않은 주문은 아직 살아 있으므로 자리와 돈을 잡아둬야 한다 — timeout 은
+    실제로 체결됐을 수 있고, 가상 브로커의 pending_next_open 은 이미 장부에
+    예약된 상태다.
+
+    두 질문을 buy_rec["ok"] 하나로 묶었더니 가상 모드에서 한도가 통째로
+    꺼졌다. 가상 주문은 영원히 "체결 확인 안 됨"이라 카운터가 늘지 않았고,
+    5종목 한도에 12종목이 예약됐다(2026-07-31). 그렇다고 ok 를 켜면 이번엔
+    체결도 안 된 주문이 어제 종가로 성적표에 올라간다. 그래서 나눈다.
+    """
+    return fill_status not in _DEFINITIVE_FAIL
+
+
 def place_buy(symbol: str, notional_amount: float, market: str = "KRX") -> dict:
     return _pm_notional_buy(symbol, notional_amount, TOSS_CLIENT_ID, TOSS_CLIENT_SECRET,
                              TOSS_ACCOUNT_SEQ, market=market, dry_run=DRY_RUN)
@@ -944,28 +966,27 @@ def main():
                     buy_rec["fill_price"] = float(fill.get("filled_avg_price") or sig.get("price", 0))
                     print(f"    체결 확인 ✓ {buy_rec['fill_price']:.2f}")
                 elif fill_status == "pending_next_open":
-                    # 가상 브로커는 신호가 장 마감 후에 나오므로 다음 거래일
-                    # 시가에 체결한다. 지금 미체결인 것이 정상이고 주문은 이미
-                    # 장부에 예약됐다. 이걸 실패로 세면 n_bought 가 늘지 않아
-                    # MAX_POSITIONS 한도가 통째로 무력화된다 — 2026-07-31 실행에서
-                    # 5종목 한도인데 12종목이 예약됐다.
-                    print("    예약 확인 ✓ 다음 거래일 시가 체결")
+                    # 가상 브로커는 다음 거래일 시가에 체결한다. 주문은 장부에
+                    # 예약됐지만 체결가는 아직 세상에 없다.
+                    #
+                    # ok 는 "체결이 확인됐다"는 뜻이고, 그 아래 성적표 기록이
+                    # 이 값에 매달려 있다. 여기서 True 로 만들면 체결가 자리에
+                    # 어제 종가가 대신 박혀 성적이 통째로 어긋난다 — 체결 확인
+                    # 검사가 막으려던 바로 그 일이다. 그러니 ok 는 False 로 둔다.
+                    # 한도 계산은 ok 가 아니라 order_accepted() 로 따로 센다.
+                    buy_rec["ok"] = False
+                    print("    예약됨 — 다음 거래일 시가 체결 예정")
                 else:
                     print(f"    ⚠️ 미체결: {fill_status}")
                     buy_rec["ok"] = False
 
             buy_results.append(buy_rec)
-            _definitive_fail = {"canceled", "rejected", "replaced", "cancel_rejected", "replace_rejected"}
-            _fill_status = buy_rec.get("fill_status")
-            # 자본 예약: 명백한 실패(취소/거부)만 제외. timeout은 체결됐을 수 있어
-            # 보수적으로 매수여력을 예약한다(다음 종목 과다매수 방지). 실제 미체결이면
-            # 다음 실행의 포지션 대사에서 브로커 실보유와 맞춰진다.
-            if _fill_status not in _definitive_fail:
+            # 살아 있는 주문은 매수여력도 자리도 차지한다. 명백한 실패(취소/거부)만
+            # 제외한다 — timeout은 체결됐을 수 있어 보수적으로 잡아둔다(다음 종목
+            # 과다매수 방지). 실제 미체결이면 다음 실행의 포지션 대사에서 맞춰진다.
+            # 시그널 로그 기록은 여기가 아니라 ok(체결 확인)를 따른다.
+            if order_accepted(buy_rec.get("fill_status")):
                 buying_power -= _size_krw
-            # 매수 '확정' 카운트: DRY_RUN이거나 체결 확인(ok=True)된 경우만.
-            # timeout은 체결 미확정이라 ok=False → 신규 매수로 세지 않고 시그널 로그에도
-            # 기록하지 않는다(과거엔 timeout을 매수 성공으로 오기록하던 버그).
-            if buy_rec.get("ok"):
                 n_bought += 1
                 bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
             if kill is not None:
@@ -1010,6 +1031,10 @@ def main():
     n_errs    = sum(1 for r in sell_results + buy_results if "error" in r)
     n_pending = sum(1 for r in buy_results
                     if not r.get("ok") and r.get("fill_status") in {"timeout", "unknown"})
+    # 가상 예약분은 체결 확인이 안 됐으므로 n_buys 에 안 잡힌다. 그렇다고 빼놓으면
+    # 요약이 "매수 0건"이라고 말한다 — 실제로는 주문이 나갔는데도. 따로 알린다.
+    reserved = [r["symbol"] for r in buy_results
+                if r.get("fill_status") == "pending_next_open"]
     _trail_sells = [r["symbol"] for r in sell_results
                     if r.get("ok") and "트레일링" in r.get("reason", "")]
 
@@ -1022,6 +1047,8 @@ def main():
         f"*매도* {n_sells}건: " + (", ".join(r["symbol"] for r in sell_results if r.get("ok")) or "없음"),
         f"*매수* {n_buys}건: " + (", ".join(r["symbol"] for r in buy_results  if r.get("ok")) or "없음"),
     ]
+    if reserved:
+        lines.append(f"*예약* {len(reserved)}건: {', '.join(reserved)} (다음 거래일 시가 체결)")
     if _trail_sells:
         lines.append(f"트레일링 스톱 발동: {', '.join(_trail_sells)}")
     if skipped_sector:
