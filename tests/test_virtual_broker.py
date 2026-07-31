@@ -1,0 +1,57 @@
+"""가상 브로커 — 주문이 제 날짜에 체결되고, 없는 돈을 예약하지 않는가.
+
+2026-07-31 에 두 증상이 같이 터졌다. 7/30 예약분이 이틀째 체결되지 않았고,
+예약 합계 1,852만원이 현금 1,000만원을 넘었다. 원인은 하나로 이어져 있다 —
+주문 날짜를 한국 달력으로 찍어 체결이 하루씩 밀렸고, 체결이 안 되니 현금이
+그대로 남아 러너가 매일 같은 돈으로 주문을 새로 냈다.
+"""
+
+from datetime import datetime, timezone
+
+import pytest
+
+from modules import virtual_broker as vb
+
+
+@pytest.fixture
+def broker(tmp_path, monkeypatch):
+    """상태 파일을 임시 폴더로 돌리고 환율을 1,000원으로 고정한 브로커."""
+    monkeypatch.setattr(vb, "STATE_FILE", str(tmp_path / "virtual_portfolio.json"))
+    monkeypatch.setattr(vb, "_FX", 1000.0)
+    return vb
+
+
+def test_order_date_follows_us_session_not_korean_calendar(broker):
+    # 러너는 21:30 UTC 에 돈다 = 뉴욕 17:30(장 마감 직후), 서울은 이미 다음 날
+    # 06:30. 주문은 신호가 나온 7/30 장으로 찍혀야 7/31 시가에 체결된다.
+    # 서울 날짜(7/31)로 찍으면 체결이 8/3 시가로 밀린다.
+    after_us_close = datetime(2026, 7, 30, 21, 30, tzinfo=timezone.utc)
+    assert broker.market_date(after_us_close).isoformat() == "2026-07-30"
+
+
+def test_reservation_cannot_exceed_available_cash(broker):
+    # 현금 1,000만. 600만을 예약하면 남은 가용은 400만이다.
+    broker.place_notional_buy("AAA", 6000.0, market="US")
+    assert broker.available_krw(broker.load_state()) == pytest.approx(4_000_000)
+    assert broker.get_account()["buying_power"] == pytest.approx(4_000_000)
+
+    with pytest.raises(ValueError, match="가용 현금"):
+        broker.place_notional_buy("BBB", 6000.0, market="US")
+
+    # 거부된 주문은 대기열에 남지 않는다.
+    assert len(broker.load_state()["pending"]) == 1
+
+
+def test_pending_buy_fills_at_next_open_and_spends_cash(broker, monkeypatch):
+    broker.place_notional_buy("AAA", 1000.0, market="US")   # 100만원어치
+    monkeypatch.setattr(
+        broker, "next_open_price", lambda symbol, after: (100.0, "2026-07-31")
+    )
+
+    state = broker.settle_pending(broker.load_state(), 1000.0)
+
+    # 1주 10만원 → 100만원으로 10주.
+    assert state["positions"]["AAA"]["qty"] == 10
+    assert state["cash_krw"] == pytest.approx(9_000_000)
+    assert state["pending"] == []
+    assert state["trades"][0]["side"] == "buy"

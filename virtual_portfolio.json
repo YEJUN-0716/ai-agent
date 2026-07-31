@@ -5,162 +5,85 @@
     {
       "side": "buy",
       "symbol": "KHC",
-      "notional_krw": 896024.5142578125,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "GM",
-      "notional_krw": 810217.802109375,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "COF",
-      "notional_krw": 712304.9821142579,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "BAC",
-      "notional_krw": 879418.1549194335,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "F",
-      "notional_krw": 865011.5990258789,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "CVS",
-      "notional_krw": 1130051.9696264649,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "CFG",
-      "notional_krw": 553746.6004833984,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "USB",
-      "notional_krw": 694490.8875512695,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "RF",
-      "notional_krw": 661982.6810888672,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "ALLY",
-      "notional_krw": 800340.2533081054,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "PFE",
-      "notional_krw": 1398471.1232958983,
-      "placed_date": "2026-07-30",
-      "market": "US"
-    },
-    {
-      "side": "buy",
-      "symbol": "KHC",
       "notional_krw": 848423.71564209,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "GM",
       "notional_krw": 780629.9938134765,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "COF",
       "notional_krw": 701478.0870947265,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "BAC",
       "notional_krw": 923623.7132250976,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "CFG",
       "notional_krw": 547865.3888183594,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "HPE",
       "notional_krw": 848423.71564209,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "ALLY",
       "notional_krw": 773692.8295751953,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "USB",
       "notional_krw": 739405.0423974609,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "RF",
       "notional_krw": 678875.4413183593,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "CVS",
       "notional_krw": 1128739.1697705078,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "HBAN",
       "notional_krw": 603376.9182250976,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     },
     {
       "side": "buy",
       "symbol": "T",
       "notional_krw": 544325.7291967773,
-      "placed_date": "2026-07-31",
+      "placed_date": "2026-07-30",
       "market": "US"
     }
   ],
