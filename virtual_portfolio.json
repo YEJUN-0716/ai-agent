@@ -1,43 +1,74 @@
 {
-  "cash_krw": 10000000.0,
-  "positions": {},
-  "pending": [
-    {
-      "side": "buy",
-      "symbol": "KHC",
-      "notional_krw": 848423.71564209,
-      "placed_date": "2026-07-30",
-      "market": "US"
+  "cash_krw": 6079604.848156799,
+  "positions": {
+    "KHC": {
+      "qty": 22,
+      "avg_price_usd": 26.020000457763672,
+      "entry_date": "2026-07-31"
     },
-    {
-      "side": "buy",
-      "symbol": "GM",
-      "notional_krw": 780629.9938134765,
-      "placed_date": "2026-07-30",
-      "market": "US"
+    "GM": {
+      "qty": 6,
+      "avg_price_usd": 88.8499984741211,
+      "entry_date": "2026-07-31"
     },
-    {
-      "side": "buy",
-      "symbol": "COF",
-      "notional_krw": 701478.0870947265,
-      "placed_date": "2026-07-30",
-      "market": "US"
+    "COF": {
+      "qty": 2,
+      "avg_price_usd": 210.0,
+      "entry_date": "2026-07-31"
     },
-    {
-      "side": "buy",
-      "symbol": "BAC",
-      "notional_krw": 923623.7132250976,
-      "placed_date": "2026-07-30",
-      "market": "US"
+    "BAC": {
+      "qty": 10,
+      "avg_price_usd": 61.540000915527344,
+      "entry_date": "2026-07-31"
     },
-    {
-      "side": "buy",
-      "symbol": "HPE",
-      "notional_krw": 848423.71564209,
-      "placed_date": "2026-07-30",
-      "market": "US"
+    "HPE": {
+      "qty": 12,
+      "avg_price_usd": 49.0,
+      "entry_date": "2026-07-31"
     }
-  ],
+  },
+  "pending": [],
   "realized_pnl_krw": 0.0,
-  "trades": []
+  "trades": [
+    {
+      "date": "2026-07-31",
+      "symbol": "KHC",
+      "side": "buy",
+      "qty": 22,
+      "price_usd": 26.02,
+      "amount_krw": 822367.0
+    },
+    {
+      "date": "2026-07-31",
+      "symbol": "GM",
+      "side": "buy",
+      "qty": 6,
+      "price_usd": 88.85,
+      "amount_krw": 765851.0
+    },
+    {
+      "date": "2026-07-31",
+      "symbol": "COF",
+      "side": "buy",
+      "qty": 2,
+      "price_usd": 210.0,
+      "amount_krw": 603372.0
+    },
+    {
+      "date": "2026-07-31",
+      "symbol": "BAC",
+      "side": "buy",
+      "qty": 10,
+      "price_usd": 61.54,
+      "amount_krw": 884084.0
+    },
+    {
+      "date": "2026-07-31",
+      "symbol": "HPE",
+      "side": "buy",
+      "qty": 12,
+      "price_usd": 49.0,
+      "amount_krw": 844721.0
+    }
+  ]
 }
