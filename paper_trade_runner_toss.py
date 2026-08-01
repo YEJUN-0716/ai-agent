@@ -456,8 +456,13 @@ def reconcile_positions(peaks: dict, actual_positions: list,
 
 # ── 시그널 로그 ─────────────────────────────────────────────────────────
 def append_signals_to_log(new_signals: list, existing_log: list) -> list:
-    """매수 시그널을 로그에 추가 (같은 날 중복 제외)."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    """매수 시그널을 로그에 추가 (같은 날 중복 제외).
+
+    항목에 entry_date 가 있으면 그 날짜로 남긴다. 가상 체결은 예약 다음
+    거래일 시가에 일어나므로 기록하는 날(오늘)과 체결일이 다르다. 오늘로
+    찍으면 보유 기간이 하루씩 짧게 계산돼 성적이 어긋난다.
+    """
+    default_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # signal-alerts 워크플로가 남기는 항목에는 id가 없다. 없는 항목은
     # symbol-entry_date 조합으로 같은 키를 만들어 중복 판정에 참여시킨다.
     existing_ids = {
@@ -467,14 +472,15 @@ def append_signals_to_log(new_signals: list, existing_log: list) -> list:
     for sig in new_signals:
         if sig.get("action") != "매수":
             continue
-        sig_id = f"{sig['symbol']}-{today}"
+        entry_date = sig.get("entry_date") or default_date
+        sig_id = f"{sig['symbol']}-{entry_date}"
         if sig_id in existing_ids:
             continue
         existing_log.append({
             "id":           sig_id,
             "symbol":       sig["symbol"],
             "action":       sig["action"],
-            "entry_date":   today,
+            "entry_date":   entry_date,
             "entry_price":  sig.get("price", 0.0),
             "score":        sig.get("score", 0.0),
             "rsi":          sig.get("rsi", 50.0),
@@ -483,6 +489,37 @@ def append_signals_to_log(new_signals: list, existing_log: list) -> list:
             "return_pct":    None,
         })
     return existing_log
+
+
+def record_virtual_fills(new_trades: list) -> int:
+    """방금 체결된 가상 매수를 성적표(signal_log)에 올린다. 기록한 건수 반환.
+
+    가상 체결은 주문한 날이 아니라 다음 거래일 시가에, 그것도 러너의 매수
+    경로가 아니라 settle_pending 안에서 일어난다. 그래서 주문 시점에 기록하는
+    기존 경로(buy_results)로는 영원히 잡히지 않았고, 가상 매매는 성적표에 한
+    건도 오르지 않았다 — 지금 유일하게 돌고 있는 매매인데도.
+
+    체결가와 체결일은 이 시점에 처음 확정되므로 여기서 기록한다.
+
+    점수·RSI 는 주문 시점의 값이라 체결 시점에는 알 수 없다. 오늘 다시 계산한
+    점수로 채우면 주문 근거가 아닌 값이 성적표에 박혀 점수-수익률 관계가
+    조용히 틀어진다. 그래서 비워 둔다 — signal_scorecard.by_score_bucket 은
+    점수가 없는 항목을 빼고 계산하므로, 승률·기대값에는 잡히고 점수 구간별
+    분석에서만 빠진다.
+    """
+    buys = [t for t in new_trades if t.get("side") == "buy"]
+    if not buys:
+        return 0
+    save_signal_log(append_signals_to_log(
+        [{"symbol":     t["symbol"],
+          "action":     "매수",
+          "price":      t.get("price_usd", 0.0),
+          "score":      None,
+          "rsi":        None,
+          "entry_date": t.get("date")} for t in buys],
+        load_signal_log(),
+    ))
+    return len(buys)
 
 
 def resolve_signal_outcomes(signal_log: list, prices_cache: dict) -> list:
@@ -685,8 +722,15 @@ def main():
             load_state, save_state, set_fx, settle_pending,
         )
         set_fx(_KRW_PER_USD)
-        _vstate = settle_pending(load_state(), _KRW_PER_USD)
+        _vstate_before = load_state()
+        # 체결은 settle_pending 안에서 trades 뒤에 덧붙는다. 부르기 전 길이를
+        # 재두면 이번에 새로 체결된 건만 성적표에 올릴 수 있다.
+        _n_trades_before = len(_vstate_before["trades"])
+        _vstate = settle_pending(_vstate_before, _KRW_PER_USD)
         save_state(_vstate)
+        _n_logged = record_virtual_fills(_vstate["trades"][_n_trades_before:])
+        if _n_logged:
+            print(f"  [가상] 체결 {_n_logged}건을 성적표에 기록했습니다.")
 
     # 0. 시장 레짐 감지
     print("시장 레짐 감지 중...")
