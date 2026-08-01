@@ -101,6 +101,66 @@
       "reason": "\ud329\ud130 68\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 51)",
       "source": "github_actions",
       "return_pct": null
+    },
+    {
+      "id": "KHC-2026-07-31",
+      "symbol": "KHC",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-07-31",
+      "entry_price": 26.02,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "GM-2026-07-31",
+      "symbol": "GM",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-07-31",
+      "entry_price": 88.85,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "COF-2026-07-31",
+      "symbol": "COF",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-07-31",
+      "entry_price": 210.0,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "BAC-2026-07-31",
+      "symbol": "BAC",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-07-31",
+      "entry_price": 61.54,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "HPE-2026-07-31",
+      "symbol": "HPE",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-07-31",
+      "entry_price": 49.0,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
