@@ -1,5 +1,5 @@
 {
-  "updated": "2026-07-26T15:17:06.588570+00:00",
+  "updated": "2026-08-02T15:06:02.610765+00:00",
   "universe_size": 276,
   "coverage": {
     "requested": 276,
@@ -9,179 +9,179 @@
   "lookback_years": 5,
   "per_factor_ic": {
     "mom_3m": {
-      "mean_ic": -0.0153,
-      "std_ic": 0.2154,
-      "icir": -0.071,
-      "pct_positive": 55.2,
+      "mean_ic": -0.0296,
+      "std_ic": 0.2023,
+      "icir": -0.146,
+      "pct_positive": 44.8,
       "n": 58
     },
     "mom_1m": {
-      "mean_ic": 0.0067,
-      "std_ic": 0.1897,
-      "icir": 0.035,
-      "pct_positive": 56.9,
+      "mean_ic": -0.012,
+      "std_ic": 0.193,
+      "icir": -0.062,
+      "pct_positive": 50.0,
       "n": 58
     },
     "low_vol": {
-      "mean_ic": -0.0358,
-      "std_ic": 0.2286,
-      "icir": -0.157,
-      "pct_positive": 46.6,
+      "mean_ic": -0.0421,
+      "std_ic": 0.2306,
+      "icir": -0.183,
+      "pct_positive": 51.7,
       "n": 58
     },
     "value": {
-      "mean_ic": 0.0244,
-      "std_ic": 0.1164,
-      "icir": 0.21,
-      "pct_positive": 53.4,
+      "mean_ic": 0.031,
+      "std_ic": 0.1327,
+      "icir": 0.233,
+      "pct_positive": 51.7,
       "n": 58
     },
     "quality": {
-      "mean_ic": 0.0116,
-      "std_ic": 0.082,
-      "icir": 0.141,
-      "pct_positive": 56.9,
+      "mean_ic": 0.0118,
+      "std_ic": 0.0828,
+      "icir": 0.143,
+      "pct_positive": 55.2,
       "n": 58
     },
     "ict": {
-      "mean_ic": 0.0022,
-      "std_ic": 0.1744,
-      "icir": 0.013,
-      "pct_positive": 50.0,
+      "mean_ic": -0.0254,
+      "std_ic": 0.1781,
+      "icir": -0.143,
+      "pct_positive": 39.7,
       "n": 58
     },
     "bulls": {
-      "mean_ic": -0.0106,
-      "std_ic": 0.0698,
-      "icir": -0.152,
-      "pct_positive": 50.0,
+      "mean_ic": -0.0011,
+      "std_ic": 0.0655,
+      "icir": -0.016,
+      "pct_positive": 55.2,
       "n": 58
     },
     "mom_12_1": {
-      "mean_ic": 0.0229,
-      "std_ic": 0.2105,
-      "icir": 0.109,
-      "pct_positive": 62.0,
+      "mean_ic": 0.0224,
+      "std_ic": 0.1925,
+      "icir": 0.116,
+      "pct_positive": 56.0,
       "n": 50
     },
     "low_vol_252": {
-      "mean_ic": -0.049,
-      "std_ic": 0.275,
-      "icir": -0.178,
-      "pct_positive": 38.0,
+      "mean_ic": -0.0514,
+      "std_ic": 0.2603,
+      "icir": -0.197,
+      "pct_positive": 42.0,
       "n": 50
     }
   },
   "ic_unavailable_factors": [],
   "regime_weights": {
     "bull": {
-      "mom_3m": 0.1832,
-      "mom_1m": 0.1754,
-      "low_vol": 0.0785,
-      "value": 0.3832,
-      "quality": 0.1215,
-      "ict": 0.0582
+      "mom_3m": 0.1727,
+      "mom_1m": 0.1233,
+      "low_vol": 0.074,
+      "value": 0.4588,
+      "quality": 0.1164,
+      "ict": 0.0548
     },
     "neutral": {
-      "mom_3m": 0.1161,
-      "mom_1m": 0.1245,
-      "low_vol": 0.0929,
-      "value": 0.4533,
-      "quality": 0.1616,
-      "ict": 0.0516
+      "mom_3m": 0.1062,
+      "mom_1m": 0.0849,
+      "low_vol": 0.0849,
+      "value": 0.5265,
+      "quality": 0.1503,
+      "ict": 0.0472
     },
     "bear": {
-      "mom_3m": 0.0423,
-      "mom_1m": 0.0284,
-      "low_vol": 0.1693,
-      "value": 0.5165,
-      "quality": 0.1964,
-      "ict": 0.047
+      "mom_3m": 0.0373,
+      "mom_1m": 0.0186,
+      "low_vol": 0.1491,
+      "value": 0.5777,
+      "quality": 0.1759,
+      "ict": 0.0414
     }
   },
   "production_weights": {
     "bull": {
-      "momentum": 0.7115,
-      "value": 0.1895,
-      "quality": 0.0601,
-      "low_vol": 0.0388
+      "momentum": 0.6713,
+      "value": 0.2323,
+      "quality": 0.0589,
+      "low_vol": 0.0375
     },
     "neutral": {
-      "momentum": 0.5749,
-      "value": 0.2722,
-      "quality": 0.0971,
-      "low_vol": 0.0558
+      "momentum": 0.5291,
+      "value": 0.3255,
+      "quality": 0.0929,
+      "low_vol": 0.0525
     },
     "bear": {
-      "momentum": 0.2479,
-      "value": 0.4403,
-      "quality": 0.1674,
-      "low_vol": 0.1444
+      "momentum": 0.2172,
+      "value": 0.501,
+      "quality": 0.1526,
+      "low_vol": 0.1293
     }
   },
   "out_of_sample_validation": {
     "train_period": {
-      "start": "2021-04-28",
-      "end": "2025-04-04"
+      "start": "2021-05-05",
+      "end": "2025-04-11"
     },
     "test_period": {
-      "start": "2025-04-05",
-      "end": "2026-07-26"
+      "start": "2025-04-12",
+      "end": "2026-08-02"
     },
     "train_factor_ic": {
       "mom_3m": {
-        "mean_ic": -0.0249,
-        "std_ic": 0.2023,
-        "icir": -0.123,
-        "pct_positive": 48.8,
+        "mean_ic": -0.0476,
+        "std_ic": 0.2021,
+        "icir": -0.235,
+        "pct_positive": 39.5,
         "n": 43
       },
       "mom_1m": {
-        "mean_ic": -0.0161,
-        "std_ic": 0.1832,
-        "icir": -0.088,
-        "pct_positive": 55.8,
+        "mean_ic": -0.0169,
+        "std_ic": 0.1795,
+        "icir": -0.094,
+        "pct_positive": 48.8,
         "n": 43
       },
       "low_vol": {
-        "mean_ic": -0.008,
-        "std_ic": 0.2324,
-        "icir": -0.035,
-        "pct_positive": 46.5,
+        "mean_ic": -0.0219,
+        "std_ic": 0.2253,
+        "icir": -0.097,
+        "pct_positive": 51.2,
         "n": 43
       },
       "value": {
-        "mean_ic": 0.0176,
-        "std_ic": 0.129,
-        "icir": 0.136,
-        "pct_positive": 53.5,
+        "mean_ic": 0.0219,
+        "std_ic": 0.1318,
+        "icir": 0.166,
+        "pct_positive": 51.2,
         "n": 43
       },
       "quality": {
-        "mean_ic": 0.0193,
-        "std_ic": 0.0837,
-        "icir": 0.231,
+        "mean_ic": 0.0222,
+        "std_ic": 0.0744,
+        "icir": 0.298,
         "pct_positive": 55.8,
         "n": 43
       },
       "ict": {
-        "mean_ic": -0.0013,
-        "std_ic": 0.1549,
-        "icir": -0.008,
-        "pct_positive": 53.5,
+        "mean_ic": -0.0306,
+        "std_ic": 0.1727,
+        "icir": -0.177,
+        "pct_positive": 46.5,
         "n": 43
       }
     },
     "derived_test_weights": {
-      "mom_3m": 0.0879,
-      "mom_1m": 0.0879,
-      "low_vol": 0.0879,
-      "value": 0.3093,
-      "quality": 0.3392,
-      "ict": 0.0879
+      "mom_3m": 0.078,
+      "mom_1m": 0.078,
+      "low_vol": 0.078,
+      "value": 0.3417,
+      "quality": 0.3463,
+      "ict": 0.078
     },
-    "test_composite_ic": 0.0182,
-    "train_composite_ic": 0.0076,
+    "test_composite_ic": 0.0092,
+    "train_composite_ic": 0.006,
     "overfitting_flag": false
   },
   "caveats": {
