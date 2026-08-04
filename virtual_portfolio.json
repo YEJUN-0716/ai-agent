@@ -27,7 +27,41 @@
       "entry_date": "2026-07-31"
     }
   },
-  "pending": [],
+  "pending": [
+    {
+      "side": "buy",
+      "symbol": "ALLY",
+      "notional_krw": 774990.5855273437,
+      "placed_date": "2026-08-04",
+      "market": "US",
+      "meta": {
+        "score": 65.9,
+        "rsi": 54.4
+      }
+    },
+    {
+      "side": "buy",
+      "symbol": "CVS",
+      "notional_krw": 1256586.5685766602,
+      "placed_date": "2026-08-04",
+      "market": "US",
+      "meta": {
+        "score": 60.5,
+        "rsi": 49.9
+      }
+    },
+    {
+      "side": "buy",
+      "symbol": "T",
+      "notional_krw": 909759.1269238282,
+      "placed_date": "2026-08-04",
+      "market": "US",
+      "meta": {
+        "score": 60.2,
+        "rsi": 55.9
+      }
+    }
+  ],
   "realized_pnl_krw": 0.0,
   "trades": [
     {
