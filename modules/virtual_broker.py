@@ -223,6 +223,8 @@ def _fill_buy(state: dict, order: dict, price_usd: float,
         "date": fill_date, "symbol": sym, "side": "buy",
         "qty": qty, "price_usd": round(price_usd, 4),
         "amount_krw": round(cost_krw, 0),
+        # 주문 시점의 근거(점수·RSI). 성적표가 여기서 읽어 간다.
+        "meta": dict(order.get("meta") or {}),
     })
     print(f"  [가상] 매수 체결 {sym} {qty}주 @ ${price_usd:,.2f} ({fill_date} 시가)")
     return state
@@ -303,8 +305,15 @@ def get_positions(client_id: str = "", client_secret: str = "",
 def place_notional_buy(symbol: str, notional_amount: float,
                        client_id: str = "", client_secret: str = "",
                        account_seq: str = "", market: str = "US",
-                       dry_run: bool = False) -> dict:
+                       dry_run: bool = False,
+                       meta: dict | None = None) -> dict:
     """주문을 대기열에 넣는다. 실제 체결은 다음 실행 때 다음 거래일 시가로.
+
+    meta 는 주문 근거(점수·RSI)다. 체결은 다음 거래일에 일어나므로 그 시점에는
+    주문 때의 점수를 알 방법이 없다 — 다시 계산한 점수로 채우면 매수 근거가
+    아닌 값이 성적표에 박혀 점수-수익률 관계가 조용히 틀어진다. 그래서 주문에
+    실어 두고 체결 기록으로 그대로 옮긴다. 성적표의 점수 구간별 분석이 이 값을
+    쓴다. toss_trading 도 같은 인자를 받아 무시하므로 러너 코드는 갈라지지 않는다.
 
     notional_amount 의 단위는 시장을 따른다 — KRX는 원, 그 외는 달러.
     러너와 toss_trading 이 그렇게 넘기기 때문이다. 장부는 원화로만
@@ -344,6 +353,7 @@ def place_notional_buy(symbol: str, notional_amount: float,
         "notional_krw": notional_krw,
         "placed_date":  market_date().isoformat(),
         "market":       market,
+        "meta":         dict(meta or {}),
     })
     save_state(state)
     print(f"  [가상] 매수 예약 {symbol} {notional_krw:,.0f}원 — 다음 거래일 시가 체결")

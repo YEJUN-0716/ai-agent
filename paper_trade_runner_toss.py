@@ -266,9 +266,11 @@ def order_accepted(fill_status: str | None) -> bool:
     return fill_status not in _DEFINITIVE_FAIL
 
 
-def place_buy(symbol: str, notional_amount: float, market: str = "KRX") -> dict:
+def place_buy(symbol: str, notional_amount: float, market: str = "KRX",
+              meta: dict | None = None) -> dict:
     return _pm_notional_buy(symbol, notional_amount, TOSS_CLIENT_ID, TOSS_CLIENT_SECRET,
-                             TOSS_ACCOUNT_SEQ, market=market, dry_run=DRY_RUN)
+                             TOSS_ACCOUNT_SEQ, market=market, dry_run=DRY_RUN,
+                             meta=meta)
 
 
 def place_sell(symbol: str, qty, market: str = "KRX") -> dict:
@@ -487,11 +489,12 @@ def record_virtual_fills(new_trades: list) -> int:
 
     체결가와 체결일은 이 시점에 처음 확정되므로 여기서 기록한다.
 
-    점수·RSI 는 주문 시점의 값이라 체결 시점에는 알 수 없다. 오늘 다시 계산한
-    점수로 채우면 주문 근거가 아닌 값이 성적표에 박혀 점수-수익률 관계가
-    조용히 틀어진다. 그래서 비워 둔다 — signal_scorecard.by_score_bucket 은
-    점수가 없는 항목을 빼고 계산하므로, 승률·기대값에는 잡히고 점수 구간별
-    분석에서만 빠진다.
+    점수·RSI 는 주문 시점의 값이라 체결 시점에 다시 계산할 수 없다. 오늘 점수로
+    채우면 주문 근거가 아닌 값이 성적표에 박혀 점수-수익률 관계가 조용히 틀어진다.
+    그래서 주문에 실어 둔 것(trade["meta"])을 그대로 옮긴다. 근거가 없는 주문
+    (meta 를 안 실은 예전 예약분, 비서를 통한 수동 매수)은 비워 둔다 —
+    signal_scorecard.by_score_bucket 이 점수 없는 항목을 빼고 계산하므로,
+    승률·기대값에는 잡히고 점수 구간별 분석에서만 빠진다.
     """
     buys = [t for t in new_trades if t.get("side") == "buy"]
     if not buys:
@@ -500,8 +503,8 @@ def record_virtual_fills(new_trades: list) -> int:
         [{"symbol":     t["symbol"],
           "action":     "매수",
           "price":      t.get("price_usd", 0.0),
-          "score":      None,
-          "rsi":        None,
+          "score":      (t.get("meta") or {}).get("score"),
+          "rsi":        (t.get("meta") or {}).get("rsi"),
           "entry_date": t.get("date")} for t in buys],
         load_signal_log(),
     ))
@@ -978,7 +981,11 @@ def main():
         if _ict_sig:
             print(f"    ▶ ICT: {_ict_sig}")
         try:
-            result = place_buy(sym, _size, market=market_of_symbol(sym))
+            # 주문 근거를 함께 실어 보낸다. 가상 브로커는 다음 거래일 시가에
+            # 체결되므로, 그때 이 값이 없으면 성적표의 점수 칸이 비어 점수
+            # 구간별 분석에서 통째로 빠진다.
+            result = place_buy(sym, _size, market=market_of_symbol(sym),
+                               meta={"score": sig.get("score"), "rsi": sig.get("rsi")})
             buy_rec = {
                 "symbol":  sym, "ticker": sig["ticker"], "notional": _size, "ok": True,
                 "price":   sig.get("price", 0),

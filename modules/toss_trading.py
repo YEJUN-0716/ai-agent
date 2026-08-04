@@ -237,6 +237,7 @@ def place_notional_buy(
     account_seq:   str,
     market:        str  = "KRX",
     dry_run:       bool = False,
+    meta:          dict | None = None,
 ) -> dict:
     """
     금액(notional) 기반 시장가 매수.
@@ -246,6 +247,11 @@ def place_notional_buy(
     Body: { symbol, side:"BUY", orderType:"MARKET", quantity:"10" }
     quantity는 API 스펙상 문자열(decimal string)로 전송.
     응답: result.orderId
+
+    meta(주문 근거 점수·RSI)는 받기만 하고 버린다. 토스는 주문에 메모를 달 수
+    없고, 실매매는 즉시 체결돼 러너가 그 자리에서 성적표에 점수를 기록한다.
+    가상 브로커만 다음 거래일에 체결되므로 근거를 주문에 실어 보내야 한다 —
+    러너가 브로커별로 갈라지지 않게 여기서도 같은 인자를 받는다.
     """
     price = _get_price(symbol, client_id, client_secret)
     if price <= 0:
