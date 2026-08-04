@@ -8,6 +8,7 @@
 
 from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
 
 from modules import virtual_broker as vb
@@ -40,6 +41,43 @@ def test_reservation_cannot_exceed_available_cash(broker):
 
     # 거부된 주문은 대기열에 남지 않는다.
     assert len(broker.load_state()["pending"]) == 1
+
+
+def test_account_view_carries_every_field_the_daily_report_prints(broker, monkeypatch):
+    """일일 보고가 읽는 칸이 전부 있어야 한다.
+
+    보고서는 BROKER 값에 따라 토스와 가상 장부를 갈아끼운다. 두 모듈이 같은
+    칸을 내놓는다는 전제인데, 확인하는 곳이 없으면 이름 하나가 어긋난 날
+    보고서가 조용히 0원을 찍는다. 저장소 이음매에서 이미 겪은 사고다.
+    """
+    monkeypatch.setattr(broker, "last_close_price", lambda symbol: 120.0)
+    state = broker.load_state()
+    state["positions"] = {
+        "AAA": {"qty": 10, "avg_price_usd": 100.0, "entry_date": "2026-07-31"}
+    }
+    broker.save_state(state)
+
+    position = broker.get_positions()[0]
+    assert {"symbol", "qty", "avg_entry_price",
+            "current_price", "unrealized_pl"} <= position.keys()
+    assert float(position["unrealized_pl"]) == pytest.approx(200.0)  # (120-100)*10
+
+    account = broker.get_account()
+    # 평가액은 주가 × 수량 × 환율. 현금은 그대로.
+    assert account["equity"] == pytest.approx(10_000_000 + 10 * 120.0 * 1000.0)
+    assert account["buying_power"] == pytest.approx(10_000_000)
+
+
+def test_price_ignores_the_empty_row_of_a_day_not_yet_traded(broker, monkeypatch):
+    # 장 열리기 전에는 오늘 행이 종가 없이 먼저 생긴다. 그 행을 집으면 NaN 이
+    # 평가액을 타고 올라가 총자산이 통째로 nan 이 된다. 실제로 그렇게 찍혔다.
+    frame = pd.DataFrame(
+        {"Close": [100.0, 110.0, float("nan")]},
+        index=pd.to_datetime(["2026-07-30", "2026-07-31", "2026-08-03"]),
+    )
+    monkeypatch.setattr(broker, "_fetch_ohlc", lambda symbol, start, end: frame)
+
+    assert broker.last_close_price("AAA") == 110.0
 
 
 def test_pending_buy_fills_at_next_open_and_spends_cash(broker, monkeypatch):
