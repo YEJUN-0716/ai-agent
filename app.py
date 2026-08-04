@@ -4061,29 +4061,116 @@ def risk_guardrail_status():
     return build_ops_report('리스크 가드레일', '🛡️', status, reasons)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def equity_log_status():
-    """계좌 현황: equity_log.json 상태 (시그널 전용 모드에서는 보통 비어있는 게 정상).
-    equity_log.json은 앱 안에서는 쓰지 않고 외부 페이퍼 트레이딩 스크립트만 갱신하므로
-    무효화 없이 캐시해도 안전하다."""
-    path = os.path.join(os.path.dirname(__file__), "equity_log.json")
+def _read_json_beside_app(filename):
+    """앱과 같은 폴더의 JSON. 없거나 깨졌으면 None.
+
+    Streamlit은 실행 위치가 제각각이라 상대경로로 읽으면 어느 날 조용히
+    '기록 없음'이 된다. 파일 위치는 앱 파일 기준으로 잡는다.
+    """
+    path = os.path.join(os.path.dirname(__file__), filename)
     if not os.path.exists(path):
-        return build_ops_report('계좌 현황', '📊', '정상',
-            ['equity_log.json 없음 — 시그널 전용 모드에서는 정상 (실거래가 없어 자산 변동 기록도 없음)'])
+        return None
     try:
         with open(path, encoding='utf-8') as f:
-            data = json.load(f)
-        records = data if isinstance(data, list) else data.get('records', [])
-        if not records:
-            return build_ops_report('계좌 현황', '📊', '정상',
-                ['equity_log.json 존재하나 기록 0건 (과거 페이퍼 트레이딩 이력 없음)'])
-        last = records[-1]
-        reasons = [f'{len(records)}개 기록 존재 (과거 페이퍼 트레이딩 이력)']
-        if last.get('date') and last.get('equity') is not None:
-            reasons.append(f"최근 기록: {last['date']} · 자산 {last['equity']:,.0f}")
-        return build_ops_report('계좌 현황', '📊', '정상', reasons)
-    except Exception as e:
-        return build_ops_report('계좌 현황', '📊', '경고', [f'로그 읽기 실패: {e}'])
+            return json.load(f)
+    except (ValueError, OSError):
+        return None
+
+
+def _equity_log_records():
+    data = _read_json_beside_app("equity_log.json")
+    if data is None:
+        return []
+    return data if isinstance(data, list) else data.get('records', [])
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def equity_log_status():
+    """계좌 현황: 가상 장부의 보유·현금 + equity_log.json 기록 상태.
+
+    시세는 여기서 조회하지 않는다 — 이 함수는 모듈 칩을 그리려고 매 rerun
+    호출되므로, 종목마다 시세를 받으면 아무도 열지 않은 화면 때문에 페이지
+    전체가 네트워크를 기다린다. 총자산은 러너가 계산해 equity_log 에 남긴 값을
+    쓰고, 실시간 값은 모듈을 열었을 때 패널이 따로 받는다."""
+    ledger  = _read_json_beside_app("virtual_portfolio.json")
+    records = _equity_log_records()
+
+    if not ledger and not records:
+        return build_ops_report('계좌 현황', '📊', '정상',
+            ['가상 장부·자산 기록 없음 — 아직 매매가 한 건도 일어나지 않음'])
+
+    reasons = []
+    if ledger:
+        last_eq = records[-1].get('equity') if records else None
+        head = (f"보유 {len(ledger.get('positions', {}))}종목 · "
+                f"현금 {ledger.get('cash_krw', 0):,.0f}원")
+        reasons.append(f"총자산 {last_eq:,.0f}원 · " + head if last_eq is not None else head)
+        if ledger.get('pending'):
+            reasons.append(f"대기 주문 {len(ledger['pending'])}건 — 다음 거래일 시가 체결 예정")
+
+    if records:
+        reasons.append(f"자산 기록 {len(records)}일치 · 최근 {records[-1].get('date')}")
+    else:
+        reasons.append('자산 기록 없음 — 러너가 아직 한 번도 완주하지 않음')
+    return build_ops_report('계좌 현황', '📊', '정상', reasons)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def virtual_ledger_snapshot():
+    """가상 장부의 실시간 현황 — 보유·현금·평가액.
+
+    숫자는 일일 보고가 쓰는 함수(virtual_broker.get_positions)에서 그대로 뽑는다.
+    화면이 따로 계산하면 텔레그램 보고와 대시보드가 서로 다른 총자산을 말하는
+    날이 온다. 종목마다 시세를 받으므로 5분 캐시한다.
+    """
+    # 브로커는 import 시점에 상태 파일 경로를 굳힌다. 앱은 실행 위치가 제각각이라
+    # 여기서 절대경로를 먼저 심어야 빈 장부를 읽지 않는다.
+    os.environ.setdefault(
+        "VIRTUAL_PORTFOLIO_FILE",
+        os.path.join(os.path.dirname(__file__), "virtual_portfolio.json"))
+    try:
+        from modules import virtual_broker as vb
+        from modules.fx import fetch_krw_per_usd
+    except ImportError:
+        return None
+
+    vb.set_fx(fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400"))))
+    state = vb.load_state()
+    if not state["positions"] and not state["pending"] and not state["trades"]:
+        return None
+
+    fx, rows, stock_value = vb.krw_per_usd(), [], 0.0
+    for p in vb.get_positions():
+        qty = int(float(p["qty"]))
+        avg = float(p["avg_entry_price"])
+        cur = float(p["current_price"])
+        # 시세를 못 받으면 0 으로 온다. 그대로 계산하면 -100% 라는 없는 손실이
+        # 찍히고 총자산까지 끌어내린다. 모르는 값은 모른다고 쓴다.
+        ok    = cur > 0 and avg > 0
+        value = qty * cur * fx if ok else None
+        stock_value += value or 0.0
+        rows.append({
+            '종목': p["symbol"], '수량': qty,
+            '평단($)':      round(avg, 2),
+            '현재가($)':    round(cur, 2) if ok else None,
+            '평가액(원)':   round(value) if ok else None,
+            '평가손익(원)': round((cur - avg) * qty * fx) if ok else None,
+            '손익률(%)':    round((cur / avg - 1) * 100, 2) if ok else None,
+            '매수일': (state["positions"].get(p["symbol"]) or {}).get('entry_date', ''),
+        })
+
+    cash = float(state["cash_krw"])
+    return {
+        'fx': fx, 'cash': cash,
+        'reserved':     vb.reserved_krw(state),
+        'stock_value':  stock_value,
+        'equity':       cash + stock_value,
+        'realized':     float(state["realized_pnl_krw"]),
+        'initial':      float(vb.INITIAL_CAPITAL_KRW),
+        'positions':    rows,
+        'pending':      state["pending"],
+        'price_failed': [r['종목'] for r in rows if r['현재가($)'] is None],
+    }
 
 
 # ─────────────────────────────────────────────
@@ -7558,6 +7645,71 @@ def main():
                     except ValueError:
                         st.error("JSON 파싱 오류")
 
+        def render_account_panel():
+            """가상 장부 화면 — 보유·현금·자본곡선.
+
+            지금 돌고 있는 유일한 매매인데 볼 수 있는 곳이 텔레그램 일일 보고뿐이었다.
+            """
+            snap = virtual_ledger_snapshot()
+            if snap is None:
+                st.info("가상 장부가 비어 있습니다 — 아직 주문도 체결도 없습니다.")
+            else:
+                _ret = (snap['equity'] / snap['initial'] - 1) * 100 if snap['initial'] else 0.0
+                _a1, _a2, _a3, _a4 = st.columns(4)
+                _a1.metric("총 자산", f"{snap['equity']:,.0f}원", f"{_ret:+.2f}%")
+                _a2.metric("현금", f"{snap['cash']:,.0f}원",
+                           f"예약 {snap['reserved']:,.0f}원" if snap['reserved'] else None,
+                           delta_color="off")
+                _a3.metric("주식 평가액", f"{snap['stock_value']:,.0f}원")
+                _a4.metric("실현 손익", f"{snap['realized']:,.0f}원")
+                st.caption(f"환율 {snap['fx']:,.0f}원/$ · 초기 자본 {snap['initial']:,.0f}원 "
+                           "· 시세는 5분 캐시 (일일 보고와 같은 계산식)")
+
+                if snap['positions']:
+                    st.markdown("#### 보유 종목")
+                    st.dataframe(pd.DataFrame(snap['positions']),
+                                 width='stretch', hide_index=True)
+                    if snap['price_failed']:
+                        st.warning(f"시세 조회 실패: {', '.join(snap['price_failed'])} "
+                                   "— 평가액·총자산에서 빠져 있습니다.")
+                else:
+                    st.caption("보유 종목 없음 — 전량 현금.")
+
+                for _o in snap['pending']:
+                    _side = '매수' if _o.get('side') == 'buy' else '매도'
+                    _amt  = (f"{_o.get('notional_krw', 0):,.0f}원" if _o.get('side') == 'buy'
+                             else f"{_o.get('qty', 0)}주")
+                    st.caption(f"⏳ 대기 주문 · {_o.get('symbol')} {_side} {_amt} "
+                               f"({_o.get('placed_date')} 주문 → 다음 거래일 시가 체결)")
+
+            st.markdown("#### 자본곡선")
+            _eq_records = _equity_log_records()
+            if len(_eq_records) < 2:
+                st.caption(f"기록 {len(_eq_records)}일치 — 2일 이상 쌓이면 그려집니다. "
+                           "러너가 평일 하루 한 번 한 점씩 남깁니다.")
+            else:
+                _eq_df  = pd.DataFrame(_eq_records)
+                _fig_eq = go.Figure()
+                _fig_eq.add_trace(go.Scatter(
+                    x=_eq_df['date'], y=_eq_df['equity'],
+                    name='가상 장부', line=dict(color='#2962ff', width=2.5)))
+                _spy = (pd.to_numeric(_eq_df['spy_price'], errors='coerce')
+                        if 'spy_price' in _eq_df else None)
+                if _spy is not None and _spy.notna().all() and float(_spy.iloc[0]) > 0:
+                    # SPY를 같은 출발 자산으로 맞춰야 "시장보다 나은가"를 눈으로 읽을 수 있다.
+                    _fig_eq.add_trace(go.Scatter(
+                        x=_eq_df['date'],
+                        y=_spy / float(_spy.iloc[0]) * float(_eq_df['equity'].iloc[0]),
+                        name='SPY (벤치마크)', line=dict(color='#888', width=1.5, dash='dash')))
+                _fig_eq.update_layout(height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
+                                      font=dict(color=TV_TEXT),
+                                      yaxis=dict(gridcolor=TV_GRID, tickformat=','),
+                                      xaxis=dict(gridcolor=TV_GRID),
+                                      margin=dict(l=20, r=20, t=30, b=20),
+                                      legend=dict(orientation='h', y=1.15, x=0))
+                st.plotly_chart(_fig_eq, width='stretch')
+                st.caption("체결가는 신호 다음 거래일 시가 · 슬리피지와 부분체결은 반영되지 않습니다.")
+
     st.markdown("""
 <div style="display:flex;align-items:baseline;gap:10px;margin:16px 0 8px 0">
   <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
@@ -7637,7 +7789,7 @@ def main():
             AnalyticsModule('exec', '실행 모드', execution_mode_status, render_execution_mode_panel),
             AnalyticsModule('sig', '시그널 파이프라인', signal_pipeline_status),
             AnalyticsModule('risk', '리스크 가드레일', risk_guardrail_status, render_risk_guardrail_panel),
-            AnalyticsModule('eq', '계좌 현황', equity_log_status),
+            AnalyticsModule('eq', '계좌 현황', equity_log_status, render_account_panel),
         ]),
     ]
 

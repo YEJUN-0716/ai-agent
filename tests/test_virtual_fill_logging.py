@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import pytest
 
 import paper_trade_runner_toss as runner
+from modules import virtual_broker as vb
 
 
 @pytest.fixture
@@ -42,9 +43,34 @@ def test_fill_is_logged_at_its_own_price_and_date(signal_log):
     assert entry["id"] == "AAA-2026-07-31"
 
 
+def test_order_score_travels_from_order_to_the_scorecard(signal_log, tmp_path,
+                                                          monkeypatch):
+    """주문 → 다음 거래일 체결 → 성적표까지 점수가 살아서 건너오는가.
+
+    점수는 주문 시점에만 존재하고 체결은 다음 거래일에 일어난다. 그 사이를
+    잇는 고리가 하나라도 끊기면(브로커가 meta 를 안 싣거나, 체결 기록에 안
+    옮기거나, 성적표가 안 읽거나) 점수 칸이 조용히 비고 가상 체결이 점수
+    구간별 분석에서 통째로 빠진다 — 2026-08-04 까지 실제로 그 상태였다.
+    """
+    monkeypatch.setattr(vb, "STATE_FILE", str(tmp_path / "virtual_portfolio.json"))
+    monkeypatch.setattr(vb, "_FX", 1000.0)
+    monkeypatch.setattr(vb, "next_open_price",
+                        lambda symbol, after: (100.0, "2026-07-31"))
+
+    vb.place_notional_buy("AAA", 1000.0, market="US", meta={"score": 82, "rsi": 61})
+    state = vb.settle_pending(vb.load_state(), 1000.0)
+
+    runner.record_virtual_fills(state["trades"])
+
+    entry = _entries(signal_log)[0]
+    assert entry["score"] == 82
+    assert entry["rsi"] == 61
+    assert entry["entry_price"] == 100.0        # 신호가가 아니라 체결가
+
+
 def test_unknown_score_is_left_empty_not_faked(signal_log):
-    # 점수·RSI 는 주문 시점의 값이라 체결 시점엔 알 수 없다. 0 이나 오늘 점수로
-    # 채우면 점수 구간별 분석이 없는 근거로 오염된다.
+    # 근거를 안 실은 주문(예전 예약분, 비서를 통한 수동 매수)은 점수를 모른다.
+    # 0 이나 오늘 다시 계산한 점수로 채우면 점수 구간별 분석이 없는 근거로 오염된다.
     runner.record_virtual_fills([
         {"date": "2026-07-31", "symbol": "AAA", "side": "buy",
          "qty": 10, "price_usd": 100.0},
