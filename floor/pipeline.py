@@ -143,6 +143,13 @@ def run(
     yield {"type": "log", "track": "system", "text": "■ 뉴스 헤드라인"}
     for line in snapshot.headlines:
         yield {"type": "log", "track": "system", "text": f"  - {line}"}
+    if not snapshot.headlines:
+        # 뉴스가 없는 판과 뉴스를 못 가져온 판을 화면에서 구분해 준다.
+        yield {
+            "type": "log",
+            "track": "system",
+            "text": "  - 헤드라인을 가져오지 못했습니다. 뉴스 없이 판단합니다.",
+        }
 
     retro = report.retrospect(reports_dir, symbol.key, snapshot.price)
     yield {"type": "log", "track": "system", "text": "■ 과거 판정 회고"}

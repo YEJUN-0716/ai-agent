@@ -413,7 +413,7 @@ function paintModeNote() {
     : "";
   const live = DEMO
     ? ""
-    : ' <span class="warn">— 지금은 실전 모드입니다. 데모로 보려면 주소 끝에 ?demo=1 을 붙이세요.</span>';
+    : ` <span class="warn">— 실전 모드입니다. 실제 시세를 조회하고 클로드를 ${m.calls}번 부릅니다. 화면만 볼 거면 주소 끝에 ?demo=1 을 붙이세요.</span>`;
   $("modeNote").innerHTML =
     `판정 기준 시장 <b>${esc(m.basis)}</b> · 가능한 판정 ${esc(m.actions.join(" / "))} · ` +
     `${esc(m.note)}${warn}${live}`;
@@ -457,6 +457,6 @@ fetch("/api/meta")
     paintModeNote();
     line(DEMO
       ? "데모 모드입니다. 클로드를 부르지 않고 준비된 응답으로 전 과정을 재생합니다. 시세는 합성값입니다."
-      : "종목과 모드를 고르고 ▶ ANALYZE 를 누르세요.");
+      : "실전 모드입니다. ▶ ANALYZE 를 누르면 실제 시세를 조회하고 클로드가 한 명씩 답합니다. 한 판에 몇 분 걸립니다.");
   })
   .catch(() => line("⚠ 서버 정보를 읽지 못했습니다.", "warn"));

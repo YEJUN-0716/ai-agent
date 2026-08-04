@@ -57,7 +57,8 @@ class Context:
         return None
 
 
-def _body(observed: str, reading: str, counter: str, trigger: str) -> str:
+def format_body(observed: str, reading: str, counter: str, trigger: str) -> str:
+    """브리핑 본문 네 토막. 데모와 실전이 같은 모양이어야 리포트가 한 종류로 남는다."""
     return (
         f"**관찰** {observed}\n\n"
         f"**해석** {reading}\n\n"
@@ -137,7 +138,7 @@ def _taro(ctx: Context) -> Briefing:
     return Briefing(
         "TARO",
         f"MA20 {side}, 기준 변동성 {vol:.2f}%",
-        _body(
+        format_body(
             f"종가 {_fmt(s.price, s)}, MA20 {_fmt(ma20, s)}, 20봉 고 {_fmt(s.high20, s)} "
             f"저 {_fmt(s.low20, s)}. {ctx.mode.basis} 기준 변동성 {vol:.2f}%.",
             f"가격이 MA20 {side}에 있고 20봉 레인지의 "
@@ -155,7 +156,7 @@ def _diana(ctx: Context) -> Briefing:
     return Briefing(
         "DIANA",
         "밸류에이션 중립, 수급이 변수",
-        _body(
+        format_body(
             f"{s.symbol.label} 현재가 {_fmt(s.price, s)}, 최근 60봉 고점 대비 "
             f"{(s.price / max(s.closes) - 1) * 100:.1f}%, 저점 대비 "
             f"{(s.price / min(s.closes) - 1) * 100:+.1f}%.",
@@ -173,7 +174,7 @@ def _nova(ctx: Context) -> Briefing:
     return Briefing(
         "NOVA",
         "헤드라인 혼조 — 방향성 없음",
-        _body(
+        format_body(
             f"최신 헤드라인 {len(s.headlines)}건:\n{lines}",
             "상향 리포트와 변동성 확대 기사가 같이 나온다. 뉴스만으로는 한쪽으로 "
             "몰리지 않는 상태다.",
@@ -190,7 +191,7 @@ def _vibe(ctx: Context) -> Briefing:
     return Briefing(
         "VIBE",
         f"공포탐욕 {fg} · {label}",
-        _body(
+        format_body(
             f"공포탐욕 지수 {fg}({label}), 당일 등락 {s.change_pct:+.2f}%.",
             f"{label} 구간이다. "
             + ("과열 되돌림 위험을 얹는다." if fg > 60 else "역발상 매수 여지가 있다."),
@@ -207,7 +208,7 @@ def _bull(ctx: Context) -> Briefing:
     return Briefing(
         "BULL",
         f"{ctx.turn}턴 — 상승 근거 우위",
-        _body(
+        format_body(
             f"{head}TARO 관찰: {taro.bubble if taro else '기술적 중립'}. "
             f"20봉 저점 {_fmt(s.low20, s)}이 두 번 지켜졌다.",
             "저점이 유지되는 동안은 하방보다 상방 여유가 크다. 손절을 저점 아래로 "
@@ -225,7 +226,7 @@ def _bear(ctx: Context) -> Briefing:
     return Briefing(
         "BEAR",
         f"{ctx.turn}턴 — 상단 저항 미돌파",
-        _body(
+        format_body(
             f"{head}20봉 고점 {_fmt(s.high20, s)}을 아직 못 뚫었고 "
             f"기준 변동성이 {_vol(s, ctx.mode):.2f}%다.",
             "저점 방어는 매수 신호가 아니라 아직 결정이 안 났다는 뜻이다. "
@@ -243,7 +244,7 @@ def _blitz(ctx: Context) -> Briefing:
     return Briefing(
         "BLITZ",
         f"{'롱' if up else '숏'} 트리거 {_fmt(entry, s)}",
-        _body(
+        format_body(
             f"15분봉 기준. 진입 {_fmt(entry, s)} · 무효화 {_fmt(stop, s)} · "
             f"목표 {_fmt(target, s)}. 기준 시장은 {ctx.mode.basis}.",
             f"손절까지 {abs(entry - stop) / entry * 100:.2f}%, 목표까지 "
@@ -264,7 +265,7 @@ def _guard(ctx: Context) -> Briefing:
     return Briefing(
         "GUARD",
         f"청산 버퍼 {buffer:.2f}%p · 비중 {size}%",
-        _body(
+        format_body(
             f"격리 20배에서 청산은 약 {LIQUIDATION_PCT}% 역행. 이 계획의 손절 폭은 "
             f"{stop_pct:.2f}%이므로 버퍼는 {buffer:.2f}%p다. "
             f"{ctx.mode.basis} 변동성 {_vol(s, ctx.mode):.2f}% 기준.",
@@ -286,7 +287,7 @@ def _risky(ctx: Context) -> Briefing:
     return Briefing(
         "RISKY",
         "계획이 과도하게 방어적",
-        _body(
+        format_body(
             f"ACE 계획: {plan.action if plan else '미정'} · 확신도 "
             f"{plan.confidence if plan else 0}% · 비중 {plan.size_pct if plan else 0}%.",
             "손절이 명확한 계획에서 비중을 깎으면 기대값만 깎인다. 손실은 손절이 "
@@ -304,7 +305,7 @@ def _safe(ctx: Context) -> Briefing:
     return Briefing(
         "SAFE",
         "비중 축소·손절 상향 요구",
-        _body(
+        format_body(
             f"최악 시나리오: 진입 직후 {_fmt(s.low20, s)} 이탈. 그 경우 손실은 "
             f"계획 손절 {_fmt(plan.stop, s) if plan else '미정'}에서 멈추지 않을 수 있다.",
             "꼬리위험은 평균 변동성에 안 잡힌다. 비중을 절반으로 줄이면 같은 사건에서 "
@@ -322,7 +323,7 @@ def _neutral(ctx: Context) -> Briefing:
     return Briefing(
         "NEUTRAL",
         f"조건부 승인 — 비중 {size}%",
-        _body(
+        format_body(
             "RISKY는 기대값, SAFE는 생존을 본다. 둘 다 맞고 충돌 지점은 비중 하나다.",
             f"손절이 지정가로 걸린다는 전제에서만 RISKY가 맞다. 그 전제를 계획에 "
             f"박아 넣고 비중은 {size}%로 절충한다.",
@@ -357,7 +358,7 @@ def _ace(ctx: Context) -> Briefing:
     return Briefing(
         "ACE",
         f"{action} · 확신도 {confidence}%",
-        _body(
+        format_body(
             f"판정 {action}, 확신도 {confidence}%. 진입 {_fmt(entry, s)} · "
             f"손절 {_fmt(stop, s)} · 목표 {_fmt(target, s)} · 비중 {verdict.size_pct}%.",
             rationale,
@@ -402,7 +403,7 @@ def _pm(ctx: Context) -> Briefing:
     return Briefing(
         "PM",
         f"{status} · 비중 {size}%",
-        _body(
+        format_body(
             f"ACE 계획 {plan.action} 확신도 {plan.confidence}% 비중 "
             f"{plan.size_pct}%를 심사했다.",
             comment,

@@ -28,7 +28,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from floor import pipeline, report
+from floor import claude_runner, market, pipeline, report
 
 # DNS 재바인딩으로 남의 페이지가 이 서버를 대신 부르는 걸 막는다.
 ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]")
@@ -46,7 +46,13 @@ def _sse(events: Iterator[dict]) -> Iterator[str]:
         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-def create_app(reports_dir: Path = REPORTS_DIR) -> FastAPI:
+def create_app(
+    reports_dir: Path = REPORTS_DIR,
+    *,
+    runner: pipeline.Runner = claude_runner.claude_runner,
+    snapshot_fn: pipeline.SnapshotFn = market.live_snapshot,
+) -> FastAPI:
+    """러너·시세를 인자로 받는 이유는 하나다. 실전 배선을 요금 없이 테스트하려고."""
     app = FastAPI(title="PIXEL TRADING FLOOR", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS))
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -79,20 +85,19 @@ def create_app(reports_dir: Path = REPORTS_DIR) -> FastAPI:
         mode: str = Query("algo", max_length=16),
         demo: int = Query(0),
     ) -> StreamingResponse:
-        if demo != 1:
-            # 실전 모드는 2단계다. 준비 안 된 걸 조용히 데모로 대체하면
-            # 사장님이 합성 숫자를 실측으로 믿게 된다 — 그건 막는다.
-            events: Iterator[dict] = iter(
-                [
-                    {
-                        "type": "error",
-                        "text": "실전 분석은 아직 준비 중입니다. "
-                        "지금은 주소 끝에 ?demo=1 을 붙여 데모 모드로 보세요.",
-                    }
-                ]
+        # 데모는 클로드를 안 부르고, 실전은 부른다. 그래서 둘을 절대 섞지 않는다 —
+        # 실전이 조용히 데모로 떨어지면 사장님이 합성 숫자를 실측으로 믿게 된다.
+        events: Iterator[dict] = (
+            pipeline.run(symbol, mode, reports_dir=reports_dir)
+            if demo == 1
+            else pipeline.run(
+                symbol,
+                mode,
+                reports_dir=reports_dir,
+                runner=runner,
+                snapshot_fn=snapshot_fn,
             )
-        else:
-            events = pipeline.run(symbol, mode, reports_dir=reports_dir)
+        )
         return StreamingResponse(
             _sse(events),
             media_type="text/event-stream",
