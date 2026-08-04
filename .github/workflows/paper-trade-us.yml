@@ -70,18 +70,24 @@ permissions:
 
 jobs:
   run-paper-trade-us:
-    # 토스 오픈API는 IP 화이트리스트를 적용한다. 자택 IP만 등록돼 있으므로
-    # 클라우드 러너로 옮기면 oauth2/token이 403 access_denied로 거부된다.
-    # 클라우드로 되돌리려면 먼저 해당 러너의 고정 IP를 토스에 등록할 것.
-    runs-on: [self-hosted, Windows]
+    # BROKER=virtual 인 동안에는 클라우드 러너를 쓴다.
+    #
+    # 자택 러너를 쓰던 이유는 토스 오픈API의 IP 화이트리스트 하나였다(클라우드
+    # 에서는 oauth2/token 이 403 access_denied). 가상 장부 모드는 토스를 한 번도
+    # 부르지 않으므로 그 제약이 없다.
+    #
+    # 대신 자택 러너에는 PC가 꺼져 있으면 잡이 큐에서 기다린다는 문제가 있다.
+    # 2026-07-31 예약분이 러너를 16시간 기다렸다 실행됐다(실행 자체는 1분).
+    #
+    # ⚠️ BROKER 를 toss 로 되돌리면 이 줄도 [self-hosted, Windows] 로 되돌릴 것.
+    #    안 그러면 토스 인증이 403 으로 전량 실패한다(07-17~28 12일간 겪음).
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v5
 
-      # setup-python은 쓰지 않는다. self-hosted(Windows) 러너에서 파이썬 설치
-      # 관리자 권한이 없어 실패한다. PC에 설치된 시스템 파이썬을 그대로 쓴다.
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
@@ -117,11 +123,11 @@ jobs:
         run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널·자본·가상 포트폴리오)
-        # bash가 아니라 PowerShell을 쓴다. 자택 러너에 Git for Windows는
-        # 깔려 있지만 서비스 PATH에 bash.exe가 없어서, shell: bash 로 두면
-        # "bash: command not found"로 이 단계만 죽는다. 매매 계산은 멀쩡히
-        # 끝나고 결과만 사라지는 상태가 2026-07-15부터 이어졌다.
-        shell: powershell
+        # 클라우드 러너로 옮기면서 PowerShell에서 bash로 되돌렸다. PowerShell을
+        # 쓰던 이유는 자택 러너의 서비스 PATH에 bash.exe가 없어서였다("bash:
+        # command not found"로 이 단계만 죽고, 매매 계산은 멀쩡히 끝나는데 결과만
+        # 사라지는 상태가 2026-07-15부터 이어졌다). 로직은 그대로 옮겼다.
+        shell: bash
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
@@ -129,40 +135,32 @@ jobs:
           # 중단된 rebase가 남아 있으면 이후 pull이 전부 막힌다. 실제로
           # 2026-07-13 rebase 찌꺼기가 방치돼 7월 내내 결과가 안 올라갔다.
           # HEAD는 건드리지 않고 상태만 정리한다(--quit).
-          if ((Test-Path ".git/rebase-merge") -or (Test-Path ".git/rebase-apply")) {
-            Write-Host "WARNING: stale rebase state found - clearing it"
+          if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+            echo "WARNING: stale rebase state found - clearing it"
             git rebase --quit
-          }
+          fi
 
           # virtual_portfolio.json 은 첫 매매 전에는 없다. 없는 파일을
           # git add 하면 pathspec 오류로 단계가 통째로 실패하므로 걸러낸다.
-          $tracked = @(
-            "peak_prices.json",
-            "signal_log.json",
-            "equity_log.json",
-            "virtual_portfolio.json"
-          ) | Where-Object { Test-Path $_ }
+          # (셸이 -e 로 돌므로 test 실패가 단계를 죽이지 않게 if 로 감싼다)
+          tracked=()
+          for f in peak_prices.json signal_log.json equity_log.json virtual_portfolio.json; do
+            if [ -f "$f" ]; then tracked+=("$f"); fi
+          done
 
-          if (-not $tracked) {
-            Write-Host "No tracked files to commit."
+          if [ ${#tracked[@]} -eq 0 ]; then
+            echo "No tracked files to commit."
             exit 0
-          }
+          fi
 
-          git add -- $tracked
-          git diff --staged --quiet
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "No changes staged - nothing to commit."
+          git add -- "${tracked[@]}"
+          if git diff --staged --quiet; then
+            echo "No changes staged - nothing to commit."
             exit 0
-          }
+          fi
 
-          $stamp = [DateTime]::UtcNow.ToString("yyyy-MM-dd")
-          git commit -m "chore: US peak/signal/equity/portfolio update $stamp"
-          if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
-
+          git commit -m "chore: US peak/signal/equity/portfolio update $(date -u +%Y-%m-%d)"
           git pull --rebase origin main
-          if ($LASTEXITCODE -ne 0) { throw "git pull --rebase failed" }
-
           git push
-          if ($LASTEXITCODE -ne 0) { throw "git push failed" }
 
-          Write-Host "Committed and pushed: $($tracked -join ', ')"
+          echo "Committed and pushed: ${tracked[*]}"
