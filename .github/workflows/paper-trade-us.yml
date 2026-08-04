@@ -51,7 +51,7 @@ on:
       max_sector_positions:
         description: "동일 섹터 최대 보유 종목 수"
         required: false
-        default: "2"
+        default: "3"
       neutral_max_positions:
         description: "neutral 레짐 최대 포지션 수"
         required: false
@@ -109,11 +109,19 @@ jobs:
           # 1,000만원 / 5종목 ÷ 환율 약 1,460 = 종목당 약 1,370달러
           CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '1370' }}
           KRW_PER_USD:           ${{ github.event.inputs.krw_per_usd || '1400' }}
-          MAX_POSITIONS:         "5"
+          # 5종목으로는 1,000만 중 410만밖에 안 들어간다. 종목당 기준액
+          # $1,370(약 200만)이 변동성·상관관계 사이징에서 약 82만까지 깎이기
+          # 때문이다. 종목당 금액을 억지로 키우면 한 종목 노출이 2.4배가 되므로,
+          # 금액은 그대로 두고 종목 수로 채운다 — 분산이 늘고 성적표에 쌓이는
+          # 표본도 두 배가 된다. 약 82만 × 10종목 = 약 820만.
+          MAX_POSITIONS:         "10"
           TRAIL_STOP_PCT:        ${{ github.event.inputs.trail_stop_pct || '10' }}
           BUY_SCORE_MIN:         ${{ github.event.inputs.buy_score_min || '60' }}
           PORTFOLIO_DD_STOP_PCT: ${{ github.event.inputs.portfolio_dd_stop_pct || '15' }}
-          MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '2' }}
+          # 10종목을 채우려면 섹터 한도도 함께 풀어야 한다. 2로 두면 후보가
+          # 금융주에 몰려 있어 5~6종목에서 멈춘다. 3이면 한 섹터가 30%를
+          # 넘지 않으면서 10종목이 찬다.
+          MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '3' }}
           NEUTRAL_MAX_POSITIONS: ${{ github.event.inputs.neutral_max_positions || '7' }}
           BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '4' }}
           # 가상 브로커에서는 DRY_RUN=false 여야 장부에 체결이 기록된다.
