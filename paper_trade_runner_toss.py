@@ -41,6 +41,7 @@ from modules.factor_engine import (
     get_market_regime, calc_factor_scores, generate_signals,
     fetch_returns_matrix,
 )
+from modules.fx import fetch_krw_per_usd
 from modules.portfolio_allocator import (
     correlation_penalty_scale,
     risk_parity_position_scale,
@@ -218,21 +219,6 @@ UNIVERSE_PRESETS = {
 def ticker_market(ticker: str) -> str:
     """'.KS'/'.KQ'로 끝나면 국내(KRX), 그 외는 해외(US)로 판단."""
     return "KRX" if ticker.endswith((".KS", ".KQ")) else "US"
-
-
-def _fetch_krw_per_usd(fallback: float = 1400.0) -> float:
-    """Yahoo Finance KRW=X로 실시간 원/달러 환율 조회. 실패 시 fallback 반환."""
-    try:
-        raw = yf.download("KRW=X", period="5d", progress=False, auto_adjust=True)
-        if isinstance(raw.columns, pd.MultiIndex):
-            raw.columns = raw.columns.droplevel(1)
-        if not raw.empty:
-            rate = float(raw["Close"].dropna().iloc[-1])
-            print(f"  [환율] USD/KRW 실시간: {rate:,.1f}원")
-            return rate
-    except Exception as e:
-        print(f"  [환율] 실시간 조회 실패 ({e}) → {fallback:,.0f}원 사용")
-    return fallback
 
 
 def toss_symbol(ticker: str) -> str:
@@ -714,7 +700,7 @@ def main():
         sys.exit(1)
 
     # 0-0. 실시간 환율 (미국 종목 매수여력 원화 환산용)
-    _KRW_PER_USD = _fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400")))
+    _KRW_PER_USD = fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400")))
 
     # 0-1. 지난 실행에서 예약된 가상 주문을 다음 거래일 시가로 체결한다.
     if BROKER == "virtual":

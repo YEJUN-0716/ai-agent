@@ -150,12 +150,19 @@ def next_open_price(symbol: str, after: date) -> tuple[float, str] | None:
 
 
 def last_close_price(symbol: str) -> float:
-    """최근 종가. 평가액 계산용. 실패 시 0.0."""
+    """최근 종가. 평가액 계산용. 실패 시 0.0.
+
+    값이 있는 마지막 행을 집는다. 장이 열리기 전이나 휴장일에는 오늘 행이
+    종가 없이(NaN) 먼저 생기는데, 그대로 마지막 행을 집으면 NaN 이 나오고
+    그 하나가 평가액·총자산까지 통째로 nan 으로 만든다. 2026-08-04 아침
+    보고서가 실제로 "총 자산 nan원"을 찍었다.
+    """
     today = date.today()
     df = _fetch_ohlc(symbol, today - timedelta(days=10), today + timedelta(days=1))
     if df.empty or "Close" not in df:
         return 0.0
-    return float(df["Close"].iloc[-1])
+    closes = df["Close"].dropna()
+    return float(closes.iloc[-1]) if not closes.empty else 0.0
 
 
 # ── 대기 주문 체결 ─────────────────────────────────────────────────────

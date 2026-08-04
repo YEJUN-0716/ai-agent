@@ -32,6 +32,10 @@ jobs:
       - name: 토스 일별 P&L 리포트 발송
         env:
           PYTHONUTF8:         "1"
+          # 매매가 가상 장부로 돌고 있으므로(paper-trade-us.yml) 보고서도 같은
+          # 장부를 읽어야 한다. 토스 계좌를 읽으면 실제로 5종목을 들고 있어도
+          # 매일 아침 "보유 포지션 없음"이 온다. 실매매로 돌아가면 이 줄을 지운다.
+          BROKER:             "virtual"
           TOSS_CLIENT_ID:     ${{ secrets.TOSS_CLIENT_ID }}
           TOSS_CLIENT_SECRET: ${{ secrets.TOSS_CLIENT_SECRET }}
           TOSS_ACCOUNT_SEQ:   ${{ secrets.TOSS_ACCOUNT_SEQ }}
