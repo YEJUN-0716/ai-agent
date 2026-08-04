@@ -1,17 +1,27 @@
 """심볼 해석과 시세 스냅샷.
 
-1단계(데모)에서는 값이 전부 합성이다. source="demo" 로 표시하고 화면에도
-그대로 띄운다 — 숫자가 그럴듯해서 실측으로 착각하는 게 이 앱의 가장 큰 위험이다.
-2단계에서 이 파일의 조회 함수만 실제 API로 바꾸면 나머지는 그대로 쓴다.
+두 가지 조회가 있다.
+    demo_snapshot  합성값. source="demo" 로 표시하고 화면에도 그대로 띄운다 —
+                   숫자가 그럴듯해서 실측으로 착각하는 게 이 앱의 가장 큰 위험이다.
+    live_snapshot  실측. Binance·Yahoo·환율·뉴스·공포탐욕을 직접 부른다.
 
-탭비트 값은 실측이 아니라 4개 거래소 평균 추정치다. API 직접 조회가 막혀 있다.
+실전에서는 못 가져온 값을 지어내지 않는다. 거래소 한 곳이 죽으면 그 줄만 빠지고,
+전부 죽으면 전광판이 통째로 빠진다. source 문자열에 어디서 왔는지 매번 적는다.
+
+탭비트 값만 실측이 아니라 4개 거래소 평균 추정치다. API 직접 조회가 막혀 있다.
 """
 
 from __future__ import annotations
 
+import json
 import random
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from html import unescape
 
 KST = timezone(timedelta(hours=9))
 
@@ -206,3 +216,337 @@ def demo_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
         board_rows=board_rows,
         fx_krw=fx,
     )
+
+
+# ── 실전 시세 ─────────────────────────────────────────────
+#
+# 여기부터는 전부 실측이다. 값 하나를 못 가져오면 그 값을 빼거나 판을 접는다.
+# 합성으로 메우면 데모와 실전이 화면에서 구분이 안 된다 — 그게 제일 위험하다.
+
+# 야후는 UA 없는 요청을 막는다.
+_UA = {"User-Agent": "Mozilla/5.0 (compatible; pixel-trading-floor)"}
+_TIMEOUT = 12.0
+
+_YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
+_YAHOO_SEARCH = "https://query1.finance.yahoo.com/v1/finance/search"
+_FX_TICKER = "KRW=X"
+
+# 한국 종목은 야후 티커와 뉴스 검색어가 따로 논다. 티커로 검색하면 무관한 기사가
+# 나와서(실측: 000660.KS → 항공기 리스 채권 기사) 회사 이름으로 찾는다.
+_YAHOO_TICKERS = {"SKHYNIX": "000660.KS", "SAMSUNG": "005930.KS"}
+_NEWS_QUERIES = {"SKHYNIX": "SK Hynix", "SAMSUNG": "Samsung Electronics"}
+
+_HEADLINE_COUNT = 5
+
+# 코인 뉴스. 야후 검색은 코인 질의를 무시하고 아무 펀드 기사나 돌려준다.
+_COINDESK_RSS = "https://www.coindesk.com/arc/outboundfeeds/rss/"
+_RSS_TITLE = re.compile(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", re.S)
+# 기사 제목은 티커보다 이름을 쓴다. 거래량 상위 셋만 넣고 나머지는 티커로 찾는다.
+_COIN_NAMES = {"BTC": "Bitcoin", "ETH": "Ether", "SOL": "Solana"}
+
+
+class MarketError(RuntimeError):
+    """시세를 못 가져왔을 때. 메시지가 그대로 화면에 뜬다."""
+
+
+def _get_json(url: str):
+    request = urllib.request.Request(url, headers=_UA)
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            return json.load(response)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise MarketError(f"{urllib.parse.urlsplit(url).netloc} 조회 실패: {exc}") from exc
+
+
+def _num(value) -> float:
+    return float(value)
+
+
+def _range_pct(high: float, low: float, close: float) -> float:
+    """하루치 고저 폭. 이 값이 손절 폭을 정하고, 스캘핑의 오기각을 가른다."""
+    if not close:
+        raise MarketError("종가가 0입니다")
+    return round(abs(high - low) / close * 100, 2)
+
+
+# ── 거래소 ────────────────────────────────────────────────
+
+
+def _binance_klines(pair: str, *, perp: bool, limit: int) -> list[list]:
+    host = "https://fapi.binance.com/fapi/v1" if perp else "https://api.binance.com/api/v3"
+    rows = _get_json(f"{host}/klines?symbol={pair}&interval=1d&limit={limit}")
+    if not isinstance(rows, list) or len(rows) < 2:
+        raise MarketError(f"바이낸스에 {pair} 일봉이 없습니다")
+    return rows
+
+
+def _binance_perp(base: str) -> tuple[float, float]:
+    data = _get_json(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={base}USDT")
+    return round(_num(data["markPrice"]), 4), round(_num(data["lastFundingRate"]) * 100, 4)
+
+
+def _bybit_perp(base: str) -> tuple[float, float]:
+    data = _get_json(
+        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={base}USDT"
+    )
+    row = data["result"]["list"][0]
+    return round(_num(row["lastPrice"]), 4), round(_num(row["fundingRate"]) * 100, 4)
+
+
+def _okx_perp(base: str) -> tuple[float, float]:
+    inst = f"{base}-USDT-SWAP"
+    last = _get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst}")
+    funding = _get_json(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst}")
+    return (
+        round(_num(last["data"][0]["last"]), 4),
+        round(_num(funding["data"][0]["fundingRate"]) * 100, 4),
+    )
+
+
+def _gate_perp(base: str) -> tuple[float, float]:
+    data = _get_json(
+        f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={base}_USDT"
+    )
+    row = data[0]
+    rate = row.get("funding_rate") or row["funding_rate_indicative"]
+    return round(_num(row["last"]), 4), round(_num(rate) * 100, 4)
+
+
+# PERP_EXCHANGES 와 순서가 같아야 화면 표가 데모와 같은 줄 순서로 뜬다.
+_PERP_FETCHERS = (
+    ("Binance", _binance_perp),
+    ("Bybit", _bybit_perp),
+    ("OKX", _okx_perp),
+    ("Gate", _gate_perp),
+)
+
+
+def _board(base: str, fx: float, krx_price: float) -> tuple[dict, ...]:
+    """4개 거래소 무기한 + 탭비트(평균 추정). 죽은 거래소는 줄째로 뺀다."""
+    rows: list[dict] = []
+    for name, fetch in _PERP_FETCHERS:
+        try:
+            price, funding = fetch(base)
+        except (MarketError, KeyError, IndexError, TypeError, ValueError):
+            continue  # 한 곳이 없다고 판을 접지 않는다. 지어내지도 않는다.
+        rows.append(
+            {
+                "exchange": name,
+                "perp_usdt": price,
+                "funding_pct": funding,
+                "gap_pct": round((price * fx / krx_price - 1) * 100, 2),
+                "estimated": False,
+            }
+        )
+    if not rows:
+        return ()
+
+    average = round(sum(r["perp_usdt"] for r in rows) / len(rows), 4)
+    rows.append(
+        {
+            "exchange": TAPBIT,
+            "perp_usdt": average,
+            "funding_pct": None,
+            "gap_pct": round((average * fx / krx_price - 1) * 100, 2),
+            # 직접 조회가 막혀 있어 위 거래소 평균으로 추정한 값이다.
+            "estimated": True,
+        }
+    )
+    return tuple(rows)
+
+
+# ── 야후 ──────────────────────────────────────────────────
+
+
+def _yahoo_chart(ticker: str, span: str = "6mo") -> dict:
+    data = _get_json(f"{_YAHOO_CHART}{urllib.parse.quote(ticker)}?range={span}&interval=1d")
+    try:
+        result = data["chart"]["result"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise MarketError(f"야후가 {ticker} 를 모릅니다") from exc
+    if result.get("indicators", {}).get("quote"):
+        return result
+    raise MarketError(f"야후 {ticker} 응답에 일봉이 없습니다")
+
+
+def _yahoo_bars(result: dict) -> list[tuple[float, float, float]]:
+    """(고, 저, 종) 완결 봉만. 진행 중인 오늘 봉은 종가가 비어 있어 빠진다."""
+    q = result["indicators"]["quote"][0]
+    bars = [
+        (float(h), float(low), float(c))
+        for h, low, c in zip(q["high"], q["low"], q["close"])
+        if h is not None and low is not None and c is not None
+    ]
+    if len(bars) < 21:
+        raise MarketError("일봉이 21개 미만이라 20봉 레인지를 못 만듭니다")
+    return bars
+
+
+def _yahoo_price(result: dict, bars: list[tuple[float, float, float]]) -> float:
+    price = result.get("meta", {}).get("regularMarketPrice")
+    return round(float(price if price is not None else bars[-1][2]), 2)
+
+
+def _get_text(url: str) -> str:
+    request = urllib.request.Request(url, headers=_UA)
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            return response.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as exc:
+        raise MarketError(f"{urllib.parse.urlsplit(url).netloc} 조회 실패: {exc}") from exc
+
+
+def _crypto_headlines(key: str) -> tuple[str, ...]:
+    """코인 뉴스. 야후 검색은 코인 질의를 무시하고 무관한 펀드 기사를 준다(실측).
+
+    종목을 짚은 기사를 앞에 두되, 없으면 시장 전체 기사로 채운다 — 코인은
+    개별 뉴스보다 시장 흐름이 먼저 움직이는 일이 잦다.
+    """
+    try:
+        feed = _get_text(_COINDESK_RSS)
+    except MarketError:
+        return ()
+
+    # XML 파서를 안 쓴다. 남의 피드를 파싱하는 데 파서를 붙이면 엔티티 폭탄까지
+    # 같이 받는다. 필요한 건 <item> 안의 제목 한 줄뿐이라 그것만 긁는다.
+    titles = []
+    for block in re.findall(r"<item\b.*?</item>", feed, re.S):
+        found = _RSS_TITLE.search(block)
+        if found:
+            titles.append(unescape(found.group(1)).strip())
+    words = (key, _COIN_NAMES.get(key, key))
+    hit = [t for t in titles if any(w.lower() in t.lower() for w in words)]
+    rest = [t for t in titles if t not in hit]
+    return tuple((hit + rest)[:_HEADLINE_COUNT])
+
+
+def _headlines(query: str) -> tuple[str, ...]:
+    """야후 뉴스 검색. 실패하면 빈 값 — 없는 뉴스를 지어내지 않는다."""
+    url = (
+        f"{_YAHOO_SEARCH}?q={urllib.parse.quote(query)}"
+        f"&newsCount={_HEADLINE_COUNT}&quotesCount=0"
+    )
+    try:
+        items = _get_json(url).get("news", [])
+    except (MarketError, AttributeError):
+        return ()
+    return tuple(item["title"] for item in items if item.get("title"))[:_HEADLINE_COUNT]
+
+
+def _fear_greed() -> int:
+    """alternative.me 공포탐욕. 크립토 기준 지수라 주식에서는 참고값이다."""
+    try:
+        return int(_get_json("https://api.alternative.me/fng/?limit=1")["data"][0]["value"])
+    except (MarketError, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise MarketError(f"공포탐욕 지수를 못 가져왔습니다: {exc}") from exc
+
+
+def _fx_krw() -> float:
+    bars = _yahoo_bars(_yahoo_chart(_FX_TICKER, span="3mo"))
+    return round(bars[-1][2], 2)
+
+
+def _finish(
+    symbol: Symbol,
+    closes: list[float],
+    price: float,
+    perp_vol: float,
+    krw_vol: float,
+    *,
+    headlines: tuple[str, ...],
+    source: str,
+    now: datetime,
+    board_rows: tuple[dict, ...] = (),
+    fx: float | None = None,
+) -> Snapshot:
+    window = tuple(closes[-20:])
+    return Snapshot(
+        symbol=symbol,
+        price=price,
+        change_pct=round((price / closes[-2] - 1) * 100, 2),
+        closes=tuple(closes),
+        ma20=_moving_average(tuple(closes), 20),
+        ma50=_moving_average(tuple(closes), 50),
+        high20=max(window),
+        low20=min(window),
+        market_open=_is_krx_open(now) if symbol.kind == KIND_KR else True,
+        perp_vol_pct=perp_vol,
+        krw_vol_pct=krw_vol,
+        fear_greed=_fear_greed(),
+        headlines=headlines,
+        board_rows=board_rows,
+        fx_krw=fx,
+        source=source,
+    )
+
+
+def _coin_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
+    pair = f"{symbol.key}USDT"
+    spot = _binance_klines(pair, perp=False, limit=60)
+    closes = [round(_num(row[4]), 2) for row in spot]
+
+    # 판정 기준은 무기한 차트다. 마지막 봉은 진행 중이라 직전 완결 봉으로 잰다.
+    perp = _binance_klines(pair, perp=True, limit=3)[-2]
+    perp_vol = _range_pct(_num(perp[2]), _num(perp[3]), _num(perp[4]))
+
+    return _finish(
+        symbol,
+        closes,
+        closes[-1],
+        perp_vol,
+        perp_vol,  # 코인은 원화 정규장 차트가 없다. 같은 값을 들고 간다.
+        headlines=_crypto_headlines(symbol.key),
+        source=f"Binance {pair} 현물·무기한 · F&G alternative.me · 뉴스 CoinDesk",
+        now=now,
+    )
+
+
+def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
+    ticker = _YAHOO_TICKERS.get(symbol.key, symbol.key)
+    chart = _yahoo_chart(ticker)
+    bars = _yahoo_bars(chart)
+    price = _yahoo_price(chart, bars)
+    closes = [round(bar[2], 2) for bar in bars] + [price]
+    day_vol = _range_pct(*bars[-1])
+    news = _headlines(_NEWS_QUERIES.get(symbol.key, symbol.key))
+
+    if symbol.kind != KIND_KR:
+        # 미국 주식엔 대응 무기한 시장이 없다. 일봉 레인지를 그대로 쓰고 출처에 적는다.
+        return _finish(
+            symbol,
+            closes,
+            price,
+            day_vol,
+            day_vol,
+            headlines=news,
+            source=f"Yahoo {ticker} 일봉 · 무기한 시장 없음 · 뉴스 Yahoo",
+            now=now,
+        )
+
+    # 한국 종목: 화면 가격은 원화, 판정 변동성은 해외 무기한. 둘을 같이 들고 간다.
+    perp = _binance_klines(f"{symbol.key}USDT", perp=True, limit=3)[-2]
+    perp_vol = _range_pct(_num(perp[2]), _num(perp[3]), _num(perp[4]))
+    fx = _fx_krw()
+    return _finish(
+        symbol,
+        closes,
+        price,
+        perp_vol,
+        day_vol,
+        headlines=news,
+        source=(
+            f"Yahoo {ticker} · 무기한 {'/'.join(PERP_EXCHANGES)} · "
+            f"환율 Yahoo {_FX_TICKER} · 뉴스 Yahoo"
+        ),
+        now=now,
+        board_rows=_board(symbol.key, fx, price),
+        fx=fx,
+    )
+
+
+def live_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
+    """실측 시세 한 장. 못 가져오면 MarketError 로 판을 접는다."""
+    now = now or datetime.now(KST)
+    if symbol.kind == KIND_COIN:
+        return _coin_snapshot(symbol, now)
+    return _stock_snapshot(symbol, now)
