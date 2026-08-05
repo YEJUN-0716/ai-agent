@@ -4303,12 +4303,12 @@ _MODULE_STATUS_COLOR = {'정상': '#26a69a', '주의': '#f0b90b', '경고': '#ef
 
 
 def inject_console_css():
-    """모듈 콘솔(그룹 컨테이너 + 모듈 칩 버튼) + 커맨드 바 CSS를 주입.
+    """보고서 레일(그룹 컨테이너 + 화면 열기 버튼) + 커맨드 바 CSS를 주입.
     st.container(key=...)가 만드는 안정적인 st-key-* 클래스로 스코프를 좁힌다.
 
     주의: 세션당 1회 주입(session_state 게이트)은 금물 — Streamlit은 rerun마다 화면을
     새로 그리므로 두 번째 rerun부터 <style>이 DOM에서 사라져 스타일이 전부 풀린다.
-    매 rerun 호출돼야 하며, 중복 호출 방지는 호출부(render_module_console 한 곳)가 담당한다."""
+    매 rerun 호출돼야 하며, 중복 호출 방지는 호출부(main() 한 곳)가 담당한다."""
     st.markdown("""
 <style>
 /* ── 모듈 그룹 패널 ── */
@@ -4336,6 +4336,20 @@ div[class*="st-key-modbtn_"] button p {
     font-size: 11.5px !important; line-height: 1.6 !important;
 }
 div[class*="st-key-modbtn_"] button:hover { filter: brightness(1.25); }
+
+/* ── 우측 레일의 "화면 열기" — 보고서 글을 읽는 흐름을 끊지 않게 최대한 작게 ── */
+div[class*="st-key-modopen_"] button {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace !important;
+    font-size: 10px !important;
+    min-height: 0 !important;
+    padding: 1px 8px !important;
+    margin: -3px 0 10px 0 !important;
+    color: var(--text-4) !important;
+    border-color: transparent !important;
+    background: transparent !important;
+}
+div[class*="st-key-modopen_"] button p { font-size: 10px !important; }
+div[class*="st-key-modopen_"] button:hover { color: var(--text-1) !important; }
 
 /* 경고 모듈은 좌측 바가 점멸한다 (per-chip box-shadow를 주지 않아야 애니메이션이 산다) */
 @keyframes mod-alert {
@@ -4662,70 +4676,91 @@ def _group_modules(group: ModuleGroup):
     return group.modules() if callable(group.modules) else group.modules
 
 
-def render_module_console(groups: List[ModuleGroup], per_row: int = 3):
-    """모듈 콘솔을 2단계로 렌더링: 1) 모든 그룹의 모듈 칩을 먼저 그려 이번 rerun의 클릭을
-    확정하고, 2) 확정된 선택값으로 콘솔 아래 상세 영역에 보고서·업무 패널을 그린다.
-    (Streamlit은 st.button()을 순차 평가하므로, 칩을 그리는 도중에 상세를 그리면
-    방금 클릭한 모듈이 직전 선택값을 덮어쓰기 전 상태로 표시된다.)
+def render_report_rail(groups: List[ModuleGroup]):
+    """우측 레일 — 전 모듈의 보고서를 접지 않고 글로 쭉 적는다. 보고서 dict를 반환.
 
-    칩 스타일은 inject_console_css()에 의존한다 — main()이 매 rerun 먼저 주입한다."""
+    칩만 늘어놓던 구조에서는 11개 모듈 중 하나를 눌러야 그 하나의 근거를 읽을 수
+    있었다. 여기서는 상태와 근거를 전부 펼쳐 두고, 실행할 화면이 있는 모듈만
+    작은 버튼으로 왼쪽 메인에 연다.
+
+    반환값을 메인 쪽이 다시 쓴다 — report_fn 중에는 파일을 읽거나 계산을 하는
+    것이 있어 한 rerun 안에서 두 번 부를 이유가 없다.
+
+    스타일은 inject_console_css()에 의존한다 — main()이 매 rerun 먼저 주입한다."""
     chip_css = []
-    reports = {}
+    reports  = {}
+    st.markdown(
+        "<div style='display:flex;align-items:baseline;gap:8px;margin:0 0 8px 0'>"
+        "<span style=\"font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;"
+        "font-family:'JetBrains Mono',ui-monospace,monospace\">REPORTS</span>"
+        "<span style='font-size:10px;color:var(--text-4)'>전 모듈 보고서 · 상시 표시</span></div>",
+        unsafe_allow_html=True)
 
-    for row_start in range(0, len(groups), per_row):
-        row = groups[row_start:row_start + per_row]
-        cols = st.columns(per_row)
-        for col, group in zip(cols, row):
-            with col:
-                modules = _group_modules(group)
-                with st.container(key=f"modgrp_{group.key}"):
-                    st.markdown(
-                        f"<div style='display:flex;align-items:baseline;gap:7px;margin-bottom:8px'>"
-                        f"<span style='font-size:13px'>{group.icon}</span>"
-                        f"<span style='font-size:10.5px;font-weight:800;color:var(--text-3);"
-                        f"letter-spacing:1.1px;text-transform:uppercase'>{group.name}</span>"
-                        f"<span style='font-size:10px;color:var(--text-4);margin-left:auto;"
-                        f"font-family:JetBrains Mono,monospace'>{len(modules or [])}</span></div>",
-                        unsafe_allow_html=True)
-                    if not modules:
-                        st.caption("대기 — 종목을 분석하면 모듈이 활성화됩니다.")
-                        continue
-                    # 위젯 키는 순번으로 만든다 — 모듈 키(예: '차트+파동+모멘텀')를 그대로 쓰면
-                    # st-key-* 클래스에 '+'·한글이 섞여 CSS 셀렉터가 깨진다.
-                    for idx, mod in enumerate(modules):
-                        chip_key = f"modbtn_{group.key}_{idx}"
-                        rep = mod.report_fn()
-                        reports[(group.key, mod.key)] = rep
-                        color, alert = _module_accent(rep)
-                        n = _normalize_report(rep)
-                        sel = st.session_state.get('module_view') == (group.key, mod.key)
-                        # 경고 모듈은 점멸 애니메이션이 box-shadow를 그리므로 여기서 덮어쓰지 않는다
-                        if alert:
-                            shadow = 'animation:mod-alert 1.4s ease-in-out infinite;'
-                        elif sel:
-                            shadow = (f'box-shadow:inset 3px 0 0 0 {color},'
-                                      f'inset 0 0 0 1px {color}77,'
-                                      f'inset 0 0 0 999px {color}26 !important;')
-                        else:
-                            shadow = (f'box-shadow:inset 3px 0 0 0 {color},'
-                                      f'inset 0 0 0 999px {color}0f !important;')
-                        chip_css.append(f'.st-key-{chip_key} button {{{shadow}}}')
-                        if st.button(f"{mod.name}\n{n['headline']}",
-                                     key=chip_key, use_container_width=True):
-                            st.session_state['module_view'] = (group.key, mod.key)
+    for group in groups:
+        modules = _group_modules(group)
+        with st.container(key=f"modgrp_{group.key}"):
+            st.markdown(
+                f"<div style='display:flex;align-items:baseline;gap:7px;margin-bottom:8px'>"
+                f"<span style='font-size:13px'>{group.icon}</span>"
+                f"<span style='font-size:10.5px;font-weight:800;color:var(--text-3);"
+                f"letter-spacing:1.1px;text-transform:uppercase'>{group.name}</span>"
+                f"<span style='font-size:10px;color:var(--text-4);margin-left:auto;"
+                f"font-family:JetBrains Mono,monospace'>{len(modules or [])}</span></div>",
+                unsafe_allow_html=True)
+            if not modules:
+                st.caption("대기 — 종목을 분석하면 모듈이 활성화됩니다.")
+                continue
+            # 위젯 키는 순번으로 만든다 — 모듈 키(예: '차트+파동+모멘텀')를 그대로 쓰면
+            # st-key-* 클래스에 '+'·한글이 섞여 CSS 셀렉터가 깨진다.
+            for idx, mod in enumerate(modules):
+                rep = mod.report_fn()
+                reports[(group.key, mod.key)] = rep
+                color, alert = _module_accent(rep)
+                n = _normalize_report(rep)
+                sel = st.session_state.get('module_view') == (group.key, mod.key)
+                # 경고 모듈은 좌측 바가 점멸한다. 애니메이션이 box-shadow 를 쓰므로
+                # 그 경우엔 고정 테두리를 얹지 않는다 — 얹으면 점멸이 죽는다.
+                _accent = ('animation:mod-alert 1.4s ease-in-out infinite;' if alert
+                           else f'border-left:3px solid {color};')
+                st.markdown(f"""
+<div style="background:{color}{'1a' if sel else '0d'};
+            border:1px solid {color}{'66' if sel else '2e'};{_accent}
+            border-radius:4px;padding:9px 11px;margin:0 0 7px 0">
+  <div style="display:flex;align-items:baseline;gap:7px;margin-bottom:4px">
+    <span style="font-size:12px;font-weight:700;color:var(--text-2)">{n['icon']} {n['name']}</span>
+    <span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:3px;margin-left:auto;
+                 background:{color}22;color:{color};letter-spacing:.5px;
+                 font-family:'JetBrains Mono',ui-monospace,monospace">{n['headline']}</span>
+  </div>
+  <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:15px;line-height:1.65">
+    {_reasons_to_html(n['reasons'])}</ul>
+</div>""", unsafe_allow_html=True)
+                if mod.panel_fn is None:
+                    continue
+                open_key = f"modopen_{group.key}_{idx}"
+                if sel:
+                    chip_css.append(f'.st-key-{open_key} button {{color:{color} !important}}')
+                if st.button("▸ 화면 열림" if sel else "▸ 화면 열기",
+                             key=open_key, use_container_width=True):
+                    st.session_state['module_view'] = (group.key, mod.key)
 
     if chip_css:
         st.markdown(f"<style>{''.join(chip_css)}</style>", unsafe_allow_html=True)
+    return reports
 
-    # ── 선택된 모듈 상세 ──────────────
+
+def render_module_detail(groups: List[ModuleGroup], reports: dict):
+    """레일에서 연 모듈의 업무 화면 — 메인 칼럼에 그린다. 연 게 없으면 아무것도 안 그린다.
+
+    반드시 render_report_rail() **뒤에** 불러야 한다. Streamlit은 st.button()을
+    순차 평가하므로, 먼저 그리면 방금 누른 모듈이 직전 선택값으로 표시된다."""
     sel = st.session_state.get('module_view')
     sel_group = next((g for g in groups if sel and g.key == sel[0]), None)
     sel_mod = next((m for m in (_group_modules(sel_group) or []) if m.key == sel[1]),
                    None) if sel_group else None
+    if sel_mod is None:
+        return
     with st.container(border=True, key="module_detail"):
-        if sel_mod is None:
-            st.caption("모듈을 선택하면 이 자리에 보고서와 업무 화면이 열립니다.")
-            return
         st.markdown(
             f"<div style='font-size:10.5px;font-weight:700;color:var(--text-4);letter-spacing:1px;"
             f"margin-bottom:4px;font-family:JetBrains Mono,monospace'>"
@@ -4736,6 +4771,72 @@ def render_module_console(groups: List[ModuleGroup], per_row: int = 3):
         if sel_mod.panel_fn is not None:
             st.markdown("")
             sel_mod.panel_fn()
+
+
+def render_verdict_cards(snap):
+    """총괄 종합 보고서 + 트레이더 매수/매도 라인 카드.
+
+    메인 상단(render_verdict_hero)과 애널리스트 팀 리포트가 같은 카드를 쓴다.
+    두 곳이 각자 HTML을 들고 있으면 한쪽만 고쳐진 채 서로 다른 판정을 보여준다.
+    """
+    mgr, trader = snap['manager'], snap['trader']
+    p = lambda v: _fmt_price(v, snap.get('is_krw', False))   # noqa: E731
+
+    mc = score_color(mgr['total_score'])
+    dissent_html = f"<br>⚠️ {mgr['dissent']}" if mgr['dissent'] else ''
+    context_bits = ' · '.join(x for x in (mgr.get('macro_note'), mgr.get('confidence_note')) if x)
+    context_html = (f"<div style='font-size:11px;color:var(--text-4);margin-top:6px'>{context_bits}</div>"
+                    if context_bits else '')
+    st.markdown(f"""
+<div style="background:{mc}0d;border:1px solid {mc}40;border-radius:10px;padding:14px 18px;margin-top:4px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📊 총괄 종합 보고서 <span style="text-transform:none;font-weight:500">— 방향성 3인 IC가중 블렌드</span></div>
+  <div style="display:flex;align-items:baseline;gap:12px;margin:6px 0;flex-wrap:wrap">
+    <span style="font-size:2rem;font-weight:800;color:{mc};font-family:'JetBrains Mono',monospace">{mgr['total_score']:.1f}</span>
+    <span style="font-size:13px;font-weight:700;color:{mc}">{mgr['consensus']}</span>
+    <span style="font-size:11px;color:var(--text-4)">팀 합의율 {mgr['agreement']}%</span>
+  </div>
+  <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {mgr['strongest_opinion']}{dissent_html}</div>
+  {context_html}
+</div>""", unsafe_allow_html=True)
+
+    tl = '#10b981' if mgr['verdict'] == '매수' else ('#ef4444' if mgr['verdict'] == '매도' else '#f59e0b')
+    pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {trader['position_note']}</div>"
+                if trader['position_note'] else '')
+    st.markdown(f"""
+<div style="background:{tl}0d;border:1px solid {tl}40;border-radius:10px;padding:14px 18px;margin-top:8px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 — 매수/매도 라인</div>
+  <div style="font-size:13px;font-weight:700;color:{tl};margin:6px 0">{trader['stance']}</div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
+    <span>🟢 매수 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['buy_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['buy_dist']:+.1f}%)</span></span>
+    <span>🔴 매도 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['sell_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['sell_dist']:+.1f}%)</span></span>
+  </div>{pos_html}
+</div>""", unsafe_allow_html=True)
+    st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
+
+
+def render_verdict_hero():
+    """메인 최상단 — 마지막으로 분석한 종목의 총괄 판정과 매수/매도 라인.
+
+    이 자리에는 모듈 칩 12개가 깔려 있었다. 정작 결론(살 것인가, 얼마에)은
+    분석 패널 안쪽 접힌 expander에 있어 매번 찾아 들어가야 했다.
+    """
+    st.markdown(
+        "<div style='display:flex;align-items:baseline;gap:10px;margin:0 0 6px 0'>"
+        "<span style=\"font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;"
+        "font-family:'JetBrains Mono',ui-monospace,monospace\">VERDICT · 총괄 판정</span>"
+        "<span style='font-size:10.5px;color:var(--text-4)'>애널리스트 7인 종합 → 트레이더 라인</span></div>",
+        unsafe_allow_html=True)
+    snap = st.session_state.get('analyst_snapshot')
+    if not snap:
+        st.info("상단 커맨드 바에 종목을 넣고 **분석 시작**을 누르면 "
+                "여기에 총괄 점수와 매수/매도 라인이 뜹니다.")
+        return
+    st.markdown(
+        f"<div style='font-size:11px;color:var(--text-4);font-family:JetBrains Mono,monospace'>"
+        f"LAST SCAN · {snap['ticker']}</div>", unsafe_allow_html=True)
+    render_verdict_cards(snap)
 
 
 def _fmt_price(v, is_krw):
@@ -5323,44 +5424,15 @@ def main():
                             _render_report_card(_rep)
 
                 st.markdown("")
-                _mgr = manager_consolidate(_team_reports)
-                _mc  = score_color(_mgr['total_score'])
-                _dissent_html = f"<br>⚠️ {_mgr['dissent']}" if _mgr['dissent'] else ''
-                _context_bits = ' · '.join(x for x in (_mgr.get('macro_note'), _mgr.get('confidence_note')) if x)
-                _context_html = (f"<div style='font-size:11px;color:var(--text-4);margin-top:6px'>{_context_bits}</div>"
-                                 if _context_bits else '')
-                st.markdown(f"""
-<div style="background:{_mc}0d;border:1px solid {_mc}40;border-radius:10px;padding:14px 18px;margin-top:4px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📊 총괄 종합 보고서 <span style="text-transform:none;font-weight:500">— 방향성 3인 IC가중 블렌드</span></div>
-  <div style="display:flex;align-items:baseline;gap:12px;margin:6px 0;flex-wrap:wrap">
-    <span style="font-size:2rem;font-weight:800;color:{_mc};font-family:'JetBrains Mono',monospace">{_mgr['total_score']:.1f}</span>
-    <span style="font-size:13px;font-weight:700;color:{_mc}">{_mgr['consensus']}</span>
-    <span style="font-size:11px;color:var(--text-4)">팀 합의율 {_mgr['agreement']}%</span>
-  </div>
-  <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {_mgr['strongest_opinion']}{_dissent_html}</div>
-  {_context_html}
-</div>""", unsafe_allow_html=True)
-
+                _mgr      = manager_consolidate(_team_reports)
                 _risk_rep = next(r for r in _team_reports if r['name'] == '리스크팀')
-                _trader = trader_signal_lines(df, _mgr, _risk_rep)
+                _trader   = trader_signal_lines(df, _mgr, _risk_rep)
                 st.session_state['analyst_snapshot'] = {
-                    'ticker': ticker, 'reports': _team_reports, 'manager': _mgr, 'trader': _trader,
+                    'ticker': ticker, 'reports': _team_reports, 'manager': _mgr,
+                    'trader': _trader, 'is_krw': is_krw,
                 }
-                _tl_color = '#10b981' if _mgr['verdict'] == '매수' else ('#ef4444' if _mgr['verdict'] == '매도' else '#f59e0b')
-                _pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {_trader['position_note']}</div>"
-                             if _trader['position_note'] else '')
-                st.markdown(f"""
-<div style="background:{_tl_color}0d;border:1px solid {_tl_color}40;border-radius:10px;padding:14px 18px;margin-top:8px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 — 매수/매도 라인</div>
-  <div style="font-size:13px;font-weight:700;color:{_tl_color};margin:6px 0">{_trader['stance']}</div>
-  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
-    <span>🟢 매수 라인: <b style="font-family:'JetBrains Mono',monospace">{fmt_p(_trader['buy_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({_trader['buy_dist']:+.1f}%)</span></span>
-    <span>🔴 매도 라인: <b style="font-family:'JetBrains Mono',monospace">{fmt_p(_trader['sell_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({_trader['sell_dist']:+.1f}%)</span></span>
-  </div>{_pos_html}
-</div>""", unsafe_allow_html=True)
-                st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
+                # 같은 카드를 메인 상단(render_verdict_hero)도 그린다 — 공유 함수를 쓴다.
+                render_verdict_cards(st.session_state['analyst_snapshot'])
 
             # ── 국면 조정 배너 ──────────────────────────
             _rcm = {'bull':'#10b981','bear':'#ef4444','neutral':'#f59e0b'}
@@ -7710,12 +7782,7 @@ def main():
                 st.plotly_chart(_fig_eq, width='stretch')
                 st.caption("체결가는 신호 다음 거래일 시가 · 슬리피지와 부분체결은 반영되지 않습니다.")
 
-    st.markdown("""
-<div style="display:flex;align-items:baseline;gap:10px;margin:16px 0 8px 0">
-  <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
-               font-family:'JetBrains Mono',ui-monospace,monospace">MODULES</span>
-  <span style="font-size:10.5px;color:var(--text-4)">모듈을 클릭하면 콘솔 아래에 보고서와 업무 화면이 열립니다</span>
-</div>""", unsafe_allow_html=True)
+    # (옛 MODULES 헤더 자리 — 칩 그리드가 사라지고 VERDICT / REPORTS 두 헤더가 대신한다)
 
     def render_trade_plan_panel():
         """트레이드 플랜 상세 — 플랜 라인이 그려진 ICT 차트 + 진입 근거."""
@@ -7793,14 +7860,29 @@ def main():
         ]),
     ]
 
-    render_module_console(_groups, per_row=2)
+    # ── 메인(총괄 판정 + 연 모듈의 업무 화면) | 우측 레일(전 모듈 보고서) ──
+    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+    _main_col, _rail_col = st.columns([2.5, 1], gap="large")
+
+    # 레일을 먼저 채운다. Streamlit은 st.button()을 만나는 순서대로 평가하므로
+    # 메인을 먼저 그리면 방금 누른 모듈이 한 박자 늦게 열린다. (칼럼의 화면상
+    # 위치는 st.columns()가 이미 정해 뒀으므로 채우는 순서와 무관하다.)
+    with _rail_col:
+        # 레일에 높이를 준다(자체 스크롤). 안 주면 보고서 11개 길이만큼 칼럼이 늘어나
+        # 왼쪽에 화면 두 개 분량의 빈 공간이 생기고, 아래 워크스페이스가 그만큼 밀린다.
+        with st.container(height=740, border=False):
+            _reports = render_report_rail(_groups)
+    with _main_col:
+        render_verdict_hero()
+        render_module_detail(_groups, _reports)
 
     # ── 분석 워크스페이스 (커맨드 바에서 실행한 분석의 결과 화면) ──
+    # 차트·표가 넓어야 읽히므로 칼럼 밖 전체 폭에 둔다.
     st.markdown("""
 <div style="display:flex;align-items:baseline;gap:10px;margin:20px 0 8px 0">
   <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
                font-family:'JetBrains Mono',ui-monospace,monospace">ANALYSIS WORKSPACE</span>
-  <span style="font-size:10.5px;color:var(--text-4)">상단 커맨드 바에서 실행한 종목 분석 결과 · 애널리스트 모듈로도 반영됩니다</span>
+  <span style="font-size:10.5px;color:var(--text-4)">상단 커맨드 바에서 실행한 종목 분석 결과 · 우측 보고서에도 반영됩니다</span>
 </div>""", unsafe_allow_html=True)
     with st.container(border=True, key="analysis_workspace"):
         render_stock_analysis_panel()
@@ -7809,8 +7891,8 @@ def main():
     st.markdown("---")
     render_desk_status()
 
-    # 분석이 방금 끝났으면 한 번 더 rerun — 이번 rerun의 모듈 콘솔은 분석 *이전*
-    # 스냅샷으로 이미 그려졌으므로, 새 결과가 저장된 상태에서 다시 그린다.
+    # 분석이 방금 끝났으면 한 번 더 rerun — 이번 rerun의 총괄 판정·보고서 레일은
+    # 분석 *이전* 스냅샷으로 이미 그려졌으므로, 새 결과가 저장된 상태에서 다시 그린다.
     if st.session_state.pop('_analysis_done_flip', False):
         st.rerun()
 
