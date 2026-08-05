@@ -26,7 +26,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from floor import claude_runner, market, report
+from floor import claude_runner, market, plan_gate, report
 from floor.agents import BY_KEY, Mode, UnknownMode, resolve_mode
 from floor.demo import Briefing, Context, Verdict
 from floor.market import Snapshot, Symbol, UnknownSymbol
@@ -92,6 +92,8 @@ def _snapshot_from(data: dict) -> Snapshot:
     fields["symbol"] = Symbol(**fields["symbol"])
     for key in _TUPLE_FIELDS:
         fields[key] = tuple(fields[key])
+    # 봉은 튜플의 튜플이라 한 겹 더 되돌린다.
+    fields["bars"] = tuple(tuple(bar) for bar in fields.get("bars", ()))
     return Snapshot(**fields)
 
 
@@ -264,6 +266,10 @@ def save(
     if final is None:
         raise FloorError("판정을 낸 에이전트가 없습니다.")
 
+    # 화면과 같은 관문을 세션에서도 통과해야 한다. 여기서 빠지면 `/floor` 로 돈 판만
+    # 검증 없이 리포트에 남는다.
+    gate = plan_gate.check(snapshot.bars, final.action) if mode.key == "algo" else None
+
     text = report.render(
         snapshot=snapshot,
         mode_key=mode.key,
@@ -274,9 +280,10 @@ def save(
         retro=retro,
         now=now,
         source=snapshot.source,
+        gate=gate,
     )
     path = report.save(reports_dir, report.report_name(snapshot.symbol.key, now), text)
-    return path, final
+    return path, final, gate
 
 
 # ── 명령줄 ────────────────────────────────────────────────
@@ -315,13 +322,17 @@ def main(argv: list[str] | None = None) -> int:
             text, _ = prep(*split_args(args.words))
             print(text)
         else:
-            path, verdict = save(args.state, args.briefings)
+            path, verdict, gate = save(args.state, args.briefings)
             print(f"리포트 저장 — {_rel(path)}")
             print(
                 f"판정 {verdict.action} · 확신도 {verdict.confidence}% · "
                 f"진입 {verdict.entry} · 손절 {verdict.stop} · 목표 {verdict.target} · "
                 f"비중 {verdict.size_pct}%"
             )
+            if gate is not None:
+                print(f"검증 관문 {gate.status.upper()} — {gate.headline}")
+                if gate.blocked:
+                    print("→ 이 매매는 하지 않습니다. 위 숫자는 실행 대상이 아닙니다.")
     except _FAILURES as exc:
         print(f"실패 — {exc}", file=sys.stderr)
         return 1

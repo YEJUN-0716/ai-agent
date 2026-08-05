@@ -303,6 +303,42 @@ function paintVerdict(v) {
   $("vWhy").textContent = v.rationale;
 }
 
+const GATE_MARKS = { pass: "✅ 검증 통과", reject: "⛔ 검증 기각", skip: "⚠️ 검사 못 함" };
+
+/* 검증 관문. 여기 뜨는 라인은 클로드가 부른 숫자가 아니라 stock-analyzer
+   플랜 엔진이 계산한 것이다. 기각이면 판정 카드 전체를 잠근다. */
+function paintGate(g) {
+  const box = $("vGate");
+  box.hidden = false;
+  box.className = `gate ${g.status}`;
+  $("vGateHead").textContent = `${GATE_MARKS[g.status] || g.status} — ${g.headline}`;
+
+  const rows = [];
+  if (g.targets && g.targets.length) {
+    rows.push(
+      `진입 ${money(g.entry_low, currency)}~${money(g.entry_high, currency)}` +
+      `  ·  손절 ${money(g.stop, currency)}`
+    );
+    g.targets.forEach((t, i) => {
+      const rr = g.rr && g.rr[i] != null ? `  (R:R ${g.rr[i]})` : "";
+      rows.push(`목표${i + 1} ${money(t, currency)}${rr}`);
+    });
+  }
+  if (g.blocked) rows.push("→ 이 매매는 하지 않습니다. 위 숫자는 실행 대상이 아닙니다.");
+  else if (g.status === "skip") rows.push("→ 통과가 아니라 확인이 안 된 상태입니다.");
+
+  const lines = $("vGateLines");
+  lines.textContent = "";
+  for (const text of rows) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    lines.appendChild(div);
+  }
+  // 기각은 잠그고, 검사 못 함은 잠그진 않되 통과와 같아 보이면 안 된다.
+  $("verdict").classList.toggle("blocked", !!g.blocked);
+  $("verdict").classList.toggle("unchecked", g.status === "skip");
+}
+
 /* ── 사건 재생 ──────────────────────────────────── */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let queue = [], draining = false, seen = 0, total = 0;
@@ -350,7 +386,12 @@ async function play(ev) {
       break;
     case "verdict":
       paintVerdict(ev);
-      line(`■ 최종 판정 ${ev.action} · 확신도 ${ev.confidence}%`, "head");
+      line(`■ 플로어 판정 ${ev.action} · 확신도 ${ev.confidence}%`, "head");
+      await sleep(300);
+      break;
+    case "gate":
+      paintGate(ev);
+      line(`■ 검증 관문 — ${ev.headline}`, ev.blocked ? "warn" : "head");
       await sleep(300);
       break;
     case "saved": {
@@ -383,6 +424,8 @@ function analyze(symbol) {
   $("run").disabled = true;
   $("log").innerHTML = "";
   $("toast").hidden = true;
+  $("vGate").hidden = true;
+  $("verdict").classList.remove("blocked", "unchecked");
   queue = []; seen = 0; total = 0; lastBriefs = {};
   $("progress").textContent = "";
 

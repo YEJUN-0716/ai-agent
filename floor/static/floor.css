@@ -156,6 +156,23 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:10px;padding:10p
 .pm{margin-top:8px;padding:4px 6px;border:2px solid var(--violet);color:var(--violet);font-size:11px}
 .v-why{margin:8px 0 0;color:var(--dim);font-size:11px;line-height:1.5}
 
+/* ── 검증 관문 ───────────────────────────────────── */
+/* 기각당한 판은 카드째 빨갛게 잠근다. 숫자는 남지만 실행 대상이 아니라는 뜻이다. */
+.verdict.blocked{border-color:var(--red)}
+/* 검사 못 함. 기각은 아니지만 검증된 판정과 같아 보여선 안 된다. */
+.verdict.unchecked{border-color:var(--gold);border-style:dashed}
+.verdict.blocked .v-action,
+.verdict.blocked .v-levels dd{color:var(--dim);text-decoration:line-through}
+.gate{margin-top:8px;padding:6px 8px;border:2px solid var(--line);font-size:11px}
+.gate.pass{border-color:var(--green)}
+.gate.reject{border-color:var(--red)}
+.gate.skip{border-color:var(--gold)}
+.gate-head{font-weight:700;line-height:1.4}
+.gate.pass .gate-head{color:var(--green)}
+.gate.reject .gate-head{color:var(--red)}
+.gate.skip .gate-head{color:var(--gold)}
+.gate-lines{margin-top:5px;color:var(--dim);line-height:1.6}
+
 /* ── 콘솔 ────────────────────────────────────────── */
 .console{background:var(--panel);border:2px solid var(--line);display:flex;flex-direction:column;min-height:0}
 .tabs{display:flex;gap:4px;padding:6px;border-bottom:2px solid var(--line);align-items:center}

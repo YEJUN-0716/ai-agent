@@ -23,7 +23,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from floor import report
+from floor import plan_gate, report
 from floor.agents import BY_KEY, MODES, UnknownMode, resolve_mode
 from floor.demo import Briefing, Context, Verdict, demo_runner
 from floor.market import Snapshot, Symbol, UnknownSymbol, demo_snapshot, resolve_symbol
@@ -200,6 +200,13 @@ def run(
 
     yield _verdict_event(final, mode.basis)
 
+    # 검증 관문. 방향은 플로어가 정했고, 그 매매가 가능한지는 엔진이 정한다.
+    # 일봉 ICT 구조 기반이라 시간축이 맞는 algo 모드에만 세운다 — scalp·attack 은
+    # 15분봉 단타라 이 엔진의 판단 범위 밖이고, attack 은 애초에 연출용이다.
+    gate = plan_gate.check(snapshot.bars, final.action) if mode.key == "algo" else None
+    if gate is not None:
+        yield {"type": "gate", **asdict(gate), "blocked": gate.blocked}
+
     text = report.render(
         snapshot=snapshot,
         mode_key=mode.key,
@@ -207,6 +214,7 @@ def run(
         basis=mode.basis,
         briefings=tuple(briefings),
         verdict=final,
+        gate=gate,
         retro=retro,
         now=now,
         source=snapshot.source,

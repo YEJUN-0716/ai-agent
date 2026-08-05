@@ -16,6 +16,8 @@ from pathlib import Path
 
 from floor.demo import Briefing, Verdict
 from floor.market import KST, Snapshot
+from floor import plan_gate
+from floor.plan_gate import GateResult
 
 # 화면(`server.py`)과 세션(`cli.py`)이 같은 서랍을 쓴다. 갈라지면 회고가 끊긴다.
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
@@ -50,17 +52,58 @@ def report_name(symbol_key: str, now: datetime) -> str:
     return f"{now:%Y-%m-%d}-{symbol_key}-{now:%H%M}.md"
 
 
-def _header(snapshot: Snapshot, mode_key: str, verdict: Verdict, now: datetime) -> str:
+def _header(
+    snapshot: Snapshot, mode_key: str, now: datetime, action: str, confidence: int
+) -> str:
     values = {
         "symbol": snapshot.symbol.key,
         "mode": mode_key,
-        "action": verdict.action,
-        "confidence": verdict.confidence,
+        # 회고는 이 두 줄만 읽는다. 기각당한 판이면 실행된 결론(HOLD·0%)을 적어야
+        # 안 한 매매를 했다고 기억하지 않는다.
+        "action": action,
+        "confidence": confidence,
         "price": snapshot.price,
         "at": now.isoformat(),
     }
     lines = "\n".join(f"{key}: {values[key]}" for key in _HEADER_KEYS)
     return f"---\n{lines}\n---\n"
+
+
+_GATE_MARKS = {
+    plan_gate.STATUS_PASS: "✅ 통과",
+    plan_gate.STATUS_REJECT: "⛔ 기각",
+    plan_gate.STATUS_SKIP: "⚠️ 검사 못 함",
+}
+
+
+def _gate_section(gate: GateResult, verdict: Verdict) -> list[str]:
+    """검증 관문 절. 엔진이 계산한 라인만 실행 대상으로 적는다."""
+    mark = _GATE_MARKS.get(gate.status, gate.status)
+    lines = [
+        "\n## 검증 관문 — stock-analyzer 플랜 엔진\n",
+        f"- 결과 **{mark}** — {gate.headline}",
+    ]
+    if gate.targets:
+        lines.append(f"- 방향 {gate.direction} · 확신도 {gate.confidence}")
+        lines.append(f"- 진입 {gate.entry_low}~{gate.entry_high} · 손절 {gate.stop}")
+        for i, target in enumerate(gate.targets):
+            rr = gate.rr[i] if i < len(gate.rr) else None
+            lines.append(f"- 목표{i + 1} {target}" + (f" (R:R {rr})" if rr else ""))
+    if gate.signals:
+        lines.append("- 근거")
+        lines.extend(f"  - {s}" for s in gate.signals)
+
+    if gate.blocked:
+        lines.append(
+            f"\n> 기각된 판입니다. 위 플로어 판정의 진입 {verdict.entry} · "
+            f"손절 {verdict.stop} · 목표 {verdict.target} 는 에이전트가 부른 숫자이며 "
+            "실행 대상이 아닙니다."
+        )
+    elif gate.status == plan_gate.STATUS_SKIP:
+        lines.append(
+            "\n> 검사기가 돌지 않았습니다. 통과가 아니라 확인이 안 된 상태입니다."
+        )
+    return lines
 
 
 def render(
@@ -73,11 +116,16 @@ def render(
     retro: tuple[str, ...],
     now: datetime,
     source: str,
+    gate: GateResult | None = None,
 ) -> str:
     s = snapshot
+    # 기각당했으면 실제로 실행된 결론은 관망이다. 제목과 머리말이 그걸 따른다.
+    blocked = gate is not None and gate.blocked
+    action = "HOLD" if blocked else verdict.action
+    confidence = 0 if blocked else verdict.confidence
     parts = [
-        _header(s, mode_key, verdict, now),
-        f"\n# {s.symbol.label} · {mode_label} · {verdict.action}\n",
+        _header(s, mode_key, now, action, confidence),
+        f"\n# {s.symbol.label} · {mode_label} · {action}\n",
         f"- 시각 {now:%Y-%m-%d %H:%M} KST",
         f"- 판정 기준 시장 **{basis}**",
         f"- 현재가 {s.price} ({s.change_pct:+.2f}%)",
@@ -108,13 +156,17 @@ def render(
         parts.append(f"### {item.agent} — {item.bubble}\n")
         parts.append(item.body + "\n")
 
-    parts.append("\n## 최종 판정\n")
+    parts.append("\n## 플로어 판정\n")
     parts.append(f"- 액션 **{verdict.action}** · 확신도 {verdict.confidence}%")
     parts.append(f"- 진입 {verdict.entry} · 손절 {verdict.stop} · 목표 {verdict.target}")
     parts.append(f"- 권장 비중 {verdict.size_pct}%")
     if verdict.pm_status:
         parts.append(f"- PM {verdict.pm_status} — {verdict.pm_comment}")
     parts.append(f"- 근거 {verdict.rationale}")
+
+    if gate is not None:
+        parts.extend(_gate_section(gate, verdict))
+
     parts.append(
         "\n---\nAI 시뮬레이션입니다. 투자 조언이 아니며 실제 주문은 이뤄지지 않았습니다.\n"
     )
