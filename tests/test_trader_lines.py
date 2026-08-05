@@ -1,30 +1,31 @@
-"""트레이더 라인 — 총괄 판정이 정한 방향으로 진입·목표·손절이 잡히는가.
+"""트레이더 라인 — 총괄이 방향을 정하고, 검증된 플랜 엔진이 라인을 잡는다.
 
-매수/매도 라인만 있을 때는 "얼마에 사서 얼마에 판다"까지만 말할 수 있었다.
-손절이 없으면 틀렸을 때 얼마를 잃는지 모르고, 그러면 손익비도 못 낸다 —
-방향이 맞아도 장기적으로 남는 게 없는 매매를 걸러낼 수가 없다.
+예전에는 이 함수가 지지/저항 최근접 레벨로 직접 라인을 그렸다. 그러면 화면이
+**언제나** 세 라인을 그린다 — 손익비가 0.6:1 이어도, 상승장 한복판에서 숏이어도.
+`modules/trade_plan.py` 에는 이미 같은 계산이 게이트(손익비 하한·숏 레짐·저확신
+숏 억제)와 백테스트까지 붙은 채로 있었으므로, 여기서는 그걸 호출하고 방향만
+총괄 판정으로 주입한다.
 
-방향도 계획의 일부다. 총괄이 매도를 냈는데 롱 계획을 그려 주면 화면이 총괄과
-반대되는 매매를 지시하게 된다. 그래서 매수→롱, 매도→숏, 중립→롱 기준 참고선.
-
-손절 자리는 진입 너머의 다음 지지/저항이다. 거기까지 갔으면 "이 자리에서
-되돌린다"는 진입 근거 자체가 사라진 것이다. 다만 지지·저항은 정확히 그
-가격에서 돌지 않고 살짝 넘겼다 돌아오는 일이 흔해서 ATR의 절반을 더 밀어낸다.
+그래서 이 파일이 지키는 것은 **이음매**다: 판정이 방향으로 옮겨졌는가, 플랜의
+숫자가 카드 키로 옳게 옮겨졌는가, 게이트가 걸렸을 때 화면이 라인 대신 사유를
+받는가. 라인 기하 자체는 tests/test_trade_plan.py 가 본다 — 두 번 보지 않는다.
 """
 
 import pandas as pd
 import pytest
 
 import app
+from modules import trade_plan as tp
 
 
 @pytest.fixture
 def flat_df():
-    """ATR이 정확히 2.0이 되는 30일치 봉 — 손절 폭을 손으로 검산할 수 있게."""
+    """현재가 100 인 봉. 플랜 엔진을 가짜로 갈아끼우므로 내용은 중요하지 않다."""
     n = 30
     return pd.DataFrame({
+        'Open':   [100.0] * n,
         'Close':  [100.0] * n,
-        'High':   [101.0] * n,   # TR = max(H-L, |H-prevC|, |L-prevC|) = max(2, 1, 1)
+        'High':   [101.0] * n,
         'Low':    [99.0] * n,
         'Volume': [1_000_000] * n,
     })
@@ -34,99 +35,140 @@ LONG    = {'verdict': '매수', 'agreement': 80}
 SHORT   = {'verdict': '매도', 'agreement': 80}
 NEUTRAL = {'verdict': '중립', 'agreement': 60}
 
-# 지지 95·90, 저항 110·120. 현재가 100.
-FULL_SR = [{'level': 95.0, 'above': False}, {'level': 90.0, 'above': False},
-           {'level': 110.0, 'above': True}, {'level': 120.0, 'above': True}]
+
+def _plan(**over):
+    """유효한 롱 플랜 하나 — 진입 95(94~96), 손절 89, 목표 110/120, R:R 2.5."""
+    base = {
+        'direction': 'long', 'bias_score': 20, 'confidence': 'high', 'confluence': 3,
+        'current': 100.0, 'entry': {'low': 94.0, 'high': 96.0, 'ref': 95.0},
+        'stop': 89.0, 'targets': [110.0, 120.0], 'rr': [2.5, 5.0],
+        'valid': True, 'reason_invalid': '', 'signals': ['진입 근거: Bullish OB 지지'],
+    }
+    base.update(over)
+    return base
 
 
-def _levels(monkeypatch, levels):
-    monkeypatch.setattr(app, 'find_sr_levels', lambda c, h, l: levels)
+def _no_lines(**over):
+    """게이트에 막혀 라인 자체가 없는 플랜 (숏 레짐 보류 등)."""
+    return _plan(entry={'low': 0.0, 'high': 0.0, 'ref': 0.0}, stop=0.0,
+                 targets=[], rr=[], valid=False, **over)
 
 
-def test_atr_measures_the_stocks_own_daily_swing(flat_df):
-    assert app.calc_atr(flat_df) == pytest.approx(2.0)
+def _engine(monkeypatch, plan, capture=None):
+    """플랜 엔진을 가짜로 교체. capture 를 주면 호출 인자를 담아 준다."""
+    def fake(df, **kwargs):
+        if capture is not None:
+            capture.update(kwargs)
+        return plan
+    monkeypatch.setattr(tp, 'build_trade_plan', fake)
 
 
-# ── 롱 (총괄 매수) ────────────────────────────────────────────────
+# ── 방향: 총괄 판정이 정한다 ──────────────────────────────────────
 
-def test_buy_verdict_plans_a_long(flat_df, monkeypatch):
-    _levels(monkeypatch, FULL_SR)
+def test_buy_verdict_asks_the_engine_for_a_long(flat_df, monkeypatch):
+    got = {}
+    _engine(monkeypatch, _plan(), got)
 
     t = app.trader_signal_lines(flat_df, LONG)
 
+    assert got['direction'] == 'long'
     assert t['direction'] == 'long'
-    assert t['entry_line'] == 95.0     # 최근접 지지에서 산다
-    assert t['target_line'] == 110.0   # 최근접 저항에서 판다
-    assert t['stop_line'] == pytest.approx(89.0)   # 다음 지지 90 − 0.5 ATR
-    assert t['stop_line'] < t['entry_line'] < t['target_line']
 
 
-def test_long_stop_falls_back_to_atr_when_no_support_below(flat_df, monkeypatch):
-    # 아래에 기댈 지지가 없으면 구조가 아니라 변동성으로 잰다 — 진입가 -1.5 ATR.
-    _levels(monkeypatch, [{'level': 95.0, 'above': False},
-                          {'level': 110.0, 'above': True}])
-
-    t = app.trader_signal_lines(flat_df, LONG)
-
-    assert t['stop_line'] == pytest.approx(92.0)
-    assert '지지 없음' in t['stop_note']
-
-
-def test_long_risk_reward_comes_from_the_three_lines(flat_df, monkeypatch):
-    # 진입 95 → 목표 110 은 +15, 진입 95 → 손절 89 는 -6. 손익비 2.5:1.
-    _levels(monkeypatch, FULL_SR)
-
-    assert app.trader_signal_lines(flat_df, LONG)['rr'] == pytest.approx(2.5)
-
-
-# ── 숏 (총괄 매도) ────────────────────────────────────────────────
-
-def test_sell_verdict_plans_a_short_not_a_long(flat_df, monkeypatch):
+def test_sell_verdict_asks_the_engine_for_a_short(flat_df, monkeypatch):
     """매도 판정에 롱 계획을 그려 주면 화면이 총괄과 반대되는 말을 한다."""
-    _levels(monkeypatch, FULL_SR)
+    got = {}
+    _engine(monkeypatch, _plan(direction='short'), got)
 
     t = app.trader_signal_lines(flat_df, SHORT)
 
+    assert got['direction'] == 'short'
     assert t['direction'] == 'short'
-    assert t['entry_line'] == 110.0    # 최근접 저항에서 판다(공매도)
-    assert t['target_line'] == 95.0    # 최근접 지지에서 되산다
-    assert t['stop_line'] == pytest.approx(121.0)  # 다음 저항 120 + 0.5 ATR
-    assert t['target_line'] < t['entry_line'] < t['stop_line']   # 롱과 정확히 반대
 
 
-def test_short_stop_falls_back_to_atr_when_no_resistance_above(flat_df, monkeypatch):
-    _levels(monkeypatch, [{'level': 95.0, 'above': False},
-                          {'level': 110.0, 'above': True}])
+def test_neutral_verdict_lets_the_structure_decide(flat_df, monkeypatch):
+    """총괄이 방향을 안 냈으면 억지로 롱 참고선을 그리지 않고 구조에 맡긴다."""
+    got = {}
+    _engine(monkeypatch, _plan(), got)
 
-    t = app.trader_signal_lines(flat_df, SHORT)
+    app.trader_signal_lines(flat_df, NEUTRAL)
 
-    assert t['stop_line'] == pytest.approx(113.0)   # 진입 110 + 1.5 ATR
-    assert '저항 없음' in t['stop_note']
-
-
-def test_short_risk_reward_uses_the_short_direction(flat_df, monkeypatch):
-    # 진입 110 → 목표 95 는 +15(숏이니 하락이 이익), 손절 121 까지는 -11.
-    _levels(monkeypatch, FULL_SR)
-
-    assert app.trader_signal_lines(flat_df, SHORT)['rr'] == pytest.approx(15 / 11)
+    assert got['direction'] is None
 
 
-# ── 중립·경계 ────────────────────────────────────────────────────
+# ── 매핑: 플랜의 숫자가 카드 키로 옳게 옮겨지는가 ────────────────
 
-def test_neutral_verdict_keeps_the_long_reference(flat_df, monkeypatch):
-    # 방향이 없으면 참고선이라도 하나는 있어야 한다. 롱 기준으로 두고 화면이 밝힌다.
-    _levels(monkeypatch, FULL_SR)
-
-    assert app.trader_signal_lines(flat_df, NEUTRAL)['direction'] == 'long'
-
-
-def test_long_stop_never_goes_below_zero(flat_df, monkeypatch):
-    # 동전주에서 그냥 빼면 손절이 음수가 된다 — 화면에 "-0.30에 손절"이 찍힌다.
-    _levels(monkeypatch, [{'level': 0.5, 'above': False},
-                          {'level': 0.1, 'above': False},
-                          {'level': 2.0, 'above': True}])
+def test_plan_numbers_map_onto_the_card_keys(flat_df, monkeypatch):
+    _engine(monkeypatch, _plan())
 
     t = app.trader_signal_lines(flat_df, LONG)
 
-    assert t['stop_line'] == 0.0
-    assert t['rr'] is None or t['rr'] > 0
+    assert t['entry_line'] == 95.0        # 진입 구간의 기준값
+    assert t['target_line'] == 110.0      # T1 (T2 는 카드에 안 쓴다)
+    assert t['stop_line'] == 89.0
+    assert t['rr'] == 2.5
+    assert t['valid'] is True
+
+
+def test_distances_are_measured_from_the_current_price(flat_df, monkeypatch):
+    _engine(monkeypatch, _plan())
+
+    t = app.trader_signal_lines(flat_df, LONG)
+
+    assert t['entry_dist'] == pytest.approx(-5.0)    # 95 vs 현재가 100
+    assert t['target_dist'] == pytest.approx(10.0)
+    assert t['stop_dist'] == pytest.approx(-11.0)
+
+
+def test_entry_basis_is_carried_to_the_screen(flat_df, monkeypatch):
+    # "왜 여기가 진입인가"가 사라지면 화면이 숫자만 남은 점괘가 된다.
+    _engine(monkeypatch, _plan())
+
+    assert 'Bullish OB 지지' in app.trader_signal_lines(flat_df, LONG)['entry_note']
+
+
+# ── 게이트: 못 할 매매는 못 한다고 말한다 ────────────────────────
+
+def test_low_rr_setup_is_held_not_recommended(flat_df, monkeypatch):
+    """예전에는 손익비 0.6:1 도 그냥 그렸다. 이제는 화면이 보류라고 말한다."""
+    _engine(monkeypatch, _plan(valid=False, rr=[0.6, 1.0],
+                               reason_invalid='손익비 부족 (T1 R:R 0.60 < 1.5)'))
+
+    t = app.trader_signal_lines(flat_df, LONG)
+
+    assert t['valid'] is False
+    assert '보류' in t['stance']
+    assert '손익비 부족' in t['reason_invalid']
+    assert t['entry_line'] == 95.0        # 참고용 라인은 남긴다
+
+
+def test_vetoed_short_draws_no_lines_at_all(flat_df, monkeypatch):
+    """레짐에 막힌 숏은 라인이 없다 — 0.00 을 그리느니 사유를 보여준다."""
+    _engine(monkeypatch, _no_lines(direction='short',
+                                   reason_invalid='상위추세 상승/횡보 — 숏 보류'))
+
+    t = app.trader_signal_lines(flat_df, SHORT)
+
+    assert t['entry_line'] is None
+    assert t['target_line'] is None and t['stop_line'] is None
+    assert t['entry_dist'] is None
+    assert t['rr'] is None
+    assert '숏 보류' in t['reason_invalid']
+
+
+def test_real_engine_refuses_a_too_short_frame(flat_df):
+    """가짜 없이 진짜 엔진과 붙여 보는 한 판 — 30봉이면 구조를 믿을 수 없다."""
+    t = app.trader_signal_lines(flat_df, LONG)
+
+    assert t['entry_line'] is None
+    assert t['valid'] is False
+    assert '데이터 부족' in t['reason_invalid']
+
+
+def test_kelly_note_from_the_risk_team_is_still_quoted(flat_df, monkeypatch):
+    _engine(monkeypatch, _plan())
+    risk = {'reasons': ['변동성 높음', 'Half-Kelly 권장 비중 3.2%']}
+
+    t = app.trader_signal_lines(flat_df, LONG, risk)
+
+    assert t['position_note'] == 'Half-Kelly 권장 비중 3.2%'

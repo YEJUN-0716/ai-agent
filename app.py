@@ -3965,71 +3965,60 @@ def manager_consolidate(reports):
 
 
 def trader_signal_lines(df, manager_report, risk_report=None):
-    """트레이더: 총괄 보고서 + 지지/저항 레벨로 진입/목표/손절 세 라인 산출.
+    """트레이더: 총괄이 정한 방향으로, 검증된 플랜 엔진이 세 라인을 잡는다.
     리스크팀 보고서에 Kelly 권장 비중이 있으면 그대로 인용한다.
 
     **방향은 총괄 판정이 정한다.** 매도 판정에 롱 계획을 그려 주면 화면이
     총괄과 반대되는 말을 하게 된다.
 
-      총괄 매수 → 롱: 지지에서 사서(진입) 저항에서 팔고(목표) 지지 아래서 손절
-      총괄 매도 → 숏: 저항에서 팔아(진입) 지지에서 되사고(목표) 저항 위서 손절
-      총괄 중립 → 방향 미확정. 롱 기준 참고선만 그리고 그렇다고 밝힌다.
+      총괄 매수 → 롱 · 총괄 매도 → 숏
+      총괄 중립 → 방향의 주인이 없다. 구조(ICT)에 맡기고, 구조도 방향을 못
+                  정하면 라인을 그리지 않는다 — 억지 참고선보다 정직하다.
 
-    그래서 키 이름을 매수/매도가 아니라 진입/목표로 둔다 — 숏에서는 진입이
-    파는 쪽이라, 'buy_line'이 어떤 날은 사는 가격이고 어떤 날은 파는 가격이
-    되는 이름이 이 시스템에서 가장 위험한 종류의 이름이다.
+    **라인은 modules/trade_plan.py 가 계산한다.** 여기서 지지/저항 최근접
+    레벨로 직접 그리던 때는 화면이 **언제나** 세 라인을 그렸다 — 손익비가
+    0.6:1 이어도, 상승장 한복판의 숏이어도. 그 모듈에는 같은 계산이 게이트
+    (손익비 하한 1.5 · 숏 레짐 · 저확신 숏 억제)와 실측(롱 +0.69R, 고확신 숏
+    +0.68R)까지 붙은 채로 이미 있었다. 같은 화면이 같은 질문에 검증된 답과
+    미검증 답을 동시에 내고 있었던 셈이다.
 
-    셋이 다 있어야 손익비가 나오고, 손익비가 이 매매를 할지 말지를 가른다.
+    그래서 이 함수의 반환에는 **라인이 없을 수 있다**(`entry_line` None) —
+    "지금은 그릴 계획이 없다"와 "그렸지만 하지 마라"(`valid` False)는 다른
+    답이고, 화면은 둘 다 낼 수 있어야 한다.
     """
-    cp = float(df['Close'].iloc[-1])
-    sr = find_sr_levels(df['Close'], df['High'], df['Low'])
-    supports = sorted([s['level'] for s in sr if not s['above']], reverse=True)
-    resistances = sorted([s['level'] for s in sr if s['above']])
+    from modules.trade_plan import ATR_STOP_BUFFER, build_trade_plan
 
+    cp = float(df['Close'].iloc[-1])
     verdict = manager_report['verdict']
     agreement = manager_report['agreement']
-    direction = 'short' if verdict == '매도' else 'long'
 
-    # 손절은 ATR(그 종목의 보통 하루 흔들림)로 잰다. %로 고정하면 조용한 종목은
-    # 못 털리고 시끄러운 종목은 매번 털린다.
-    #
-    # 기준선은 진입 너머의 **다음** 지지/저항이다. 거기까지 갔으면 "이 자리에서
-    # 되돌린다"는 진입 근거 자체가 사라진 것이므로 더 들고 있을 이유가 없다.
-    # 다음 레벨이 없으면 구조가 아니라 변동성으로 재서 ATR 한 칸을 쓴다.
-    #
-    # 어느 쪽이든 ATR 절반을 더 밀어낸다. 지지·저항은 정확히 그 가격에서 돌지
-    # 않고 살짝 넘겼다 돌아오는 일이 흔해서, 여유가 없으면 방향이 맞는 매매에서도
-    # 꼬리에 손절만 맞고 나온다.
-    atr = calc_atr(df)
+    plan = build_trade_plan(df, direction={'매수': 'long', '매도': 'short'}.get(verdict))
 
-    if direction == 'long':
-        entry_line  = supports[0] if supports else cp * 0.97
-        target_line = resistances[0] if resistances else cp * 1.05
-        beyond      = supports[1] if len(supports) > 1 else None
-        stop_line   = max((beyond if beyond is not None else entry_line - atr) - atr * 0.5, 0.0)
-        stop_note   = ('진입 아래 지지 −0.5 ATR' if beyond is not None
-                       else '아래 지지 없음 — 진입가 −1.5 ATR')
-        risk, reward = entry_line - stop_line, target_line - entry_line
-    else:
-        entry_line  = resistances[0] if resistances else cp * 1.03
-        target_line = supports[0] if supports else cp * 0.95
-        beyond      = resistances[1] if len(resistances) > 1 else None
-        stop_line   = (beyond if beyond is not None else entry_line + atr) + atr * 0.5
-        stop_note   = ('진입 위 저항 +0.5 ATR' if beyond is not None
-                       else '위 저항 없음 — 진입가 +1.5 ATR')
-        risk, reward = stop_line - entry_line, entry_line - target_line
+    # 라인 유무와 매매 가치는 다른 질문이다. 게이트에 막히면(레짐·저확신·봉 부족)
+    # 라인 자체가 없고, 라인이 있어도 손익비가 모자라면 valid 가 False 다.
+    has_lines = bool(plan['targets']) and plan['entry']['ref'] > 0
+    entry_line  = plan['entry']['ref'] if has_lines else None
+    target_line = plan['targets'][0] if has_lines else None       # T1 만 카드에 쓴다
+    stop_line   = plan['stop'] if has_lines else None
+    rr          = plan['rr'][0] if (has_lines and plan['rr']) else None
 
-    # 손익비: 목표까지 버는 폭 ÷ 손절까지 잃는 폭.
-    rr = reward / risk if risk > 0 and reward > 0 else None
+    def _dist(v):
+        return None if v is None else (v - cp) / cp * 100
 
-    if verdict == '매수':
-        stance = '분할 매수 검토' if agreement >= 75 else '소액 선진입, 지지선 확인 후 비중 확대'
+    if not plan['valid']:
+        stance = '진입 보류 — 조건 미충족'
+    elif verdict == '매수':
+        stance = '분할 매수 검토' if agreement >= 75 else '소액 선진입, 진입 구간 확인 후 비중 확대'
     elif verdict == '매도':
         # 보유 중인 사람과 숏을 볼 사람 둘 다에게 말이 되게 쓴다.
         stance = ('숏 진입 검토 · 보유 중이면 비중 축소' if agreement >= 75
                   else '저항 재테스트에서 소액 숏, 보유분은 일부 이익실현')
     else:
-        stance = '신규 진입 보류 — 저항/지지 재테스트 대기'
+        stance = '총괄 중립 — 구조가 정한 방향, 신규 진입은 소액부터'
+
+    # 왜 여기가 진입인지가 사라지면 화면이 숫자만 남은 점괘가 된다.
+    entry_note = next((s.split(': ', 1)[1] for s in plan['signals']
+                       if s.startswith('진입 근거: ')), '')
 
     position_note = None
     if risk_report:
@@ -4039,12 +4028,17 @@ def trader_signal_lines(df, manager_report, risk_report=None):
                 break
 
     return {
-        'stance': stance, 'direction': direction,
+        'stance': stance, 'direction': plan['direction'],
+        'valid': plan['valid'], 'reason_invalid': plan['reason_invalid'],
+        'confidence': plan['confidence'],
         'entry_line': entry_line, 'target_line': target_line, 'stop_line': stop_line,
-        'entry_dist':  (entry_line - cp) / cp * 100,
-        'target_dist': (target_line - cp) / cp * 100,
-        'stop_dist':   (stop_line - cp) / cp * 100,
-        'rr': rr, 'stop_note': stop_note,
+        'entry_low':  plan['entry']['low'] if has_lines else None,
+        'entry_high': plan['entry']['high'] if has_lines else None,
+        'entry_dist':  _dist(entry_line),
+        'target_dist': _dist(target_line),
+        'stop_dist':   _dist(stop_line),
+        'rr': rr, 'entry_note': entry_note,
+        'stop_note': f'진입 구조 무효화 + {ATR_STOP_BUFFER} ATR 완충' if has_lines else '',
         'current': cp,
         'position_note': position_note,
     }
@@ -4857,7 +4851,14 @@ def render_verdict_cards(snap):
   {context_html}
 </div>""", unsafe_allow_html=True)
 
-    tl = '#10b981' if mgr['verdict'] == '매수' else ('#ef4444' if mgr['verdict'] == '매도' else '#f59e0b')
+    # 카드 색은 "지금 뭘 하라는 카드인가"를 따라간다. 게이트에 막혔으면 총괄이
+    # 매수여도 초록이 아니다 — 초록은 들어가라는 말로 읽힌다.
+    if not trader['valid']:
+        tl = '#f59e0b'
+    elif trader['direction'] == 'short':
+        tl = '#ef4444'
+    else:
+        tl = '#10b981'
     pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {trader['position_note']}</div>"
                 if trader['position_note'] else '')
     # 손익비는 이 매매를 할지 말지를 가르는 숫자다. 1.5 미만이면 방향이 맞아도
@@ -4871,18 +4872,54 @@ def render_verdict_cards(snap):
 
     # 숏은 진입이 파는 쪽, 목표가 되사는 쪽이다. 색과 말이 방향을 따라가지 않으면
     # 화면이 총괄 판정과 반대되는 매매를 지시하는 꼴이 된다.
-    is_short = trader.get('direction') == 'short'
+    is_short = trader['direction'] == 'short'
     if is_short:
         plan_tag = 'SHORT'
         entry_lbl,  entry_ico  = '진입 (숏 매도)', '🔴'
         target_lbl, target_ico = '목표 (환매수)', '🟢'
-        plan_note = '총괄 <b>매도</b> → <b>숏 하나의 계획</b>입니다 (저항에서 팔고 지지에서 되산다)'
-    else:
+    elif trader['direction'] == 'long':
         plan_tag = 'LONG'
         entry_lbl,  entry_ico  = '진입 (매수)', '🟢'
         target_lbl, target_ico = '목표 (매도)', '🔴'
-        plan_note = ('총괄 <b>매수</b> → <b>롱 하나의 계획</b>입니다' if mgr['verdict'] == '매수'
-                     else '총괄 <b>중립</b> — 방향 미확정이라 <b>롱 기준 참고선</b>만 그립니다')
+    else:
+        plan_tag = '방향 미확정'
+        entry_lbl = entry_ico = target_lbl = target_ico = ''
+
+    if mgr['verdict'] == '매수':
+        plan_note = '총괄 <b>매수</b> → <b>롱 하나의 계획</b>입니다'
+    elif mgr['verdict'] == '매도':
+        plan_note = '총괄 <b>매도</b> → <b>숏 하나의 계획</b>입니다 (저항에서 팔고 지지에서 되산다)'
+    else:
+        plan_note = '총괄 <b>중립</b> — 방향은 ICT 구조 판정을 따릅니다'
+
+    # 라인이 없는 날이 있다. 0.00 을 그리느니 없다고 말한다.
+    if trader['entry_line'] is None:
+        lines_html = ("<div style='font-size:13px;color:var(--text-3)'>"
+                      "라인 없음 — 지금은 그릴 계획이 없습니다</div>")
+    else:
+        zone_html = ''
+        if trader['entry_low'] is not None and trader['entry_low'] != trader['entry_high']:
+            zone_html = (f"<span style='color:var(--text-4);font-size:11px'> · 구간 "
+                         f"{p(trader['entry_low'])}~{p(trader['entry_high'])}</span>")
+        lines_html = f"""<div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
+    <span>{entry_ico} {entry_lbl}: <b style="font-family:'JetBrains Mono',monospace">{p(trader['entry_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['entry_dist']:+.1f}%)</span>{zone_html}</span>
+    <span>{target_ico} {target_lbl}: <b style="font-family:'JetBrains Mono',monospace">{p(trader['target_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['target_dist']:+.1f}%)</span></span>
+    <span>🛡️ 손절: <b style="font-family:'JetBrains Mono',monospace">{p(trader['stop_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['stop_dist']:+.1f}%)</span></span>
+  </div>"""
+
+    # 못 할 매매는 못 한다고 말한다. 손익비 0.6:1 을 조용히 그려 주던 자리다.
+    gate_html = ''
+    if not trader['valid'] and trader['reason_invalid']:
+        gate_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:6px'>"
+                     f"⛔ 진입 보류 — {trader['reason_invalid']}</div>")
+
+    basis = ' · '.join(x for x in (
+        plan_note,
+        f"진입 근거: {trader['entry_note']}" if trader['entry_note'] else '',
+        f"손절 기준: {trader['stop_note']}" if trader['stop_note'] else '') if x)
     st.markdown(f"""
 <div style="background:{tl}0d;border:1px solid {tl}40;border-radius:10px;padding:14px 18px;margin-top:8px">
   <div style="display:flex;align-items:baseline;gap:8px;font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">
@@ -4890,16 +4927,9 @@ def render_verdict_cards(snap):
     <span style="padding:1px 7px;border-radius:3px;background:{tl}22;color:{tl};
                  font-family:'JetBrains Mono',monospace">{plan_tag}</span>{rr_html}</div>
   <div style="font-size:13px;font-weight:700;color:{tl};margin:6px 0">{trader['stance']}</div>
-  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
-    <span>{entry_ico} {entry_lbl}: <b style="font-family:'JetBrains Mono',monospace">{p(trader['entry_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({trader['entry_dist']:+.1f}%)</span></span>
-    <span>{target_ico} {target_lbl}: <b style="font-family:'JetBrains Mono',monospace">{p(trader['target_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({trader['target_dist']:+.1f}%)</span></span>
-    <span>🛡️ 손절: <b style="font-family:'JetBrains Mono',monospace">{p(trader['stop_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({trader['stop_dist']:+.1f}%)</span></span>
-  </div>
-  <div style="font-size:11px;color:var(--text-4);margin-top:6px">
-    {plan_note} · 손절 기준: {trader['stop_note']}</div>
+  {lines_html}
+  {gate_html}
+  <div style="font-size:11px;color:var(--text-4);margin-top:6px">{basis}</div>
   {pos_html}
 </div>""", unsafe_allow_html=True)
     _short_kr = (" · 국내 주식은 개인 공매도가 제한적이라 숏 라인은 청산·관망 기준으로만 보십시오."
