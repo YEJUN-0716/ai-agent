@@ -170,6 +170,15 @@ class Mode:
         return sum(step.calls for step in self.steps)
 
     @property
+    def order(self) -> tuple[tuple[str, int], ...]:
+        """(에이전트, 턴) 발언 순서 전체. 길이가 곧 호출 횟수다.
+
+        pipeline 은 방 단위로 끊어 돌지만, `/floor` 세션은 한 줄로 편 이 순서를
+        그대로 받아 연기한다.
+        """
+        return tuple(item for step in self.steps for item in step.order())
+
+    @property
     def roster(self) -> tuple[str, ...]:
         """이번 모드에서 일하는 에이전트. 나머지는 화면에서 흐릿하게 쉰다."""
         seen: list[str] = []

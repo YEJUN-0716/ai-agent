@@ -17,6 +17,9 @@ from pathlib import Path
 from floor.demo import Briefing, Verdict
 from floor.market import KST, Snapshot
 
+# 화면(`server.py`)과 세션(`cli.py`)이 같은 서랍을 쓴다. 갈라지면 회고가 끊긴다.
+REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
+
 _HEADER_KEYS = ("symbol", "mode", "action", "confidence", "price", "at")
 # 파일 이름을 URL·경로에 그대로 쓰므로, 만든 규칙에서 벗어난 이름은 아예 안 읽는다.
 _NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[A-Z0-9.\-]+-\d{4}\.md$")
