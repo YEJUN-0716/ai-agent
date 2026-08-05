@@ -6,7 +6,10 @@
 숏을 롱의 단순 미러로 짠 뒤 "숏이 롱보다 약한가?"를 유니버스 규모로 확인하고,
 결과를 docs/measurements/ 에 기록한다 (팩터 비교 선례와 같은 규율).
 
-    python scripts/measure_trade_plan.py [bars=400] [ticker_limit]
+    python scripts/measure_trade_plan.py [bars=400] [ticker_limit] [min_rr]
+
+`min_rr` 을 주면 그 손익비 기준으로 잰다 (기본값은 프로덕션 기준). 기준을 바꿀
+때 무엇을 잃고 무엇을 얻는지는 같은 패널에서 두 번 돌려 비교해야 알 수 있다.
 
 입력  data/price_panel_v1.parquet  (MultiIndex 컬럼 (Price,Ticker), 일봉)
 출력  콘솔 요약 + docs/measurements/<날짜>-trade-plan-short-vs-long.md
@@ -76,7 +79,8 @@ def main() -> None:
         pass
 
     bars = int(sys.argv[1]) if len(sys.argv) > 1 else 400
-    limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None  # "" = 전체
+    min_rr = float(sys.argv[3]) if len(sys.argv) > 3 else bt.DEFAULT_MIN_RR
 
     panel = pd.read_parquet(PANEL)
     tickers = sorted({t for _, t in panel.columns})
@@ -89,7 +93,8 @@ def main() -> None:
         df = _ohlcv(panel, tk).tail(bars)
         if len(df) < MIN_LEN:
             continue
-        out = bt.backtest_trade_plans(df, fill_window=FILL_WINDOW, hold_window=HOLD_WINDOW)
+        out = bt.backtest_trade_plans(df, min_rr=min_rr,
+                                      fill_window=FILL_WINDOW, hold_window=HOLD_WINDOW)
         for t in out["trades"]:
             t["ticker"] = tk
         all_trades += out["trades"]
@@ -97,8 +102,8 @@ def main() -> None:
 
     today = _dt.date.today().isoformat()
     header = (f"트레이드 플랜 롱/숏 성능 — {today}\n"
-              f"유니버스 {used}종목 · 최근 {bars}봉 · fill≤{FILL_WINDOW}·hold≤{HOLD_WINDOW}봉 "
-              f"· 손절 우선(보수적)\n")
+              f"유니버스 {used}종목 · 최근 {bars}봉 · 손익비 기준 R≥{min_rr} · "
+              f"fill≤{FILL_WINDOW}·hold≤{HOLD_WINDOW}봉 · 손절 우선(보수적)\n")
     body = _table(all_trades)
     report = header + "\n" + body + "\n"
     print(report)
@@ -107,12 +112,15 @@ def main() -> None:
     md = (f"# 트레이드 플랜 롱/숏 성능 측정 ({today})\n\n"
           f"- 유니버스: {used}종목 (저장 패널 `data/price_panel_v1.parquet`)\n"
           f"- 구간: 각 종목 최근 {bars}봉\n"
+          f"- 손익비 기준: T1 R:R >= {min_rr} (미달 셋업은 계획 자체가 무효)\n"
           f"- 체결 판정: 진입 구간에 되돌림 닿으면 체결, fill≤{FILL_WINDOW}봉 미도달이면 미체결\n"
           f"- 결판: 체결 후 hold≤{HOLD_WINDOW}봉 내 손절/목표 선착, 같은 봉이면 손절 우선(보수적)\n"
           f"- R: 위험 1단위 기준. 목표=+R:R, 손절=-1.0, timeout=0\n\n"
           f"```\n{body}\n```\n\n"
-          f"생성: `python scripts/measure_trade_plan.py {bars}`\n")
-    out_path = OUT_DIR / f"{today}-trade-plan-short-vs-long.md"
+          f"생성: `python scripts/measure_trade_plan.py {bars} \"\" {min_rr}`\n")
+    # 기준을 바꿔 돌린 결과가 프로덕션 기준 기록을 덮어쓰면 비교가 사라진다.
+    suffix = "" if min_rr == bt.DEFAULT_MIN_RR else f"-rr{min_rr}"
+    out_path = OUT_DIR / f"{today}-trade-plan-short-vs-long{suffix}.md"
     out_path.write_text(md, encoding="utf-8")
     print(f"\n기록: {out_path}")
 
