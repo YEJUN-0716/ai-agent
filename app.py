@@ -2635,14 +2635,24 @@ def calc_monte_carlo(df, days=60, n_sims=500, initial=None):
 # TRADE LEVELS
 # ─────────────────────────────────────────────
 
+def calc_atr(df, period=14):
+    """ATR(평균 실체 범위) 최근값. 손절 폭의 기준이 되는 '이 종목의 보통 하루 흔들림'.
+
+    손절을 %로 고정하면 조용한 종목은 못 털리고 시끄러운 종목은 매번 털린다.
+    ATR로 재면 종목마다 제 변동성에 맞는 폭이 나온다.
+    """
+    h, l, c = df['High'], df['Low'], df['Close']
+    prev_c = c.shift(1)
+    tr = pd.concat([(h - l), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    return float(tr.rolling(period).mean().iloc[-1])
+
+
 def calc_trade_levels(df, total_score):
     """단타(1~5일)·스윙(2~4주) 실전 매매가 산출.
     RSI/MACD/스토캐스틱/거래량 조건 통합, VWAP, 3분할 매수, 시간손절 포함."""
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     cp  = float(p.iloc[-1])
-    _prev_c = p.shift(1)
-    _tr = pd.concat([(h-l), (h-_prev_c).abs(), (l-_prev_c).abs()], axis=1).max(axis=1)
-    atr = float(_tr.rolling(14).mean().iloc[-1])
+    atr = calc_atr(df)
 
     ma10  = float(p.rolling(10).mean().iloc[-1])
     ma20  = float(p.rolling(20).mean().iloc[-1])
@@ -3955,8 +3965,13 @@ def manager_consolidate(reports):
 
 
 def trader_signal_lines(df, manager_report, risk_report=None):
-    """트레이더: 총괄 보고서 + 지지/저항 레벨로 매수/매도 라인 산출.
-    리스크팀 보고서에 Kelly 권장 비중이 있으면 그대로 인용한다."""
+    """트레이더: 총괄 보고서 + 지지/저항 레벨로 매수/매도/손절 라인 산출.
+    리스크팀 보고서에 Kelly 권장 비중이 있으면 그대로 인용한다.
+
+    세 라인은 매수 라인에서 진입한 **롱 하나의 계획**이다. 매수는 최근접 지지,
+    매도(익절)는 최근접 저항, 손절은 그 지지가 깨졌다고 인정하는 지점이다.
+    셋이 다 있어야 손익비가 나오고, 손익비가 이 매매를 할지 말지를 가른다.
+    """
     cp = float(df['Close'].iloc[-1])
     sr = find_sr_levels(df['Close'], df['High'], df['Low'])
     supports = sorted([s['level'] for s in sr if not s['above']], reverse=True)
@@ -3967,6 +3982,25 @@ def trader_signal_lines(df, manager_report, risk_report=None):
 
     buy_line  = supports[0] if supports else cp * 0.97
     sell_line = resistances[0] if resistances else cp * 1.05
+
+    # ── 손절 라인 ────────────────────────────────────────────────
+    # 매수 라인 아래의 다음 지지가 기준이다. 거기까지 밀렸으면 "이 지지에서
+    # 반등한다"는 진입 근거가 사라진 것이므로 더 들고 있을 이유가 없다.
+    # 다음 지지가 없으면 매수 라인에서 ATR 한 칸 아래를 쓴다.
+    #
+    # 어느 쪽이든 ATR 의 절반을 더 뺀다. 지지선은 정확히 그 가격에서 반등하지
+    # 않고 아래를 한 번 찍고 올라오는 일이 흔해서, 여유가 없으면 방향이 맞는
+    # 매매에서도 꼬리에 손절만 맞고 나온다.
+    atr = calc_atr(df)
+    _next_support = supports[1] if len(supports) > 1 else None
+    stop_line = (_next_support if _next_support is not None else buy_line - atr) - atr * 0.5
+    stop_line = max(stop_line, 0.0)
+    stop_note = ('매수 라인 아래 지지 −0.5 ATR' if _next_support is not None
+                 else '아래 지지 없음 — 매수 라인 −1.5 ATR')
+
+    # 손익비: 매수 라인에서 들어가 매도 라인에서 나올 때 버는 폭 ÷ 손절까지 잃는 폭.
+    _risk = buy_line - stop_line
+    rr = (sell_line - buy_line) / _risk if _risk > 0 else None
 
     if verdict == '매수':
         stance = '분할 매수 검토' if agreement >= 75 else '소액 선진입, 지지선 확인 후 비중 확대'
@@ -3984,9 +4018,11 @@ def trader_signal_lines(df, manager_report, risk_report=None):
 
     return {
         'stance': stance,
-        'buy_line': buy_line, 'sell_line': sell_line,
+        'buy_line': buy_line, 'sell_line': sell_line, 'stop_line': stop_line,
         'buy_dist': (buy_line - cp) / cp * 100,
         'sell_dist': (sell_line - cp) / cp * 100,
+        'stop_dist': (stop_line - cp) / cp * 100,
+        'rr': rr, 'stop_note': stop_note,
         'current': cp,
         'position_note': position_note,
     }
@@ -4802,16 +4838,30 @@ def render_verdict_cards(snap):
     tl = '#10b981' if mgr['verdict'] == '매수' else ('#ef4444' if mgr['verdict'] == '매도' else '#f59e0b')
     pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {trader['position_note']}</div>"
                 if trader['position_note'] else '')
+    # 손익비는 이 매매를 할지 말지를 가르는 숫자다. 1.5 미만이면 방향이 맞아도
+    # 장기적으로 남는 게 없으므로 초록으로 칠하지 않는다.
+    rr = trader.get('rr')
+    rr_html = ''
+    if rr is not None:
+        rr_color = '#10b981' if rr >= 1.5 else '#f59e0b'
+        rr_html = (f"<span style='margin-left:auto;font-size:11px;color:var(--text-4)'>손익비 "
+                   f"<b style=\"color:{rr_color};font-family:'JetBrains Mono',monospace\">R {rr:.1f}:1</b></span>")
     st.markdown(f"""
 <div style="background:{tl}0d;border:1px solid {tl}40;border-radius:10px;padding:14px 18px;margin-top:8px">
-  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📐 트레이더 — 매수/매도 라인</div>
+  <div style="display:flex;align-items:baseline;font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">
+    📐 트레이더 — 매수/매도/손절 라인 {rr_html}</div>
   <div style="font-size:13px;font-weight:700;color:{tl};margin:6px 0">{trader['stance']}</div>
   <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
     <span>🟢 매수 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['buy_line'])}</b>
       <span style="color:var(--text-4);font-size:11px">({trader['buy_dist']:+.1f}%)</span></span>
     <span>🔴 매도 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['sell_line'])}</b>
       <span style="color:var(--text-4);font-size:11px">({trader['sell_dist']:+.1f}%)</span></span>
-  </div>{pos_html}
+    <span>🛡️ 손절 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['stop_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['stop_dist']:+.1f}%)</span></span>
+  </div>
+  <div style="font-size:11px;color:var(--text-4);margin-top:6px">
+    세 라인은 <b>매수 라인에서 진입한 롱 하나의 계획</b>입니다 · 손절 기준: {trader['stop_note']}</div>
+  {pos_html}
 </div>""", unsafe_allow_html=True)
     st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
 
