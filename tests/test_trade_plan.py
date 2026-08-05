@@ -72,6 +72,22 @@ def test_assemble_long_low_rr_invalid():
     assert "손익비" in plan["reason_invalid"]
 
 
+def test_default_gate_is_one_to_two():
+    """기본 기준선은 1:2 다 — 이기는 판에서 잃는 판의 두 배는 벌어야 추천이다."""
+    # 진입 96, 손절 93 → 위험 3. 목표 101.4 → 보상 5.4 = R 1.8 (미달)
+    near = tp._assemble_plan("long", current=98.0, entry_low=95.0, entry_high=97.0,
+                             stop=93.0, targets=[101.4])
+    assert near["rr"][0] == pytest.approx(1.8)
+    assert near["valid"] is False
+    assert "손익비" in near["reason_invalid"]
+
+    # 목표 102.0 → 보상 6.0 = R 2.0 (경계 통과)
+    at_line = tp._assemble_plan("long", current=98.0, entry_low=95.0, entry_high=97.0,
+                                stop=93.0, targets=[102.0])
+    assert at_line["rr"][0] == pytest.approx(2.0)
+    assert at_line["valid"] is True
+
+
 def test_assemble_long_bad_ordering_invalid():
     # 손절이 진입 구간 위 → 정렬 불가 → 무효
     plan = tp._assemble_plan("long", current=98.0,

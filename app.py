@@ -4861,12 +4861,14 @@ def render_verdict_cards(snap):
         tl = '#10b981'
     pos_html = (f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>💰 {trader['position_note']}</div>"
                 if trader['position_note'] else '')
-    # 손익비는 이 매매를 할지 말지를 가르는 숫자다. 1.5 미만이면 방향이 맞아도
-    # 장기적으로 남는 게 없으므로 초록으로 칠하지 않는다.
+    # 손익비는 이 매매를 할지 말지를 가르는 숫자다. 1:2 에 못 미치면 방향이 맞아도
+    # 장기적으로 남는 게 없으므로 초록으로 칠하지 않고, 추천으로도 내보내지 않는다.
+    from modules.trade_plan import DEFAULT_MIN_RR
+
     rr = trader.get('rr')
     rr_html = ''
     if rr is not None:
-        rr_color = '#10b981' if rr >= 1.5 else '#f59e0b'
+        rr_color = '#10b981' if rr >= DEFAULT_MIN_RR else '#f59e0b'
         rr_html = (f"<span style='margin-left:auto;font-size:11px;color:var(--text-4)'>손익비 "
                    f"<b style=\"color:{rr_color};font-family:'JetBrains Mono',monospace\">R {rr:.1f}:1</b></span>")
 
@@ -4916,6 +4918,12 @@ def render_verdict_cards(snap):
         gate_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:6px'>"
                      f"⛔ 진입 보류 — {trader['reason_invalid']}</div>")
 
+    # 게이트를 통과한 계획만 "추천"이라는 말을 단다. 통과 못 한 계획은 위의
+    # 보류 문구가 대신 붙으므로, 화면에는 둘 중 하나만 뜬다.
+    rec_html = ('' if not trader['valid'] else
+                "<span style=\"padding:1px 7px;border-radius:3px;background:#10b98122;color:#10b981;"
+                "font-family:'JetBrains Mono',monospace\">✅ 추천</span>")
+
     basis = ' · '.join(x for x in (
         plan_note,
         f"진입 근거: {trader['entry_note']}" if trader['entry_note'] else '',
@@ -4925,7 +4933,7 @@ def render_verdict_cards(snap):
   <div style="display:flex;align-items:baseline;gap:8px;font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">
     📐 트레이더 — 진입/목표/손절
     <span style="padding:1px 7px;border-radius:3px;background:{tl}22;color:{tl};
-                 font-family:'JetBrains Mono',monospace">{plan_tag}</span>{rr_html}</div>
+                 font-family:'JetBrains Mono',monospace">{plan_tag}</span>{rec_html}{rr_html}</div>
   <div style="font-size:13px;font-weight:700;color:{tl};margin:6px 0">{trader['stance']}</div>
   {lines_html}
   {gate_html}

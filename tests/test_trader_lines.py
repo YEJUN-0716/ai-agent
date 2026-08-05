@@ -165,6 +165,37 @@ def test_real_engine_refuses_a_too_short_frame(flat_df):
     assert '데이터 부족' in t['reason_invalid']
 
 
+# ── 화면 표시: 추천이라는 말은 게이트를 통과한 계획에만 붙는다 ──────
+
+MGR = {'total_score': 62.0, 'consensus': '매수 우위', 'agreement': 80, 'verdict': '매수',
+       'strongest_opinion': '모멘텀팀 +12', 'dissent': '', 'macro_note': '',
+       'confidence_note': ''}
+
+
+def _card_html(flat_df, monkeypatch, plan):
+    """카드를 그려 보고 HTML 을 받아 온다 — 화면에 실제로 무슨 말이 찍히는지."""
+    _engine(monkeypatch, plan)
+    trader = app.trader_signal_lines(flat_df, MGR)
+    out = []
+    monkeypatch.setattr(app.st, 'markdown', lambda html, **kw: out.append(html))
+    monkeypatch.setattr(app.st, 'caption', lambda *a, **kw: None)
+    app.render_verdict_cards({'manager': MGR, 'trader': trader, 'is_krw': False})
+    return ''.join(out)
+
+
+def test_recommended_badge_on_a_setup_that_clears_the_gate(flat_df, monkeypatch):
+    assert '추천' in _card_html(flat_df, monkeypatch, _plan())
+
+
+def test_no_recommendation_when_the_reward_does_not_cover_the_risk(flat_df, monkeypatch):
+    """1:2 에 못 미치는 계획은 추천이 아니라 보류로 나간다."""
+    html = _card_html(flat_df, monkeypatch, _plan(
+        valid=False, rr=[1.8, 3.0], reason_invalid='손익비 부족 (T1 R:R 1.80 < 2.0)'))
+
+    assert '추천' not in html
+    assert '보류' in html and '손익비 부족' in html
+
+
 def test_kelly_note_from_the_risk_team_is_still_quoted(flat_df, monkeypatch):
     _engine(monkeypatch, _plan())
     risk = {'reasons': ['변동성 높음', 'Half-Kelly 권장 비중 3.2%']}
