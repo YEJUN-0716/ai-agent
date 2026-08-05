@@ -3965,11 +3965,20 @@ def manager_consolidate(reports):
 
 
 def trader_signal_lines(df, manager_report, risk_report=None):
-    """트레이더: 총괄 보고서 + 지지/저항 레벨로 매수/매도/손절 라인 산출.
+    """트레이더: 총괄 보고서 + 지지/저항 레벨로 진입/목표/손절 세 라인 산출.
     리스크팀 보고서에 Kelly 권장 비중이 있으면 그대로 인용한다.
 
-    세 라인은 매수 라인에서 진입한 **롱 하나의 계획**이다. 매수는 최근접 지지,
-    매도(익절)는 최근접 저항, 손절은 그 지지가 깨졌다고 인정하는 지점이다.
+    **방향은 총괄 판정이 정한다.** 매도 판정에 롱 계획을 그려 주면 화면이
+    총괄과 반대되는 말을 하게 된다.
+
+      총괄 매수 → 롱: 지지에서 사서(진입) 저항에서 팔고(목표) 지지 아래서 손절
+      총괄 매도 → 숏: 저항에서 팔아(진입) 지지에서 되사고(목표) 저항 위서 손절
+      총괄 중립 → 방향 미확정. 롱 기준 참고선만 그리고 그렇다고 밝힌다.
+
+    그래서 키 이름을 매수/매도가 아니라 진입/목표로 둔다 — 숏에서는 진입이
+    파는 쪽이라, 'buy_line'이 어떤 날은 사는 가격이고 어떤 날은 파는 가격이
+    되는 이름이 이 시스템에서 가장 위험한 종류의 이름이다.
+
     셋이 다 있어야 손익비가 나오고, 손익비가 이 매매를 할지 말지를 가른다.
     """
     cp = float(df['Close'].iloc[-1])
@@ -3979,33 +3988,46 @@ def trader_signal_lines(df, manager_report, risk_report=None):
 
     verdict = manager_report['verdict']
     agreement = manager_report['agreement']
+    direction = 'short' if verdict == '매도' else 'long'
 
-    buy_line  = supports[0] if supports else cp * 0.97
-    sell_line = resistances[0] if resistances else cp * 1.05
-
-    # ── 손절 라인 ────────────────────────────────────────────────
-    # 매수 라인 아래의 다음 지지가 기준이다. 거기까지 밀렸으면 "이 지지에서
-    # 반등한다"는 진입 근거가 사라진 것이므로 더 들고 있을 이유가 없다.
-    # 다음 지지가 없으면 매수 라인에서 ATR 한 칸 아래를 쓴다.
+    # 손절은 ATR(그 종목의 보통 하루 흔들림)로 잰다. %로 고정하면 조용한 종목은
+    # 못 털리고 시끄러운 종목은 매번 털린다.
     #
-    # 어느 쪽이든 ATR 의 절반을 더 뺀다. 지지선은 정확히 그 가격에서 반등하지
-    # 않고 아래를 한 번 찍고 올라오는 일이 흔해서, 여유가 없으면 방향이 맞는
-    # 매매에서도 꼬리에 손절만 맞고 나온다.
+    # 기준선은 진입 너머의 **다음** 지지/저항이다. 거기까지 갔으면 "이 자리에서
+    # 되돌린다"는 진입 근거 자체가 사라진 것이므로 더 들고 있을 이유가 없다.
+    # 다음 레벨이 없으면 구조가 아니라 변동성으로 재서 ATR 한 칸을 쓴다.
+    #
+    # 어느 쪽이든 ATR 절반을 더 밀어낸다. 지지·저항은 정확히 그 가격에서 돌지
+    # 않고 살짝 넘겼다 돌아오는 일이 흔해서, 여유가 없으면 방향이 맞는 매매에서도
+    # 꼬리에 손절만 맞고 나온다.
     atr = calc_atr(df)
-    _next_support = supports[1] if len(supports) > 1 else None
-    stop_line = (_next_support if _next_support is not None else buy_line - atr) - atr * 0.5
-    stop_line = max(stop_line, 0.0)
-    stop_note = ('매수 라인 아래 지지 −0.5 ATR' if _next_support is not None
-                 else '아래 지지 없음 — 매수 라인 −1.5 ATR')
 
-    # 손익비: 매수 라인에서 들어가 매도 라인에서 나올 때 버는 폭 ÷ 손절까지 잃는 폭.
-    _risk = buy_line - stop_line
-    rr = (sell_line - buy_line) / _risk if _risk > 0 else None
+    if direction == 'long':
+        entry_line  = supports[0] if supports else cp * 0.97
+        target_line = resistances[0] if resistances else cp * 1.05
+        beyond      = supports[1] if len(supports) > 1 else None
+        stop_line   = max((beyond if beyond is not None else entry_line - atr) - atr * 0.5, 0.0)
+        stop_note   = ('진입 아래 지지 −0.5 ATR' if beyond is not None
+                       else '아래 지지 없음 — 진입가 −1.5 ATR')
+        risk, reward = entry_line - stop_line, target_line - entry_line
+    else:
+        entry_line  = resistances[0] if resistances else cp * 1.03
+        target_line = supports[0] if supports else cp * 0.95
+        beyond      = resistances[1] if len(resistances) > 1 else None
+        stop_line   = (beyond if beyond is not None else entry_line + atr) + atr * 0.5
+        stop_note   = ('진입 위 저항 +0.5 ATR' if beyond is not None
+                       else '위 저항 없음 — 진입가 +1.5 ATR')
+        risk, reward = stop_line - entry_line, entry_line - target_line
+
+    # 손익비: 목표까지 버는 폭 ÷ 손절까지 잃는 폭.
+    rr = reward / risk if risk > 0 and reward > 0 else None
 
     if verdict == '매수':
         stance = '분할 매수 검토' if agreement >= 75 else '소액 선진입, 지지선 확인 후 비중 확대'
     elif verdict == '매도':
-        stance = '비중 축소 검토' if agreement >= 75 else '일부 이익실현, 저항선 이탈 시 전량 정리'
+        # 보유 중인 사람과 숏을 볼 사람 둘 다에게 말이 되게 쓴다.
+        stance = ('숏 진입 검토 · 보유 중이면 비중 축소' if agreement >= 75
+                  else '저항 재테스트에서 소액 숏, 보유분은 일부 이익실현')
     else:
         stance = '신규 진입 보류 — 저항/지지 재테스트 대기'
 
@@ -4017,11 +4039,11 @@ def trader_signal_lines(df, manager_report, risk_report=None):
                 break
 
     return {
-        'stance': stance,
-        'buy_line': buy_line, 'sell_line': sell_line, 'stop_line': stop_line,
-        'buy_dist': (buy_line - cp) / cp * 100,
-        'sell_dist': (sell_line - cp) / cp * 100,
-        'stop_dist': (stop_line - cp) / cp * 100,
+        'stance': stance, 'direction': direction,
+        'entry_line': entry_line, 'target_line': target_line, 'stop_line': stop_line,
+        'entry_dist':  (entry_line - cp) / cp * 100,
+        'target_dist': (target_line - cp) / cp * 100,
+        'stop_dist':   (stop_line - cp) / cp * 100,
         'rr': rr, 'stop_note': stop_note,
         'current': cp,
         'position_note': position_note,
@@ -4846,24 +4868,44 @@ def render_verdict_cards(snap):
         rr_color = '#10b981' if rr >= 1.5 else '#f59e0b'
         rr_html = (f"<span style='margin-left:auto;font-size:11px;color:var(--text-4)'>손익비 "
                    f"<b style=\"color:{rr_color};font-family:'JetBrains Mono',monospace\">R {rr:.1f}:1</b></span>")
+
+    # 숏은 진입이 파는 쪽, 목표가 되사는 쪽이다. 색과 말이 방향을 따라가지 않으면
+    # 화면이 총괄 판정과 반대되는 매매를 지시하는 꼴이 된다.
+    is_short = trader.get('direction') == 'short'
+    if is_short:
+        plan_tag = 'SHORT'
+        entry_lbl,  entry_ico  = '진입 (숏 매도)', '🔴'
+        target_lbl, target_ico = '목표 (환매수)', '🟢'
+        plan_note = '총괄 <b>매도</b> → <b>숏 하나의 계획</b>입니다 (저항에서 팔고 지지에서 되산다)'
+    else:
+        plan_tag = 'LONG'
+        entry_lbl,  entry_ico  = '진입 (매수)', '🟢'
+        target_lbl, target_ico = '목표 (매도)', '🔴'
+        plan_note = ('총괄 <b>매수</b> → <b>롱 하나의 계획</b>입니다' if mgr['verdict'] == '매수'
+                     else '총괄 <b>중립</b> — 방향 미확정이라 <b>롱 기준 참고선</b>만 그립니다')
     st.markdown(f"""
 <div style="background:{tl}0d;border:1px solid {tl}40;border-radius:10px;padding:14px 18px;margin-top:8px">
-  <div style="display:flex;align-items:baseline;font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">
-    📐 트레이더 — 매수/매도/손절 라인 {rr_html}</div>
+  <div style="display:flex;align-items:baseline;gap:8px;font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">
+    📐 트레이더 — 진입/목표/손절
+    <span style="padding:1px 7px;border-radius:3px;background:{tl}22;color:{tl};
+                 font-family:'JetBrains Mono',monospace">{plan_tag}</span>{rr_html}</div>
   <div style="font-size:13px;font-weight:700;color:{tl};margin:6px 0">{trader['stance']}</div>
   <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
-    <span>🟢 매수 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['buy_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({trader['buy_dist']:+.1f}%)</span></span>
-    <span>🔴 매도 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['sell_line'])}</b>
-      <span style="color:var(--text-4);font-size:11px">({trader['sell_dist']:+.1f}%)</span></span>
-    <span>🛡️ 손절 라인: <b style="font-family:'JetBrains Mono',monospace">{p(trader['stop_line'])}</b>
+    <span>{entry_ico} {entry_lbl}: <b style="font-family:'JetBrains Mono',monospace">{p(trader['entry_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['entry_dist']:+.1f}%)</span></span>
+    <span>{target_ico} {target_lbl}: <b style="font-family:'JetBrains Mono',monospace">{p(trader['target_line'])}</b>
+      <span style="color:var(--text-4);font-size:11px">({trader['target_dist']:+.1f}%)</span></span>
+    <span>🛡️ 손절: <b style="font-family:'JetBrains Mono',monospace">{p(trader['stop_line'])}</b>
       <span style="color:var(--text-4);font-size:11px">({trader['stop_dist']:+.1f}%)</span></span>
   </div>
   <div style="font-size:11px;color:var(--text-4);margin-top:6px">
-    세 라인은 <b>매수 라인에서 진입한 롱 하나의 계획</b>입니다 · 손절 기준: {trader['stop_note']}</div>
+    {plan_note} · 손절 기준: {trader['stop_note']}</div>
   {pos_html}
 </div>""", unsafe_allow_html=True)
-    st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
+    _short_kr = (" · 국내 주식은 개인 공매도가 제한적이라 숏 라인은 청산·관망 기준으로만 보십시오."
+                 if is_short and snap.get('is_krw') else "")
+    st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다."
+               + _short_kr)
 
 
 def render_verdict_hero():
