@@ -35,7 +35,8 @@ ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-REPORTS_DIR = BASE_DIR.parent / "reports"
+# 화면과 `/floor` 세션이 같은 서랍을 써야 회고가 이어진다. 정의는 report.py 에 있다.
+REPORTS_DIR = report.REPORTS_DIR
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000

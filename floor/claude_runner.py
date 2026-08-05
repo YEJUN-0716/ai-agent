@@ -3,8 +3,12 @@
 데모 러너와 자리가 같다. `pipeline.run(runner=...)` 에 이걸 넣으면 준비된 응답
 대신 진짜 클로드가 쓴다. 나머지 순서·화면·리포트는 그대로다.
 
-호출 한 번이 프로세스 하나다. 알고리즘 모드면 13번 뜬다 — 느린 게 정상이고,
-세션 하나로 줄이는 건 3단계(`/floor` 슬래시커맨드) 몫이다.
+호출 한 번이 프로세스 하나다. 알고리즘 모드면 13번 뜬다 — 느린 게 정상이다.
+급하면 `/floor` 슬래시커맨드(`floor/cli.py`)가 같은 판을 세션 하나로 돈다.
+
+프롬프트 조각(`facts`·`rules`·`shape`)과 응답 검사(`parse_briefing`)는 그 세션
+러너와 공유한다. 화면으로 돌리든 세션으로 돌리든 같은 기준을 통과한 것만 리포트가
+된다 — 한쪽에만 예외를 뚫으면 두 경로의 판정이 갈린다.
 
 **과금 주의.** `ANTHROPIC_API_KEY` 가 환경에 있으면 구독이 아니라 API 로 돈이
 나간다. 확인에 기대지 않고 자식 프로세스 환경에서 매번 벗겨서 넘긴다.
@@ -59,7 +63,8 @@ def _env() -> dict[str, str]:
     return env
 
 
-def _facts(snap: Snapshot, ctx: Context) -> str:
+def facts(snap: Snapshot, ctx: Context) -> str:
+    """에이전트가 인용해도 되는 숫자 전부. 여기 없는 값은 지어낸 값이다."""
     unit = "원" if snap.symbol.currency == "KRW" else "달러"
     lines = [
         f"종목: {snap.symbol.label} ({snap.symbol.key}) · 표시통화 {unit}",
@@ -93,7 +98,7 @@ def _prior(ctx: Context) -> str:
     return "\n\n".join(f"[{b.agent}] {b.bubble}\n{b.body}" for b in ctx.prior)
 
 
-def _shape(agent: str, ctx: Context) -> str:
+def shape(agent: str, ctx: Context) -> str:
     """이 에이전트가 내야 하는 JSON 모양. 판정을 내는 둘만 verdict 를 붙인다."""
     base = (
         '{"bubble": "말풍선 한 줄, 40자 이내", '
@@ -114,31 +119,35 @@ def _shape(agent: str, ctx: Context) -> str:
     return base + verdict + "}}"
 
 
-def _prompt(agent: str, ctx: Context) -> str:
-    who = BY_KEY[agent]
-    rules = [
+def rules(agent: str, ctx: Context) -> list[str]:
+    """이 에이전트가 지켜야 할 것. 세션 러너도 같은 목록을 받아 쓴다."""
+    out = [
         f"판정 기준 시장은 {ctx.mode.basis} 다. 이 시장의 변동성으로 계산한다.",
         f"이 모드에서 낼 수 있는 판정은 {' / '.join(ctx.mode.actions)} 뿐이다.",
     ]
     if ctx.mode.key in ("scalp", "attack"):
-        rules.append(
+        out.append(
             "원화 정규장 변동성은 폭락일에 몇 배로 부풀려진다. 그 값으로 손절 폭을 "
             "재면 멀쩡한 셋업이 청산 위험으로 오기각되므로 쓰지 않는다."
         )
     if ctx.mode.key == "attack":
-        rules.append("관망은 금지다. 근거가 약해도 방향을 고르고 확신도를 낮게 적는다.")
+        out.append("관망은 금지다. 근거가 약해도 방향을 고르고 확신도를 낮게 적는다.")
     if agent in VERDICT_AGENTS:
         # 관망에 0 을 적으면 화면에 "손절 0" 으로 뜬다. 안 들어간다는 뜻이지
         # 손절이 없다는 뜻이 아니므로, 감시 레벨을 적게 하고 비중만 0 으로 둔다.
-        rules.append(
+        out.append(
             "관망 판정이어도 entry·stop·target 에는 0 이 아니라 '들어간다면 여기'인 "
             "감시 레벨을 적는다. 비중(size_pct)만 0 으로 둔다."
         )
     if agent == "GUARD":
-        rules.append("격리 20배 기준 약 5% 역행이면 청산이다. 손절 폭이 그 안인지 본다.")
+        out.append("격리 20배 기준 약 5% 역행이면 청산이다. 손절 폭이 그 안인지 본다.")
     if ctx.turn:
-        rules.append(f"{ctx.turn}번째 발언이다. 상대 주장을 인용해 직접 반박한다.")
+        out.append(f"{ctx.turn}번째 발언이다. 상대 주장을 인용해 직접 반박한다.")
+    return out
 
+
+def _prompt(agent: str, ctx: Context) -> str:
+    who = BY_KEY[agent]
     return "\n".join(
         [
             f"역할: {who.name} — {who.role} ({who.key})",
@@ -146,16 +155,16 @@ def _prompt(agent: str, ctx: Context) -> str:
             f"모드: {ctx.mode.label} — {ctx.mode.note}",
             "",
             "규칙:",
-            *(f"- {rule}" for rule in rules),
+            *(f"- {rule}" for rule in rules(agent, ctx)),
             "",
             "시세:",
-            _facts(ctx.snapshot, ctx),
+            facts(ctx.snapshot, ctx),
             "",
             "앞선 브리핑:",
             _prior(ctx),
             "",
             "다음 JSON 하나만 출력한다:",
-            _shape(agent, ctx),
+            shape(agent, ctx),
         ]
     )
 
@@ -210,7 +219,11 @@ def _verdict(data: dict, agent: str, ctx: Context) -> Verdict:
     )
 
 
-def _briefing(data: dict, agent: str, ctx: Context) -> Briefing:
+def parse_briefing(data: dict, agent: str, ctx: Context) -> Briefing:
+    """JSON 한 덩이를 브리핑으로. 검사에 걸리면 메우지 않고 거절한다.
+
+    `-p` 러너와 `/floor` 세션 러너가 둘 다 이 문을 지난다.
+    """
     missing = [key for key in _FIELDS if not str(data.get(key, "")).strip()]
     if missing:
         raise RunnerError(f"{agent} 브리핑에 {' · '.join(missing)} 가 없습니다")
@@ -270,7 +283,7 @@ def claude_runner(agent: str, ctx: Context) -> Briefing:
     prompt = _prompt(agent, ctx)
     for attempt in (1, 2):
         try:
-            return _briefing(_extract(_call(prompt)), agent, ctx)
+            return parse_briefing(_extract(_call(prompt)), agent, ctx)
         except RunnerError:
             # 형식이 한 번 깨지는 건 흔하다. 두 번째도 깨지면 판을 접는다 —
             # 여기서 대충 메워 넘기면 판정이 아니라 창작이 된다.

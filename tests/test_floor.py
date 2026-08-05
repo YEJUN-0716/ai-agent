@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import replace
 from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
-from floor import claude_runner, market, pipeline, report
+from floor import claude_runner, cli, market, pipeline, report
 from floor.agents import (
     ALGO,
     ATTACK,
@@ -530,3 +531,167 @@ def test_시세를_못_가져오면_판을_접고_리포트를_남기지_않는�
     events = list(pipeline.run("BTC", "scalp", reports_dir=tmp_path, snapshot_fn=boom))
     assert events[-1]["type"] == "error" and "바이낸스" in events[-1]["text"]
     assert list(tmp_path.glob("*.md")) == []
+
+
+# ── /floor 세션 러너 ──────────────────────────────────────
+#
+# 3단계의 전부는 "프로세스를 안 띄운다"는 것. 나머지 검사는 `-p` 러너와 같은
+# 함수를 지나야 하므로, 여기서는 세션 경로가 그 문을 정말 지나는지를 본다.
+
+
+def _prep(tmp_path, symbol="BTC", mode="scalp", snap=None):
+    """판 하나를 차린다. 시세는 고정값이라 네트워크를 안 탄다."""
+    snap = snap or market.demo_snapshot(market.resolve_symbol(symbol))
+    text, state = cli.prep(
+        symbol,
+        mode,
+        reports_dir=tmp_path,
+        snapshot_fn=lambda _symbol: snap,
+        state_dir=tmp_path / "state",
+        now=datetime(2026, 8, 5, 15, 30, tzinfo=market.KST),
+    )
+    return text, state, snap
+
+
+def _session_briefings(mode) -> list[dict]:
+    """세션이 순서대로 썼다고 치는 브리핑 한 벌."""
+    out = []
+    for key, _turn in mode.order:
+        item = {
+            "agent": key,
+            "bubble": f"{key} 한 줄",
+            "observed": "MA20 위, 기준 변동성 1.2%",
+            "reading": "추세 추종 구간",
+            "counter": "레인지면 수수료만 낸다",
+            "trigger": "20봉 저점 이탈",
+        }
+        if key in claude_runner.VERDICT_AGENTS:
+            item["verdict"] = {**_GOOD["verdict"], "action": mode.actions[0]}
+            if key == "PM":
+                item["verdict"] |= {"pm_status": "승인", "pm_comment": "간다"}
+        out.append(item)
+    return out
+
+
+def _write_json(directory, payload):
+    path = directory / "briefings.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("mode,expected", [(ALGO, 13), (SCALP, 5), (ATTACK, 5)])
+def test_세션_발언_순서의_길이가_호출_횟수와_같다(mode, expected):
+    assert len(mode.order) == mode.calls == expected
+
+
+@pytest.mark.parametrize("key,mode", [("algo", ALGO), ("scalp", SCALP), ("attack", ATTACK)])
+def test_브리핑팩이_모드의_발언_순서를_전부_담는다(tmp_path, key, mode):
+    text, _state, _snap = _prep(tmp_path, mode=key)
+    for index, (agent, _turn) in enumerate(mode.order, start=1):
+        assert f"{index}. **{agent}**" in text
+    assert f"발언 {mode.calls}회" in text
+    assert mode.basis in text  # 어느 시장 기준인지가 팩 첫 화면에 있어야 한다
+
+
+def test_얼린_판이_그대로_되살아난다(tmp_path):
+    """13명이 같은 가격을 봐야 한다. JSON 왕복에서 값이 변하면 그게 깨진다."""
+    _text, state, snap = _prep(tmp_path)
+    mode, revived, retro, now = cli._read_state(state)
+    assert mode is SCALP and now.hour == 15 and retro == ()
+    assert revived == snap  # 튜플·중첩 dataclass 까지 그대로
+
+
+def test_세션_러너는_클로드_프로세스를_한번도_띄우지_않는다(tmp_path, monkeypatch):
+    """3단계의 이유 전부. 여기가 뚫리면 세션으로 돌리는 의미가 없다."""
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("세션 러너가 프로세스를 띄웠다")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    _text, state, _snap = _prep(tmp_path)
+    path, verdict = cli.save(
+        state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path
+    )
+    assert path.exists() and verdict.action == "LONG"
+
+
+def test_세션_리포트가_화면_리포트와_같은_서랍_같은_머리말이다(tmp_path):
+    _text, state, _snap = _prep(tmp_path)
+    path, verdict = cli.save(
+        state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path
+    )
+    calls = report.listing(tmp_path)  # 화면이 /reports 를 그릴 때 쓰는 그 함수
+    assert path.parent == tmp_path and len(calls) == 1
+    assert calls[0].symbol == "BTC" and calls[0].action == verdict.action
+    assert "AI 시뮬레이션" in path.read_text(encoding="utf-8")
+
+
+def test_세션_저장이_빠진_발언을_거절한다(tmp_path):
+    """호출 횟수는 요금이자 판정의 근거다. 12명이 낸 걸 13명이 낸 걸로 남길 수 없다."""
+    _text, state, _snap = _prep(tmp_path, mode="algo")
+    short = _session_briefings(ALGO)[:-1]  # PM 을 빼먹었다
+    with pytest.raises(cli.FloorError) as exc:
+        cli.save(state, _write_json(tmp_path, short), reports_dir=tmp_path)
+    assert "13개" in str(exc.value)
+    assert list(tmp_path.glob("*.md")) == []
+
+
+def test_세션_저장이_어긋난_발언_순서를_거절한다(tmp_path):
+    _text, state, _snap = _prep(tmp_path)
+    items = _session_briefings(SCALP)
+    items[0], items[1] = items[1], items[0]
+    with pytest.raises(cli.FloorError) as exc:
+        cli.save(state, _write_json(tmp_path, items), reports_dir=tmp_path)
+    assert "순서" in str(exc.value)
+    assert list(tmp_path.glob("*.md")) == []
+
+
+def test_세션_저장도_모드에_없는_판정을_거절한다(tmp_path):
+    """`-p` 러너와 같은 검사를 지난다는 증거. 세션이 썼다고 느슨해지지 않는다."""
+    _text, state, _snap = _prep(tmp_path)
+    items = _session_briefings(SCALP)
+    items[-1]["verdict"]["action"] = "BUY"
+    with pytest.raises(claude_runner.RunnerError) as exc:
+        cli.save(state, _write_json(tmp_path, items), reports_dir=tmp_path)
+    assert "LONG" in str(exc.value)
+    assert list(tmp_path.glob("*.md")) == []
+
+
+def test_세션_저장이_판정_없는_판을_거절한다(tmp_path):
+    _text, state, _snap = _prep(tmp_path)
+    items = _session_briefings(SCALP)
+    del items[-1]["verdict"]
+    with pytest.raises(claude_runner.RunnerError):
+        cli.save(state, _write_json(tmp_path, items), reports_dir=tmp_path)
+
+
+def test_세션_팩에도_과거_판정_회고가_들어간다(tmp_path):
+    """저장한 리포트는 다음 판단의 입력이다 — 화면이든 세션이든 같은 서랍을 본다."""
+    _text, state, snap = _prep(tmp_path)
+    cli.save(state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path)
+
+    again, _state, _snap = _prep(tmp_path, snap=snap)
+    assert "지난 판정 없음" not in again
+    assert "LONG(확신도 62%)" in again
+
+
+@pytest.mark.parametrize(
+    "words,expected",
+    [
+        (["BTC"], ("BTC", "algo")),
+        (["하이닉스", "scalp"], ("하이닉스", "scalp")),
+        (["SK", "하이닉스", "scalp"], ("SK 하이닉스", "scalp")),
+        (["삼성전자", "공격"], ("삼성전자", "공격")),
+        (["SK", "하이닉스"], ("SK 하이닉스", "algo")),
+    ],
+)
+def test_슬래시커맨드_인자를_종목과_모드로_가른다(words, expected):
+    assert cli.split_args(words) == expected
+
+
+def test_판_상태가_깨졌으면_반쯤_녹여_쓰지_않는다(tmp_path):
+    _text, state, _snap = _prep(tmp_path)
+    state.write_text('{"mode": "scalp"}', encoding="utf-8")
+    with pytest.raises(cli.FloorError) as exc:
+        cli.save(state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path)
+    assert "prep 부터 다시" in str(exc.value)
