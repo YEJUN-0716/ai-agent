@@ -1,5 +1,5 @@
 {
-  "cash_krw": 6079604.848156799,
+  "cash_krw": 3208817.92064818,
   "positions": {
     "KHC": {
       "qty": 22,
@@ -25,43 +25,24 @@
       "qty": 12,
       "avg_price_usd": 49.0,
       "entry_date": "2026-07-31"
+    },
+    "ALLY": {
+      "qty": 12,
+      "avg_price_usd": 45.040000915527344,
+      "entry_date": "2026-08-05"
+    },
+    "CVS": {
+      "qty": 9,
+      "avg_price_usd": 93.72000122070312,
+      "entry_date": "2026-08-05"
+    },
+    "T": {
+      "qty": 28,
+      "avg_price_usd": 22.65999984741211,
+      "entry_date": "2026-08-05"
     }
   },
-  "pending": [
-    {
-      "side": "buy",
-      "symbol": "ALLY",
-      "notional_krw": 774990.5855273437,
-      "placed_date": "2026-08-04",
-      "market": "US",
-      "meta": {
-        "score": 65.9,
-        "rsi": 54.4
-      }
-    },
-    {
-      "side": "buy",
-      "symbol": "CVS",
-      "notional_krw": 1256586.5685766602,
-      "placed_date": "2026-08-04",
-      "market": "US",
-      "meta": {
-        "score": 60.5,
-        "rsi": 49.9
-      }
-    },
-    {
-      "side": "buy",
-      "symbol": "T",
-      "notional_krw": 909759.1269238282,
-      "placed_date": "2026-08-04",
-      "market": "US",
-      "meta": {
-        "score": 60.2,
-        "rsi": 55.9
-      }
-    }
-  ],
+  "pending": [],
   "realized_pnl_krw": 0.0,
   "trades": [
     {
@@ -103,6 +84,42 @@
       "qty": 12,
       "price_usd": 49.0,
       "amount_krw": 844721.0
+    },
+    {
+      "date": "2026-08-05",
+      "symbol": "ALLY",
+      "side": "buy",
+      "qty": 12,
+      "price_usd": 45.04,
+      "amount_krw": 768714.0,
+      "meta": {
+        "score": 65.9,
+        "rsi": 54.4
+      }
+    },
+    {
+      "date": "2026-08-05",
+      "symbol": "CVS",
+      "side": "buy",
+      "qty": 9,
+      "price_usd": 93.72,
+      "amount_krw": 1199665.0,
+      "meta": {
+        "score": 60.5,
+        "rsi": 49.9
+      }
+    },
+    {
+      "date": "2026-08-05",
+      "symbol": "T",
+      "side": "buy",
+      "qty": 28,
+      "price_usd": 22.66,
+      "amount_krw": 902408.0,
+      "meta": {
+        "score": 60.2,
+        "rsi": 55.9
+      }
     }
   ]
 }

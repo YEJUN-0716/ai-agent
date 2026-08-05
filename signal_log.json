@@ -161,6 +161,42 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "ALLY-2026-08-05",
+      "symbol": "ALLY",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-05",
+      "entry_price": 45.04,
+      "score": 65.9,
+      "rsi": 54.4,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "CVS-2026-08-05",
+      "symbol": "CVS",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-05",
+      "entry_price": 93.72,
+      "score": 60.5,
+      "rsi": 49.9,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "T-2026-08-05",
+      "symbol": "T",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-05",
+      "entry_price": 22.66,
+      "score": 60.2,
+      "rsi": 55.9,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
