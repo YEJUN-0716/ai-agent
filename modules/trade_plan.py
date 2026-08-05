@@ -226,9 +226,16 @@ def _short_trend_ok(df: pd.DataFrame) -> tuple[bool, str]:
 
 
 def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
-                     short_trend_filter: bool = True) -> dict:
+                     short_trend_filter: bool = True,
+                     direction: str | None = None) -> dict:
     """
     ICT 구조 기반 양방향 트레이드 플랜.
+
+    direction
+      None(기본)이면 ICT 순점수의 부호로 방향을 정한다.
+      "long" | "short" 를 주면 **방향만** 그것으로 고정한다 — 방향의 주인이
+      바깥(총괄 판정)일 때 쓴다. 게이트(숏 레짐·저확신 숏 억제·손익비 하한)는
+      그대로 적용된다. 방향을 넘겨받는 것이지 "무조건 그린다"는 뜻이 아니다.
 
     반환 dict
       direction        "long" | "short" | "none"
@@ -244,6 +251,9 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
       reason_invalid   valid=False 사유
       signals          근거(사람이 읽는 문장) 목록
     """
+    if direction not in (None, "long", "short"):
+        raise ValueError(f"direction 은 'long' | 'short' | None 만 됩니다: {direction!r}")
+
     empty = {
         "direction": "none", "bias_score": 0, "confidence": "low", "confluence": 0,
         "current": float(df["Close"].iloc[-1]) if len(df) else 0.0,
@@ -260,28 +270,36 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
         adj = int(adj_info.get("adjustment", 0))
         signals = list(adj_info.get("signals", []))
 
-        if adj >= BIAS_TH:
-            direction = "long"
-        elif adj <= -BIAS_TH:
-            direction = "short"
-        else:
-            out = dict(empty)
-            out.update({"current": round(cur, 2), "bias_score": adj, "signals": signals,
-                        "reason_invalid": f"뚜렷한 방향성 없음 (ICT {adj:+d}, |{adj}|<{BIAS_TH})"})
-            return out
+        if direction is None:
+            if adj >= BIAS_TH:
+                direction = "long"
+            elif adj <= -BIAS_TH:
+                direction = "short"
+            else:
+                out = dict(empty)
+                out.update({"current": round(cur, 2), "bias_score": adj, "signals": signals,
+                            "reason_invalid": f"뚜렷한 방향성 없음 (ICT {adj:+d}, |{adj}|<{BIAS_TH})"})
+                return out
+
+        # 구조가 방향에 **동의한** 정도. 반대 부호는 확신의 근거가 될 수 없으므로
+        # 0 으로 깎는다. 방향을 ICT 가 정한 경우엔 이 값이 |adj| 와 같아서 아무것도
+        # 달라지지 않고, 방향을 주입받은 경우에만 의미가 생긴다.
+        conf_mag = max(adj if direction == "long" else -adj, 0)
+        if conf_mag == 0 and abs(adj) >= BIAS_TH:
+            signals = [f"⚠️ ICT 구조는 반대 방향 ({adj:+d}) — 방향은 바깥 판정을 따름"] + signals
 
         def _short_veto(reason: str) -> dict:
             out = dict(empty)
             out.update({"direction": "short", "current": round(cur, 2),
                         "bias_score": adj, "signals": signals,
-                        "confidence": _confidence(abs(adj), len(signals)),
+                        "confidence": _confidence(conf_mag, len(signals)),
                         "confluence": len(signals), "reason_invalid": reason})
             return out
 
         # 저확신 숏 억제 — low 확신도 숏은 기대값이 낮다 (실측 +0.16R). 숏은
-        # medium 이상(|ICT| >= CONF_MED_TH)만 허용한다. 롱은 제한 없음.
-        if direction == "short" and abs(adj) < CONF_MED_TH:
-            return _short_veto(f"저확신 숏 억제 (|ICT| {abs(adj)} < {CONF_MED_TH})")
+        # medium 이상(약세 동의 >= CONF_MED_TH)만 허용한다. 롱은 제한 없음.
+        if direction == "short" and conf_mag < CONF_MED_TH:
+            return _short_veto(f"저확신 숏 억제 (약세 구조 동의 {conf_mag} < {CONF_MED_TH})")
 
         # 숏 레짐 게이트 — 종목이 약세가 아니면 숏 보류 (라인은 계산하지 않음)
         if direction == "short" and short_trend_filter:
@@ -301,7 +319,7 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
 
         plan = _assemble_plan(direction, cur, entry_low, entry_high, stop, targets, min_rr=min_rr)
         plan["bias_score"] = adj
-        plan["confidence"] = _confidence(abs(adj), len(signals))
+        plan["confidence"] = _confidence(conf_mag, len(signals))
         plan["confluence"] = len(signals)
         plan["signals"] = [f"진입 근거: {struct}"] + signals
         return plan
