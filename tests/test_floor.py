@@ -10,13 +10,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import replace
 from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
-from floor import claude_runner, cli, market, pipeline, report
+from floor import claude_runner, cli, market, pipeline, plan_gate, report
 from floor.agents import (
     ALGO,
     ATTACK,
@@ -404,6 +405,8 @@ def _yahoo(price: float, day_pct: float, bars: int = 40) -> dict:
                     "indicators": {
                         "quote": [
                             {
+                                # 시가는 전봉 종가. 오더블록 판정(양봉/음봉)에 쓰인다.
+                                "open": [closes[max(i - 1, 0)] for i in range(bars)],
                                 "high": [c * (1 + day_pct / 200) for c in closes],
                                 "low": [c * (1 - day_pct / 200) for c in closes],
                                 "close": closes,
@@ -609,7 +612,7 @@ def test_세션_러너는_클로드_프로세스를_한번도_띄우지_않는�
 
     monkeypatch.setattr(subprocess, "run", forbidden)
     _text, state, _snap = _prep(tmp_path)
-    path, verdict = cli.save(
+    path, verdict, _gate = cli.save(
         state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path
     )
     assert path.exists() and verdict.action == "LONG"
@@ -617,7 +620,7 @@ def test_세션_러너는_클로드_프로세스를_한번도_띄우지_않는�
 
 def test_세션_리포트가_화면_리포트와_같은_서랍_같은_머리말이다(tmp_path):
     _text, state, _snap = _prep(tmp_path)
-    path, verdict = cli.save(
+    path, verdict, _gate = cli.save(
         state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path
     )
     calls = report.listing(tmp_path)  # 화면이 /reports 를 그릴 때 쓰는 그 함수
@@ -695,3 +698,131 @@ def test_판_상태가_깨졌으면_반쯤_녹여_쓰지_않는다(tmp_path):
     with pytest.raises(cli.FloorError) as exc:
         cli.save(state, _write_json(tmp_path, _session_briefings(SCALP)), reports_dir=tmp_path)
     assert "prep 부터 다시" in str(exc.value)
+
+
+# ── 검증 관문 ─────────────────────────────────────────────
+# 플로어가 부른 숫자를 stock-analyzer 플랜 엔진이 다시 재는 자리.
+# 여기가 조용히 skip 으로 새면 "검증이 붙어 있다"는 말만 남고 실체가 없다.
+
+_ENGINE_READY = plan_gate.stock_analyzer_dir().is_dir()
+
+
+def _rising_bars(n: int = 200, start: float = 100.0) -> tuple:
+    """눌림목이 섞인 상승 시리즈. 구조(오더블록·스윙)가 잡히도록 만든 (시, 고, 저, 종)."""
+    bars: list[tuple[float, float, float, float]] = []
+    price = start
+    for i in range(n):
+        price *= 0.978 if i % 7 == 6 else 1.012  # 6봉 오르고 1봉 눌린다
+        opening = bars[-1][3] if bars else price
+        bars.append(
+            (
+                round(opening, 2),
+                round(max(opening, price) * 1.006, 2),
+                round(min(opening, price) * 0.994, 2),
+                round(price, 2),
+            )
+        )
+    return tuple(bars)
+
+
+@pytest.mark.skipif(not _ENGINE_READY, reason="stock-analyzer 사본이 없는 환경")
+def test_검증_관문이_실제로_stock_analyzer_엔진에_닿는다():
+    """이 테스트가 skip 상태를 보면 이음매가 끊긴 것이다. 통과로 착각하면 안 된다."""
+    gate = plan_gate.check(_rising_bars(), "BUY")
+    assert gate.status in (plan_gate.STATUS_PASS, plan_gate.STATUS_REJECT), gate.headline
+    assert gate.min_rr > 0  # 엔진이 자기 손익비 기준을 돌려줬다는 증거
+    assert gate.direction == "long"  # 방향은 플로어가 정한 대로 따라왔다
+
+
+def test_엔진을_못_부르면_통과가_아니라_검사_못_함이다(tmp_path, monkeypatch):
+    """검사기가 자리를 비운 걸 승인으로 읽으면 관문이 없느니만 못하다."""
+    monkeypatch.setattr(plan_gate, "stock_analyzer_dir", lambda: tmp_path / "없는폴더")
+    gate = plan_gate.check(_rising_bars(), "BUY")
+    assert gate.status == plan_gate.STATUS_SKIP
+    assert gate.status != plan_gate.STATUS_PASS and not gate.blocked
+    assert "검사 못 함" in gate.headline
+
+
+def test_야후_봉은_시고저종_순서다():
+    """봉이 3칸에서 4칸으로 넓어졌을 때 인덱스가 밀려 저가를 종가로 읽은 적이 있다."""
+    bars = market._yahoo_bars(_yahoo(100.0, 4.0, bars=30)["chart"]["result"][0])
+    _opening, high, low, close = bars[-1]
+    assert high == max(bars[-1]) and low == min(bars[-1])
+    assert low < close < high  # 종가가 극단이 아니다
+
+
+def test_환율은_저가가_아니라_종가로_잡는다(monkeypatch):
+    """여기가 밀리면 전광판 괴리율이 통째로 틀어진다. 화면엔 멀쩡해 보인다."""
+    _fake_market(monkeypatch)
+    quote = _yahoo(1400.0, 0.30)["chart"]["result"][0]["indicators"]["quote"][0]
+    assert market._fx_krw() == pytest.approx(quote["close"][-1], abs=0.01)
+
+
+def test_관문에_들어가는_봉에서_진행중인_봉을_뗀다(monkeypatch):
+    """야후는 장중에도 오늘 봉 값을 채워 준다 — 값이 있다고 완결 봉이 아니다."""
+    _fake_market(monkeypatch)
+    snap = market.live_snapshot(market.resolve_symbol("하이닉스"))
+    raw = market._yahoo_bars(_yahoo(1_500_000.0, 3.05)["chart"]["result"][0])
+    assert len(snap.bars) == len(raw) - 1
+    assert snap.bars[-1] == raw[-2]
+
+
+def test_엔진_호출이_터져도_판정은_살고_검사_못_함이_된다(monkeypatch):
+    """관문 하나 때문에 판 전체를 잃지 않는다. 대신 통과로 새지도 않는다."""
+    pd = pytest.importorskip("pandas")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("판다스 버전 어긋남")
+
+    monkeypatch.setattr(plan_gate, "_load", lambda: (boom, 60, 2.0, pd))
+    gate = plan_gate.check(_rising_bars(), "BUY")
+    assert gate.status == plan_gate.STATUS_SKIP and "호출 실패" in gate.headline
+
+
+def test_관문이_sys_path를_더럽히고_끝나지_않는다():
+    """`modules` 는 흔한 이름이다. 경로가 남으면 다른 import 가 저쪽으로 샌다."""
+    before = list(sys.path)
+    plan_gate.check(_rising_bars(), "BUY")
+    assert sys.path == before
+
+
+def test_관망은_검증할_매매가_없다():
+    assert plan_gate.check(_rising_bars(), "HOLD").status == plan_gate.STATUS_SKIP
+
+
+def test_algo_는_판정_뒤에_관문을_세운다(tmp_path):
+    events = _events("BTC", "algo", tmp_path)
+    kinds = [e["type"] for e in events]
+    assert "gate" in kinds
+    assert kinds.index("gate") > kinds.index("verdict")
+
+
+@pytest.mark.parametrize("mode", ["scalp", "attack"])
+def test_스캘핑과_공격에는_관문이_없다(tmp_path, mode):
+    """일봉 ICT 엔진은 15분봉 단타를 잴 수 없다. 못 재는 걸 잰 척하지 않는다."""
+    assert _of(_events("BTC", mode, tmp_path), "gate") == []
+
+
+def test_기각당한_판은_회고에_매매로_남지_않는다(tmp_path, monkeypatch):
+    """머리말 action 이 회고의 유일한 입력이다. 안 한 매매를 했다고 기억하면 안 된다."""
+    rejected = plan_gate.GateResult(
+        plan_gate.STATUS_REJECT,
+        "손익비 부족 (T1 R:R 1.31 < 2.0)",
+        direction="long",
+        entry_low=100.0,
+        entry_high=102.0,
+        stop=98.0,
+        targets=(104.0,),
+        rr=(1.31,),
+    )
+    monkeypatch.setattr(plan_gate, "check", lambda *_a, **_k: rejected)
+
+    events = _events("BTC", "algo", tmp_path)
+    assert _of(events, "gate")[0]["blocked"] is True
+    past = report.listing(tmp_path)[0]
+    # 확신도까지 같이 내려야 한다. 기각된 LONG 의 62% 가 남으면 회고에
+    # "HOLD(확신도 62%)" 라는 있지도 않은 판정이 생긴다.
+    assert past.action == "HOLD" and past.confidence == 0
+
+    body = (tmp_path / _of(events, "saved")[0]["name"]).read_text(encoding="utf-8")
+    assert "⛔ 기각" in body and "실행 대상이 아닙니다" in body

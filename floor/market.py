@@ -120,6 +120,10 @@ class Snapshot:
     krw_vol_pct: float
     fear_greed: int
     headlines: tuple[str, ...]
+    # (시, 고, 저, 종) 완결 일봉. closes 는 화면용이라 20/50 이평에 맞춰 짧게
+    # 자르지만, 검증 플랜 엔진은 ICT 구조를 보려면 봉 전체가 필요하다
+    # (trade_plan.MIN_BARS=60). 시가는 오더블록 판정(양봉/음봉)에 쓰인다.
+    bars: tuple[tuple[float, float, float, float], ...] = ()
     board_rows: tuple[dict, ...] = ()
     fx_krw: float | None = None
     source: str = "demo"
@@ -151,10 +155,25 @@ def demo_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
 
     base = {KIND_KR: 190_000.0, KIND_COIN: 68_000.0}.get(symbol.kind, 240.0)
     price = base
-    closes: list[float] = []
-    for _ in range(60):
+    series: list[float] = []
+    for _ in range(200):
         price *= 1 + rng.gauss(0.001, 0.018)
-        closes.append(round(price, 2))
+        series.append(round(price, 2))
+
+    # 화면은 뒤 60봉만 그린다. 앞쪽은 검증 플랜 엔진이 ICT 구조를 찾을 준비운동
+    # 구간이다 — 60봉(MIN_BARS)에 딱 맞추면 스윙·오더블록이 안 잡힌다.
+    closes = series[-60:]
+    # 시가는 전봉 종가로 둔다. 갭 없는 합성 시리즈라 이게 가장 자연스럽고,
+    # 양봉·음봉이 실제 흐름대로 섞여 오더블록이 잡힌다.
+    bars = tuple(
+        (
+            series[i - 1] if i else c,
+            round(max(c, series[i - 1] if i else c) * (1 + abs(rng.gauss(0, 0.006))), 2),
+            round(min(c, series[i - 1] if i else c) * (1 - abs(rng.gauss(0, 0.006))), 2),
+            c,
+        )
+        for i, c in enumerate(series)
+    )
 
     last, prev = closes[-1], closes[-2]
     window = tuple(closes[-20:])
@@ -206,6 +225,7 @@ def demo_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
         market_open=_is_krx_open(now) if symbol.kind == KIND_KR else True,
         perp_vol_pct=round(perp_vol, 2),
         krw_vol_pct=round(krw_vol, 2),
+        bars=bars,
         fear_greed=rng.randint(18, 82),
         headlines=(
             f"{symbol.label} 관련 수급 변화 관측 — 기관 순매수 이틀째",
@@ -369,22 +389,26 @@ def _yahoo_chart(ticker: str, span: str = "6mo") -> dict:
     raise MarketError(f"야후 {ticker} 응답에 일봉이 없습니다")
 
 
-def _yahoo_bars(result: dict) -> list[tuple[float, float, float]]:
-    """(고, 저, 종) 완결 봉만. 진행 중인 오늘 봉은 종가가 비어 있어 빠진다."""
+def _yahoo_bars(result: dict) -> list[tuple[float, float, float, float]]:
+    """(시, 고, 저, 종) 값이 다 찬 봉만.
+
+    주의: 장중에도 오늘 봉의 값이 채워져 내려오므로 "완결 봉"이라는 보장은 없다.
+    구조 판정에 쓸 봉은 호출한 쪽에서 마지막 하나를 떼야 한다.
+    """
     q = result["indicators"]["quote"][0]
     bars = [
-        (float(h), float(low), float(c))
-        for h, low, c in zip(q["high"], q["low"], q["close"])
-        if h is not None and low is not None and c is not None
+        (float(o), float(h), float(low), float(c))
+        for o, h, low, c in zip(q["open"], q["high"], q["low"], q["close"])
+        if None not in (o, h, low, c)
     ]
     if len(bars) < 21:
         raise MarketError("일봉이 21개 미만이라 20봉 레인지를 못 만듭니다")
     return bars
 
 
-def _yahoo_price(result: dict, bars: list[tuple[float, float, float]]) -> float:
+def _yahoo_price(result: dict, bars: list[tuple[float, float, float, float]]) -> float:
     price = result.get("meta", {}).get("regularMarketPrice")
-    return round(float(price if price is not None else bars[-1][2]), 2)
+    return round(float(price if price is not None else bars[-1][3]), 2)
 
 
 def _get_text(url: str) -> str:
@@ -443,7 +467,7 @@ def _fear_greed() -> int:
 
 def _fx_krw() -> float:
     bars = _yahoo_bars(_yahoo_chart(_FX_TICKER, span="3mo"))
-    return round(bars[-1][2], 2)
+    return round(bars[-1][3], 2)  # 종가. 봉이 (시, 고, 저, 종) 이라 3번이다.
 
 
 def _finish(
@@ -456,6 +480,7 @@ def _finish(
     headlines: tuple[str, ...],
     source: str,
     now: datetime,
+    bars: tuple[tuple[float, float, float, float], ...] = (),
     board_rows: tuple[dict, ...] = (),
     fx: float | None = None,
 ) -> Snapshot:
@@ -474,6 +499,7 @@ def _finish(
         krw_vol_pct=krw_vol,
         fear_greed=_fear_greed(),
         headlines=headlines,
+        bars=bars,
         board_rows=board_rows,
         fx_krw=fx,
         source=source,
@@ -482,8 +508,11 @@ def _finish(
 
 def _coin_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
     pair = f"{symbol.key}USDT"
-    spot = _binance_klines(pair, perp=False, limit=60)
-    closes = [round(_num(row[4]), 2) for row in spot]
+    # 화면은 60봉이면 되지만 검증 플랜 엔진은 60봉이 최소선이라 딱 맞추면 구조를
+    # 못 찾는다. 넉넉히 받아 화면엔 뒤 60개만 쓴다.
+    spot = _binance_klines(pair, perp=False, limit=200)
+    bars = tuple((_num(r[1]), _num(r[2]), _num(r[3]), _num(r[4])) for r in spot[:-1])
+    closes = [round(_num(row[4]), 2) for row in spot[-60:]]
 
     # 판정 기준은 무기한 차트다. 마지막 봉은 진행 중이라 직전 완결 봉으로 잰다.
     perp = _binance_klines(pair, perp=True, limit=3)[-2]
@@ -495,6 +524,7 @@ def _coin_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
         closes[-1],
         perp_vol,
         perp_vol,  # 코인은 원화 정규장 차트가 없다. 같은 값을 들고 간다.
+        bars=bars,
         headlines=_crypto_headlines(symbol.key),
         source=f"Binance {pair} 현물·무기한 · F&G alternative.me · 뉴스 CoinDesk",
         now=now,
@@ -506,8 +536,12 @@ def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
     chart = _yahoo_chart(ticker)
     bars = _yahoo_bars(chart)
     price = _yahoo_price(chart, bars)
-    closes = [round(bar[2], 2) for bar in bars] + [price]
-    day_vol = _range_pct(*bars[-1])
+    # 야후는 장중에도 오늘 봉의 OHLC 를 채워 내려준다 — "값이 있다"로는 완결 봉인지
+    # 알 수 없다. 구조 판정에 진행 중인 봉이 섞이면 안 되므로 바이낸스와 똑같이
+    # 마지막 봉을 뗀다. 화면용 closes 는 아래에서 실시간가를 따로 붙인다.
+    gate_bars = tuple(bars[:-1])
+    closes = [round(bar[3], 2) for bar in bars] + [price]
+    day_vol = _range_pct(bars[-1][1], bars[-1][2], bars[-1][3])
     news = _headlines(_NEWS_QUERIES.get(symbol.key, symbol.key))
 
     if symbol.kind != KIND_KR:
@@ -518,6 +552,7 @@ def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
             price,
             day_vol,
             day_vol,
+            bars=gate_bars,
             headlines=news,
             source=f"Yahoo {ticker} 일봉 · 무기한 시장 없음 · 뉴스 Yahoo",
             now=now,
@@ -533,6 +568,7 @@ def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
         price,
         perp_vol,
         day_vol,
+        bars=gate_bars,
         headlines=news,
         source=(
             f"Yahoo {ticker} · 무기한 {'/'.join(PERP_EXCHANGES)} · "
