@@ -3,6 +3,7 @@
 실제 data/ 는 건드리지 않는다. 전부 tmp_path 안에서 돈다.
 """
 import pandas as pd
+import pytest
 
 from modules import analyst_log as al
 from modules import analyst_scorecard as sc
@@ -206,3 +207,57 @@ def test_record_without_asof_is_not_scored(tmp_path):
 
     assert written == 0
     assert sl.load_returns(returns_root) == {}
+
+
+# ── 15분봉 기록에 퀀트·총괄 판정 붙이기 ──────────────────────────────
+#
+# 재무제표는 봉과 무관하므로 15분봉 판정도 일봉과 같은 퀀트 점수를 쓴다 —
+# 화면(app.build_scalp_verdict)이 일봉 퀀트 보고서를 그대로 받는 것과 같다.
+
+def _intraday(n_bars=200):
+    import numpy as np
+
+    idx = pd.date_range("2026-08-06 09:30", periods=n_bars, freq="15min")
+    close = pd.Series([100 + 0.05 * i + 2 * np.sin(i / 7) for i in range(n_bars)],
+                      index=idx)
+    return pd.DataFrame({
+        "Open": close * 0.999, "High": close * 1.004,
+        "Low": close * 0.996, "Close": close,
+        "Volume": pd.Series([500_000] * n_bars, index=idx),
+    })
+
+
+def test_scalp_record_reuses_daily_quant(monkeypatch):
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker, "_directional_weights", lambda: {})
+    captured = {}
+    monkeypatch.setattr(
+        signal_worker.analyst_log, "append_day",
+        lambda date_str, regime, scores, **kw: captured.update(scores=scores))
+
+    n = signal_worker.record_scalp_scores(
+        {"AAPL": _intraday()}, "bull", quant_by_ticker={"AAPL": 20.0})
+
+    assert n == 1
+    row = captured["scores"]["AAPL"]
+    assert row["quant"] == 20.0
+    assert row["verdict"] == pytest.approx(
+        (row["chart"] + row["ict"] + row["quant"]) / 3)
+
+
+def test_scalp_record_without_quant_has_no_verdict(monkeypatch):
+    """일봉 스텝이 퀀트를 못 남긴 날 — 차트·ICT 는 그대로 기록된다."""
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker, "_directional_weights", lambda: {})
+    captured = {}
+    monkeypatch.setattr(
+        signal_worker.analyst_log, "append_day",
+        lambda date_str, regime, scores, **kw: captured.update(scores=scores))
+
+    assert signal_worker.record_scalp_scores({"AAPL": _intraday()}, "bull") == 1
+
+    row = captured["scores"]["AAPL"]
+    assert "verdict" not in row and "quant" not in row
+    assert "chart" in row

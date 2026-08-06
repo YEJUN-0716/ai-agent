@@ -2,7 +2,23 @@
 
 실제 data/analyst_log/ 는 건드리지 않는다. 전부 tmp_path 안에서 돈다.
 """
+import pytest
+
 from modules import analyst_log as al
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """기록 경로에서 네트워크를 타는 두 곳을 막는다 — 재무 조회와 가중치 조회.
+
+    막지 않으면 이 테스트들이 종목마다 yfinance 를 실제로 부른다.
+    """
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker, "_quant_score", lambda *a, **k: None)
+    monkeypatch.setattr(signal_worker, "_directional_weights", lambda: {})
+    monkeypatch.setattr(signal_worker, "QUANT_FETCH_SLEEP_SEC", 0)
+    return signal_worker
 
 
 def test_round_trip(tmp_path):
@@ -91,9 +107,9 @@ def _panel(n_bars=300):
     })
 
 
-def test_recording_failure_does_not_raise(monkeypatch):
+def test_recording_failure_does_not_raise(monkeypatch, no_network):
     """기록이 깨져도 일일 스캔은 계속돼야 한다."""
-    import signal_worker
+    signal_worker = no_network
 
     monkeypatch.setattr(signal_worker.price_panel, "load_panel",
                         lambda tks, s, e: ({}, {"AAPL": _panel()}))
@@ -122,28 +138,118 @@ def test_empty_universe_records_nothing(monkeypatch):
     assert signal_worker.record_analyst_scores([], "bull") == 0
 
 
-def test_records_chart_and_ict(monkeypatch, tmp_path):
+def _capture_append(monkeypatch, signal_worker):
+    captured = {}
+    monkeypatch.setattr(
+        signal_worker.analyst_log, "append_day",
+        lambda date_str, regime, scores, **kw: captured.update(scores=scores))
+    return captured
+
+
+def test_records_chart_and_ict(monkeypatch, no_network):
     """정상 경로 — 두 애널리스트 점수가 기록된다."""
-    import signal_worker
+    signal_worker = no_network
 
     monkeypatch.setattr(signal_worker.price_panel, "load_panel",
                         lambda tks, s, e: ({}, {"AAPL": _panel()}))
-
-    captured = {}
-
-    def _capture(date_str, regime, scores, **kw):
-        captured["scores"] = scores
-
-    monkeypatch.setattr(signal_worker.analyst_log, "append_day", _capture)
+    captured = _capture_append(monkeypatch, signal_worker)
 
     assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 1
     assert set(captured["scores"]["AAPL"]) <= {"chart", "ict"}
     assert captured["scores"]["AAPL"]
 
 
-def test_short_history_ticker_is_skipped(monkeypatch):
-    """봉이 모자란 종목은 기록하지 않는다 — 지표가 잡음이다."""
+# ── 퀀트+재무와 총괄 판정 ────────────────────────────────────────────
+#
+# 성적표가 화면 판정을 재려면 세 명이 다 기록돼야 하고, 그 셋을 섞은 점수를
+# 기록 시점에 남겨야 한다 — 가중치가 주마다 바뀌어 나중에 다시 섞으면 그날
+# 화면에 뜬 값이 아니게 된다.
+
+def test_records_quant_and_verdict(monkeypatch, no_network):
+    signal_worker = no_network
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"AAPL": _panel()}))
+    monkeypatch.setattr(signal_worker, "_quant_score", lambda tk, df: 30.0)
+    captured = _capture_append(monkeypatch, signal_worker)
+
+    assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 1
+
+    row = captured["scores"]["AAPL"]
+    assert row["quant"] == 30.0
+    # 가중치가 비었으므로 동일가중 — 세 점수의 단순평균이어야 한다.
+    assert row["verdict"] == pytest.approx(
+        (row["chart"] + row["ict"] + row["quant"]) / 3)
+
+
+def test_verdict_uses_screen_weights(monkeypatch, no_network):
+    """화면과 같은 가중치로 섞어야 화면 판정을 재는 것이 된다."""
+    signal_worker = no_network
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"AAPL": _panel()}))
+    monkeypatch.setattr(signal_worker, "_quant_score", lambda tk, df: 0.0)
+    monkeypatch.setattr(signal_worker, "_directional_weights",
+                        lambda: {"chart": 0.0, "quant": 100.0, "ict": 0.0})
+    captured = _capture_append(monkeypatch, signal_worker)
+
+    signal_worker.record_analyst_scores(["AAPL"], "bull")
+
+    # 퀀트에 가중치가 전부 실렸으므로 퀀트 점수 그대로여야 한다.
+    assert captured["scores"]["AAPL"]["verdict"] == 0.0
+
+
+def test_no_verdict_when_quant_missing(monkeypatch, no_network):
+    """재무를 못 받으면 판정을 남기지 않는다 — 두 명만 섞은 값은 화면이 낸
+    판정이 아니고, 50 으로 채우면 '못 받았다'가 '중립 판단'이 된다."""
+    signal_worker = no_network
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"AAPL": _panel()}))
+    captured = _capture_append(monkeypatch, signal_worker)
+
+    signal_worker.record_analyst_scores(["AAPL"], "bull")
+
+    row = captured["scores"]["AAPL"]
+    assert "quant" not in row and "verdict" not in row
+    assert "chart" in row          # 차트·ICT 기록은 그대로 살아 있다
+
+
+def test_quant_score_drops_blocked_fetch(monkeypatch):
+    """야후가 막히면 fundamental_score 가 50.0 을 준다 — 그걸 기록하면 안 된다."""
     import signal_worker
+
+    monkeypatch.setattr(signal_worker.core, "fundamental_score",
+                        lambda tk, df=None: (50.0, {"데이터없음": True}))
+    assert signal_worker._quant_score("AAPL", None) is None
+
+    monkeypatch.setattr(signal_worker.core, "fundamental_score",
+                        lambda tk, df=None: (50.0, {"오류": "timeout"}))
+    assert signal_worker._quant_score("AAPL", None) is None
+
+    monkeypatch.setattr(signal_worker.core, "fundamental_score",
+                        lambda tk, df=None: (61.5, {"업종": "Tech"}))
+    assert signal_worker._quant_score("AAPL", None) == 61.5
+
+
+def test_todays_quant_reads_daily_record(tmp_path):
+    """15분봉 스텝은 앞 스텝이 남긴 퀀트를 읽는다 — 조회를 두 번 하지 않는다."""
+    import signal_worker
+
+    al.append_day("2026-08-07", "bull",
+                  {"AAPL": {"chart": 60.0, "ict": 70.0, "quant": 44.0},
+                   "MSFT": {"chart": 55.0}},          # 퀀트 없는 종목
+                  root=tmp_path)
+
+    got = signal_worker.todays_quant("2026-08-07", root=tmp_path)
+
+    assert got == {"AAPL": 44.0}
+    assert signal_worker.todays_quant("2026-08-06", root=tmp_path) == {}
+
+
+def test_short_history_ticker_is_skipped(monkeypatch, no_network):
+    """봉이 모자란 종목은 기록하지 않는다 — 지표가 잡음이다."""
+    signal_worker = no_network
 
     monkeypatch.setattr(signal_worker.price_panel, "load_panel",
                         lambda tks, s, e: ({}, {"NEW": _panel(n_bars=20)}))

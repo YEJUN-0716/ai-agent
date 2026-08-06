@@ -22,7 +22,11 @@ SLUG_NAMES = {
     "combined": "종합",
 }
 
-MISSING_REASON = {"quant": "일별 펀더멘털 수집 미구축"}
+# 퀀트+재무는 2026-08-07 부터 기록한다(signal_worker.record_analyst_scores).
+# 다만 이 채널의 종합 점수는 여전히 차트+ICT 단순평균이다 — 셋을 섞을 가중치를
+# 정할 실측 IC 표본이 아직 없다(근거 없는 가중치보다 균등이 정직하다는 결정).
+# 앱 화면의 총괄 판정은 ic_weights 기반 블렌드라 이 채널과 다른 값이다.
+MISSING_REASON = {"quant": "실측 IC 표본이 없어 가중치 근거가 아직 없음"}
 
 # 종합 점수가 무엇의 평균인지 밝힌다. 합성 방식을 감추면 순위의 의미를
 # 알 수 없고, 나중에 가중치를 바꿨을 때 구독자가 알아챌 방법도 없다.
@@ -35,12 +39,12 @@ def _slug_name(slug):
 
 
 def _missing_slug_lines(missing_slugs):
-    """미기록 슬러그 공개 문구 — 조용히 빼지 않는다.
+    """종합 점수에서 빠진 슬러그 공개 문구 — 조용히 빼지 않는다.
 
     두 발행문(성적표·오늘의 기록) 모두에서 쓴다. 슬러그를 빼고 두 개만
     보여주면 성적표/기록이 완전한 것처럼 보인다.
     """
-    return [f"※ {_slug_name(slug)}는 아직 기록하지 않음 — "
+    return [f"※ {_slug_name(slug)}는 종합 점수에 아직 안 들어감 — "
             f"{MISSING_REASON.get(slug, '기록 없음')}"
             for slug in missing_slugs]
 
