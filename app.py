@@ -3324,7 +3324,10 @@ TEAM_WEIGHTS = {'차트+파동+모멘텀': 20, '퀀트+재무': 20, '매크로+�
 
 
 def _team_verdict(score):
-    return '매수' if score >= 65 else ('매도' if score <= 40 else '중립')
+    # 문턱은 modules/analyst_scorecard 가 소유한다 — 성적표가 "매수라고 한
+    # 판정이 맞았나" 를 셀 때 화면과 다른 선을 쓰면 성적이 화면을 못 잰다.
+    from modules.analyst_scorecard import verdict_of
+    return verdict_of(score)
 
 
 def _current_analyst_weights():
@@ -3352,9 +3355,10 @@ def _current_analyst_weights():
 # 근거 없이 포트폴리오를 흔드는 것이고, 그게 PR #22 에서 고친 고장의 형태다.
 
 _ANALYST_SLUG_NAMES = {
-    'chart': '차트+파동+모멘텀',
-    'quant': '퀀트+재무',
-    'ict':   'ICT+CRT',
+    'chart':    '차트+파동+모멘텀',
+    'quant':    '퀀트+재무',
+    'ict':      'ICT+CRT',
+    'combined': '종합(차트+ICT)',
 }
 
 # 유효 표본(겉보기 n 이 아니라)이 이만큼은 돼야 판정에 쓸 수 있다.
@@ -3391,6 +3395,104 @@ def _analyst_scorecard_rows(days, prices, horizon):
             '판정': '가능' if decided else '아직 불가',
         })
     return rows
+
+
+def _scalp_scorecard_rows(days, returns, horizon_bars):
+    """15분봉 기록 + 저장된 선행수익률 → (IC 행 목록, 판정 적중률 dict).
+
+    가격을 다시 받지 않는다. 15분봉은 60일이 지나면 사라지므로 채점은 기록
+    시점에 이미 끝나 있고(signal_worker.resolve_scalp_returns), 화면은 남겨둔
+    수익률만 읽는다. 여기서 다시 받으려 들면 오래된 날이 조용히 빠진다.
+
+    Streamlit 을 모른다 — 산술을 테스트로 잠글 수 있어야 한다.
+    """
+    from modules import analyst_scorecard as _sc
+
+    combined = _sc.combined_days(days)
+    # 겹침 보정 lag 은 봉이 아니라 '겹치는 기록 수' 다 — 26봉을 그대로 넘기면
+    # lag 이 표본보다 커져 유효표본이 0 에 붙는다.
+    sessions = _sc.sessions_for_bars(horizon_bars)
+
+    scored = dict(_sc.score_analysts(days, returns, sessions))
+    scored.update(_sc.score_analysts(combined, returns, sessions))
+
+    rows = []
+    for slug, stat in sorted(scored.items()):
+        t_stat = stat.get('t_stat')
+        decided = (stat['effective_n'] >= ANALYST_SCORECARD_MIN_EFFECTIVE_N
+                   and t_stat is not None
+                   and abs(t_stat) >= ANALYST_SCORECARD_T_THRESHOLD)
+        rows.append({
+            '애널리스트': _ANALYST_SLUG_NAMES.get(slug, slug),
+            'IC': stat['mean_ic'],
+            't': t_stat,
+            'IC 적중률(%)': stat['hit_rate'],
+            '표본(겉보기)': stat['n'],
+            '유효표본': stat['effective_n'],
+            '판정': '가능' if decided else '아직 불가',
+        })
+
+    return rows, _sc.verdict_hit_rate(combined, returns)
+
+
+def render_scalp_scorecard():
+    """스캘핑(15분봉) 판정 성적. 기록이 없으면 안내만 띄운다."""
+    from modules import analyst_log as _log
+    from modules import analyst_scorecard as _sc
+    from modules import scalp_log as _slog
+
+    st.markdown("---")
+    st.subheader("⚡ 스캘핑(15분봉) 판정 성적")
+    st.caption(
+        "화면 오른쪽 칸(SCALP · 15분봉)이 내린 판정이 실제로 맞았는지를 셉니다.  \n"
+        "**판정 적중률** — 매수라고 한 종목이 실제로 올랐나(중립은 세지 않습니다).  \n"
+        "**IC 적중률** — 그날 점수 순위가 실제 수익률 순위와 같은 방향이었던 날의 비율. "
+        "일봉 성적표와 같은 자입니다.")
+
+    try:
+        days = _log.load_days(root=_slog.SCORE_DIRNAME)
+        returns_by_horizon = _slog.load_returns()
+    except Exception as e:
+        st.warning(f"15분봉 기록을 읽지 못했습니다: {e}")
+        return
+
+    if not days:
+        st.info("아직 15분봉 기록이 없습니다 — 평일 장마감 후 기록 잡이 쌓기 시작합니다.")
+        return
+
+    tickers = sorted({t for d in days for t in d.get('scores', {})})
+    st.caption(f"기록 {len(days)}일 · {len(tickers)}종목 "
+               f"({days[0]['date']} ~ {days[-1]['date']})")
+
+    any_rows = False
+    for bars in _sc.SCALP_HORIZONS_BARS:
+        returns = returns_by_horizon.get(bars) or {}
+        if not returns:
+            continue
+        rows, verdict = _scalp_scorecard_rows(days, returns, bars)
+        if not rows and not verdict['n']:
+            continue
+        any_rows = True
+
+        sessions = _sc.sessions_for_bars(bars)
+        st.markdown(f"##### {bars}봉 앞선 수익률 기준 (약 {sessions}거래일)")
+        if verdict['n']:
+            st.metric(f"판정 적중률 ({verdict['hits']}/{verdict['n']})",
+                      f"{verdict['hit_rate']}%",
+                      help=f"매수 판정 {verdict['buy_n']}건 · 매도 {verdict['sell_n']}건 · "
+                           f"중립 {verdict['neutral_n']}건은 분모에서 뺐습니다.")
+        else:
+            st.caption("아직 방향 판정(매수·매도)이 나온 기록이 없습니다 — 전부 중립입니다.")
+        if rows:
+            st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+
+    if not any_rows:
+        st.info("아직 채점된 날이 없습니다 — 기록 다음 거래일이 지나야 첫 성적이 나옵니다.")
+        return
+
+    st.caption(
+        "15분봉은 60일치만 받을 수 있어, 채점은 기록한 다음 실행에서 즉시 끝내 "
+        "저장합니다. 이 표는 저장된 값을 읽을 뿐 가격을 다시 받지 않습니다.")
 
 
 def render_analyst_scorecard():
@@ -6481,6 +6583,9 @@ def main():
 
             st.divider()
             render_analyst_scorecard()
+            # 일봉 성적표가 어느 갈래로 일찍 return 하든(기록 없음·가격 실패)
+            # 스캘핑 성적은 따로 뜬다 — 재료도 채점 시점도 다른 성적이다.
+            render_scalp_scorecard()
 
             st.divider()
             st.subheader("🔬 팩터 IC 검증 (예측력 통계 검증)")

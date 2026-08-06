@@ -26,11 +26,15 @@ def _read_lines(path):
         return [ln for ln in (line.strip() for line in f) if ln]
 
 
-def append_day(date_str, regime, scores, root=LOG_DIRNAME):
+def append_day(date_str, regime, scores, root=LOG_DIRNAME, asof=None):
     """하루치 점수를 기록한다. 같은 날짜가 이미 있으면 대체한다.
 
     같은 날 스캔이 두 번 돌아도 줄이 겹치지 않아야 한다 — 겹치면 그 날이
     성적에 두 번 계산돼 표본이 부풀려진다.
+
+    asof — 기준 봉의 시각(ISO 문자열). 일봉 기록은 날짜만으로 그 날 종가를
+    찾을 수 있어 비워 둔다. 분봉 기록(scalp_log.SCORE_DIRNAME)은 하루에 봉이
+    26개라 "그 날의 어느 봉이었나" 를 남기지 않으면 몇 봉 뒤를 셀 기준이 없다.
     """
     path = _year_path(root, date_str)
     parent = os.path.dirname(path)
@@ -45,6 +49,8 @@ def append_day(date_str, regime, scores, root=LOG_DIRNAME):
             trimmed[ticker] = row
 
     record = {"date": date_str, "regime": regime, "scores": trimmed}
+    if asof:
+        record["asof"] = str(asof)
 
     kept = []
     for line in _read_lines(path):
