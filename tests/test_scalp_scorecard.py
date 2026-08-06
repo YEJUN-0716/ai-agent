@@ -145,6 +145,54 @@ def test_resolve_skips_already_scored(tmp_path):
     assert sl.load_returns(returns_root)[26]["2026-08-06"]["AAPL"] == 99.0
 
 
+def test_partial_download_is_filled_in_later(tmp_path):
+    """일부만 받아진 날을 '채점 끝'으로 찍으면, 못 받은 종목은 영영 안 들어간다.
+
+    한 번의 다운로드 실패가 성적표 표본에 영구히 남는 형태의 고장이다.
+    """
+    import signal_worker
+
+    scores_root, returns_root = tmp_path / "scores", tmp_path / "returns"
+    series = _bars(30)
+    al.append_day("2026-08-06", "bull",
+                  {"AAPL": {"chart": 60.0, "ict": 70.0},
+                   "MSFT": {"chart": 40.0, "ict": 45.0}},
+                  root=scores_root, asof=series.index[0].isoformat())
+
+    # 1차 실행: AAPL 만 받아졌다.
+    signal_worker.resolve_scalp_returns(
+        {"AAPL": series}, score_root=scores_root, returns_root=returns_root)
+    assert list(sl.load_returns(returns_root)[26]["2026-08-06"]) == ["AAPL"]
+
+    # 2차 실행: MSFT 가 뒤늦게 온다 — 그 날은 이미 기록이 있어도 채워져야 한다.
+    written = signal_worker.resolve_scalp_returns(
+        {"AAPL": series, "MSFT": _bars(30, start_price=200.0, step=-2.0)},
+        score_root=scores_root, returns_root=returns_root)
+
+    assert written == 1
+    out = sl.load_returns(returns_root)[26]["2026-08-06"]
+    assert sorted(out) == ["AAPL", "MSFT"]
+    assert out["AAPL"] == 26.0        # 먼저 저장된 값은 덮이지 않는다
+    assert out["MSFT"] < 0
+
+
+def test_fully_scored_date_is_not_rewritten(tmp_path):
+    """다 채워진 날은 다시 쓰지 않는다 — 매 실행 커밋이 생기면 안 된다."""
+    import signal_worker
+
+    scores_root, returns_root = tmp_path / "scores", tmp_path / "returns"
+    series = _bars(30)
+    al.append_day("2026-08-06", "bull", {"AAPL": {"chart": 60.0, "ict": 70.0}},
+                  root=scores_root, asof=series.index[0].isoformat())
+
+    signal_worker.resolve_scalp_returns(
+        {"AAPL": series}, score_root=scores_root, returns_root=returns_root)
+    written = signal_worker.resolve_scalp_returns(
+        {"AAPL": series}, score_root=scores_root, returns_root=returns_root)
+
+    assert written == 0
+
+
 def test_record_without_asof_is_not_scored(tmp_path):
     """기준 봉을 모르면 몇 봉 뒤를 셀 수 없다 — 날짜만으로 찍으면 안 된다."""
     import signal_worker
