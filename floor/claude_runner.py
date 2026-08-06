@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import tempfile
 
-from floor.agents import BY_KEY, ROOM_ANALYSTS, ROOM_RESEARCH
+from floor.agents import BY_KEY
 from floor.demo import Briefing, Context, Verdict, format_body
 from floor.market import Snapshot
 
@@ -31,14 +31,6 @@ TIMEOUT_SEC = 240
 
 # 이 둘만 판정을 낸다. 나머지는 브리핑만 쓴다.
 VERDICT_AGENTS = ("ACE", "PM")
-
-# 매매 레벨(진입가·손절가·목표가)을 부를 수 있는 방.
-#
-# 애널리스트 팀과 리서치룸은 관측과 논거를 내는 자리다. 여기서 "손절 3% 이내 롱
-# 진입 성립" 같은 문장이 나오면 리포트 한 장에 추천가가 여러 벌 실려, 어느 숫자가
-# 실행 대상인지 흐려진다. 리스크 위원회는 이미 나온 계획을 검증·수정하는 자리라
-# 레벨을 만지지 않으면 일이 안 되므로 여기 넣지 않는다.
-QUIET_ROOMS = (ROOM_ANALYSTS, ROOM_RESEARCH)
 PM_STATUSES = ("승인", "수정승인", "기각")
 
 SYSTEM_PROMPT = (
@@ -131,28 +123,14 @@ def rules(agent: str, ctx: Context) -> list[str]:
     """이 에이전트가 지켜야 할 것. 세션 러너도 같은 목록을 받아 쓴다."""
     out = [
         f"판정 기준 시장은 {ctx.mode.basis} 다. 이 시장의 변동성으로 계산한다.",
+        f"이 모드에서 낼 수 있는 판정은 {' / '.join(ctx.mode.actions)} 뿐이다.",
     ]
-    # 매수·매도를 권하는 건 트레이딩 본부 몫이다. 분석 방에 판정 목록을 쥐여주면
-    # 관측 대신 추천을 적어 와, 한 화면에 추천이 여러 개 뜬다.
-    if agent in VERDICT_AGENTS:
-        out.append(f"이 모드에서 낼 수 있는 판정은 {' / '.join(ctx.mode.actions)} 뿐이다.")
-    else:
-        out.append(
-            "판정은 트레이딩 본부만 낸다. 매수·매도·진입을 권하지 말고 "
-            "관측·해석·반대 시나리오·판단이 바뀌는 조건만 적는다."
-        )
-    if BY_KEY[agent].room in QUIET_ROOMS:
-        out.append(
-            "진입가·손절가·목표가·비중 같은 매매 레벨은 부르지 않는다. 가격은 "
-            "관측과 해석의 근거로만 인용하고, 트리거는 '이러면 진입'이 아니라 "
-            "'이러면 내 해석이 뒤집힌다'로 적는다."
-        )
     if ctx.mode.key in ("scalp", "attack"):
         out.append(
             "원화 정규장 변동성은 폭락일에 몇 배로 부풀려진다. 그 값으로 손절 폭을 "
             "재면 멀쩡한 셋업이 청산 위험으로 오기각되므로 쓰지 않는다."
         )
-    if ctx.mode.key == "attack" and agent in VERDICT_AGENTS:
+    if ctx.mode.key == "attack":
         out.append("관망은 금지다. 근거가 약해도 방향을 고르고 확신도를 낮게 적는다.")
     if agent in VERDICT_AGENTS:
         # 관망에 0 을 적으면 화면에 "손절 0" 으로 뜬다. 안 들어간다는 뜻이지
