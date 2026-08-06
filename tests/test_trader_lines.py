@@ -172,15 +172,25 @@ MGR = {'total_score': 62.0, 'consensus': '매수 우위', 'agreement': 80, 'verd
        'confidence_note': ''}
 
 
-def _card_html(flat_df, monkeypatch, plan):
+def _card_html(flat_df, monkeypatch, plan, with_trader=True):
     """카드를 그려 보고 HTML 을 받아 온다 — 화면에 실제로 무슨 말이 찍히는지."""
     _engine(monkeypatch, plan)
     trader = app.trader_signal_lines(flat_df, MGR)
     out = []
     monkeypatch.setattr(app.st, 'markdown', lambda html, **kw: out.append(html))
     monkeypatch.setattr(app.st, 'caption', lambda *a, **kw: None)
-    app.render_verdict_cards({'manager': MGR, 'trader': trader, 'is_krw': False})
+    app.render_verdict_cards({'manager': MGR, 'trader': trader, 'is_krw': False},
+                             with_trader=with_trader)
     return ''.join(out)
+
+
+def test_workspace_report_shows_the_verdict_without_trade_prices(flat_df, monkeypatch):
+    """애널리스트 팀 리포트는 총괄까지만. 매매추천가는 최상단 총괄 자리에만 둔다."""
+    html = _card_html(flat_df, monkeypatch, _plan(), with_trader=False)
+
+    assert '총괄 종합 보고서' in html
+    for banned in ('진입', '목표', '손절', '추천'):
+        assert banned not in html, banned
 
 
 def test_recommended_badge_on_a_setup_that_clears_the_gate(flat_df, monkeypatch):

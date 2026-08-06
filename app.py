@@ -4825,11 +4825,14 @@ def render_module_detail(groups: List[ModuleGroup], reports: dict):
             sel_mod.panel_fn()
 
 
-def render_verdict_cards(snap):
+def render_verdict_cards(snap, *, with_trader=True):
     """총괄 종합 보고서 + 트레이더 매수/매도 라인 카드.
 
     메인 상단(render_verdict_hero)과 애널리스트 팀 리포트가 같은 카드를 쓴다.
     두 곳이 각자 HTML을 들고 있으면 한쪽만 고쳐진 채 서로 다른 판정을 보여준다.
+
+    `with_trader=False` 면 총괄 보고서까지만 그린다. 매매추천가는 한 화면에 한 벌만
+    있어야 한다 — 같은 라인이 위아래로 두 번 뜨면 어느 쪽이 실행 대상인지 흐려진다.
     """
     mgr, trader = snap['manager'], snap['trader']
     p = lambda v: _fmt_price(v, snap.get('is_krw', False))   # noqa: E731
@@ -4850,6 +4853,9 @@ def render_verdict_cards(snap):
   <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {mgr['strongest_opinion']}{dissent_html}</div>
   {context_html}
 </div>""", unsafe_allow_html=True)
+
+    if not with_trader:
+        return
 
     # 카드 색은 "지금 뭘 하라는 카드인가"를 따라간다. 게이트에 막혔으면 총괄이
     # 매수여도 초록이 아니다 — 초록은 들어가라는 말로 읽힌다.
@@ -5519,7 +5525,7 @@ def main():
 </div>""", unsafe_allow_html=True)
 
             # ── AI 애널리스트 팀 리포트 ──────────────────────
-            with st.expander("📋 애널리스트 팀 리포트 — 7개 파트 → 총괄 → 매수/매도 라인", expanded=False):
+            with st.expander("📋 애널리스트 팀 리포트 — 7개 파트 → 총괄 (매수/매도 라인은 최상단 총괄 판정에)", expanded=False):
                 with st.spinner("팀 리포트 작성 중 (백테스트·리스크 분석 포함)..."):
                     _bt_rep = backtest_analyst(df)
                     _team_reports = [
@@ -5561,8 +5567,9 @@ def main():
                     'ticker': ticker, 'reports': _team_reports, 'manager': _mgr,
                     'trader': _trader, 'is_krw': is_krw,
                 }
-                # 같은 카드를 메인 상단(render_verdict_hero)도 그린다 — 공유 함수를 쓴다.
-                render_verdict_cards(st.session_state['analyst_snapshot'])
+                # 매매추천가(진입·목표·손절)는 메인 최상단 총괄 자리에만 둔다.
+                # 여기 워크스페이스는 팀이 어떻게 그 결론에 왔는지를 보여주는 곳이다.
+                render_verdict_cards(st.session_state['analyst_snapshot'], with_trader=False)
 
             # ── 국면 조정 배너 ──────────────────────────
             _rcm = {'bull':'#10b981','bear':'#ef4444','neutral':'#f59e0b'}
