@@ -2519,6 +2519,42 @@ def calc_momentum(df):
     score = sum(sc(v) for v in vals) / len(vals) if vals else 50.0
     return {'score': round(score, 1), '1M': m1, '3M': m3, '6M': m6, '12M': m12}
 
+
+# 15분봉 정규장은 미국(9:30~16:00)·한국(9:00~15:30) 모두 6.5시간 = 26봉이다.
+BARS_PER_DAY_15M = 26
+
+
+def calc_momentum_intraday(df):
+    """15분봉용 단기 모멘텀 — 1일/3일/1주 수익률 및 점수.
+
+    calc_momentum 은 창을 봉 개수로 잡으므로(63봉=3개월) 15분봉에 그대로 먹이면
+    '3개월 모멘텀'이 이틀 반이 된다. 터지지는 않지만 점수 기준이 "3개월에
+    +30%면 90점"이라 이틀 반 수익률은 언제나 50점 근처에 붙는다 — 죽은 숫자를
+    30% 가중치로 섞는 셈이다. 창과 기준을 함께 스캘핑 규모로 다시 잡는다.
+    """
+    p  = df['Close']
+    cp = float(p.iloc[-1])
+
+    def ret(bars):
+        return (cp - float(p.iloc[-bars])) / float(p.iloc[-bars]) * 100 if len(p) >= bars else None
+
+    d1, d3, w1 = (ret(BARS_PER_DAY_15M * n) for n in (1, 3, 5))
+
+    def sc(v):
+        if v is None:   return 50
+        if v > 5:       return 90
+        elif v > 3:     return 75
+        elif v > 1.5:   return 65
+        elif v > 0:     return 55
+        elif v > -1.5:  return 40
+        elif v > -3:    return 25
+        else:           return 10
+
+    vals = [v for v in (d1, d3, w1) if v is not None]
+    score = sum(sc(v) for v in vals) / len(vals) if vals else 50.0
+    return {'score': round(score, 1), '1D': d1, '3D': d3, '1W': w1}
+
+
 def calc_dcf(ticker, treasury_yield=4.5):
     """그레이엄 변형 공식 기반 내재가치 산출 (기본/보수적 2가지)"""
     try:
@@ -3456,8 +3492,13 @@ def ict_crt_analyst(df):
         return build_analyst_report('ICT+CRT', '🧭', 50.0, [f'ICT 분석 실패: {e}'])
 
 
-def technical_momentum_analyst(t_score, t_det, mom_data):
-    """차트+파동+모멘텀: 기술점수 70% + 모멘텀점수 30%."""
+def technical_momentum_analyst(t_score, t_det, mom_data, *,
+                               mom_label='3개월 모멘텀', mom_key='3M'):
+    """차트+파동+모멘텀: 기술점수 70% + 모멘텀점수 30%.
+
+    스캘핑판(15분봉)은 같은 산식에 창이 다른 모멘텀을 넣는다 — 라벨까지 같이
+    넘겨받아야 화면이 이틀치 수익률을 '3개월'이라고 부르지 않는다.
+    """
     mom_score = mom_data.get('score', 50.0) if mom_data else 50.0
     score = _analyst_team.chart_score(t_score, mom_score)
     reasons = []
@@ -3467,8 +3508,8 @@ def technical_momentum_analyst(t_score, t_det, mom_data):
         reasons.append(f"ADX추세강도 {t_det['ADX추세강도']:.0f}점")
     if t_det.get('MA정렬') is not None:
         reasons.append(f"MA정렬 {t_det['MA정렬']:.0f}점")
-    if mom_data and mom_data.get('3M') is not None:
-        reasons.append(f"3개월 모멘텀 {mom_data['3M']:+.1f}%")
+    if mom_data and mom_data.get(mom_key) is not None:
+        reasons.append(f"{mom_label} {mom_data[mom_key]:+.1f}%")
     return build_analyst_report('차트+파동+모멘텀', '📈', score, reasons,
                                  {**t_det, '모멘텀점수': mom_score})
 
@@ -3733,6 +3774,39 @@ def trader_signal_lines(df, manager_report, risk_report=None):
         'current': cp,
         'position_note': position_note,
     }
+
+
+# yfinance 는 15분봉을 최근 60일까지만 준다.
+SCALP_LOOKBACK_DAYS = 59
+
+
+def build_scalp_verdict(ticker, quant_report, *, days=SCALP_LOOKBACK_DAYS):
+    """스캘핑판(15분봉) 총괄 판정 — 방향성 3인을 15분봉으로 다시 계산한다.
+
+    일봉 방향을 빌려 쓰고 라인만 15분봉으로 잡는 안은 기각됐다. 스윙과
+    스캘핑의 방향은 서로 달라질 수 있어야 한다 — 그게 이 화면을 두 벌로
+    만드는 이유다.
+
+    퀀트+재무만 일봉 보고서를 그대로 받는다(재무제표는 봉과 무관하다).
+
+    실패하면 예외를 올린다. 15분봉을 못 받았을 때 일봉으로 조용히 대체하면
+    화면은 스캘핑 판정이라고 적힌 스윙 판정을 보여주게 된다.
+    """
+    end = datetime.now()
+    df = download_stock(ticker, end - timedelta(days=days), end, interval='15m')
+    if df is None or df.empty or len(df) < BARS_PER_DAY_15M * 2:
+        raise ValueError('15분봉 데이터가 부족합니다')
+
+    t_score, t_det = technical_score(df)
+    mom = calc_momentum_intraday(df)
+    reports = [
+        technical_momentum_analyst(t_score, t_det, mom, mom_label='1일 모멘텀', mom_key='1D'),
+        quant_report,
+        ict_crt_analyst(df),
+    ]
+    mgr = manager_consolidate(reports)
+    return {'manager': mgr, 'trader': trader_signal_lines(df, mgr),
+            'reports': reports, 'momentum': mom, 'bars': len(df)}
 
 
 # ─────────────────────────────────────────────
@@ -4653,7 +4727,7 @@ def render_verdict_hero():
         "<div style='display:flex;align-items:baseline;gap:10px;margin:0 0 6px 0'>"
         "<span style=\"font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;"
         "font-family:'JetBrains Mono',ui-monospace,monospace\">VERDICT · 총괄 판정</span>"
-        "<span style='font-size:10.5px;color:var(--text-4)'>애널리스트 7인 종합 → 트레이더 라인</span></div>",
+        "<span style='font-size:10.5px;color:var(--text-4)'>애널리스트 7인 종합 → 트레이더 라인 · 스윙/스캘핑 두 벌</span></div>",
         unsafe_allow_html=True)
     snap = st.session_state.get('analyst_snapshot')
     if not snap:
@@ -4663,7 +4737,33 @@ def render_verdict_hero():
     st.markdown(
         f"<div style='font-size:11px;color:var(--text-4);font-family:JetBrains Mono,monospace'>"
         f"LAST SCAN · {snap['ticker']}</div>", unsafe_allow_html=True)
-    render_verdict_cards(snap)
+
+    # 좌우 나란히 — 탭이면 한쪽을 열 때 다른 쪽이 사라진다. 두 판정이 서로
+    # 엇갈리는 순간이 이 화면의 정보이므로 같은 눈에 들어와야 한다.
+    col_swing, col_scalp = st.columns(2)
+    with col_swing:
+        _render_timeframe_header('SWING · 일봉', '며칠~몇 주 보유', '#38bdf8')
+        render_verdict_cards(snap)
+    with col_scalp:
+        scalp = snap.get('scalp')
+        _render_timeframe_header('SCALP · 15분봉',
+                                 f"당일~며칠 · 최근 {scalp['bars']}봉" if scalp else '당일~며칠',
+                                 '#a78bfa')
+        if scalp:
+            render_verdict_cards({**snap, **scalp})
+        else:
+            st.info(f"15분봉 판정 없음 — {snap.get('scalp_error') or '데이터를 받지 못했습니다'}\n\n"
+                    "일봉 판정으로 대체하지 않습니다. 왼쪽 스윙 판정만 보십시오.")
+
+
+def _render_timeframe_header(tag, note, color):
+    """스윙/스캘핑 칸 머리 — 어느 봉의 판정인지 카드 위에 못 박아 둔다."""
+    st.markdown(
+        f"<div style='display:flex;align-items:baseline;gap:8px;margin:8px 0 2px 0'>"
+        f"<span style=\"font-size:11px;font-weight:800;color:{color};letter-spacing:1.2px;"
+        f"font-family:'JetBrains Mono',ui-monospace,monospace\">{tag}</span>"
+        f"<span style='font-size:10.5px;color:var(--text-4)'>{note}</span></div>",
+        unsafe_allow_html=True)
 
 
 def _fmt_price(v, is_krw):
@@ -5250,9 +5350,17 @@ def main():
                 _mgr      = manager_consolidate(_team_reports)
                 _risk_rep = next(r for r in _team_reports if r['name'] == '리스크팀')
                 _trader   = trader_signal_lines(df, _mgr, _risk_rep)
+                # 스캘핑판(15분봉)은 방향성 3인을 다시 계산한다. 여기서 함께 만들어
+                # 스냅샷에 담아 둬야 최상단 총괄이 두 벌을 나란히 그릴 수 있다.
+                _quant_rep = next(r for r in _team_reports if r['name'] == '퀀트+재무')
+                try:
+                    _scalp, _scalp_err = build_scalp_verdict(ticker, _quant_rep), None
+                except Exception as _e:
+                    _scalp, _scalp_err = None, str(_e)
                 st.session_state['analyst_snapshot'] = {
                     'ticker': ticker, 'reports': _team_reports, 'manager': _mgr,
                     'trader': _trader, 'is_krw': is_krw,
+                    'scalp': _scalp, 'scalp_error': _scalp_err,
                 }
                 # 매매추천가(진입·목표·손절)는 메인 최상단 총괄 자리에만 둔다.
                 # 여기 워크스페이스는 팀이 어떻게 그 결론에 왔는지를 보여주는 곳이다.
