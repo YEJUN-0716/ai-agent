@@ -478,14 +478,21 @@ def resolve_scalp_returns(prices, score_root=None, returns_root=None):
             continue      # 기준 봉을 모르면 몇 봉 뒤를 셀 수 없다
 
         for horizon in analyst_scorecard.SCALP_HORIZONS_BARS:
-            if date_str in done.get(horizon, {}):
-                continue
+            # 완료 판정은 **종목 단위**다. 날짜 단위로 찍으면, 다운로드가 일부만
+            # 성공한 날이 통째로 "채점 끝" 이 돼 못 받은 종목은 다음 실행에서
+            # 데이터가 와도 영영 안 들어간다 — 한 번의 네트워크 사고가 성적표
+            # 표본에 영구히 남는다.
+            already = done.get(horizon, {}).get(date_str, {})
             fwd = analyst_scorecard.build_forward_returns(
                 prices, [asof], horizon).get(asof) or {}
-            rets = {t: pct for t, pct in fwd.items() if t in recorded_tickers}
-            if not rets:
-                continue  # 아직 미래가 오지 않았다
-            scalp_log.append_returns(date_str, horizon, rets, root=returns_root)
+            fresh = {t: pct for t, pct in fwd.items()
+                     if t in recorded_tickers and t not in already}
+            if not fresh:
+                continue  # 아직 미래가 안 왔거나, 받을 종목이 다 채워졌다
+            # 이미 저장된 값이 이긴다. 같은 봉으로 계산한 값이라 바뀔 이유가
+            # 없고, 나중에 덮어쓰면 채점 시점이 종목마다 달라진다.
+            scalp_log.append_returns(date_str, horizon, {**already, **fresh},
+                                     root=returns_root)
             written += 1
 
     return written
