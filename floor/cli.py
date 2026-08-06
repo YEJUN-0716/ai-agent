@@ -93,7 +93,8 @@ def _snapshot_from(data: dict) -> Snapshot:
     for key in _TUPLE_FIELDS:
         fields[key] = tuple(fields[key])
     # 봉은 튜플의 튜플이라 한 겹 더 되돌린다.
-    fields["bars"] = tuple(tuple(bar) for bar in fields.get("bars", ()))
+    for key in ("bars", "bars_15m"):
+        fields[key] = tuple(tuple(bar) for bar in fields.get(key, ()))
     return Snapshot(**fields)
 
 
@@ -236,7 +237,7 @@ def save(
     briefings_path: Path,
     *,
     reports_dir: Path = report.REPORTS_DIR,
-) -> tuple[Path, Verdict]:
+) -> tuple[Path, Verdict, plan_gate.GateResult]:
     """세션이 쓴 브리핑을 `-p` 러너와 같은 기준으로 검사하고 리포트로 남긴다."""
     mode, snapshot, retro, now = _read_state(state_path)
     payload = _read_briefings(briefings_path)
@@ -267,8 +268,8 @@ def save(
         raise FloorError("판정을 낸 에이전트가 없습니다.")
 
     # 화면과 같은 관문을 세션에서도 통과해야 한다. 여기서 빠지면 `/floor` 로 돈 판만
-    # 검증 없이 리포트에 남는다.
-    gate = plan_gate.check(snapshot.bars, final.action) if mode.key == "algo" else None
+    # 검증 없이 리포트에 남는다. 시간축 선택도 화면과 같은 함수가 한다.
+    gate = plan_gate.for_mode(mode.key, snapshot, final.action)
 
     text = report.render(
         snapshot=snapshot,
@@ -329,10 +330,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"진입 {verdict.entry} · 손절 {verdict.stop} · 목표 {verdict.target} · "
                 f"비중 {verdict.size_pct}%"
             )
-            if gate is not None:
-                print(f"검증 관문 {gate.status.upper()} — {gate.headline}")
-                if gate.blocked:
-                    print("→ 이 매매는 하지 않습니다. 위 숫자는 실행 대상이 아닙니다.")
+            print(f"검증 관문 {gate.status.upper()} ({gate.basis}) — {gate.headline}")
+            if gate.blocked:
+                print("→ 이 매매는 하지 않습니다. 위 숫자는 실행 대상이 아닙니다.")
     except _FAILURES as exc:
         print(f"실패 — {exc}", file=sys.stderr)
         return 1

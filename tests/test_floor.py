@@ -427,6 +427,19 @@ def _klines(close: float, day_pct: float) -> list[list]:
     return [row(close * 0.99), row(close), row(close * 1.01)]
 
 
+# 검증 엔진이 60봉을 최소로 보므로 15분봉 응답도 그만큼 길어야 한다.
+_INTRADAY_ROWS = 120
+
+
+def _klines_15m(close: float = 1100.0) -> list[list]:
+    """눌림목 섞인 상승 15분봉. 구조가 잡혀야 관문이 판정까지 간다."""
+    out, price = [], close * 0.9
+    for i in range(_INTRADAY_ROWS):
+        price *= 0.994 if i % 7 == 6 else 1.003
+        out.append([0, price * 0.999, price * 1.002, price * 0.998, price, 0])
+    return out
+
+
 _RSS = """<rss><channel>
   <title>CoinDesk: Crypto News</title>
   <item><title>Wells Fargo joins race to tokenize Wall Street</title></item>
@@ -449,6 +462,9 @@ def _fake_market(monkeypatch, dead: tuple[str, ...] = ()) -> None:
             return {"data": [{"last": "1104"}]}
         if "gateio" in url:
             return [{"last": "1106", "funding_rate": "0.0003"}]
+        if "interval=15m" in url:
+            # 코인도 한국 종목도 15분봉은 무기한(fapi)에서 온다. 가격대만 다르다.
+            return _klines_15m(68_000.0 if "BTCUSDT" in url else 1100.0)
         if "fapi.binance.com" in url:
             return _klines(1100.0, 1.20)  # 무기한 — 실측 예시값
         if "api.binance.com" in url:
@@ -798,9 +814,55 @@ def test_algo_는_판정_뒤에_관문을_세운다(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["scalp", "attack"])
-def test_스캘핑과_공격에는_관문이_없다(tmp_path, mode):
-    """일봉 ICT 엔진은 15분봉 단타를 잴 수 없다. 못 재는 걸 잰 척하지 않는다."""
-    assert _of(_events("BTC", mode, tmp_path), "gate") == []
+def test_스캘핑과_공격은_15분봉으로_검증한다(tmp_path, mode):
+    """엔진은 시간축을 묻지 않는다 — 봉 개수로 잰다. 단타는 단타 차트로 재야 한다.
+
+    공격 모드도 포함이다. 연출이라는 이유로 거부권을 면제하면 거부권이 아니다.
+    """
+    gates = _of(_events("BTC", mode, tmp_path), "gate")
+    assert len(gates) == 1
+    assert "15분봉" in gates[0]["basis"]
+    # 무기한 기준 모드라 라인 단위가 화면 통화가 아니다.
+    assert gates[0]["currency"] == "USD"
+
+
+def test_모드마다_관문이_보는_차트가_다르다(tmp_path):
+    """스윙을 15분봉으로, 단타를 일봉으로 재면 검증이 아니라 오판이다."""
+    algo = _of(_events("BTC", "algo", tmp_path), "gate")[0]
+    scalp = _of(_events("BTC", "scalp", tmp_path), "gate")[0]
+    assert algo["basis"] == "일봉" and "15분봉" in scalp["basis"]
+
+
+def test_모르는_모드는_통과가_아니라_검사_못_함이다():
+    """모드가 늘어났는데 시간축을 안 정해 주면 조용히 통과시키지 않는다."""
+    snap = market.demo_snapshot(market.resolve_symbol("BTC"))
+    gate = plan_gate.for_mode("새모드", snap, "BUY")
+    assert gate.status == plan_gate.STATUS_SKIP and not gate.blocked
+
+
+def test_15분봉을_못_가져오면_검사_못_함이다():
+    """빈 봉은 '문제 없음'이 아니다. 통과로 새면 관문이 없느니만 못하다."""
+    snap = market.demo_snapshot(market.resolve_symbol("BTC"))
+    empty = replace(snap, bars_15m=(), bars_15m_from="")
+    gate = plan_gate.for_mode("scalp", empty, "LONG")
+    assert gate.status == plan_gate.STATUS_SKIP and "검사 못 함" in gate.headline
+
+
+def test_한국종목_15분봉은_원화가_아니라_무기한에서_온다(monkeypatch):
+    """원화 정규장 15분봉으로 무기한 단타를 재면 폭락일에 멀쩡한 셋업이 오기각된다."""
+    _fake_market(monkeypatch)
+    snap = market.live_snapshot(market.resolve_symbol("하이닉스"))
+    assert "무기한" in snap.bars_15m_from and "SKHYNIXUSDT" in snap.bars_15m_from
+    # 원화 종가(150만원대)가 아니라 무기한 USDT 값이어야 한다.
+    assert snap.bars_15m[-1][3] < 10_000
+
+
+def test_15분봉도_진행중인_봉을_뗀다(monkeypatch):
+    """일봉과 같은 이유다 — 채워져 있다고 완결 봉이 아니다."""
+    _fake_market(monkeypatch)
+    snap = market.live_snapshot(market.resolve_symbol("BTC"))
+    assert len(snap.bars_15m) == _INTRADAY_ROWS - 1
+    assert snap.bars_15m[-1][3] == pytest.approx(_klines_15m(68_000.0)[-2][4])
 
 
 def test_기각당한_판은_회고에_매매로_남지_않는다(tmp_path, monkeypatch):

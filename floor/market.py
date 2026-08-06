@@ -124,6 +124,12 @@ class Snapshot:
     # 자르지만, 검증 플랜 엔진은 ICT 구조를 보려면 봉 전체가 필요하다
     # (trade_plan.MIN_BARS=60). 시가는 오더블록 판정(양봉/음봉)에 쓰인다.
     bars: tuple[tuple[float, float, float, float], ...] = ()
+    # 스캘핑·공격 모드용 완결 15분봉. 검증 관문이 일봉으로 단타를 재면 시간축이
+    # 어긋나 검증이 아니라 오판이 된다. 못 가져오면 빈 값으로 두고 관문이
+    # "검사 못 함"으로 끝나게 한다 — 빈 값을 통과로 읽는 자리는 없다.
+    bars_15m: tuple[tuple[float, float, float, float], ...] = ()
+    # 그 15분봉을 어느 시장에서 가져왔는지. 무기한은 USDT 라 화면 통화와 다르다.
+    bars_15m_from: str = ""
     board_rows: tuple[dict, ...] = ()
     fx_krw: float | None = None
     source: str = "demo"
@@ -148,32 +154,42 @@ def _is_krx_open(now: datetime) -> bool:
     return 9 * 60 <= minutes <= 15 * 60 + 30
 
 
+def _synth_bars(
+    rng: random.Random, base: float, count: int, drift: float, sigma: float
+) -> tuple[list[float], tuple[tuple[float, float, float, float], ...]]:
+    """(종가 시리즈, (시,고,저,종) 봉) 합성.
+
+    시가는 전봉 종가로 둔다. 갭 없는 합성 시리즈라 이게 가장 자연스럽고,
+    양봉·음봉이 실제 흐름대로 섞여 오더블록이 잡힌다.
+    """
+    price = base
+    series: list[float] = []
+    for _ in range(count):
+        price *= 1 + rng.gauss(drift, sigma)
+        series.append(round(price, 2))
+    wick = sigma / 3
+    bars = tuple(
+        (
+            series[i - 1] if i else c,
+            round(max(c, series[i - 1] if i else c) * (1 + abs(rng.gauss(0, wick))), 2),
+            round(min(c, series[i - 1] if i else c) * (1 - abs(rng.gauss(0, wick))), 2),
+            c,
+        )
+        for i, c in enumerate(series)
+    )
+    return series, bars
+
+
 def demo_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
     """합성 시세. 심볼을 시드로 써서 같은 종목이면 항상 같은 화면이 나온다."""
     now = now or datetime.now(KST)
     rng = random.Random(f"pixel-floor::{symbol.key}")
 
     base = {KIND_KR: 190_000.0, KIND_COIN: 68_000.0}.get(symbol.kind, 240.0)
-    price = base
-    series: list[float] = []
-    for _ in range(200):
-        price *= 1 + rng.gauss(0.001, 0.018)
-        series.append(round(price, 2))
-
     # 화면은 뒤 60봉만 그린다. 앞쪽은 검증 플랜 엔진이 ICT 구조를 찾을 준비운동
     # 구간이다 — 60봉(MIN_BARS)에 딱 맞추면 스윙·오더블록이 안 잡힌다.
+    series, bars = _synth_bars(rng, base, 200, 0.001, 0.018)
     closes = series[-60:]
-    # 시가는 전봉 종가로 둔다. 갭 없는 합성 시리즈라 이게 가장 자연스럽고,
-    # 양봉·음봉이 실제 흐름대로 섞여 오더블록이 잡힌다.
-    bars = tuple(
-        (
-            series[i - 1] if i else c,
-            round(max(c, series[i - 1] if i else c) * (1 + abs(rng.gauss(0, 0.006))), 2),
-            round(min(c, series[i - 1] if i else c) * (1 - abs(rng.gauss(0, 0.006))), 2),
-            c,
-        )
-        for i, c in enumerate(series)
-    )
 
     last, prev = closes[-1], closes[-2]
     window = tuple(closes[-20:])
@@ -213,6 +229,12 @@ def demo_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
         )
         board_rows = tuple(rows)
 
+    # 아래 두 줄의 순서를 바꾸지 말 것. 시드가 같아도 난수를 뽑는 순서가 바뀌면
+    # 같은 종목의 데모 화면이 통째로 달라진다.
+    fear_greed = rng.randint(18, 82)
+    # 15분봉은 하루치보다 덜 움직인다. 20배 스캘핑이 말이 되는 폭으로 만든다.
+    _, bars_15m = _synth_bars(rng, last, 240, 0.0002, 0.004)
+
     return Snapshot(
         symbol=symbol,
         price=last,
@@ -226,7 +248,9 @@ def demo_snapshot(symbol: Symbol, *, now: datetime | None = None) -> Snapshot:
         perp_vol_pct=round(perp_vol, 2),
         krw_vol_pct=round(krw_vol, 2),
         bars=bars,
-        fear_greed=rng.randint(18, 82),
+        bars_15m=bars_15m,
+        bars_15m_from="데모 15분봉",
+        fear_greed=fear_greed,
         headlines=(
             f"{symbol.label} 관련 수급 변화 관측 — 기관 순매수 이틀째",
             f"{symbol.label} 목표주가 상향 리포트 발간",
@@ -292,12 +316,19 @@ def _range_pct(high: float, low: float, close: float) -> float:
 # ── 거래소 ────────────────────────────────────────────────
 
 
-def _binance_klines(pair: str, *, perp: bool, limit: int) -> list[list]:
+def _binance_klines(
+    pair: str, *, perp: bool, limit: int, interval: str = "1d"
+) -> list[list]:
     host = "https://fapi.binance.com/fapi/v1" if perp else "https://api.binance.com/api/v3"
-    rows = _get_json(f"{host}/klines?symbol={pair}&interval=1d&limit={limit}")
+    rows = _get_json(f"{host}/klines?symbol={pair}&interval={interval}&limit={limit}")
     if not isinstance(rows, list) or len(rows) < 2:
-        raise MarketError(f"바이낸스에 {pair} 일봉이 없습니다")
+        raise MarketError(f"바이낸스에 {pair} {interval} 봉이 없습니다")
     return rows
+
+
+def _klines_bars(rows: list[list]) -> tuple[tuple[float, float, float, float], ...]:
+    """(시, 고, 저, 종). 마지막 봉은 진행 중이라 뗀다 — 구조 판정에 섞으면 안 된다."""
+    return tuple((_num(r[1]), _num(r[2]), _num(r[3]), _num(r[4])) for r in rows[:-1])
 
 
 def _binance_perp(base: str) -> tuple[float, float]:
@@ -378,8 +409,10 @@ def _board(base: str, fx: float, krx_price: float) -> tuple[dict, ...]:
 # ── 야후 ──────────────────────────────────────────────────
 
 
-def _yahoo_chart(ticker: str, span: str = "6mo") -> dict:
-    data = _get_json(f"{_YAHOO_CHART}{urllib.parse.quote(ticker)}?range={span}&interval=1d")
+def _yahoo_chart(ticker: str, span: str = "6mo", interval: str = "1d") -> dict:
+    data = _get_json(
+        f"{_YAHOO_CHART}{urllib.parse.quote(ticker)}?range={span}&interval={interval}"
+    )
     try:
         result = data["chart"]["result"][0]
     except (KeyError, IndexError, TypeError) as exc:
@@ -470,6 +503,40 @@ def _fx_krw() -> float:
     return round(bars[-1][3], 2)  # 종가. 봉이 (시, 고, 저, 종) 이라 3번이다.
 
 
+# ── 15분봉 ────────────────────────────────────────────────
+#
+# 스캘핑·공격의 판정 기준 시장은 24시간 USDT 무기한이다. 검증 관문도 **같은 차트**를
+# 봐야 한다 — 원화 정규장 15분봉으로 무기한 단타를 재면 폭락일에 변동성이 몇 배로
+# 부풀려져(실측: KRX 3.05% vs 무기한 1.20%) 멀쩡한 셋업이 오기각된다. 무기한이
+# 아예 없는 미국 주식만 야후 15분봉으로 잰다.
+#
+# 못 가져오면 빈 값을 돌려주고 판은 계속 간다. 관문이 "검사 못 함"으로 끝날 뿐,
+# 없는 봉을 지어내지도 다른 시장 봉으로 대신하지도 않는다.
+
+INTRADAY = "15m"
+# 엔진은 60봉(MIN_BARS)이 최소이고 숏 레짐 필터가 70봉을 본다. 넉넉히 받는다.
+INTRADAY_LIMIT = 300
+_INTRADAY_SPAN = "1mo"  # 야후 15분봉이 허용하는 조회 범위
+
+
+def _intraday_perp(base: str) -> tuple[tuple[tuple[float, ...], ...], str]:
+    pair = f"{base}USDT"
+    try:
+        rows = _binance_klines(pair, perp=True, limit=INTRADAY_LIMIT, interval=INTRADAY)
+    except MarketError:
+        return (), ""
+    return _klines_bars(rows), f"무기한 {pair} 15분봉"
+
+
+def _intraday_yahoo(ticker: str) -> tuple[tuple[tuple[float, ...], ...], str]:
+    try:
+        bars = _yahoo_bars(_yahoo_chart(ticker, span=_INTRADAY_SPAN, interval=INTRADAY))
+    except MarketError:
+        return (), ""
+    # 야후는 장중에도 진행 중인 봉을 채워 준다. 일봉과 같은 이유로 마지막을 뗀다.
+    return tuple(bars[:-1]), f"Yahoo {ticker} 15분봉"
+
+
 def _finish(
     symbol: Symbol,
     closes: list[float],
@@ -481,6 +548,7 @@ def _finish(
     source: str,
     now: datetime,
     bars: tuple[tuple[float, float, float, float], ...] = (),
+    intraday: tuple[tuple[tuple[float, ...], ...], str] = ((), ""),
     board_rows: tuple[dict, ...] = (),
     fx: float | None = None,
 ) -> Snapshot:
@@ -500,6 +568,8 @@ def _finish(
         fear_greed=_fear_greed(),
         headlines=headlines,
         bars=bars,
+        bars_15m=intraday[0],
+        bars_15m_from=intraday[1],
         board_rows=board_rows,
         fx_krw=fx,
         source=source,
@@ -511,7 +581,7 @@ def _coin_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
     # 화면은 60봉이면 되지만 검증 플랜 엔진은 60봉이 최소선이라 딱 맞추면 구조를
     # 못 찾는다. 넉넉히 받아 화면엔 뒤 60개만 쓴다.
     spot = _binance_klines(pair, perp=False, limit=200)
-    bars = tuple((_num(r[1]), _num(r[2]), _num(r[3]), _num(r[4])) for r in spot[:-1])
+    bars = _klines_bars(spot)
     closes = [round(_num(row[4]), 2) for row in spot[-60:]]
 
     # 판정 기준은 무기한 차트다. 마지막 봉은 진행 중이라 직전 완결 봉으로 잰다.
@@ -525,6 +595,7 @@ def _coin_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
         perp_vol,
         perp_vol,  # 코인은 원화 정규장 차트가 없다. 같은 값을 들고 간다.
         bars=bars,
+        intraday=_intraday_perp(symbol.key),
         headlines=_crypto_headlines(symbol.key),
         source=f"Binance {pair} 현물·무기한 · F&G alternative.me · 뉴스 CoinDesk",
         now=now,
@@ -553,6 +624,8 @@ def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
             day_vol,
             day_vol,
             bars=gate_bars,
+            # 대응 무기한이 없으니 15분봉도 같은 야후 차트에서 온다 (통화도 그대로).
+            intraday=_intraday_yahoo(ticker),
             headlines=news,
             source=f"Yahoo {ticker} 일봉 · 무기한 시장 없음 · 뉴스 Yahoo",
             now=now,
@@ -569,6 +642,9 @@ def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
         perp_vol,
         day_vol,
         bars=gate_bars,
+        # 스캘핑 판정 기준이 무기한이므로 15분봉도 무기한에서 가져온다. 원화가
+        # 아니라 USDT 라, 관문이 내놓는 라인의 단위도 화면 가격과 다르다.
+        intraday=_intraday_perp(symbol.key),
         headlines=news,
         source=(
             f"Yahoo {ticker} · 무기한 {'/'.join(PERP_EXCHANGES)} · "
