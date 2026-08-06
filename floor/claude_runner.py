@@ -123,22 +123,14 @@ def rules(agent: str, ctx: Context) -> list[str]:
     """이 에이전트가 지켜야 할 것. 세션 러너도 같은 목록을 받아 쓴다."""
     out = [
         f"판정 기준 시장은 {ctx.mode.basis} 다. 이 시장의 변동성으로 계산한다.",
+        f"이 모드에서 낼 수 있는 판정은 {' / '.join(ctx.mode.actions)} 뿐이다.",
     ]
-    # 매수·매도를 권하는 건 트레이딩 본부 몫이다. 분석 방에 판정 목록을 쥐여주면
-    # 관측 대신 추천을 적어 와, 한 화면에 추천이 여러 개 뜬다.
-    if agent in VERDICT_AGENTS:
-        out.append(f"이 모드에서 낼 수 있는 판정은 {' / '.join(ctx.mode.actions)} 뿐이다.")
-    else:
-        out.append(
-            "판정은 트레이딩 본부만 낸다. 매수·매도·진입을 권하지 말고 "
-            "관측·해석·반대 시나리오·판단이 바뀌는 조건만 적는다."
-        )
     if ctx.mode.key in ("scalp", "attack"):
         out.append(
             "원화 정규장 변동성은 폭락일에 몇 배로 부풀려진다. 그 값으로 손절 폭을 "
             "재면 멀쩡한 셋업이 청산 위험으로 오기각되므로 쓰지 않는다."
         )
-    if ctx.mode.key == "attack" and agent in VERDICT_AGENTS:
+    if ctx.mode.key == "attack":
         out.append("관망은 금지다. 근거가 약해도 방향을 고르고 확신도를 낮게 적는다.")
     if agent in VERDICT_AGENTS:
         # 관망에 0 을 적으면 화면에 "손절 0" 으로 뜬다. 안 들어간다는 뜻이지

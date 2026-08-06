@@ -346,20 +346,6 @@ def test_실전러너가_JSON을_브리핑으로_바꾼다(monkeypatch):
     assert brief.verdict.action == "LONG" and brief.verdict.size_pct == 12.0
 
 
-def test_분석_방은_추천을_하지_않는다():
-    """판정 목록은 트레이딩 본부만 받는다. 분석 자리는 금지 문구를 받는다."""
-    for mode in (ALGO, SCALP, ATTACK):
-        ctx = _ctx(mode)
-        for key, _turn in mode.order:
-            joined = " ".join(claude_runner.rules(key, ctx))
-            if key in claude_runner.VERDICT_AGENTS:
-                assert "낼 수 있는 판정" in joined, key
-            else:
-                assert "낼 수 있는 판정" not in joined, key
-                assert "판정은 트레이딩 본부만 낸다" in joined, key
-                assert "관망은 금지다" not in joined, key
-
-
 def test_형식이_두번_깨지면_판을_접는다(monkeypatch):
     seen = _answers(monkeypatch, "JSON 이 없는 답")
     with pytest.raises(claude_runner.RunnerError):
