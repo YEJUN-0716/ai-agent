@@ -237,6 +237,56 @@ def market_regime_slug(tickers):
         return 'neutral'
 
 
+# 종목별 yfinance 재무 조회 사이의 간격. calc_factor_scores 가 쓰는 값과 같다 —
+# 여기만 빠르게 돌면 야후가 유니버스 후반을 통째로 막는다.
+QUANT_FETCH_SLEEP_SEC = 0.3
+
+# 이 비율 밑으로 퀀트를 받으면 성적표가 사실상 안 쌓인다. 잡은 실패시키지
+# 않지만(차트·ICT 기록은 살아 있다) 로그에서 눈에 띄어야 한다.
+QUANT_COVERAGE_WARN_AT = 0.5
+
+
+def _quant_score(ticker, df):
+    """퀀트+재무 점수 — 못 받았으면 None.
+
+    fundamental_score 는 실패해도 50.0 을 돌려준다. 화면은 사유를 함께 띄우므로
+    그걸로 충분하지만 기록은 다르다 — 50 을 적으면 '재무를 못 받았다'가
+    '중립 판단'으로 성적에 섞인다. analyst_log 가 값 없는 슬러그의 키를 아예
+    빼는 것과 같은 규칙이라, 여기서도 키를 뺄 수 있게 None 으로 바꾼다.
+    """
+    try:
+        score, det = core.fundamental_score(ticker, df)
+    except Exception:
+        return None
+    if det.get('데이터없음') or det.get('오류'):
+        return None
+    return score
+
+
+def _directional_weights():
+    """화면이 쓰는 것과 같은 방향성 3인 가중치. 못 읽으면 빈 dict."""
+    try:
+        return core.analyst_weights_by_slug()
+    except Exception as e:
+        print(f"[경고] 애널리스트 가중치 조회 실패 — 동일가중으로 기록: {e}")
+        return {}
+
+
+def todays_quant(date_str, root=None):
+    """오늘 일봉 기록에 남은 퀀트 점수 — {티커: 점수}.
+
+    재무제표는 봉과 무관하므로 15분봉 판정도 같은 퀀트 점수를 쓴다 — 화면도
+    그렇다(app.build_scalp_verdict 가 일봉 퀀트 보고서를 그대로 받는다).
+    앞 스텝이 방금 쓴 파일을 읽어서 500종목 .info 조회를 두 번 하지 않는다.
+    """
+    root = root or analyst_log.LOG_DIRNAME
+    for day in analyst_log.load_days(root=root, since=date_str):
+        if day.get("date") == date_str:
+            return {t: row["quant"] for t, row in day.get("scores", {}).items()
+                    if row.get("quant") is not None}
+    return {}
+
+
 def record_only_main():
     """애널리스트 점수만 기록한다 — 텔레그램 발송도 시그널 로그도 없다.
 
@@ -271,9 +321,15 @@ def record_analyst_scores(tickers, regime):
     맞히나" 를 영원히 알 수 없다. 그래서 조용히 죽지 않게 감싸 두고,
     실패하면 경고를 남긴다.
 
-    quant(퀀트+재무)는 종목별 yfinance .info 가 필요해 Phase 1 에서 제외했다.
-    스캔의 반환 계약을 정리한 뒤 별도로 붙인다 — 기록 포맷은 이미 수용한다.
+    quant(퀀트+재무)는 종목별 yfinance .info 가 필요해 유니버스 전체를 도는
+    유일한 무거운 부분이다. 이 조회는 하루 한 번만 한다 — 15분봉 기록은 여기서
+    남긴 값을 그대로 읽어 쓴다(todays_quant).
+
+    verdict 는 3인의 IC가중 블렌드, 곧 **그 시점 화면 총괄 점수 그대로**다.
+    재료를 나중에 다시 섞지 않는 이유는 가중치가 변하기 때문이다 —
+    ic_weights.json 은 매주 갱신되고 국면별로도 다르다.
     """
+    import time
     from datetime import datetime, timedelta
 
     if not tickers:
@@ -293,11 +349,13 @@ def record_analyst_scores(tickers, regime):
         print(f"[경고] 가격 패널 로드 실패 — 애널리스트 기록 생략: {e}")
         return 0
 
+    weights = _directional_weights()
     scores = {}
-    for ticker, df in (ohlcv or {}).items():
-        if df is None or len(df) < ANALYST_MIN_BARS:
-            continue
+    quant_n = 0
+    scored = [(t, df) for t, df in (ohlcv or {}).items()
+              if df is not None and len(df) >= ANALYST_MIN_BARS]
 
+    for i, (ticker, df) in enumerate(scored):
         row = {}
         # 계산 실패는 키를 뺀다 — 중립값 50 으로 채우면 '계산 불가'가
         # '중립 판단'으로 성적에 섞인다.
@@ -315,12 +373,30 @@ def record_analyst_scores(tickers, regime):
         except Exception:
             pass
 
+        quant = _quant_score(ticker, df)
+        if quant is not None:
+            row["quant"] = quant
+            quant_n += 1
+        if i < len(scored) - 1:
+            time.sleep(QUANT_FETCH_SLEEP_SEC)
+
+        verdict = analyst_team.verdict_score(row, weights)
+        if verdict is not None:
+            row[analyst_team.VERDICT_SLUG] = verdict
+
         if row:
             scores[ticker] = row
 
     if not scores:
         print("[경고] 애널리스트 점수를 낸 종목이 없다 — 기록 생략.")
         return 0
+
+    # 퀀트가 통째로 비어도 잡을 실패시키지 않는다 — 차트·ICT 기록은 살아 있고,
+    # 여기서 죽이면 그것까지 같이 버려진다. 대신 조용히 넘어가지도 않는다.
+    if quant_n < len(scores) * QUANT_COVERAGE_WARN_AT:
+        print(f"[경고] 퀀트+재무를 받은 종목이 {quant_n}/{len(scores)}뿐이다 — "
+              "야후 재무 조회가 막힌 것으로 보인다. 오늘 총괄 판정 성적은 "
+              "표본이 거의 안 늘어난다.")
 
     try:
         analyst_log.append_day(
@@ -329,7 +405,10 @@ def record_analyst_scores(tickers, regime):
         print(f"[경고] 애널리스트 기록 실패 (스캔은 계속): {e}")
         return 0
 
-    print(f"애널리스트 기록: {len(scores)}종목 ({regime})")
+    verdict_n = sum(1 for row in scores.values()
+                    if analyst_team.VERDICT_SLUG in row)
+    print(f"애널리스트 기록: {len(scores)}종목 ({regime}) · "
+          f"퀀트 {quant_n}종목 · 총괄 판정 {verdict_n}종목")
     return len(scores)
 
 
@@ -356,6 +435,8 @@ def record_scalp_main():
 
     0종목 기록은 성공이 아니다 (record_only_main 과 같은 규칙).
     """
+    from datetime import datetime
+
     universe_raw = os.environ.get('UNIVERSE', SCALP_LOG_UNIVERSE)
     tickers = _resolve_universe(universe_raw)
     if not tickers:
@@ -377,7 +458,14 @@ def record_scalp_main():
     print(f"유니버스: {universe_raw} (요청 {len(tickers)}종목 / 수신 "
           f"{len(ohlcv)}종목) / 국면: {regime}")
 
-    recorded = record_scalp_scores(ohlcv, regime)
+    # 앞 스텝(일봉 기록)이 방금 남긴 퀀트를 그대로 쓴다. 재무제표는 봉과
+    # 무관하고, 여기서 다시 조회하면 500종목 .info 가 하루 두 번이 된다.
+    quant = todays_quant(datetime.now().strftime("%Y-%m-%d"))
+    if not quant:
+        print("[경고] 오늘 일봉 기록에 퀀트가 없다 — 15분봉 총괄 판정은 "
+              "오늘 기록되지 않는다(차트·ICT 는 그대로 남는다).")
+
+    recorded = record_scalp_scores(ohlcv, regime, quant_by_ticker=quant)
 
     # 채점은 오늘 기록이 0종목이어도 돌린다 — 어제까지의 기록은 오늘 받은
     # 가격으로만 채점할 수 있다.
@@ -391,8 +479,12 @@ def record_scalp_main():
     return 0
 
 
-def record_scalp_scores(ohlcv, regime, root=None):
-    """15분봉 chart·ict 점수를 data/scalp_log 에 남긴다 — 하루 한 줄.
+def record_scalp_scores(ohlcv, regime, root=None, quant_by_ticker=None):
+    """15분봉 점수를 data/scalp_log 에 남긴다 — 하루 한 줄.
+
+    quant_by_ticker — 오늘 일봉 기록에서 읽은 퀀트 점수. 화면 SCALP 판정도
+    일봉 퀀트 보고서를 그대로 받으므로(app.build_scalp_verdict) 같은 값이어야
+    한다. 여기서 15분봉으로 재무를 다시 계산하는 것은 애초에 말이 안 된다.
 
     일봉 기록(record_analyst_scores)과 갈리는 곳은 모멘텀이다.
     calc_momentum 은 창을 봉 개수로 잡으므로(63봉=3개월) 15분봉에 그대로
@@ -411,6 +503,8 @@ def record_scalp_scores(ohlcv, regime, root=None):
         print(f"[경고] ICT 모듈 없음 — 15분봉 기록 생략: {e}")
         return 0
 
+    weights = _directional_weights()
+    quant_by_ticker = quant_by_ticker or {}
     scores, asof = {}, None
     for ticker, df in (ohlcv or {}).items():
         if df is None or len(df) < SCALP_MIN_BARS:
@@ -433,6 +527,13 @@ def record_scalp_scores(ohlcv, regime, root=None):
         except Exception:
             pass
 
+        if quant_by_ticker.get(ticker) is not None:
+            row["quant"] = quant_by_ticker[ticker]
+
+        verdict = analyst_team.verdict_score(row, weights)
+        if verdict is not None:
+            row[analyst_team.VERDICT_SLUG] = verdict
+
         if row:
             scores[ticker] = row
             last_bar = df.index[-1]
@@ -451,7 +552,10 @@ def record_scalp_scores(ohlcv, regime, root=None):
         print(f"[경고] 15분봉 기록 실패: {e}")
         return 0
 
-    print(f"15분봉 기록: {len(scores)}종목 ({regime}) · 기준봉 {asof}")
+    verdict_n = sum(1 for row in scores.values()
+                    if analyst_team.VERDICT_SLUG in row)
+    print(f"15분봉 기록: {len(scores)}종목 ({regime}) · 총괄 판정 {verdict_n}종목 "
+          f"· 기준봉 {asof}")
     return len(scores)
 
 

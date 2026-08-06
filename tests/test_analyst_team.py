@@ -39,3 +39,37 @@ def test_module_has_no_ui_dependency():
 
     assert "streamlit" not in imported
     assert "yfinance" not in imported
+
+
+# ── 총괄 판정 블렌드 ─────────────────────────────────────────────────
+#
+# 화면(app.manager_consolidate)과 기록(signal_worker)이 같은 함수를 쓴다.
+# 두 곳에 같은 식을 적으면 언젠가 갈라지고, 그러면 성적표가 화면과 다른 자로
+# 재게 된다.
+
+def test_blend_score_is_weighted_average():
+    assert at.blend_score([80.0, 40.0], [75.0, 25.0]) == pytest.approx(70.0)
+
+
+def test_blend_score_falls_back_to_equal_weight():
+    """가중치를 못 읽었다고 판정 자체를 버리지는 않는다."""
+    assert at.blend_score([80.0, 40.0], [0.0, 0.0]) == pytest.approx(60.0)
+
+
+def test_blend_score_of_nothing_is_none():
+    assert at.blend_score([], []) is None
+
+
+def test_verdict_score_needs_all_three():
+    """두 명만 섞은 값은 화면이 낸 판정이 아니다."""
+    weights = {"chart": 40.0, "quant": 30.0, "ict": 30.0}
+    assert at.verdict_score({"chart": 60.0, "ict": 70.0}, weights) is None
+    assert at.verdict_score({"chart": 60.0, "quant": None, "ict": 70.0},
+                            weights) is None
+
+
+def test_verdict_score_matches_manager_blend():
+    weights = {"chart": 50.0, "quant": 30.0, "ict": 20.0}
+    got = at.verdict_score({"chart": 80.0, "quant": 40.0, "ict": 30.0}, weights)
+
+    assert got == pytest.approx((80 * 50 + 40 * 30 + 30 * 20) / 100)

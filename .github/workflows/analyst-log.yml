@@ -32,7 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     # 15분봉 스텝이 붙으면서 다운로드가 두 벌이 됐다. 500종목 분봉은 일봉보다
     # 훨씬 무겁다 — 여기서 잘리면 그날 기록이 통째로 빈다.
-    timeout-minutes: 45
+    #
+    # 퀀트+재무가 붙으면서 종목별 yfinance .info 조회가 더해졌다(0.3초 간격 ×
+    # 500종목 ≈ 10~15분). 15분봉 스텝은 이 값을 파일에서 읽어 쓰므로 조회는
+    # 하루 한 번뿐이다. 야후가 클라우드 IP 를 막으면 자택 러너
+    # ([self-hosted, Windows]) 로 옮긴다 — 그때 이 줄도 같이 본다.
+    timeout-minutes: 70
 
     steps:
       - name: 저장소 체크아웃
@@ -50,8 +55,11 @@ jobs:
       - name: 애널리스트 점수 기록
         env:
           PYTHONUTF8: "1"
-          # chart·ict 는 OHLCV 만 본다 — 재무 조회가 없으므로 DART 키가 필요없다.
-          # quant 를 붙일 때 DART_API_KEY 를 여기에 추가해야 한다.
+          # quant(퀀트+재무)가 붙어 재무 조회를 한다. KRX 종목은 yfinance 에
+          # ROE·순이익률이 비어 오는 일이 많아 DART 로 폴백한다 — 유니버스가
+          # S&P 500 인 동안에는 안 쓰이지만, 키가 없으면 KOSPI 유니버스로
+          # 바꾸는 순간 조용히 절반이 빠진다.
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
           UNIVERSE: ${{ github.event.inputs.universe || 'S&P 500 전체 (500종목)' }}
         run: python scripts/record_analyst_scores.py
 

@@ -10,6 +10,15 @@ app.py 의 애널리스트 함수는 점수 계산과 보고서 포맷팅이 붙
 
 ANALYST_SLUGS = ("chart", "quant", "ict")
 
+# 총괄 판정(화면 상단 VERDICT)을 만드는 방향성 3인. 매크로·백테스트·리스크는
+# 역할이 달라 방향성 블렌드에 안 들어간다(app.manager_consolidate 참고).
+DIRECTIONAL_SLUGS = ("chart", "quant", "ict")
+
+# 블렌드 결과를 기록에 남길 때 쓰는 키. 재료(3인 점수)를 나중에 다시 섞지 않고
+# 이 값을 그대로 남기는 이유는 가중치가 변하기 때문이다 — ic_weights.json 을
+# 매주 갱신하고 국면별로도 다르다. 나중에 섞으면 그날 화면에 뜬 값과 달라진다.
+VERDICT_SLUG = "verdict"
+
 # 차트 애널리스트: 기술점수 70% + 모멘텀점수 30% (app.py 원본 비율)
 CHART_TECHNICAL_WEIGHT = 0.7
 CHART_MOMENTUM_WEIGHT = 0.3
@@ -27,3 +36,37 @@ def chart_score(technical_score, momentum_score):
 def ict_score(base, adjustment):
     """ICT+CRT 점수 = 구조 점수 + CRT/FVG/OB 조정, 0~100 으로 자름."""
     return min(max(float(base) + float(adjustment), SCORE_MIN), SCORE_MAX)
+
+
+def blend_score(scores, weights):
+    """가중평균 — 화면 총괄 점수와 기록이 공유하는 단일 산식.
+
+    app.manager_consolidate 가 이 함수에 위임한다. 같은 식을 두 곳에 적으면
+    언젠가 갈라지고, 그러면 성적표가 화면과 다른 자로 재게 된다 — 판정
+    문턱(analyst_scorecard.verdict_of)을 한 곳이 소유하는 것과 같은 이유다.
+
+    가중치 합이 0 이면 동일가중으로 떨어진다. 가중치를 못 읽었다는 이유로
+    판정 자체를 버리지는 않는다 — 판정이 없는 쪽이 훨씬 비싸다.
+    """
+    vals = [float(s) for s in scores]
+    if not vals:
+        return None
+    ws = [float(w) for w in weights]
+    total = sum(ws)
+    if total <= 0:
+        return sum(vals) / len(vals)
+    return sum(v * w for v, w in zip(vals, ws)) / total
+
+
+def verdict_score(per_analyst, weights_by_slug):
+    """기록 한 종목의 3인 점수 → 그 시점의 화면 총괄 점수. 못 내면 None.
+
+    3인이 **모두** 있어야 낸다. 빠진 자리를 중립 50 으로 채우면 '계산 불가'가
+    '중립 판단'으로 성적에 섞이고, 두 명만 섞은 값은 애초에 화면이 낸 판정이
+    아니다 — analyst_scorecard.combined_day 와 같은 규칙이다.
+    """
+    if any(per_analyst.get(slug) is None for slug in DIRECTIONAL_SLUGS):
+        return None
+    weights_by_slug = weights_by_slug or {}
+    return blend_score([per_analyst[slug] for slug in DIRECTIONAL_SLUGS],
+                       [weights_by_slug.get(slug, 0.0) for slug in DIRECTIONAL_SLUGS])

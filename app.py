@@ -1208,10 +1208,21 @@ def calc_piotroski_fscore(ticker):
     except Exception as e:
         return None, {'오류': str(e)}
 
+# 야후가 조회를 막으면 예외 없이 빈 dict(또는 심볼만 든 껍데기)를 준다. 이 중
+# 하나도 없으면 재무를 못 받은 것이다 — 그대로 계산하면 모든 항목이 None 이라
+# 점수가 50 근처에 붙고, '못 받았다'가 '중립 판단 50점'으로 조용히 흘러간다.
+_FUNDAMENTAL_CORE_FIELDS = ('trailingPE', 'forwardPE', 'priceToBook',
+                            'returnOnEquity', 'marketCap')
+
+
 def fundamental_score(ticker, df=None):
     try:
-        info = yf.Ticker(ticker).info
+        info = yf.Ticker(ticker).info or {}
         det  = {}
+        # 화면은 50점 + 사유 표시로 충분하지만, 성적표 기록은 이 표시를 보고
+        # 그 종목의 quant 를 아예 빼야 한다(signal_worker._quant_score).
+        if not any(info.get(k) is not None for k in _FUNDAMENTAL_CORE_FIELDS):
+            det['데이터없음'] = True
 
         # ── 밸류에이션 (20%): PER·PBR·PEG·EV/EBITDA ──
         per      = info.get('trailingPE') or info.get('forwardPE')
@@ -3359,7 +3370,20 @@ _ANALYST_SLUG_NAMES = {
     'quant':    '퀀트+재무',
     'ict':      'ICT+CRT',
     'combined': '종합(차트+ICT)',
+    'verdict':  '총괄 판정(화면 그대로)',
 }
+
+
+def analyst_weights_by_slug():
+    """방향성 3인 가중치를 기록용 슬러그 키로. signal_worker 가 부른다.
+
+    화면이 쓰는 것과 **같은** 가중치여야 한다. 기록 시점의 블렌드 점수를
+    남기는 것이 이 성적표의 전제이므로, 여기서 다른 가중치를 쓰면 남는 값이
+    그날 화면에 뜬 값이 아니다.
+    """
+    by_name = _current_analyst_weights()
+    return {slug: by_name.get(_ANALYST_SLUG_NAMES[slug], 0.0)
+            for slug in _analyst_team.DIRECTIONAL_SLUGS}
 
 # 유효 표본(겉보기 n 이 아니라)이 이만큼은 돼야 판정에 쓸 수 있다.
 ANALYST_SCORECARD_MIN_EFFECTIVE_N = 30
@@ -3397,8 +3421,25 @@ def _analyst_scorecard_rows(days, prices, horizon):
     return rows
 
 
+def _analyst_verdict_hit(days, prices, horizon):
+    """일봉 기록의 화면 총괄 판정 적중률 — 15분봉 성적표와 같은 자.
+
+    _analyst_scorecard_rows 의 반환을 늘리지 않고 따로 둔다. 선행수익률을 한 번
+    더 만들지만 이미 받아 둔 가격에서 계산하는 것이라 네트워크가 없다.
+    """
+    from modules import analyst_scorecard as _sc
+
+    fwd = _sc.build_forward_returns(prices, [d['date'] for d in days], horizon)
+    return _sc.verdict_hit_rate(days, fwd, slug=_analyst_team.VERDICT_SLUG)
+
+
 def _scalp_scorecard_rows(days, returns, horizon_bars):
-    """15분봉 기록 + 저장된 선행수익률 → (IC 행 목록, 판정 적중률 dict).
+    """15분봉 기록 + 저장된 선행수익률 → (IC 행, 화면판정 적중률, 차트+ICT 적중률).
+
+    적중률을 두 벌 낸다. `verdict` 는 기록 시점에 남긴 **화면 총괄 점수 그대로**
+    이고, `combined` 은 차트+ICT 평균이다. 화면 판정이 본 답이지만, 퀀트 기록이
+    없던 시기(15분봉 2026-08-06~)의 표본은 combined 에만 있다 — 새 기준을
+    켠다고 그동안 쌓인 성적을 지울 이유는 없다.
 
     가격을 다시 받지 않는다. 15분봉은 60일이 지나면 사라지므로 채점은 기록
     시점에 이미 끝나 있고(signal_worker.resolve_scalp_returns), 화면은 남겨둔
@@ -3432,7 +3473,9 @@ def _scalp_scorecard_rows(days, returns, horizon_bars):
             '판정': '가능' if decided else '아직 불가',
         })
 
-    return rows, _sc.verdict_hit_rate(combined, returns)
+    return (rows,
+            _sc.verdict_hit_rate(days, returns, slug=_analyst_team.VERDICT_SLUG),
+            _sc.verdict_hit_rate(combined, returns))
 
 
 def render_scalp_scorecard():
@@ -3442,14 +3485,13 @@ def render_scalp_scorecard():
     from modules import scalp_log as _slog
 
     st.markdown("---")
-    st.subheader("⚡ 스캘핑(15분봉) 차트+ICT 판정 성적")
+    st.subheader("⚡ 스캘핑(15분봉) SCALP 판정 성적")
     st.caption(
-        "⚠️ **화면의 SCALP 판정과 같은 값이 아닙니다.** 화면 판정은 차트·ICT·"
-        "퀀트+재무 3인을 IC가중으로 섞은 것인데, 여기 성적은 기록이 있는 "
-        "**차트+ICT 둘만** 평균한 판정입니다. 퀀트 점수가 판정을 뒤집는 종목에서는 "
-        "화면과 방향이 갈립니다 (퀀트 기록은 일봉 성적표에도 아직 없습니다).  \n"
-        "**판정 적중률** — 차트+ICT가 매수라고 한 종목이 실제로 올랐나"
-        "(중립은 세지 않습니다).  \n"
+        "**화면 상단 SCALP 판정 그대로를 잽니다.** 기록 시점의 총괄 점수(차트·"
+        "ICT·퀀트+재무 3인 IC가중 블렌드)를 그대로 남겨 두고 채점합니다 — "
+        "가중치가 주마다 바뀌므로 나중에 다시 섞으면 그날 화면에 뜬 값이 "
+        "아니게 됩니다.  \n"
+        "**판정 적중률** — 매수라고 한 종목이 실제로 올랐나(중립은 세지 않습니다).  \n"
         "**IC 적중률** — 그날 점수 순위가 실제 수익률 순위와 같은 방향이었던 날의 비율. "
         "일봉 성적표와 같은 자입니다.")
 
@@ -3473,22 +3515,33 @@ def render_scalp_scorecard():
         returns = returns_by_horizon.get(bars) or {}
         if not returns:
             continue
-        rows, verdict = _scalp_scorecard_rows(days, returns, bars)
-        if not rows and not verdict['n']:
+        rows, screen, combined = _scalp_scorecard_rows(days, returns, bars)
+        if not rows and not screen['n'] and not combined['n']:
             continue
         any_rows = True
 
         sessions = _sc.sessions_for_bars(bars)
         st.markdown(f"##### {bars}봉 앞선 수익률 기준 (약 {sessions}거래일)")
-        if verdict['n']:
-            st.metric(f"차트+ICT 판정 적중률 ({verdict['hits']}/{verdict['n']})",
-                      f"{verdict['hit_rate']}%",
-                      help=f"매수 판정 {verdict['buy_n']}건 · 매도 {verdict['sell_n']}건 · "
-                           f"중립 {verdict['neutral_n']}건은 분모에서 뺐습니다. "
-                           "퀀트+재무는 기록이 없어 빠져 있습니다 — 화면 판정과 "
-                           "갈릴 수 있습니다.")
-        else:
-            st.caption("아직 방향 판정(매수·매도)이 나온 기록이 없습니다 — 전부 중립입니다.")
+        _mcols = st.columns(2)
+        with _mcols[0]:
+            if screen['n']:
+                st.metric(f"SCALP 판정 적중률 ({screen['hits']}/{screen['n']})",
+                          f"{screen['hit_rate']}%",
+                          help=f"매수 {screen['buy_n']}건 · 매도 {screen['sell_n']}건 · "
+                               f"중립 {screen['neutral_n']}건은 분모에서 뺐습니다. "
+                               "화면 상단에 뜬 판정 그대로입니다.")
+            else:
+                st.metric("SCALP 판정 적중률", "—",
+                          help="퀀트+재무 기록이 붙은 날부터 쌓입니다. 그 전 기록에는 "
+                               "총괄 점수가 없어 채점되지 않습니다.")
+        with _mcols[1]:
+            if combined['n']:
+                st.metric(f"차트+ICT 판정 적중률 ({combined['hits']}/{combined['n']})",
+                          f"{combined['hit_rate']}%",
+                          help="퀀트를 뺀 옛 기준. 표본이 더 길어 참고로 남겨 둡니다 — "
+                               "화면 판정과 방향이 갈릴 수 있습니다.")
+            else:
+                st.caption("아직 방향 판정(매수·매도)이 나온 기록이 없습니다 — 전부 중립입니다.")
         if rows:
             st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
@@ -3555,6 +3608,13 @@ def render_analyst_scorecard():
             continue
         any_rows = True
         st.markdown(f"##### {horizon}거래일 앞선 수익률 기준")
+        _hit = _analyst_verdict_hit(days, prices, horizon)
+        if _hit['n']:
+            st.metric(f"SWING 판정 적중률 ({_hit['hits']}/{_hit['n']})",
+                      f"{_hit['hit_rate']}%",
+                      help=f"매수 {_hit['buy_n']}건 · 매도 {_hit['sell_n']}건 · "
+                           f"중립 {_hit['neutral_n']}건은 분모에서 뺐습니다. "
+                           "화면 상단에 뜬 판정 그대로입니다.")
         st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
     if not any_rows:
@@ -3758,8 +3818,11 @@ def manager_consolidate(reports):
     if not directional:
         directional = reports
 
-    total_w = sum(r['weight'] for r in directional) or 1
-    weighted_score = sum(r['score'] * r['weight'] for r in directional) / total_w
+    # 가중평균 산식은 modules/analyst_team 이 소유한다 — 기록 경로가 같은 값을
+    # 내야 성적표가 화면 판정을 재는 것이 된다(문턱을 verdict_of 에 위임한 것과
+    # 같은 이유). 여기서 식을 따로 적으면 언젠가 갈라진다.
+    weighted_score = _analyst_team.blend_score(
+        [r['score'] for r in directional], [r['weight'] for r in directional])
     verdicts = [r['verdict'] for r in directional]
     buy_n, sell_n, neu_n = verdicts.count('매수'), verdicts.count('매도'), verdicts.count('중립')
     n = len(directional)

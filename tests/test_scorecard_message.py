@@ -88,7 +88,7 @@ def test_missing_slug_is_disclosed_with_reason():
     msg = sm.build_scorecard_message(5, _SMALL, ["quant"])
 
     assert "퀀트+재무" in msg
-    assert "일별 펀더멘털 수집 미구축" in msg
+    assert "실측 IC 표본이 없어 가중치 근거가 아직 없음" in msg
 
 
 def test_record_message_also_discloses_missing_slug():
@@ -98,7 +98,7 @@ def test_record_message_also_discloses_missing_slug():
                                   {"chart": [("AAPL", 73.8)]}, ["quant"])
 
     assert "퀀트+재무" in msg
-    assert "일별 펀더멘털 수집 미구축" in msg
+    assert "실측 IC 표본이 없어 가중치 근거가 아직 없음" in msg
 
 
 def test_record_message_discloses_truncated_ties():
