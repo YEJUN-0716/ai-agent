@@ -3442,10 +3442,14 @@ def render_scalp_scorecard():
     from modules import scalp_log as _slog
 
     st.markdown("---")
-    st.subheader("⚡ 스캘핑(15분봉) 판정 성적")
+    st.subheader("⚡ 스캘핑(15분봉) 차트+ICT 판정 성적")
     st.caption(
-        "화면 오른쪽 칸(SCALP · 15분봉)이 내린 판정이 실제로 맞았는지를 셉니다.  \n"
-        "**판정 적중률** — 매수라고 한 종목이 실제로 올랐나(중립은 세지 않습니다).  \n"
+        "⚠️ **화면의 SCALP 판정과 같은 값이 아닙니다.** 화면 판정은 차트·ICT·"
+        "퀀트+재무 3인을 IC가중으로 섞은 것인데, 여기 성적은 기록이 있는 "
+        "**차트+ICT 둘만** 평균한 판정입니다. 퀀트 점수가 판정을 뒤집는 종목에서는 "
+        "화면과 방향이 갈립니다 (퀀트 기록은 일봉 성적표에도 아직 없습니다).  \n"
+        "**판정 적중률** — 차트+ICT가 매수라고 한 종목이 실제로 올랐나"
+        "(중립은 세지 않습니다).  \n"
         "**IC 적중률** — 그날 점수 순위가 실제 수익률 순위와 같은 방향이었던 날의 비율. "
         "일봉 성적표와 같은 자입니다.")
 
@@ -3477,10 +3481,12 @@ def render_scalp_scorecard():
         sessions = _sc.sessions_for_bars(bars)
         st.markdown(f"##### {bars}봉 앞선 수익률 기준 (약 {sessions}거래일)")
         if verdict['n']:
-            st.metric(f"판정 적중률 ({verdict['hits']}/{verdict['n']})",
+            st.metric(f"차트+ICT 판정 적중률 ({verdict['hits']}/{verdict['n']})",
                       f"{verdict['hit_rate']}%",
                       help=f"매수 판정 {verdict['buy_n']}건 · 매도 {verdict['sell_n']}건 · "
-                           f"중립 {verdict['neutral_n']}건은 분모에서 뺐습니다.")
+                           f"중립 {verdict['neutral_n']}건은 분모에서 뺐습니다. "
+                           "퀀트+재무는 기록이 없어 빠져 있습니다 — 화면 판정과 "
+                           "갈릴 수 있습니다.")
         else:
             st.caption("아직 방향 판정(매수·매도)이 나온 기록이 없습니다 — 전부 중립입니다.")
         if rows:
