@@ -83,6 +83,9 @@ def _gate_section(gate: GateResult, verdict: Verdict) -> list[str]:
         "\n## 검증 관문 — stock-analyzer 플랜 엔진\n",
         f"- 결과 **{mark}** — {gate.headline}",
     ]
+    if gate.basis:
+        # 어느 차트로 쟀는지 안 적으면, 무기한 USDT 로 잰 라인을 원화로 읽는다.
+        lines.append(f"- 검증 차트 **{gate.basis}** · 아래 라인 단위 {gate.currency}")
     if gate.targets:
         lines.append(f"- 방향 {gate.direction} · 확신도 {gate.confidence}")
         lines.append(f"- 진입 {gate.entry_low}~{gate.entry_high} · 손절 {gate.stop}")

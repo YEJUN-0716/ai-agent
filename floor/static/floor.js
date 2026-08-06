@@ -314,14 +314,18 @@ function paintGate(g) {
   $("vGateHead").textContent = `${GATE_MARKS[g.status] || g.status} — ${g.headline}`;
 
   const rows = [];
+  // 관문이 잰 차트의 단위로 적는다. 스캘핑은 무기한(USDT)이라 한국 종목이어도
+  // 원화가 아니다 — 화면 통화로 찍으면 1,070원짜리 하이닉스가 뜬다.
+  const unit = g.currency || currency;
+  if (g.basis) rows.push(`검증 차트 ${g.basis} · 단위 ${unit}`);
   if (g.targets && g.targets.length) {
     rows.push(
-      `진입 ${money(g.entry_low, currency)}~${money(g.entry_high, currency)}` +
-      `  ·  손절 ${money(g.stop, currency)}`
+      `진입 ${money(g.entry_low, unit)}~${money(g.entry_high, unit)}` +
+      `  ·  손절 ${money(g.stop, unit)}`
     );
     g.targets.forEach((t, i) => {
       const rr = g.rr && g.rr[i] != null ? `  (R:R ${g.rr[i]})` : "";
-      rows.push(`목표${i + 1} ${money(t, currency)}${rr}`);
+      rows.push(`목표${i + 1} ${money(t, unit)}${rr}`);
     });
   }
   if (g.blocked) rows.push("→ 이 매매는 하지 않습니다. 위 숫자는 실행 대상이 아닙니다.");

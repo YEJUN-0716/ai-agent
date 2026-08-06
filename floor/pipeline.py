@@ -201,11 +201,10 @@ def run(
     yield _verdict_event(final, mode.basis)
 
     # 검증 관문. 방향은 플로어가 정했고, 그 매매가 가능한지는 엔진이 정한다.
-    # 일봉 ICT 구조 기반이라 시간축이 맞는 algo 모드에만 세운다 — scalp·attack 은
-    # 15분봉 단타라 이 엔진의 판단 범위 밖이고, attack 은 애초에 연출용이다.
-    gate = plan_gate.check(snapshot.bars, final.action) if mode.key == "algo" else None
-    if gate is not None:
-        yield {"type": "gate", **asdict(gate), "blocked": gate.blocked}
+    # 모드마다 보는 차트가 다르므로 시간축은 for_mode 가 고른다 — algo 는 일봉,
+    # scalp·attack 은 15분봉이다. 공격 모드도 예외가 아니다.
+    gate = plan_gate.for_mode(mode.key, snapshot, final.action)
+    yield {"type": "gate", **asdict(gate), "blocked": gate.blocked}
 
     text = report.render(
         snapshot=snapshot,
