@@ -2873,73 +2873,6 @@ def _parse_pct_value(value):
         return None
 
 
-def build_execution_plan(lv, total_score, total_adj, regime, risk_data,
-                         capital, risk_per_trade_pct, max_position_pct,
-                         min_rr=1.5):
-    """추천 매매가를 실전 포지션 사이징과 거래 가능 여부로 변환."""
-    plans = {}
-    risk_budget = max(float(capital) * float(risk_per_trade_pct) / 100, 0.0)
-    max_position_value = max(float(capital) * float(max_position_pct) / 100, 0.0)
-    risk_vol = _parse_pct_value(risk_data.get('연간 변동성')) if risk_data else None
-    beta = risk_data.get('Beta') if risk_data else None
-
-    for key, label in [('dantta', '단타'), ('swing', '스윙')]:
-        tr = lv[key]
-        entry = float(tr['entry1'])
-        stop = float(tr['stop'])
-        target = float(tr['target1'])
-        per_share_risk = max(entry - stop, 1e-9)
-        rr = (target - entry) / per_share_risk
-
-        qty_by_risk = risk_budget / per_share_risk if risk_budget > 0 else 0.0
-        qty_by_alloc = max_position_value / entry if entry > 0 else 0.0
-        qty = max(min(qty_by_risk, qty_by_alloc), 0.0)
-        position_value = qty * entry
-        expected_risk = qty * per_share_risk
-        expected_reward = qty * max(target - entry, 0.0)
-
-        blockers = []
-        warnings = []
-        if total_adj < 55:
-            blockers.append('국면 조정 점수 55점 미만')
-        if rr < min_rr:
-            blockers.append(f'손익비 {rr:.1f}:1 < 기준 {min_rr:.1f}:1')
-        if risk_budget <= 0 or max_position_value <= 0:
-            blockers.append('계좌/리스크 설정 필요')
-        if beta is not None and beta >= 1.5:
-            warnings.append('고베타 종목')
-        if risk_vol is not None and risk_vol >= 45:
-            warnings.append('연간 변동성 45% 이상')
-        if regime == 'bear' and key == 'dantta':
-            warnings.append('약세장 단타는 비중 축소 권장')
-        if total_score >= 75 and rr >= min_rr and not blockers:
-            verdict = '진입 가능'
-        elif not blockers:
-            verdict = '조건부 진입'
-        else:
-            verdict = '대기/회피'
-
-        plans[key] = {
-            'label': label,
-            'verdict': verdict,
-            'blockers': blockers,
-            'warnings': warnings,
-            'qty': qty,
-            'position_value': position_value,
-            'risk_amount': expected_risk,
-            'reward_amount': expected_reward,
-            'risk_budget': risk_budget,
-            'max_position_value': max_position_value,
-            'rr': rr,
-            'entry': entry,
-            'stop': stop,
-            'target': target,
-            'risk_pct_of_account': expected_risk / capital * 100 if capital > 0 else 0.0,
-            'alloc_pct_of_account': position_value / capital * 100 if capital > 0 else 0.0,
-        }
-    return plans
-
-
 # ─────────────────────────────────────────────
 # QUANT ENGINE
 # ─────────────────────────────────────────────
@@ -5175,10 +5108,6 @@ def main():
         # 사이드바 제거 — 값 하드코딩 (이 패널 전용). 캐시된 스냅샷 재표시 시 아래에서
         # w_tech 등을 다시 지역 할당하므로 모듈 전역 이름을 직접 못 쓰고 _DEFAULT_*에서 시작한다.
         w_tech, w_fund, w_macro = _DEFAULT_W_TECH, _DEFAULT_W_FUND, _DEFAULT_W_MACRO
-        acct_capital     = 10_000_000
-        risk_per_trade   = 1.0
-        max_position_pct = 20
-        min_rr           = 1.5
 
         _err_prev = st.session_state.pop('analysis_error', None)
         if _err_prev:
@@ -6033,98 +5962,14 @@ def main():
                         else:
                             st.info("섹터 데이터를 가져올 수 없습니다.")
 
-            with tab_pos:   # 매매 전략은 판정 탭에 이어서 그린다
-                # ── 매수/매도 추천가 ──────────────────────
-                st.subheader("💡 매매 추천가")
+            with tab_pos:   # 지지·저항 좌표는 판정 탭에 이어서 그린다
+                # 여기에 "💡 매매 추천가"(1~3차 매수·목표·손절 표)와 "🛡️ 실전 포지션
+                # 플랜"(수량·투입금액·예상손실)이 있었다. 매매추천가는 메인 최상단
+                # 총괄 판정 한 곳에만 둔다 — 한 화면이 서로 다른 가격을 말하면
+                # 어느 쪽을 따라야 하는지 알 수 없다.
                 lv    = calc_trade_levels(df, total)
                 fmt_p = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
                 cp_lv = lv['cp']
-                dt    = lv['dantta']
-                sw    = lv['swing']
-
-                def _render_strategy(label, icon, color, bg, tr, cp_ref):
-                    rr_c = '#4caf50' if tr['rr1'] >= 2 else ('#ff9800' if tr['rr1'] >= 1 else '#ef5350')
-                    st.markdown(
-                        f"<div style='background:{bg};border:1px solid {color}66;border-radius:10px;"
-                        f"padding:14px 16px;margin-bottom:8px'>"
-                        f"<div style='color:{color};font-weight:700;font-size:16px'>{icon} {label}</div>"
-                        f"<div style='color:var(--text-1);font-size:13px;margin-top:4px'>{tr['strategy']}</div>"
-                        f"<div style='color:var(--text-1);font-size:11px;margin-top:4px'>"
-                        f"손익비 <b style='color:{rr_c}'>R {tr['rr1']:.1f}:1</b>"
-                        f" · 손절 <b style='color:#ef5350'>{tr['risk_pct']:.1f}%</b>"
-                        f" · 비중 <b>{tr['alloc']}</b></div>"
-                        f"</div>", unsafe_allow_html=True)
-
-                    st.caption("**진입 조건 체크**")
-                    cond_text = " &nbsp;|&nbsp; ".join(tr.get('conditions', []))
-                    st.markdown(f"<div style='font-size:12px;color:var(--text-1)'>{cond_text}</div>",
-                                unsafe_allow_html=True)
-
-                    rows = [
-                        {'구분':'🟢 1차 매수','가격':fmt_p(tr['entry1']),
-                         '대비':f"{(tr['entry1']-cp_ref)/cp_ref*100:+.1f}%",'근거':tr['basis_e1']},
-                        {'구분':'🟡 2차 매수','가격':fmt_p(tr['entry2']),
-                         '대비':f"{(tr['entry2']-cp_ref)/cp_ref*100:+.1f}%",'근거':tr['basis_e2']},
-                        {'구분':'🟠 3차 매수','가격':fmt_p(tr['entry3']),
-                         '대비':f"{(tr['entry3']-cp_ref)/cp_ref*100:+.1f}%",'근거':tr['basis_e3']},
-                        {'구분':'🔵 1차 목표','가격':fmt_p(tr['target1']),
-                         '대비':f"+{tr['ret1']:.1f}%",'근거':tr['basis_t1']},
-                        {'구분':'🔷 2차 목표','가격':fmt_p(tr['target2']),
-                         '대비':f"+{tr['ret2']:.1f}%",'근거':tr['basis_t2']},
-                    ]
-                    if 'target3' in tr:
-                        rows.append({'구분':'💎 3차 목표','가격':fmt_p(tr['target3']),
-                                     '대비':f"+{(tr['target3']-tr['entry1'])/tr['entry1']*100:.1f}%",
-                                     '근거':tr.get('basis_t3','확장 목표')})
-                    rows.append({'구분':'🔴 손절가','가격':fmt_p(tr['stop']),
-                                 '대비':f"-{tr['risk_pct']:.1f}%",'근거':tr['basis_stop']})
-                    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
-
-                    st.caption(f"📏 트레일링: {tr.get('trailing','')}  |  ⏰ 시간손절: {tr.get('time_stop','')}")
-                    if lv.get('vwap'):
-                        vwap_diff = (lv['vwap'] - cp_ref) / cp_ref * 100
-                        st.caption(f"📊 VWAP: {fmt_p(lv['vwap'])} ({vwap_diff:+.1f}%)")
-
-                _render_strategy("단타 전략 (1~5일)", "⚡", "#42a5f5", "#162640", dt, cp_lv)
-                _render_strategy("스윙 전략 (2~4주)", "📈", "#ff9800", "#2a2210", sw, cp_lv)
-
-                st.markdown("#### 🛡️ 실전 포지션 플랜")
-                exec_plans = build_execution_plan(
-                    lv, total, total_adj, regime, risk_data,
-                    acct_capital, risk_per_trade, max_position_pct, min_rr)
-                plan_cols = st.columns(2)
-                for plan_col, plan_key in zip(plan_cols, ['dantta', 'swing']):
-                    plan = exec_plans[plan_key]
-                    verdict_color = (
-                        '#26a69a' if plan['verdict'] == '진입 가능'
-                        else ('#ff9800' if plan['verdict'] == '조건부 진입' else '#ef5350')
-                    )
-                    qty_text = f"{plan['qty']:,.0f}주" if is_krw else f"{plan['qty']:,.2f}주"
-                    notes = plan['blockers'] + plan['warnings']
-                    notes_text = " · ".join(notes) if notes else "조건 충족"
-                    with plan_col:
-                        st.markdown(
-                            f"<div style='background:var(--surface);border:1px solid {verdict_color}88;"
-                            f"border-radius:8px;padding:12px 14px;margin-bottom:8px'>"
-                            f"<div style='display:flex;justify-content:space-between;gap:10px'>"
-                            f"<b>{plan['label']} 실행 판정</b>"
-                            f"<b style='color:{verdict_color}'>{plan['verdict']}</b></div>"
-                            f"<div style='color:var(--text-1);font-size:12px;margin-top:6px'>{notes_text}</div>"
-                            f"</div>", unsafe_allow_html=True)
-                        pc1, pc2, pc3 = st.columns(3)
-                        pc1.metric("최대 수량", qty_text)
-                        pc2.metric("투입 금액", fmt_p(plan['position_value']),
-                                   f"{plan['alloc_pct_of_account']:.1f}%")
-                        pc3.metric("예상 손실", fmt_p(plan['risk_amount']),
-                                   f"{plan['risk_pct_of_account']:.2f}%")
-                        pc4, pc5 = st.columns(2)
-                        pc4.metric("1차 기대수익", fmt_p(plan['reward_amount']))
-                        pc5.metric("손익비", f"R {plan['rr']:.1f}:1")
-
-                st.caption(
-                    f"계산 기준: 계좌 {fmt_p(acct_capital)} · 거래당 손실 {risk_per_trade:.1f}% "
-                    f"· 종목당 최대 {max_position_pct}% · 최소 손익비 R {min_rr:.1f}"
-                )
 
                 with st.expander("📐 피보나치 & 피봇 포인트 세부"):
                     fa, fb = st.columns(2)
@@ -6140,7 +5985,8 @@ def main():
                             st.caption(f"  {k}: {fmt_p(v)}{marker}")
                     st.caption(f"ATR(14): {fmt_p(lv['atr'])}  |  현재가: {fmt_p(cp_lv)}")
 
-                st.caption("⚠️ 추천가는 기술적 지지/저항 기반 참고값이며 실제 투자 결정의 책임은 본인에게 있습니다.")
+                st.caption("⚠️ 위 좌표는 기술적 지지/저항 참고값입니다. "
+                           "진입·목표·손절가는 화면 최상단 **총괄 판정**에 있습니다.")
 
             with tab_risk:
                 # ── 뉴스 감성 ──────────────────────────────
