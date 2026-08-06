@@ -29,6 +29,11 @@ MIN_TRADING_DAYS_SCORING = 1
 # 주간 IC 배치 기준값이다. 일간 신호에 쓰려면 더 좁혀야 한다.
 MAX_STALE_DAYS   = 5
 
+# 분봉 창. yfinance 는 15분봉을 최근 60일까지만 준다 — 그 이상을 요청해도
+# 늘지 않는다(실측: 요청 60일에 실제 40일 남짓, AAPL 1042봉).
+INTRADAY_PERIOD   = "60d"
+INTRADAY_INTERVAL = "15m"
+
 _last_coverage = {"requested": 0, "resolved": 0, "failed": []}
 
 
@@ -41,13 +46,18 @@ def last_coverage() -> dict:
     return dict(_last_coverage)
 
 
-def _download_chunked(tickers: list, start, end) -> pd.DataFrame:
-    """티커를 CHUNK_SIZE씩 끊어 일괄 다운로드하고 wide DataFrame으로 합친다."""
+def _download_chunked(tickers: list, start=None, end=None, *,
+                      period: str = None, interval: str = "1d") -> pd.DataFrame:
+    """티커를 CHUNK_SIZE씩 끊어 일괄 다운로드하고 wide DataFrame으로 합친다.
+
+    분봉은 start/end 대신 period 로 받는다 — yfinance 가 분봉에 대해서는
+    "최근 N일" 만 제공하기 때문이다(15분봉 60일).
+    """
     frames = []
     for i in range(0, len(tickers), CHUNK_SIZE):
         chunk = tickers[i:i + CHUNK_SIZE]
         raw = yf.download(
-            chunk, start=start, end=end,
+            chunk, start=start, end=end, period=period, interval=interval,
             progress=False, auto_adjust=True, threads=True,
             group_by="column",
         )
@@ -60,6 +70,27 @@ def _download_chunked(tickers: list, start, end) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1)
+
+
+def load_intraday(tickers: list, period: str = INTRADAY_PERIOD,
+                  interval: str = INTRADAY_INTERVAL, min_bars: int = 1) -> tuple:
+    """분봉 패널 — (prices, ohlcv). 캐시 없이 매번 새로 받는다.
+
+    캐시를 두지 않는 이유: 15분봉은 창이 매일 굴러가고 60일이 지난 봉은
+    yfinance 가 더는 주지 않는다. 캐시는 사라진 봉을 되살려 주지도 못하면서
+    "받았다" 는 착각만 남긴다. 채점에 필요한 값은 사라지기 전에 계산해
+    scalp_log 에 남긴다.
+
+    인덱스의 tz 는 떼고 UTC 기준 naive 로 맞춘다. 거래소가 섞이면 봉 시각의
+    tz 도 섞여 '몇 봉 뒤' 를 재는 쪽이 TypeError 로 죽거나 조용히 어긋난다.
+    기록에 남기는 기준 시각(asof)도 이 축이라야 다음 실행에서 다시 찾는다.
+    """
+    panel = _download_chunked(tickers, period=period, interval=interval)
+    if panel.empty:
+        return {}, {}
+    if getattr(panel.index, "tz", None) is not None:
+        panel.index = panel.index.tz_convert("UTC").tz_localize(None)
+    return _split_panel(panel, tickers, min_trading_days=min_bars)
 
 
 def _split_panel(panel: pd.DataFrame, tickers: list,

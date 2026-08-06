@@ -18,6 +18,76 @@ HORIZONS = (5, 21, 63)
 # 단면 상관을 낼 최소 종목 수. 이보다 적으면 그 날은 버린다.
 MIN_TICKERS_PER_DAY = 5
 
+# ── 스캘핑(15분봉) 지평 ──────────────────────────────────────────────
+# 정규장 6.5시간 = 15분봉 26개 (미국·한국 실측 동일).
+BARS_PER_SESSION_15M = 26
+
+# 26봉(1거래일)·78봉(3거래일). 스캘핑 판정은 "당일~며칠" 을 보므로
+# 5·21·63 일은 이 판정을 재는 자가 아니다.
+SCALP_HORIZONS_BARS = (26, 78)
+
+# 총괄 판정 문턱. app._team_verdict 가 verdict_of 에 위임하므로 화면과
+# 성적표가 같은 선을 쓴다 — 두 곳에 숫자를 적으면 언젠가 갈라진다.
+VERDICT_BUY_AT = 65.0
+VERDICT_SELL_AT = 40.0
+
+# 종합 점수에 들어가는 애널리스트와 그 결과를 담을 슬러그.
+# 단순 평균인 이유는 scorecard_worker 를 참고 — 실측 IC 표본이 아직 없다.
+COMBINE_SLUGS = ("chart", "ict")
+COMBINED_SLUG = "combined"
+
+
+def verdict_of(score):
+    """점수 → 매수/중립/매도. 화면의 총괄 판정과 같은 문턱."""
+    if score >= VERDICT_BUY_AT:
+        return '매수'
+    return '매도' if score <= VERDICT_SELL_AT else '중립'
+
+
+def sessions_for_bars(bars):
+    """분봉 지평을 '기록 몇 개가 겹치는지' 로 바꾼다 — Newey–West lag 용.
+
+    기록은 하루 한 번이므로 26봉(1거래일) 지평은 겹치는 기록이 없고 78봉은
+    3개가 겹친다. 여기에 봉 수를 그대로 넘기면 lag(25·77)이 표본 수보다 커져
+    표준오차가 부풀고 유효표본이 0 에 붙는다 — 봉 종류가 바뀌면 창과 기준을
+    함께 옮겨야 한다는 규칙이 채점 쪽에도 그대로 적용된다.
+    """
+    return max(int(round(int(bars) / BARS_PER_SESSION_15M)), 1)
+
+
+def combined_day(day, slugs=COMBINE_SLUGS, into=COMBINED_SLUG):
+    """하루치 기록을 종합 점수 한 줄로 바꾼다 — scores 가 {티커: {into: x}}.
+
+    slugs 를 **모두** 가진 종목만 넣는다. 한쪽이 없다고 중립값 50 으로 채우면
+    '계산 불가'가 '중립 판단'으로 성적에 섞인다 — analyst_log 가 값 없는
+    슬러그의 키를 아예 빼는 것과 같은 규칙이다.
+
+    한쪽만 있는 점수를 그대로 쓰는 것도 안 된다. 다른 종목은 두 축의 평균인데
+    그 종목만 한 축이면 같은 자로 잰 값이 아니다.
+    """
+    out = {}
+    for ticker, per_analyst in day.get("scores", {}).items():
+        vals = [per_analyst[slug] for slug in slugs if slug in per_analyst]
+        if len(vals) != len(slugs):
+            continue
+        out[ticker] = {into: sum(float(v) for v in vals) / len(vals)}
+
+    combined = {"date": day.get("date", ""), "regime": day.get("regime", ""),
+                "scores": out}
+    if day.get("asof"):
+        combined["asof"] = day["asof"]
+    return combined
+
+
+def combined_days(days, slugs=COMBINE_SLUGS, into=COMBINED_SLUG):
+    """기록 전체를 종합 점수로 바꾼다. 남는 종목이 없는 날은 버린다.
+
+    빈 날을 남기면 표본으로 세지지는 않지만 dates 목록만 길어져 가격 패널을
+    쓸데없이 넓게 잡는다.
+    """
+    converted = [combined_day(day, slugs, into) for day in days]
+    return [day for day in converted if day["scores"]]
+
 
 def newey_west_se(values, lag):
     """평균의 Newey–West 표준오차. lag=0 이면 통상 표준오차와 같다.
@@ -163,3 +233,54 @@ def score_analysts(days, forward_returns, horizon):
         }
 
     return out
+
+
+def verdict_hit_rate(days, returns, slug=COMBINED_SLUG):
+    """총괄 판정의 방향 적중률 — 화면에 뜬 매수/매도가 실제로 맞았나.
+
+    days    : combined_days() 를 거친 기록 (scores 가 {티커: {slug: 점수}})
+    returns : {date: {ticker: pct}} — 그 지평의 선행수익률
+
+    score_analysts 의 hit_rate 와 다른 것을 잰다. 그쪽은 '그 날 순위 예측이
+    맞은 방향이었나'(단면 IC 가 양수인 날의 비율)이고, 이쪽은 '매수라고 한
+    종목이 실제로 올랐나'(판정 하나하나)다. 사장님이 화면에서 보는 것은
+    이쪽이다.
+
+    중립 판정은 분모에서 뺀다 — 맞고 틀림이 정의되지 않는 판정을 세면
+    적중률이 언제나 50% 쪽으로 눌린다. 판정을 안 낸 것이 성적을 좋게도
+    나쁘게도 만들면 안 된다. 수익률 정확히 0% 는 빗나감으로 센다 —
+    방향을 맞히지 못한 것이다.
+    """
+    hits = buy_n = sell_n = neutral_n = 0
+
+    for day in days:
+        rets = returns.get(day.get("date")) or {}
+        for ticker, per_analyst in day.get("scores", {}).items():
+            score = per_analyst.get(slug)
+            ret = rets.get(ticker)
+            if score is None or ret is None:
+                continue
+            ret = float(ret)
+            if np.isnan(ret):
+                continue
+
+            verdict = verdict_of(float(score))
+            if verdict == '중립':
+                neutral_n += 1
+                continue
+            if verdict == '매수':
+                buy_n += 1
+                hits += 1 if ret > 0 else 0
+            else:
+                sell_n += 1
+                hits += 1 if ret < 0 else 0
+
+    n = buy_n + sell_n
+    return {
+        "hit_rate":  round(hits / n * 100, 1) if n else None,
+        "n":         n,
+        "hits":      hits,
+        "buy_n":     buy_n,
+        "sell_n":    sell_n,
+        "neutral_n": neutral_n,
+    }

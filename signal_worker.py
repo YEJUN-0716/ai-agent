@@ -12,7 +12,8 @@ import sys
 from datetime import date
 
 import app as core
-from modules import analyst_log, analyst_team, krx_universe, price_panel
+from modules import (analyst_log, analyst_scorecard, analyst_team,
+                     krx_universe, price_panel, scalp_log)
 
 
 KRX_SUFFIXES = ('.KS', '.KQ')
@@ -330,6 +331,164 @@ def record_analyst_scores(tickers, regime):
 
     print(f"애널리스트 기록: {len(scores)}종목 ({regime})")
     return len(scores)
+
+
+# ── 스캘핑(15분봉) 기록 ─────────────────────────────────────────────
+#
+# 일봉과 같은 유니버스를 쓴다 — 다른 종목으로 재면 두 성적표를 나란히 놓고
+# 비교할 수 없다.
+SCALP_LOG_UNIVERSE = ANALYST_LOG_UNIVERSE
+
+# 1주(5거래일) 모멘텀 창을 채우는 최소 봉 수. 이보다 짧으면
+# calc_momentum_intraday 가 창 대부분을 None 으로 흘려 점수가 50 에 붙는다.
+SCALP_MIN_BARS = core.BARS_PER_DAY_15M * 5
+
+
+def record_scalp_main():
+    """15분봉 점수를 기록하고, 지난 기록의 선행수익률을 채점한다.
+
+    한 번 받은 분봉 패널로 두 가지를 한다 — 오늘치 점수 기록과, 아직 채점
+    안 된 지난 기록의 선행수익률. 나눠 받으면 500종목 다운로드가 두 배다.
+
+    채점을 기록과 같은 잡에 두는 이유는 시한 때문이다. 15분봉은 60일이
+    지나면 사라지므로, 그때까지 계산해 두지 않은 기록은 영영 채점할 수
+    없다 — 일봉처럼 "나중에 가격에서 다시 계산" 이 안 된다.
+
+    0종목 기록은 성공이 아니다 (record_only_main 과 같은 규칙).
+    """
+    universe_raw = os.environ.get('UNIVERSE', SCALP_LOG_UNIVERSE)
+    tickers = _resolve_universe(universe_raw)
+    if not tickers:
+        print(f"유니버스가 비었다: {universe_raw}", file=sys.stderr)
+        return 1
+
+    try:
+        prices, ohlcv = price_panel.load_intraday(
+            tickers, min_bars=SCALP_MIN_BARS)
+    except Exception as e:
+        print(f"15분봉 패널 로드 실패 — 기록·채점 모두 불가: {e}", file=sys.stderr)
+        return 1
+
+    if not ohlcv:
+        print("15분봉을 받은 종목이 없다 — 기록·채점 불가.", file=sys.stderr)
+        return 1
+
+    regime = market_regime_slug(tickers)
+    print(f"유니버스: {universe_raw} (요청 {len(tickers)}종목 / 수신 "
+          f"{len(ohlcv)}종목) / 국면: {regime}")
+
+    recorded = record_scalp_scores(ohlcv, regime)
+
+    # 채점은 오늘 기록이 0종목이어도 돌린다 — 어제까지의 기록은 오늘 받은
+    # 가격으로만 채점할 수 있다.
+    print(f"선행수익률 채점: {resolve_scalp_returns(prices)}건 (기록일×지평)")
+
+    if not recorded:
+        print("15분봉 점수를 낸 종목이 없다 — 스캘핑 성적표 재료가 하루 끊겼다.",
+              file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def record_scalp_scores(ohlcv, regime, root=None):
+    """15분봉 chart·ict 점수를 data/scalp_log 에 남긴다 — 하루 한 줄.
+
+    일봉 기록(record_analyst_scores)과 갈리는 곳은 모멘텀이다.
+    calc_momentum 은 창을 봉 개수로 잡으므로(63봉=3개월) 15분봉에 그대로
+    먹이면 **예외 없이** '3개월 모멘텀'이 이틀 반이 되고, 점수표가
+    "3개월에 +30%면 90점" 이라 그 값은 언제나 50 근처에 붙는다 — 죽은
+    숫자가 30% 가중치로 섞인다. calc_momentum_intraday 로 갈아끼운다.
+
+    기준 봉 시각(asof)을 함께 남긴다. 하루에 봉이 26개라 날짜만으로는
+    "몇 봉 뒤" 를 셀 기준이 없다.
+    """
+    from datetime import datetime
+
+    try:
+        from modules.ict_analysis import ict_factor_score, calc_ict_adjustment
+    except Exception as e:
+        print(f"[경고] ICT 모듈 없음 — 15분봉 기록 생략: {e}")
+        return 0
+
+    scores, asof = {}, None
+    for ticker, df in (ohlcv or {}).items():
+        if df is None or len(df) < SCALP_MIN_BARS:
+            continue
+
+        row = {}
+        # 계산 실패는 키를 뺀다 — 중립값 50 으로 채우면 '계산 불가'가
+        # '중립 판단'으로 성적에 섞인다.
+        try:
+            t_score, _ = core.technical_score(df)
+            mom = core.calc_momentum_intraday(df) or {}
+            row["chart"] = analyst_team.chart_score(
+                t_score, mom.get("score", 50.0))
+        except Exception:
+            pass
+
+        try:
+            row["ict"] = analyst_team.ict_score(
+                ict_factor_score(df), calc_ict_adjustment(df)["adjustment"])
+        except Exception:
+            pass
+
+        if row:
+            scores[ticker] = row
+            last_bar = df.index[-1]
+            if asof is None or last_bar > asof:
+                asof = last_bar
+
+    if not scores:
+        print("[경고] 15분봉 점수를 낸 종목이 없다 — 기록 생략.")
+        return 0
+
+    try:
+        analyst_log.append_day(
+            datetime.now().strftime("%Y-%m-%d"), regime, scores,
+            root=root or scalp_log.SCORE_DIRNAME, asof=asof.isoformat())
+    except Exception as e:
+        print(f"[경고] 15분봉 기록 실패: {e}")
+        return 0
+
+    print(f"15분봉 기록: {len(scores)}종목 ({regime}) · 기준봉 {asof}")
+    return len(scores)
+
+
+def resolve_scalp_returns(prices, score_root=None, returns_root=None):
+    """아직 채점 안 된 (기록일 × 지평)의 선행수익률을 남긴다. 남긴 건수 반환.
+
+    이미 채점된 것은 다시 계산하지 않는다. 값이 바뀔 일이 없을뿐더러, 60일이
+    지나 봉이 사라진 뒤 다시 계산하면 있던 기록을 빈 값으로 덮는다.
+
+    선행 구간이 아직 안 지난 기록은 그냥 넘긴다 — 다음 실행에서 다시 본다.
+    """
+    score_root = score_root or scalp_log.SCORE_DIRNAME
+    returns_root = returns_root or scalp_log.RETURNS_DIRNAME
+
+    days = analyst_log.load_days(root=score_root)
+    done = scalp_log.load_returns(returns_root)
+    written = 0
+
+    for day in days:
+        asof = day.get("asof")
+        date_str = day.get("date", "")
+        recorded_tickers = day.get("scores", {})
+        if not asof or not date_str or not recorded_tickers:
+            continue      # 기준 봉을 모르면 몇 봉 뒤를 셀 수 없다
+
+        for horizon in analyst_scorecard.SCALP_HORIZONS_BARS:
+            if date_str in done.get(horizon, {}):
+                continue
+            fwd = analyst_scorecard.build_forward_returns(
+                prices, [asof], horizon).get(asof) or {}
+            rets = {t: pct for t, pct in fwd.items() if t in recorded_tickers}
+            if not rets:
+                continue  # 아직 미래가 오지 않았다
+            scalp_log.append_returns(date_str, horizon, rets, root=returns_root)
+            written += 1
+
+    return written
 
 
 def save_signal_log(actions):

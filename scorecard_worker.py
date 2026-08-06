@@ -39,40 +39,12 @@ MISSING_SLUGS = ["quant"]
 # 는 실측이 아니라 ic_weights.json 의 팩터 IC 를 대리 지표로 쓰는데, 그
 # 팩터들이 바로 |ICIR| < 0.1 로 판정돼 시그널 봇을 끄게 만든 것들이다.
 # 근거 없는 가중치보다 균등이 정직하다. IC 가 쌓이면 그때 근거를 갖고 바꾼다.
-COMBINE_SLUGS = ("chart", "ict")
-COMBINED_SLUG = "combined"
-
-
-def combined_day(day):
-    """하루치 기록을 종합 점수 한 줄로 바꾼다 — scores 가 {티커: {"combined": x}}.
-
-    COMBINE_SLUGS 를 **모두** 가진 종목만 넣는다. 한쪽이 없다고 중립값
-    50 으로 채우면 '계산 불가'가 '중립 판단'으로 성적에 섞인다 —
-    analyst_log 가 값 없는 슬러그의 키를 아예 빼는 것과 같은 규칙이다.
-
-    한쪽만 있는 점수를 그대로 쓰는 것도 안 된다. 다른 종목은 두 축의
-    평균인데 그 종목만 한 축이면 같은 자로 잰 값이 아니다.
-    """
-    out = {}
-    for ticker, per_analyst in day.get("scores", {}).items():
-        vals = [per_analyst[slug] for slug in COMBINE_SLUGS
-                if slug in per_analyst]
-        if len(vals) != len(COMBINE_SLUGS):
-            continue
-        out[ticker] = {COMBINED_SLUG: sum(float(v) for v in vals) / len(vals)}
-
-    return {"date": day.get("date", ""), "regime": day.get("regime", ""),
-            "scores": out}
-
-
-def combined_days(days):
-    """기록 전체를 종합 점수로 바꾼다. 남는 종목이 없는 날은 버린다.
-
-    빈 날을 남기면 표본으로 세지지는 않지만 dates 목록만 길어져 가격
-    패널을 쓸데없이 넓게 잡는다.
-    """
-    converted = [combined_day(day) for day in days]
-    return [day for day in converted if day["scores"]]
+# 산식은 analyst_scorecard 가 소유한다 — 스캘핑 성적표도 같은 규칙으로
+# 종합해야 하므로, 규칙이 두 벌이 되면 언젠가 갈라진다.
+COMBINE_SLUGS = analyst_scorecard.COMBINE_SLUGS
+COMBINED_SLUG = analyst_scorecard.COMBINED_SLUG
+combined_day = analyst_scorecard.combined_day
+combined_days = analyst_scorecard.combined_days
 
 
 def dropped_ticker_count(day, combined):

@@ -30,7 +30,9 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 15분봉 스텝이 붙으면서 다운로드가 두 벌이 됐다. 500종목 분봉은 일봉보다
+    # 훨씬 무겁다 — 여기서 잘리면 그날 기록이 통째로 빈다.
+    timeout-minutes: 45
 
     steps:
       - name: 저장소 체크아웃
@@ -53,11 +55,27 @@ jobs:
           UNIVERSE: ${{ github.event.inputs.universe || 'S&P 500 전체 (500종목)' }}
         run: python scripts/record_analyst_scores.py
 
+      # 15분봉(스캘핑) 판정의 재료. 기록만 하는 일봉과 달리 **채점까지** 여기서
+      # 한다 — 15분봉은 60일이 지나면 yfinance 가 더는 주지 않으므로, 그 전에
+      # 선행수익률을 계산해 두지 않으면 그 날은 영영 채점할 수 없다.
+      #
+      # 일봉 스텝이 끝난 뒤에 돈다. 앞 스텝이 실패하면 여기까지 안 오지만,
+      # 여기가 실패해도 일봉 기록은 이미 파일로 남아 다음 스텝이 커밋한다.
+      - name: 15분봉 점수 기록·채점
+        env:
+          PYTHONUTF8: "1"
+          UNIVERSE: ${{ github.event.inputs.universe || 'S&P 500 전체 (500종목)' }}
+        run: python scripts/record_scalp_scores.py
+
       - name: 기록 커밋 (변경 있을 때만)
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git add data/analyst_log
+          # 기록 스텝이 실패해 디렉터리가 아예 없으면 git add 가 exit 1 을 내고
+          # 커밋 스텝이 통째로 죽는다 — 그러면 성공한 일봉 기록까지 같이
+          # 버려진다. 빈 디렉터리는 git 이 무시하므로 만들어 두는 쪽이 안전하다.
+          mkdir -p data/analyst_log data/scalp_log data/scalp_returns
+          git add data/analyst_log data/scalp_log data/scalp_returns
           if ! git diff --staged --quiet; then
             git commit -m "chore: analyst log $(date -u +%Y-%m-%d)"
             git pull --rebase origin main
