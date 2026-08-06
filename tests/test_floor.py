@@ -23,6 +23,7 @@ from floor.agents import (
     ATTACK,
     BASIS_KRW,
     BASIS_PERP,
+    BY_KEY,
     SCALP,
     UnknownMode,
     resolve_mode,
@@ -358,6 +359,19 @@ def test_분석_방은_추천을_하지_않는다():
                 assert "낼 수 있는 판정" not in joined, key
                 assert "판정은 트레이딩 본부만 낸다" in joined, key
                 assert "관망은 금지다" not in joined, key
+
+
+def test_애널리스트와_리서치룸은_매매_레벨을_부르지_않는다():
+    """리포트에 추천가가 여러 벌 실리지 않게, 레벨을 부를 방을 한정한다."""
+    for mode in (ALGO, SCALP, ATTACK):
+        ctx = _ctx(mode)
+        for key, _turn in mode.order:
+            quiet = BY_KEY[key].room in claude_runner.QUIET_ROOMS
+            joined = " ".join(claude_runner.rules(key, ctx))
+            assert ("매매 레벨은 부르지 않는다" in joined) is quiet, key
+    # 알고리즘 모드에서 레벨을 부를 수 있는 자리 — 판정 둘과 계획을 손보는 위원회.
+    loud = {k for k, _ in ALGO.order if BY_KEY[k].room not in claude_runner.QUIET_ROOMS}
+    assert loud == {"ACE", "PM", "RISKY", "SAFE", "NEUTRAL"}
 
 
 def test_형식이_두번_깨지면_판을_접는다(monkeypatch):
