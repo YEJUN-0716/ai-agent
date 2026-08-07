@@ -272,6 +272,24 @@ def _directional_weights():
         return {}
 
 
+def session_date(frames):
+    """기록에 찍을 날짜 — 러너의 달력이 아니라 **받은 마지막 봉의 날짜**.
+
+    datetime.now() 를 쓰면 러너의 UTC 벽시계가 찍힌다. 크론은 23:00 UTC 지만
+    GitHub 은 이걸 최대 한 시간 넘게 밀어 실제 실행은 23:57~01:41 UTC 사이에
+    흩어진다 — 자정을 넘긴 날은 그 장의 기록이 **다음 날짜**로 저장된다.
+    실제로 2026-07-25·08-01 (둘 다 토요일) 이 기록에 남았고, 두 장이 같은
+    날짜로 찍혀 append_day 가 앞의 것을 대체하는 바람에 07-27·08-05 장은
+    통째로 사라졌다.
+
+    봉의 날짜는 러너가 언제 도는지와 무관하다 — 점수를 계산한 바로 그 봉이
+    자기 날짜를 들고 있으므로, 채점도 같은 봉에서 시작한다.
+    """
+    stamps = [df.index[-1] for df in frames
+              if df is not None and len(df) > 0]
+    return max(stamps).strftime("%Y-%m-%d") if stamps else None
+
+
 def todays_quant(date_str, root=None):
     """오늘 일봉 기록에 남은 퀀트 점수 — {티커: 점수}.
 
@@ -398,16 +416,23 @@ def record_analyst_scores(tickers, regime):
               "야후 재무 조회가 막힌 것으로 보인다. 오늘 총괄 판정 성적은 "
               "표본이 거의 안 늘어난다.")
 
+    stamp = session_date(df for _, df in scored)
+    if stamp is None:
+        print("[경고] 봉에서 날짜를 못 읽었다 — 기록 생략.")
+        return 0
+
     try:
-        analyst_log.append_day(
-            datetime.now().strftime("%Y-%m-%d"), regime, scores)
+        if not analyst_log.append_day(stamp, regime, scores):
+            print(f"[경고] {stamp} 에 이미 더 많은 종목의 기록이 있다 — "
+                  f"이번 {len(scores)}종목은 버린다(기존 기록을 지키는 쪽).")
+            return 0
     except Exception as e:
         print(f"[경고] 애널리스트 기록 실패 (스캔은 계속): {e}")
         return 0
 
     verdict_n = sum(1 for row in scores.values()
                     if analyst_team.VERDICT_SLUG in row)
-    print(f"애널리스트 기록: {len(scores)}종목 ({regime}) · "
+    print(f"애널리스트 기록: {stamp} · {len(scores)}종목 ({regime}) · "
           f"퀀트 {quant_n}종목 · 총괄 판정 {verdict_n}종목")
     return len(scores)
 
@@ -435,8 +460,6 @@ def record_scalp_main():
 
     0종목 기록은 성공이 아니다 (record_only_main 과 같은 규칙).
     """
-    from datetime import datetime
-
     universe_raw = os.environ.get('UNIVERSE', SCALP_LOG_UNIVERSE)
     tickers = _resolve_universe(universe_raw)
     if not tickers:
@@ -460,7 +483,8 @@ def record_scalp_main():
 
     # 앞 스텝(일봉 기록)이 방금 남긴 퀀트를 그대로 쓴다. 재무제표는 봉과
     # 무관하고, 여기서 다시 조회하면 500종목 .info 가 하루 두 번이 된다.
-    quant = todays_quant(datetime.now().strftime("%Y-%m-%d"))
+    # 앞 스텝이 찍은 날짜와 같은 키로 읽어야 한다 — 둘 다 봉의 날짜를 쓴다.
+    quant = todays_quant(session_date(ohlcv.values()))
     if not quant:
         print("[경고] 오늘 일봉 기록에 퀀트가 없다 — 15분봉 총괄 판정은 "
               "오늘 기록되지 않는다(차트·ICT 는 그대로 남는다).")
@@ -495,8 +519,6 @@ def record_scalp_scores(ohlcv, regime, root=None, quant_by_ticker=None):
     기준 봉 시각(asof)을 함께 남긴다. 하루에 봉이 26개라 날짜만으로는
     "몇 봉 뒤" 를 셀 기준이 없다.
     """
-    from datetime import datetime
-
     try:
         from modules.ict_analysis import ict_factor_score, calc_ict_adjustment
     except Exception as e:
@@ -545,9 +567,14 @@ def record_scalp_scores(ohlcv, regime, root=None, quant_by_ticker=None):
         return 0
 
     try:
-        analyst_log.append_day(
-            datetime.now().strftime("%Y-%m-%d"), regime, scores,
-            root=root or scalp_log.SCORE_DIRNAME, asof=asof.isoformat())
+        # asof 는 이미 기준봉이다 — 날짜도 거기서 나와야 둘이 어긋나지 않는다.
+        # 어긋난 실물이 있었다: date=2026-08-07 / asof=2026-08-06T19:45.
+        if not analyst_log.append_day(
+                asof.strftime("%Y-%m-%d"), regime, scores,
+                root=root or scalp_log.SCORE_DIRNAME, asof=asof.isoformat()):
+            print(f"[경고] {asof:%Y-%m-%d} 에 이미 더 많은 종목의 15분봉 "
+                  f"기록이 있다 — 이번 {len(scores)}종목은 버린다.")
+            return 0
     except Exception as e:
         print(f"[경고] 15분봉 기록 실패: {e}")
         return 0
