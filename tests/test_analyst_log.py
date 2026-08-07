@@ -83,6 +83,33 @@ def test_missing_directory_returns_empty(tmp_path):
     assert al.load_days(tmp_path / "nope") == []
 
 
+# ── 더 적은 종목으로 덮어쓰지 않는다 ─────────────────────────────────
+#
+# 2026-08-06 에 5종목짜리 스모크 테스트가 같은 날 276종목 기록을 지웠다.
+# 그 장은 되살릴 수 없다 — 점수는 재계산해도 그날의 퀀트(.info)는 시점
+# 데이터라 다시 못 받는다.
+
+def test_smaller_record_does_not_replace_bigger(tmp_path):
+    full = {f"T{i}": {"chart": float(i)} for i in range(20)}
+    al.append_day("2026-08-06", "bull", full, root=tmp_path)
+
+    assert al.append_day("2026-08-06", "bull",
+                         {"AAPL": {"chart": 1.0}}, root=tmp_path) is False
+
+    days = al.load_days(tmp_path)
+    assert len(days) == 1
+    assert len(days[0]["scores"]) == 20
+
+
+def test_bigger_record_replaces_smaller(tmp_path):
+    """반쪽만 받은 날의 재실행은 그대로 갱신돼야 한다 — 막는 건 축소뿐이다."""
+    al.append_day("2026-08-06", "bull", {"AAPL": {"chart": 1.0}}, root=tmp_path)
+
+    full = {f"T{i}": {"chart": float(i)} for i in range(20)}
+    assert al.append_day("2026-08-06", "bull", full, root=tmp_path) is True
+    assert len(al.load_days(tmp_path)[0]["scores"]) == 20
+
+
 # ── 일일 스캔 배선 ───────────────────────────────────────────────────
 #
 # 기록은 성적표의 유일한 재료다. 하지만 기록이 깨졌다고 일일 스캔(텔레그램
@@ -142,7 +169,8 @@ def _capture_append(monkeypatch, signal_worker):
     captured = {}
     monkeypatch.setattr(
         signal_worker.analyst_log, "append_day",
-        lambda date_str, regime, scores, **kw: captured.update(scores=scores))
+        lambda date_str, regime, scores, **kw: (captured.update(
+            scores=scores, date=date_str) or True))
     return captured
 
 
@@ -157,6 +185,27 @@ def test_records_chart_and_ict(monkeypatch, no_network):
     assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 1
     assert set(captured["scores"]["AAPL"]) <= {"chart", "ict"}
     assert captured["scores"]["AAPL"]
+
+
+# ── 기록 날짜는 봉에서 나온다 ────────────────────────────────────────
+#
+# datetime.now() 를 쓰던 동안 크론 지연(23:00 UTC → 실제 23:57~01:41)이
+# 자정을 넘을 때마다 그 장이 다음 날짜로 저장됐다. 토요일 기록(2026-07-25,
+# 08-01)이 남았고, 두 장이 같은 날짜로 겹쳐 07-27·08-05 장이 사라졌다.
+
+def test_record_date_comes_from_last_bar_not_clock(monkeypatch, no_network):
+    import pandas as pd
+
+    signal_worker = no_network
+    panel = _panel(n_bars=100)
+    panel.index = pd.bdate_range(end="2026-07-23", periods=len(panel))
+
+    monkeypatch.setattr(signal_worker.price_panel, "load_panel",
+                        lambda tks, s, e: ({}, {"AAPL": panel}))
+    captured = _capture_append(monkeypatch, signal_worker)
+
+    assert signal_worker.record_analyst_scores(["AAPL"], "bull") == 1
+    assert captured["date"] == "2026-07-23"
 
 
 # ── 퀀트+재무와 총괄 판정 ────────────────────────────────────────────

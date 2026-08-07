@@ -234,7 +234,8 @@ def test_scalp_record_reuses_daily_quant(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         signal_worker.analyst_log, "append_day",
-        lambda date_str, regime, scores, **kw: captured.update(scores=scores))
+        lambda date_str, regime, scores, **kw: (captured.update(
+            scores=scores, date=date_str) or True))
 
     n = signal_worker.record_scalp_scores(
         {"AAPL": _intraday()}, "bull", quant_by_ticker={"AAPL": 20.0})
@@ -246,6 +247,25 @@ def test_scalp_record_reuses_daily_quant(monkeypatch):
         (row["chart"] + row["ict"] + row["quant"]) / 3)
 
 
+def test_scalp_record_date_matches_its_asof(monkeypatch):
+    """date 와 asof 가 갈라지면 안 된다.
+
+    실물에 date=2026-08-07 / asof=2026-08-06T19:45 인 줄이 남았다 — 러너의
+    UTC 벽시계로 날짜를 찍고, 기준봉은 따로 들고 있었기 때문이다.
+    """
+    import signal_worker
+
+    monkeypatch.setattr(signal_worker, "_directional_weights", lambda: {})
+    captured = {}
+    monkeypatch.setattr(
+        signal_worker.analyst_log, "append_day",
+        lambda date_str, regime, scores, **kw: (captured.update(
+            date=date_str, asof=kw.get("asof")) or True))
+
+    assert signal_worker.record_scalp_scores({"AAPL": _intraday()}, "bull") == 1
+    assert captured["asof"].startswith(captured["date"])
+
+
 def test_scalp_record_without_quant_has_no_verdict(monkeypatch):
     """일봉 스텝이 퀀트를 못 남긴 날 — 차트·ICT 는 그대로 기록된다."""
     import signal_worker
@@ -254,7 +274,8 @@ def test_scalp_record_without_quant_has_no_verdict(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         signal_worker.analyst_log, "append_day",
-        lambda date_str, regime, scores, **kw: captured.update(scores=scores))
+        lambda date_str, regime, scores, **kw: (captured.update(
+            scores=scores, date=date_str) or True))
 
     assert signal_worker.record_scalp_scores({"AAPL": _intraday()}, "bull") == 1
 

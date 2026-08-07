@@ -32,6 +32,14 @@ def append_day(date_str, regime, scores, root=LOG_DIRNAME, asof=None):
     같은 날 스캔이 두 번 돌아도 줄이 겹치지 않아야 한다 — 겹치면 그 날이
     성적에 두 번 계산돼 표본이 부풀려진다.
 
+    **더 적은 종목으로는 대체하지 않는다.** 대체는 "다시 재서 갱신" 이지
+    "덜 잰 것으로 덮어쓰기" 가 아니다. 2026-08-06 에 5종목짜리 스모크
+    테스트(workflow_dispatch, UNIVERSE=AAPL,MSFT,...)가 같은 날 276종목
+    기록을 통째로 지웠고, 그 장은 되살릴 수 없다. yfinance 가 절반만
+    내려주는 날의 재실행도 같은 모양으로 기록을 깎는다.
+
+    반환값 — 기록했으면 True, 더 큰 기록을 지키느라 건너뛰었으면 False.
+
     asof — 기준 봉의 시각(ISO 문자열). 일봉 기록은 날짜만으로 그 날 종가를
     찾을 수 있어 비워 둔다. 분봉 기록(scalp_log.SCORE_DIRNAME)은 하루에 봉이
     26개라 "그 날의 어느 봉이었나" 를 남기지 않으면 몇 봉 뒤를 셀 기준이 없다.
@@ -55,15 +63,19 @@ def append_day(date_str, regime, scores, root=LOG_DIRNAME, asof=None):
     kept = []
     for line in _read_lines(path):
         try:
-            if json.loads(line).get("date") == date_str:
-                continue
+            existing = json.loads(line)
         except ValueError:
             continue          # 깨진 줄은 버린다 — 되살릴 방법이 없다
+        if existing.get("date") == date_str:
+            if len(existing.get("scores", {})) > len(trimmed):
+                return False
+            continue
         kept.append(line)
     kept.append(json.dumps(record, ensure_ascii=False))
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(kept) + "\n")
+    return True
 
 
 def load_days(root=LOG_DIRNAME, since=None):

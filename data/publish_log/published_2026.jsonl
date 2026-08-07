@@ -1,12 +1,12 @@
 {"published_at": "2026-07-28", "kind": "record", "log_date": "2026-07-28"}
 {"published_at": "2026-07-30", "kind": "record", "log_date": "2026-07-29"}
-{"published_at": "2026-07-31", "kind": "record", "log_date": "2026-07-31"}
+{"published_at": "2026-07-31", "kind": "record", "log_date": "2026-07-30"}
 {"published_at": "2026-07-31", "horizon": 5, "n": 1}
-{"published_at": "2026-08-01", "kind": "record", "log_date": "2026-08-01"}
+{"published_at": "2026-08-01", "kind": "record", "log_date": "2026-07-31"}
 {"published_at": "2026-08-01", "horizon": 5, "n": 3}
-{"published_at": "2026-08-04", "kind": "record", "log_date": "2026-08-04"}
-{"published_at": "2026-08-05", "kind": "record", "log_date": "2026-08-05"}
+{"published_at": "2026-08-04", "kind": "record", "log_date": "2026-08-03"}
+{"published_at": "2026-08-05", "kind": "record", "log_date": "2026-08-04"}
 {"published_at": "2026-08-05", "horizon": 5, "n": 4}
 {"published_at": "2026-08-06", "kind": "record", "log_date": "2026-08-06"}
 {"published_at": "2026-08-06", "horizon": 5, "n": 5}
-{"published_at": "2026-08-07", "kind": "record", "log_date": "2026-08-07"}
+{"published_at": "2026-08-07", "kind": "record", "log_date": "2026-08-06"}
