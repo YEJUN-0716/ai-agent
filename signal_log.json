@@ -207,6 +207,30 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "VZ-2026-08-07",
+      "symbol": "VZ",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-07",
+      "entry_price": 46.34,
+      "score": 62.3,
+      "rsi": 58.9,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "PFE-2026-08-07",
+      "symbol": "PFE",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-07",
+      "entry_price": 26.22,
+      "score": 61.5,
+      "rsi": 70.4,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
