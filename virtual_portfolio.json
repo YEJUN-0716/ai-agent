@@ -42,7 +42,30 @@
       "entry_date": "2026-08-05"
     }
   },
-  "pending": [],
+  "pending": [
+    {
+      "side": "buy",
+      "symbol": "VZ",
+      "notional_krw": 563612.1909082031,
+      "placed_date": "2026-08-06",
+      "market": "US",
+      "meta": {
+        "score": 62.3,
+        "rsi": 58.9
+      }
+    },
+    {
+      "side": "buy",
+      "symbol": "PFE",
+      "notional_krw": 1697385.9077722167,
+      "placed_date": "2026-08-06",
+      "market": "US",
+      "meta": {
+        "score": 61.5,
+        "rsi": 70.4
+      }
+    }
+  ],
   "realized_pnl_krw": 0.0,
   "trades": [
     {

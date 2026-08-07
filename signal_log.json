@@ -19,7 +19,9 @@
       "action": "\ud83d\udfe2 \ub9e4\uc218",
       "reason": "\ud329\ud130 61\uc810 + \uc0c1\uc2b9\ucd94\uc138 (RSI 72)",
       "source": "github_actions",
-      "return_pct": null
+      "return_pct": -6.39,
+      "outcome_price": 312.41,
+      "outcome_date": "2026-08-07"
     },
     {
       "symbol": "GOOGL",
@@ -28,7 +30,9 @@
       "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
       "reason": "\ud329\ud130 59\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 42)",
       "source": "github_actions",
-      "return_pct": null
+      "return_pct": 3.17,
+      "outcome_price": 357.75,
+      "outcome_date": "2026-08-07"
     },
     {
       "symbol": "KO",
@@ -37,7 +41,9 @@
       "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
       "reason": "\ud329\ud130 59\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 49)",
       "source": "github_actions",
-      "return_pct": null
+      "return_pct": 6.49,
+      "outcome_price": 86.85,
+      "outcome_date": "2026-08-07"
     },
     {
       "symbol": "PEP",
@@ -46,7 +52,9 @@
       "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
       "reason": "\ud329\ud130 56\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 43)",
       "source": "github_actions",
-      "return_pct": null
+      "return_pct": 0.96,
+      "outcome_price": 138.44,
+      "outcome_date": "2026-08-07"
     },
     {
       "symbol": "LLY",
@@ -55,7 +63,9 @@
       "action": "\ud83d\udfe2 \ub9e4\uc218",
       "reason": "\ud329\ud130 58\uc810 + \uc0c1\uc2b9\ucd94\uc138 (RSI 55) | \uac70\ub798\ub7c9 \uc8fc\uc758(0.7\u00d7)",
       "source": "github_actions",
-      "return_pct": null
+      "return_pct": 1.09,
+      "outcome_price": 1191.94,
+      "outcome_date": "2026-08-07"
     },
     {
       "symbol": "005930.KS",
