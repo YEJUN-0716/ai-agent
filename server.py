@@ -16,7 +16,8 @@ import uvicorn
 from assistant.brain import Brain
 from assistant.config import ConfigError, Settings, load_settings
 from assistant.memory import init_db
-from channels.telegram_bot import TelegramChannel
+from channels import discord_bot, telegram_bot
+from channels.chat import ChatChannel
 from channels.web import create_app
 
 logging.basicConfig(
@@ -35,8 +36,8 @@ async def _run_web(settings: Settings, brain: Brain) -> None:
     await uvicorn.Server(config).serve()
 
 
-async def _run_telegram(channel: TelegramChannel) -> None:
-    application = channel.build_application()
+async def _run_telegram(channel: ChatChannel, token: str) -> None:
+    application = telegram_bot.build_application(channel, token)
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
@@ -67,7 +68,7 @@ async def _main() -> None:
     settings = load_settings()
     init_db(settings.db_path)
     brain = Brain(settings)
-    channel = TelegramChannel(settings, brain)
+    telegram = ChatChannel(settings, brain, name="telegram")
 
     log.info("웹 채팅: http://%s:%s", settings.web_host, settings.web_port)
     log.info(
@@ -78,10 +79,27 @@ async def _main() -> None:
     # 한쪽이 죽어도 다른 쪽은 계속 돈다. 다만 죽은 사실은 즉시 알려야 한다 —
     # gather가 끝난 뒤에 로그를 남기면, 텔레그램이 영원히 대기하는 구조라
     # 그 로그는 영원히 출력되지 않는다.
-    await asyncio.gather(
+    tasks = [
         _supervise("웹 서버", _run_web(settings, brain)),
-        _supervise("텔레그램", _run_telegram(channel)),
-    )
+        _supervise(
+            "텔레그램", _run_telegram(telegram, settings.telegram_bot_token)
+        ),
+    ]
+
+    if settings.discord_bot_token:
+        discord_channel = ChatChannel(settings, brain, name="discord")
+        log.info(
+            "디스코드 접속 (허용 user_id: %s)",
+            ", ".join(str(i) for i in sorted(settings.discord_allowed_user_ids)),
+        )
+        tasks.append(
+            _supervise(
+                "디스코드",
+                discord_bot.run(discord_channel, settings.discord_bot_token),
+            )
+        )
+
+    await asyncio.gather(*tasks)
 
 
 def _force_utf8_console() -> None:

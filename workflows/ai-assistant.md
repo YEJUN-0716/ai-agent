@@ -19,6 +19,23 @@
    내 chat_id 확인법: 봇에게 아무 말이나 보낸 뒤
    `https://api.telegram.org/bot<토큰>/getUpdates` 를 브라우저로 연다.
 
+   디스코드도 쓰려면 아래 둘을 더 채운다. 비워두면 디스코드 창구는 안 열린다.
+
+   | 항목 | 무엇 |
+   |---|---|
+   | `DISCORD_BOT_TOKEN` | Discord 개발자 포털 → Bot → Reset Token |
+   | `DISCORD_ALLOWED_USER_IDS` | 내 user_id. 여기 없는 사람은 봇이 무시한다 |
+
+   디스코드 봇 만드는 순서 (한 번만 하면 된다):
+   1. https://discord.com/developers/applications → New Application
+   2. 왼쪽 Bot 탭 → **MESSAGE CONTENT INTENT를 켠다.** 이걸 안 켜면 봇이
+      접속은 되는데 메시지 내용이 빈 채로 와서 아무 답도 못 한다.
+   3. 같은 화면 Reset Token → 나온 토큰을 `.env`에 넣는다
+   4. OAuth2 → URL Generator → scopes에 `bot`, 권한은 Send Messages만 체크 →
+      나온 주소를 열어 내 서버에 초대한다
+   5. 내 user_id 확인: 디스코드 설정 → 고급 → 개발자 모드 켜기 → 내 이름
+      우클릭 → "사용자 ID 복사"
+
 2. `pip install -r requirements.txt`
 
 ## 실행
@@ -29,8 +46,9 @@ python server.py
 
 - 웹 채팅: http://127.0.0.1:8765
 - 텔레그램: 봇에게 그냥 말을 건다
+- 디스코드: 봇에게 DM을 보내거나, 봇이 있는 채널에서 말을 건다
 
-둘은 같은 대화 기록을 본다. 폰에서 물어본 걸 PC에서 이어 물을 수 있다.
+셋은 같은 대화 기록을 본다. 폰에서 물어본 걸 PC에서 이어 물을 수 있다.
 
 ## 쓰는 법
 
@@ -158,6 +176,8 @@ UTF-8로 맞춘다. 새 진입점을 만들면 같은 처리를 빠뜨리지 말
 | 웹을 폰에서 열고 싶다 | 안 된다. 웹은 이 PC 전용이고, `ASSISTANT_WEB_HOST`에 외부 주소를 넣으면 시작할 때 막는다. 폰에서는 텔레그램을 쓴다 |
 | 답 끝에 "…여기서 멈췄습니다" | 비서가 도구를 너무 많이 쓰다 상한에 걸렸다. 질문을 좁혀서 다시 묻는다 |
 | 텔레그램이 답을 안 함 | `TELEGRAM_ALLOWED_CHAT_IDS`에 내 chat_id가 있는지 |
+| 디스코드가 답을 안 함 | ① 개발자 포털에서 MESSAGE CONTENT INTENT가 켜져 있는지 (꺼져 있으면 내용이 빈 채로 온다) ② `DISCORD_ALLOWED_USER_IDS`에 내 user_id가 있는지 |
+| 디스코드 창구가 아예 안 뜸 | `DISCORD_BOT_TOKEN`이 비어 있으면 일부러 안 연다. 시작 로그에 "디스코드 접속" 줄이 있는지 본다 |
 | "주식 데이터를 읽지 못했습니다" | `STOCK_ANALYZER_PATH`와 그 폴더의 파일 상태 |
 | "주문을 넣지 못했습니다" | 제안은 되살려 둔다. 다만 주문이 나간 뒤에 실패했을 수도 있으니, **보유 현황을 먼저 확인**하고 같은 번호로 다시 승인 |
 | 예약해 둔 매매가 안 보임 | 자동 체결 예약(브로커가 스스로 건 것)과 승인 대기 제안(비서가 올린 것)은 다른 목록이다. 전자는 "지금 잔고", 후자는 `/승인`으로 본다 |
