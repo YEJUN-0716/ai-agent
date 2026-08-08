@@ -48,6 +48,16 @@ class Settings:
     history_limit: int
     study_inbox: Path
     obsidian_vault: Path
+    # 디스코드는 선택이다. 토큰이 비어 있으면 그 창구를 열지 않는다.
+    discord_bot_token: str = ""
+    discord_allowed_user_ids: frozenset[int] = frozenset()
+
+    def allowed_ids(self, channel: str) -> frozenset[int]:
+        """그 창구에서 답해도 되는 사람들. 모르는 창구면 아무도 없다."""
+        return {
+            "telegram": self.telegram_allowed_chat_ids,
+            "discord": self.discord_allowed_user_ids,
+        }.get(channel, frozenset())
 
     @property
     def db_path(self) -> Path:
@@ -91,7 +101,7 @@ def _require(name: str) -> str:
     return value
 
 
-def _parse_chat_ids(raw: str) -> frozenset[int]:
+def _parse_ids(name: str, raw: str) -> frozenset[int]:
     ids: set[int] = set()
     for chunk in raw.split(","):
         chunk = chunk.strip()
@@ -101,12 +111,11 @@ def _parse_chat_ids(raw: str) -> frozenset[int]:
             ids.add(int(chunk))
         except ValueError as exc:
             raise ConfigError(
-                f"TELEGRAM_ALLOWED_CHAT_IDS에 숫자가 아닌 값이 있습니다: {chunk!r}"
+                f"{name}에 숫자가 아닌 값이 있습니다: {chunk!r}"
             ) from exc
     if not ids:
         raise ConfigError(
-            "TELEGRAM_ALLOWED_CHAT_IDS가 비어 있습니다. "
-            "허용할 텔레그램 chat_id를 최소 하나 적어야 합니다."
+            f"{name}가 비어 있습니다. 허용할 ID를 최소 하나 적어야 합니다."
         )
     return frozenset(ids)
 
@@ -127,7 +136,18 @@ def load_settings() -> Settings:
     """환경변수를 읽어 검증된 설정을 만든다. 잘못됐으면 ConfigError."""
     api_key = _require("ANTHROPIC_API_KEY")
     bot_token = _require("TELEGRAM_BOT_TOKEN")
-    chat_ids = _parse_chat_ids(_require("TELEGRAM_ALLOWED_CHAT_IDS"))
+    chat_ids = _parse_ids(
+        "TELEGRAM_ALLOWED_CHAT_IDS", _require("TELEGRAM_ALLOWED_CHAT_IDS")
+    )
+
+    # 디스코드는 안 써도 된다. 다만 토큰만 넣고 명단을 비워두면 봇이 접속만
+    # 하고 아무에게도 답하지 않는다 — 조용히 고장나게 두지 않고 여기서 막는다.
+    discord_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+    discord_ids: frozenset[int] = frozenset()
+    if discord_token:
+        discord_ids = _parse_ids(
+            "DISCORD_ALLOWED_USER_IDS", _require("DISCORD_ALLOWED_USER_IDS")
+        )
 
     stock_path = Path(_require("STOCK_ANALYZER_PATH")).expanduser()
     if not stock_path.is_dir():
@@ -185,4 +205,6 @@ def load_settings() -> Settings:
         history_limit=_parse_int("ASSISTANT_HISTORY_LIMIT", DEFAULT_HISTORY_LIMIT),
         study_inbox=study_inbox,
         obsidian_vault=vault,
+        discord_bot_token=discord_token,
+        discord_allowed_user_ids=discord_ids,
     )

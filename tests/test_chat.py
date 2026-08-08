@@ -1,7 +1,7 @@
 import pytest
 
 from assistant.config import Settings
-from channels.telegram_bot import TelegramChannel
+from channels.chat import ChatChannel, split_for_limit
 from tools.virtual_trade import list_pending_requests, request_trade
 
 
@@ -52,7 +52,7 @@ class FakeExecutor:
 def test_message_from_stranger_is_ignored(settings):
     # Arrange
     brain = FakeBrain()
-    channel = TelegramChannel(settings, brain)
+    channel = ChatChannel(settings, brain)
 
     # Act
     reply = channel.handle_text(chat_id=999, text="안녕")
@@ -65,7 +65,7 @@ def test_message_from_stranger_is_ignored(settings):
 def test_message_from_owner_reaches_the_brain(settings):
     # Arrange
     brain = FakeBrain()
-    channel = TelegramChannel(settings, brain)
+    channel = ChatChannel(settings, brain)
 
     # Act
     reply = channel.handle_text(chat_id=111, text="가상 브로커 얼마야?")
@@ -78,7 +78,7 @@ def test_message_from_owner_reaches_the_brain(settings):
 def test_approve_command_executes_pending_trade(settings):
     # Arrange
     executor = FakeExecutor()
-    channel = TelegramChannel(settings, FakeBrain(), trade_executor=executor)
+    channel = ChatChannel(settings, FakeBrain(), trade_executor=executor)
     proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
 
     # Act
@@ -95,7 +95,7 @@ def test_approve_command_executes_pending_trade(settings):
 def test_approve_command_from_stranger_does_nothing(settings):
     # Arrange — 남이 승인 번호를 알아내도 실행되면 안 된다
     executor = FakeExecutor()
-    channel = TelegramChannel(settings, FakeBrain(), trade_executor=executor)
+    channel = ChatChannel(settings, FakeBrain(), trade_executor=executor)
     proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
 
     # Act
@@ -112,7 +112,7 @@ def test_approve_command_from_stranger_does_nothing(settings):
 def test_approve_with_unknown_id_explains_the_problem(settings):
     # Arrange
     executor = FakeExecutor()
-    channel = TelegramChannel(settings, FakeBrain(), trade_executor=executor)
+    channel = ChatChannel(settings, FakeBrain(), trade_executor=executor)
 
     # Act
     reply = channel.handle_text(chat_id=111, text="/승인 없는아이디")
@@ -124,7 +124,7 @@ def test_approve_with_unknown_id_explains_the_problem(settings):
 
 def test_approve_without_id_shows_pending_list(settings):
     # Arrange
-    channel = TelegramChannel(
+    channel = ChatChannel(
         settings, FakeBrain(), trade_executor=FakeExecutor()
     )
     request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
@@ -139,7 +139,7 @@ def test_approve_without_id_shows_pending_list(settings):
 
 def test_pending_list_says_so_when_nothing_waits(settings):
     # Arrange
-    channel = TelegramChannel(settings, FakeBrain())
+    channel = ChatChannel(settings, FakeBrain())
 
     # Act
     reply = channel.handle_text(chat_id=111, text="/승인")
@@ -151,7 +151,7 @@ def test_pending_list_says_so_when_nothing_waits(settings):
 def test_reject_command_discards_the_proposal(settings):
     # Arrange
     executor = FakeExecutor()
-    channel = TelegramChannel(settings, FakeBrain(), trade_executor=executor)
+    channel = ChatChannel(settings, FakeBrain(), trade_executor=executor)
     proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
 
     # Act
@@ -168,7 +168,7 @@ def test_reject_command_discards_the_proposal(settings):
 def test_english_approve_command_also_works(settings):
     # Arrange — 텔레그램이 한글 명령을 command로 인식하지 않을 때를 대비
     executor = FakeExecutor()
-    channel = TelegramChannel(settings, FakeBrain(), trade_executor=executor)
+    channel = ChatChannel(settings, FakeBrain(), trade_executor=executor)
     proposal = request_trade(settings, "sell", "AAPL", qty=3)
 
     # Act
@@ -184,7 +184,7 @@ def test_english_approve_command_also_works(settings):
 def test_help_command_does_not_reach_the_brain(settings):
     # Arrange — 도움말에 API 비용을 쓸 이유가 없다
     brain = FakeBrain()
-    channel = TelegramChannel(settings, brain)
+    channel = ChatChannel(settings, brain)
 
     # Act
     reply = channel.handle_text(chat_id=111, text="/start")
@@ -194,13 +194,48 @@ def test_help_command_does_not_reach_the_brain(settings):
     assert brain.asked == []
 
 
+def test_each_channel_uses_its_own_allowlist(settings):
+    # Arrange — 텔레그램 chat_id 111과 디스코드 user_id 111은 남남이다
+    from dataclasses import replace
+
+    settings = replace(settings, discord_allowed_user_ids=frozenset({222}))
+    brain = FakeBrain()
+    discord = ChatChannel(settings, brain, name="discord")
+
+    # Act
+    stranger = discord.handle_text(chat_id=111, text="안녕")
+    owner = discord.handle_text(chat_id=222, text="안녕")
+
+    # Assert
+    assert stranger is None
+    assert owner == "답변: 안녕"
+    assert brain.asked == [("안녕", "discord")]
+
+
+def test_long_reply_is_split_at_line_breaks():
+    # Arrange — 리포트 한 장은 디스코드 한도(2000자)를 넘긴다
+    text = "\n".join(f"{i}번째 줄입니다" * 5 for i in range(200))
+
+    # Act
+    parts = split_for_limit(text, 2000)
+
+    # Assert — 조각을 다시 붙이면 원문이고, 어느 조각도 한도를 넘지 않는다
+    assert len(parts) > 1
+    assert all(len(p) <= 2000 for p in parts)
+    assert "\n".join(parts) == text
+
+
+def test_short_reply_is_left_alone():
+    assert split_for_limit("안녕하세요", 2000) == ["안녕하세요"]
+
+
 def test_brain_failure_is_reported_not_swallowed(settings):
     # Arrange
     class BrokenBrain:
         def ask(self, question: str, channel: str) -> str:
             raise RuntimeError("API 한도 초과")
 
-    channel = TelegramChannel(settings, BrokenBrain())
+    channel = ChatChannel(settings, BrokenBrain())
 
     # Act
     reply = channel.handle_text(chat_id=111, text="질문")
