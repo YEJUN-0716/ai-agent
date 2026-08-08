@@ -129,8 +129,11 @@ def test_effective_n_never_exceeds_apparent_n():
     assert got["chart"]["effective_n"] <= got["chart"]["n"]
 
 
-def test_horizons_are_the_three_agreed_windows():
-    assert sc.HORIZONS == (5, 21, 63)
+def test_horizons_include_the_non_overlapping_one_day_window():
+    """1일이 맨 앞에 있어야 한다 — lag=0 이라 유효표본이 겉보기 n 과 같고,
+    표본이 가장 먼저 차는 지평이다. 나머지는 겹침 때문에 훨씬 늦다."""
+    assert sc.HORIZONS == (1, 5, 21, 63)
+    assert sc.HORIZONS[0] == 1
 
 
 # ── 선행수익률 산출 ──────────────────────────────────────────────────
@@ -197,3 +200,32 @@ def test_scorecard_runs_end_to_end_on_built_returns():
 
     assert got["chart"]["mean_ic"] == pytest.approx(1.0)
     assert got["chart"]["n"] == 5
+
+
+# ── 국면 판정은 날짜별로도 같은 자를 쓴다 ────────────────────────────
+#
+# 백필이 과거 날짜의 국면을 매기려면 순수 함수가 필요하다. 문턱을 두 곳에
+# 적으면 백필과 실기록의 국면 라벨이 다른 자로 찍힌다.
+
+def _closes(last, ma_level=100.0, n=260):
+    import pandas as pd
+
+    idx = pd.bdate_range("2025-01-01", periods=n)
+    vals = [ma_level] * (n - 1) + [last]
+    return pd.Series(vals, index=idx)
+
+
+def test_regime_of_reads_the_end_of_the_series():
+    import app as core
+
+    assert core.regime_of(_closes(130.0))[0] == "bull"
+    assert core.regime_of(_closes(70.0))[0] == "bear"
+    assert core.regime_of(_closes(100.0))[0] == "neutral"
+
+
+def test_regime_of_needs_two_hundred_bars():
+    """MA200 을 못 채우면 판정하지 않는다 — 짧은 계열에 억지로 값을 내면
+    백필 첫 몇 달의 국면 라벨이 통째로 거짓이 된다."""
+    import app as core
+
+    assert core.regime_of(_closes(130.0, n=150)) == ("neutral", 0.0)

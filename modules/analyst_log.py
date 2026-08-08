@@ -12,6 +12,13 @@ import json
 import os
 
 LOG_DIRNAME = os.path.join("data", "analyst_log")
+
+# 과거 봉으로 되돌려 계산한 점수. **실기록이 아니다** — 그래서 파일을 가른다.
+# 섞어 두면 "그날 화면에 뜬 점수" 와 "나중에 재구성한 점수" 가 한 파일 안에서
+# 구별되지 않고, 성적표가 무엇을 잰 건지 아무도 말할 수 없게 된다.
+# 재구성이 왜 가능한지·어디까지 같은지는 scripts/backfill_analyst_log.py 참고.
+BACKFILL_DIRNAME = os.path.join("data", "analyst_log_backfill")
+
 SCORE_DECIMALS = 1
 
 
@@ -24,6 +31,40 @@ def _read_lines(path):
         return []
     with open(path, encoding="utf-8") as f:
         return [ln for ln in (line.strip() for line in f) if ln]
+
+
+def trim_scores(scores):
+    """기록에 남길 모양으로 다듬는다 — 소수 1자리 절삭, 값 없는 슬러그 제거."""
+    trimmed = {}
+    for ticker, per_analyst in scores.items():
+        row = {slug: round(float(v), SCORE_DECIMALS)
+               for slug, v in per_analyst.items() if v is not None}
+        if row:
+            trimmed[ticker] = row
+    return trimmed
+
+
+def write_days(records, root):
+    """여러 날치를 한 번에 쓴다 — 백필처럼 수백 일을 만들 때.
+
+    append_day 를 반복하면 매번 파일을 통째로 다시 쓴다. 하루 줄이 10KB 를
+    넘으므로 500일이면 수 GB 의 쓰기가 된다. 여기는 연도별로 한 번씩만 쓴다.
+    """
+    by_year = {}
+    for date_str, regime, scores in records:
+        row = trim_scores(scores)
+        if row:
+            by_year.setdefault(date_str[:4], []).append(
+                {"date": date_str, "regime": regime, "scores": row})
+
+    for year, rows in by_year.items():
+        path = _year_path(root, f"{year}-01-01")
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        rows.sort(key=lambda r: r["date"])
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return sum(len(rows) for rows in by_year.values())
 
 
 def append_day(date_str, regime, scores, root=LOG_DIRNAME, asof=None):
@@ -49,13 +90,7 @@ def append_day(date_str, regime, scores, root=LOG_DIRNAME, asof=None):
     if parent:
         os.makedirs(parent, exist_ok=True)
 
-    trimmed = {}
-    for ticker, per_analyst in scores.items():
-        row = {slug: round(float(v), SCORE_DECIMALS)
-               for slug, v in per_analyst.items() if v is not None}
-        if row:
-            trimmed[ticker] = row
-
+    trimmed = trim_scores(scores)
     record = {"date": date_str, "regime": regime, "scores": trimmed}
     if asof:
         record["asof"] = str(asof)
@@ -76,6 +111,32 @@ def append_day(date_str, regime, scores, root=LOG_DIRNAME, asof=None):
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(kept) + "\n")
     return True
+
+
+def load_scoring_days(since=None):
+    """채점에 쓰는 전체 표본 — 백필 재구성 + 실기록. 날짜 오름차순.
+
+    같은 날짜가 양쪽에 있으면 **실기록을 남긴다.** 백필은 과거 봉으로 되돌려
+    계산한 값이고, 야후가 배당·분할로 수정주가를 갱신하면 그날 화면에 뜬
+    값과 미세하게 어긋난다 — 실제로 뜬 쪽이 사실이다.
+
+    표본이 무엇으로 이뤄졌는지는 sample_mix() 로 따로 센다. 이 함수가
+    "몇 개인가" 와 "무엇인가" 를 함께 답하면 화면이 둘을 구별할 수 없다.
+    """
+    live = load_days(LOG_DIRNAME, since=since)
+    live_dates = {d.get("date") for d in live}
+    merged = [d for d in load_days(BACKFILL_DIRNAME, since=since)
+              if d.get("date") not in live_dates] + live
+    return sorted(merged, key=lambda d: d.get("date", ""))
+
+
+def sample_mix(since=None):
+    """표본 구성 — {"live": 실기록 일수, "backfill": 백필 일수}."""
+    live = load_days(LOG_DIRNAME, since=since)
+    live_dates = {d.get("date") for d in live}
+    backfill = [d for d in load_days(BACKFILL_DIRNAME, since=since)
+                if d.get("date") not in live_dates]
+    return {"live": len(live), "backfill": len(backfill)}
 
 
 def load_days(root=LOG_DIRNAME, since=None):

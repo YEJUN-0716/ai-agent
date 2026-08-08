@@ -146,7 +146,9 @@ def cut_tie_counts(day, top):
 
 
 def main():
-    days = analyst_log.load_days()
+    # 백필(과거 봉 재구성) + 실기록. 백필은 실기록 시작일 앞에서 끝나므로
+    # days[-1] 은 언제나 실기록이다 — '오늘의 기록' 발송은 영향받지 않는다.
+    days = analyst_log.load_scoring_days()
     if not days:
         print("기록이 없다 — 발행할 것이 없다.", file=sys.stderr)
         return 1
@@ -214,7 +216,8 @@ def main():
     for horizon in new_horizons(stats_by_horizon):
         stats = stats_by_horizon[horizon]
         if not send_tg(scorecard_message.build_scorecard_message(
-                horizon, stats, MISSING_SLUGS)):
+                horizon, stats, MISSING_SLUGS,
+                sample_mix=analyst_log.sample_mix())):
             print(f"{horizon}일 성적표 발송 실패", file=sys.stderr)
             return 1
         n = max(s.get("n", 0) for s in stats.values())

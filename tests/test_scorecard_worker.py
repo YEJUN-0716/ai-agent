@@ -87,7 +87,7 @@ def test_top_by_slug_tiebreaks_by_ticker_when_scores_equal():
 def test_main_fails_loudly_when_record_message_send_fails(monkeypatch):
     """오늘의 기록 발송 실패는 조용히 넘어가지 않는다 — 워크플로가 실패해야 한다."""
     sw = _sw()
-    monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
+    monkeypatch.setattr(sw.analyst_log, "load_scoring_days", lambda **kw: [
         {"date": "2026-07-28", "regime": "bull",
          "scores": {"AAPL": {"chart": 70.0}}},
     ])
@@ -108,7 +108,7 @@ def test_main_skips_record_send_without_failing_when_already_published(monkeypat
     # chart·ict 를 둘 다 준다 — 종합 점수는 두 점수가 모두 있는 종목만
     # 쓰므로, 한쪽만 있는 기록은 채점 대상이 0건이 돼 이 테스트가 보려는
     # 것과 무관한 이유로 실패한다.
-    monkeypatch.setattr(sw.analyst_log, "load_days", lambda: [
+    monkeypatch.setattr(sw.analyst_log, "load_scoring_days", lambda **kw: [
         {"date": "2026-07-28", "regime": "bull",
          "scores": {"AAPL": {"chart": 70.0, "ict": 50.0}}},
     ])
