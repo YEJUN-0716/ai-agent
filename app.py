@@ -1314,6 +1314,26 @@ def fundamental_score(ticker, df=None):
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
+def regime_of(closes):
+    """종가 계열 → (국면, MA200 대비 %). 네트워크를 모르는 순수 함수.
+
+    백필이 과거 날짜의 국면을 매기려면 같은 산식이 필요하다. 문턱을 두 곳에
+    적으면 언젠가 갈라지고, 그러면 백필과 실기록의 국면 라벨이 다른 자로 찍혀
+    국면별 성적을 나란히 볼 수 없게 된다.
+
+    계열 끝을 '지금'으로 본다 — 과거 시점을 재려면 그 날짜까지 잘라서 넘긴다.
+    """
+    closes = closes.dropna()
+    if len(closes) < 200:
+        return 'neutral', 0.0
+    cp = float(closes.iloc[-1])
+    ma200 = float(closes.rolling(200).mean().iloc[-1])
+    diff_pct = (cp - ma200) / ma200 * 100
+    if cp > ma200 * 1.03:   return 'bull', diff_pct
+    elif cp < ma200 * 0.97: return 'bear', diff_pct
+    else:                   return 'neutral', diff_pct
+
+
 def get_market_regime(benchmark=None):
     """벤치마크 지수 vs MA200 기반 시장 국면 감지 (bull/bear/neutral).
 
@@ -1326,14 +1346,7 @@ def get_market_regime(benchmark=None):
         end = datetime.now(); start = end - timedelta(days=310)
         spy = yf.download(benchmark, start=start, end=end, progress=False)
         if isinstance(spy.columns, pd.MultiIndex): spy.columns = spy.columns.droplevel(1)
-        spy = spy.dropna(subset=['Close'])
-        if len(spy) < 200: return 'neutral', 0.0
-        cp = float(spy['Close'].iloc[-1])
-        ma200 = float(spy['Close'].rolling(200).mean().iloc[-1])
-        diff_pct = (cp - ma200) / ma200 * 100
-        if cp > ma200 * 1.03:   return 'bull', diff_pct
-        elif cp < ma200 * 0.97: return 'bear', diff_pct
-        else:                   return 'neutral', diff_pct
+        return regime_of(spy['Close'])
     except:
         return 'neutral', 0.0
 
@@ -3386,8 +3399,12 @@ def analyst_weights_by_slug():
             for slug in _analyst_team.DIRECTIONAL_SLUGS}
 
 # 유효 표본(겉보기 n 이 아니라)이 이만큼은 돼야 판정에 쓸 수 있다.
-ANALYST_SCORECARD_MIN_EFFECTIVE_N = 30
-ANALYST_SCORECARD_T_THRESHOLD = 2.0
+# 판정선은 modules/analyst_scorecard 가 갖는다 — 화면 없이도 읽혀야 한다.
+# 여기 이름은 기존 호출부를 위한 별칭이다.
+from modules import analyst_scorecard as _analyst_scorecard  # noqa: E402
+
+ANALYST_SCORECARD_MIN_EFFECTIVE_N = _analyst_scorecard.DECIDE_MIN_EFFECTIVE_N
+ANALYST_SCORECARD_T_THRESHOLD = _analyst_scorecard.DECIDE_T_THRESHOLD
 
 # 기록에서 가격을 끌어올 때의 여유. 63일 채점 + 지표 워밍업을 덮는다.
 _SCORECARD_PANEL_EXTRA_DAYS = 200
@@ -3568,7 +3585,8 @@ def render_analyst_scorecard():
         "**판정은 '겉보기 표본'이 아니라 '유효표본'으로 합니다.**")
 
     try:
-        days = _log.load_days()
+        days = _log.load_scoring_days()
+        mix = _log.sample_mix()
     except Exception as e:
         st.warning(f"기록을 읽지 못했습니다: {e}")
         return
@@ -3577,13 +3595,20 @@ def render_analyst_scorecard():
         st.info(
             "아직 기록이 없습니다. 매일 자동 스캔이 애널리스트 점수를 남기기 "
             "시작하면 여기에 성적이 쌓입니다.  \n"
-            f"5일 기준으로 유효표본 {ANALYST_SCORECARD_MIN_EFFECTIVE_N}개가 모이려면 "
-            "약 7개월이 걸립니다 — 21일 기준만 쓰면 2.5년입니다.")
+            f"1일 기준은 예측 구간이 겹치지 않아 유효표본 "
+            f"{ANALYST_SCORECARD_MIN_EFFECTIVE_N}개가 가장 먼저 모이고, "
+            "5일 기준은 그 3배쯤 걸립니다.")
         return
 
     tickers = sorted({t for d in days for t in d.get('scores', {})})
     st.caption(f"기록 {len(days)}일 · {len(tickers)}종목 "
                f"({days[0]['date']} ~ {days[-1]['date']})")
+    if mix['backfill']:
+        st.caption(
+            f"⚙️ 표본 구성: 실기록 {mix['live']}일 + **과거 재구성 "
+            f"{mix['backfill']}일**. 재구성분은 차트·ICT 만 있고 그날 화면에 뜬 "
+            "값과 소수점 단위로 다를 수 있습니다. 오늘 살아남은 종목으로 과거를 "
+            "재므로 생존자 편향이 남아 있어, IC 가 실제보다 좋게 나옵니다.")
 
     try:
         from modules import price_panel as _panel

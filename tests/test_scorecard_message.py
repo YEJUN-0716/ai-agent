@@ -155,3 +155,25 @@ def test_combined_slug_renders_as_korean_name():
         "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [])
 
     assert "*종합* 상위 1" in msg
+
+
+# ── 재구성 표본은 재구성이라고 말한다 ────────────────────────────────
+#
+# 이 채널은 "예측 기록과 사후 채점을 공개한다" 고 적어 두었다. 백필분을
+# 말없이 섞으면 예측한 적 없는 날을 성적으로 내보내게 된다.
+
+def test_backfill_sample_is_disclosed():
+    msg = sm.build_scorecard_message(5, _BIG, [],
+                                     sample_mix={"live": 12, "backfill": 480})
+
+    assert "480" in msg and "12" in msg
+    assert "생존자 편향" in msg
+
+
+def test_pure_live_sample_says_nothing_about_backfill():
+    """실기록만이면 군더더기를 붙이지 않는다."""
+    msg = sm.build_scorecard_message(5, _BIG, [],
+                                     sample_mix={"live": 12, "backfill": 0})
+
+    assert "생존자 편향" not in msg
+    assert sm.build_scorecard_message(5, _BIG, []) == msg

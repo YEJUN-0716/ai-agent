@@ -20,6 +20,9 @@ SLUG_NAMES = {
     "quant":    "퀀트+재무",
     "ict":      "ICT+CRT",
     "combined": "종합",
+    # 화면 상단에 뜨는 총괄 판정 점수 그대로. 2026-08-06 부터 기록된다 —
+    # 위 셋과 시계가 다르다.
+    "verdict":  "총괄 판정(화면)",
 }
 
 # 퀀트+재무는 2026-08-07 부터 기록한다(signal_worker.record_analyst_scores).
@@ -49,8 +52,20 @@ def _missing_slug_lines(missing_slugs):
             for slug in missing_slugs]
 
 
-def build_scorecard_message(horizon, stats, missing_slugs):
-    """N일 지평 성적표. stats 는 score_analysts() 의 반환값."""
+BACKFILL_NOTE = (
+    "※ 표본 {backfill}일은 과거 봉으로 되돌려 계산한 재구성분입니다 "
+    "(실기록 {live}일). 재구성분은 오늘 살아남은 종목만 담고 있어 생존자 "
+    "편향이 남아 있고, IC 가 실제보다 좋게 나옵니다."
+)
+
+
+def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
+    """N일 지평 성적표. stats 는 score_analysts() 의 반환값.
+
+    sample_mix — analyst_log.sample_mix() 의 반환값. 표본에 재구성분이 섞여
+    있으면 그 사실을 발행문에 적는다. 안 적으면 이 채널이 "예측 기록과 사후
+    채점을 공개한다" 고 해 놓고 예측한 적 없는 날을 성적으로 내보내게 된다.
+    """
     lines = [f"📊 {horizon}일 지평 성적표", ""]
 
     for slug in sorted(stats):
@@ -68,6 +83,9 @@ def build_scorecard_message(horizon, stats, missing_slugs):
         lines.append("")
 
     lines.extend(_missing_slug_lines(missing_slugs))
+    if sample_mix and sample_mix.get("backfill"):
+        lines.append(BACKFILL_NOTE.format(
+            backfill=sample_mix["backfill"], live=sample_mix.get("live", 0)))
 
     lines.append("")
     lines.append(COMBINE_NOTE)

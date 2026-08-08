@@ -394,3 +394,60 @@ def test_record_only_fails_on_empty_universe(monkeypatch):
     monkeypatch.setattr(signal_worker, "_resolve_universe", lambda raw: [])
 
     assert signal_worker.record_only_main() == 1
+
+
+# ── 백필 재구성분과 실기록 ───────────────────────────────────────────
+#
+# 둘은 같은 물건이 아니다. 백필은 과거 봉으로 되돌려 계산한 값이라 "그날
+# 화면에 뜬 점수" 라고 말할 수 없다. 파일을 갈라 두고, 합칠 때는 실기록이
+# 이긴다. 표본이 무엇으로 이뤄졌는지는 따로 셀 수 있어야 한다.
+
+def _mixed_logs(monkeypatch, tmp_path):
+    live, back = tmp_path / "live", tmp_path / "back"
+    monkeypatch.setattr(al, "LOG_DIRNAME", str(live))
+    monkeypatch.setattr(al, "BACKFILL_DIRNAME", str(back))
+    return live, back
+
+
+def test_scoring_days_merges_backfill_before_live(monkeypatch, tmp_path):
+    live, back = _mixed_logs(monkeypatch, tmp_path)
+    al.write_days([("2026-05-01", "bull", {"A": {"chart": 1.0}}),
+                   ("2026-06-01", "bear", {"A": {"chart": 2.0}})], back)
+    al.append_day("2026-07-23", "bull", {"A": {"chart": 3.0}}, root=live)
+
+    days = al.load_scoring_days()
+    assert [d["date"] for d in days] == ["2026-05-01", "2026-06-01", "2026-07-23"]
+    assert al.sample_mix() == {"live": 1, "backfill": 2}
+
+
+def test_live_record_wins_over_backfill_on_the_same_date(monkeypatch, tmp_path):
+    """겹치면 실제로 화면에 뜬 쪽이 사실이다 — 재구성분은 버린다."""
+    live, back = _mixed_logs(monkeypatch, tmp_path)
+    al.write_days([("2026-07-23", "bull", {"A": {"chart": 1.0}})], back)
+    al.append_day("2026-07-23", "bull", {"A": {"chart": 9.0}}, root=live)
+
+    days = al.load_scoring_days()
+    assert len(days) == 1
+    assert days[0]["scores"]["A"]["chart"] == 9.0
+    assert al.sample_mix() == {"live": 1, "backfill": 0}
+
+
+def test_write_days_splits_by_year_and_sorts(tmp_path):
+    n = al.write_days([("2027-01-05", "bull", {"A": {"chart": 1.0}}),
+                       ("2026-12-31", "bear", {"A": {"chart": 2.0}}),
+                       ("2026-03-02", "bull", {"A": {"chart": 3.0}})], tmp_path)
+
+    assert n == 3
+    assert [d["date"] for d in al.load_days(tmp_path)] == [
+        "2026-03-02", "2026-12-31", "2027-01-05"]
+    assert (tmp_path / "2026.jsonl").exists() and (tmp_path / "2027.jsonl").exists()
+
+
+def test_write_days_drops_empty_scores(tmp_path):
+    """값이 하나도 없는 날은 줄을 만들지 않는다 — 빈 날이 표본에 끼면
+    채점된 날 수가 실제보다 많아 보인다."""
+    n = al.write_days([("2026-03-02", "bull", {"A": {"chart": None}}),
+                       ("2026-03-03", "bull", {"A": {"chart": 1.0}})], tmp_path)
+
+    assert n == 1
+    assert [d["date"] for d in al.load_days(tmp_path)] == ["2026-03-03"]
