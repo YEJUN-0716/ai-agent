@@ -42,6 +42,41 @@ def test_loads_settings_from_environment(tmp_path, monkeypatch):
     assert settings.assistant_data_dir.exists()
 
 
+def test_messenger_channels_are_optional(tmp_path, monkeypatch):
+    """토큰을 비우면 그 창구는 안 연다. 서버가 못 뜨면 안 된다."""
+    # Arrange — 텔레그램을 끄고 디스코드만 켠 상태
+    env = _base_env(tmp_path)
+    del env["TELEGRAM_BOT_TOKEN"]
+    del env["TELEGRAM_ALLOWED_CHAT_IDS"]
+    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_IDS"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "d-token")
+    monkeypatch.setenv("DISCORD_ALLOWED_USER_IDS", "999")
+
+    # Act
+    settings = load_settings()
+
+    # Assert
+    assert settings.telegram_bot_token == ""
+    assert settings.telegram_allowed_chat_ids == frozenset()
+    assert settings.discord_allowed_user_ids == frozenset({999})
+
+
+def test_channel_with_a_token_but_no_allowlist_is_rejected(tmp_path, monkeypatch):
+    """토큰만 넣고 명단을 비우면 봇이 접속만 하고 아무에게도 답하지 않는다."""
+    # Arrange
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "d-token")
+    monkeypatch.delenv("DISCORD_ALLOWED_USER_IDS", raising=False)
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="DISCORD_ALLOWED_USER_IDS"):
+        load_settings()
+
+
 def test_raises_when_api_key_missing(tmp_path, monkeypatch):
     # Arrange
     env = _base_env(tmp_path)
