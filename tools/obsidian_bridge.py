@@ -8,6 +8,7 @@ API·서버 필요 없음. 표준 라이브러리만 쓴다.
   init   볼트 폴더 + 하위 구조 + Home/Watchlist 노트 생성 (이미 있으면 보존)
   push   우리 → 옵시디언: 에이전트 메모리 + stock-analyzer 결과를 볼트로 복사/렌더
   pull   옵시디언 → 우리: Watchlist.md 에서 티커를 뽑아 JSON 으로 출력
+  sync   무인 갱신: stock-analyzer 를 원격에 맞춘 뒤 push (작업 스케줄러용)
 
 경로는 환경변수로 바꾼다 (없으면 아래 기본값):
   OBSIDIAN_VAULT   볼트 폴더            기본: ~/OneDrive/Desktop/ObsidianVault
@@ -61,6 +62,7 @@ def cmd_init() -> int:
                "에이전트와 연결된 볼트입니다.\n\n"
                "- [[Watchlist]] — 관심종목 (내가 쓰면 에이전트가 읽음)\n"
                f"- [[{STOCK_SUB}/Signals|Stock 신호]] · 측정 리포트는 {STOCK_SUB}/Measurements 폴더\n"
+               f"- [[{STOCK_SUB}/Scorecard|애널리스트 성적표 — 표본 현황]] — 판정까지 얼마나 왔나\n"
                f"- [[{MEMORY_SUB}/MEMORY|에이전트 메모리]]\n\n"
                "`python tools/obsidian_bridge.py push` 로 최신화, `pull` 로 관심종목 읽기.\n")
 
@@ -136,11 +138,97 @@ def _push_signals() -> int:
     return len(recent)
 
 
+def _push_scorecard() -> int:
+    """애널리스트 성적표가 어디까지 왔는지 — 표본 상태만, 네트워크 없이.
+
+    IC·t 값은 여기서 다시 계산하지 않는다. 계산에 276종목 2년치 다운로드가
+    필요하기도 하고, 무엇보다 **같은 숫자를 두 곳에서 내면 언젠가 갈라진다.**
+    실제 판정은 앱 화면과 텔레그램 채널이 낸다 — 이 노트는 "표본이 어디까지
+    찼나" 만 말하고 그쪽을 가리킨다.
+    """
+    dest = VAULT / STOCK_SUB / "Scorecard.md"
+    sys.path.insert(0, str(STOCK_DIR))
+    try:
+        from modules import analyst_log, analyst_scorecard, publish_log, scorecard_message
+    except Exception as e:
+        print(f"[건너뜀] 성적표 모듈 로드 실패: {e}")
+        return 0
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(STOCK_DIR)          # 로그 경로가 저장소 기준 상대경로다
+        days = analyst_log.load_scoring_days()
+        mix = analyst_log.sample_mix()
+        published = {h: publish_log.last_published_n(h)
+                     for h in analyst_scorecard.HORIZONS}
+    except Exception as e:
+        print(f"[건너뜀] 성적표 기록 읽기 실패: {e}")
+        return 0
+    finally:
+        os.chdir(cwd)
+
+    if not days:
+        print("[건너뜀] 성적표 기록이 비어 있음")
+        return 0
+
+    # 슬러그마다 시계가 다르다 — quant·verdict 는 나중에 붙었다.
+    first_seen: dict[str, str] = {}
+    for day in days:
+        for row in day.get("scores", {}).values():
+            for slug in row:
+                first_seen.setdefault(slug, day["date"])
+    tickers = {t for d in days for t in d.get("scores", {})}
+
+    lines = [
+        "# 🎓 애널리스트 성적표 — 표본 현황", "", MANAGED_TAG, "",
+        f"갱신: {datetime.now():%Y-%m-%d %H:%M}", "",
+        "## 표본", "",
+        f"- 전체 **{len(days)}일** ({days[0]['date']} ~ {days[-1]['date']}) · "
+        f"{len(tickers)}종목",
+        f"- 실기록 {mix['live']}일 + 과거 재구성(백필) {mix['backfill']}일",
+    ]
+    if mix["backfill"]:
+        lines.append("- ⚠️ 재구성분은 오늘 살아남은 종목으로 과거를 재므로 "
+                     "**생존자 편향**이 남아 있다 — IC 가 실제보다 좋게 나온다.")
+    lines += ["", "## 애널리스트별 기록 시작일", "",
+              "| 애널리스트 | 첫 기록 |", "|---|---|"]
+    for slug, date in sorted(first_seen.items(), key=lambda kv: kv[1]):
+        lines.append(f"| {scorecard_message.SLUG_NAMES.get(slug, slug)} | {date} |")
+
+    lines += ["", "## 지평별 마지막 발행", "",
+              "| 지평 | 마지막 발행 표본 n |", "|---|---|"]
+    for horizon, n in published.items():
+        lines.append(f"| {horizon}일 | {'—' if n is None else n} |")
+
+    lines += [
+        "", "## 문턱 두 개", "",
+        f"- **발행** — 유효표본 ≥ {scorecard_message.MIN_EFFECTIVE_N} "
+        "(텔레그램 성적표에 숫자를 싣는 선)",
+        f"- **사용가능** — 유효표본 ≥ {analyst_scorecard.DECIDE_MIN_EFFECTIVE_N} "
+        f"이고 |t| ≥ {analyst_scorecard.DECIDE_T_THRESHOLD} "
+        "(앱 화면 '판정' 칸이 '가능'이 되는 선)",
+        "",
+        "> 겉보기 표본이 아니라 **유효표본**으로 잰다. 매일 기록하면 예측 구간이 "
+        "서로 겹쳐 표본이 실제보다 많아 보인다. 1일 지평만 겹치지 않아 "
+        "유효표본 = 겉보기 n 이다.",
+        "",
+        "> 날짜가 차는 것과 판정이 나는 것은 다르다 — |t| ≥ 2 가 함께 걸려 있어, "
+        "알파가 없으면 표본이 아무리 쌓여도 '아직 불가'로 남는다.",
+        "",
+        f"실제 IC·t 값은 앱 화면(🎓 AI 애널리스트 성적표)과 텔레그램 채널에 있다. "
+        f"이 노트는 표본 상태만 옮긴다.",
+    ]
+    _write(dest, "\n".join(lines) + "\n")
+    print(f"성적표 표본 {len(days)}일 → {dest}")
+    return len(days)
+
+
 def cmd_push() -> int:
     VAULT.mkdir(parents=True, exist_ok=True)
     _push_memory()
     _push_measurements()
     _push_signals()
+    _push_scorecard()
     print("push 완료.")
     return 0
 
@@ -242,7 +330,44 @@ def cmd_analyze() -> int:
     return 0
 
 
-COMMANDS = {"init": cmd_init, "push": cmd_push, "pull": cmd_pull, "analyze": cmd_analyze}
+# ── sync: 무인 갱신 ─────────────────────────────────────────────────
+def _refresh_stock_repo() -> None:
+    """stock-analyzer 를 원격에 맞춘다 — push 가 옛날 파일을 옮기지 않게.
+
+    성적표 기록은 GitHub Actions 러너가 만들어 origin/main 에 커밋한다.
+    이 PC 의 사본을 당겨오지 않으면 볼트는 마지막으로 당긴 날에 멈춘다.
+
+    **작업 중일 때는 건드리지 않는다.** 브랜치가 main 이 아니거나 수정 중인
+    파일이 있으면 그냥 넘어간다 — 무인 잡이 사람의 작업 트리를 움직이면
+    안 된다. 그런 날은 볼트가 조금 옛것이 되지만, 그게 훨씬 싸다.
+    """
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(("git", "-C", str(STOCK_DIR)) + args,
+                              capture_output=True, text=True, timeout=120)
+
+    try:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        dirty = bool(git("status", "--porcelain").stdout.strip())
+        if branch != "main" or dirty:
+            print(f"[건너뜀] 작업 중이라 pull 생략 (branch={branch}, dirty={dirty})")
+            return
+        out = git("pull", "--ff-only")
+        print(f"pull: {(out.stdout or out.stderr).strip().splitlines()[-1:]}")
+    except Exception as e:
+        print(f"[건너뜀] pull 실패 — 있는 파일로 진행: {e}")
+
+
+def cmd_sync() -> int:
+    """작업 스케줄러가 부르는 진입점 — 원격 갱신 + push 한 번."""
+    print(f"── sync {datetime.now():%Y-%m-%d %H:%M:%S} ──")
+    _refresh_stock_repo()
+    return cmd_push()
+
+
+COMMANDS = {"init": cmd_init, "push": cmd_push, "pull": cmd_pull,
+            "analyze": cmd_analyze, "sync": cmd_sync}
 
 
 def main() -> int:

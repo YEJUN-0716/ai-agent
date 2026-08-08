@@ -6,15 +6,102 @@ stock-analyzer 구조가 바뀌면 이 파일만 고치면 된다.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from assistant.config import Settings
-from tools import stock_sync
+from tools import stock_sync, virtual_trade
 
 
 class StockDataError(RuntimeError):
     """주식 데이터를 읽지 못했을 때. 메시지는 사용자에게 그대로 보여준다."""
+
+
+# 현재가는 질문할 때마다 새로 받을 만큼 급하게 변하지 않는다. 10분 재사용한다.
+_PRICE_TTL_SEC = 600
+_price_cache: dict[str, tuple[float, float]] = {}  # 종목 -> (달러 종가, 받은 시각)
+
+
+def _last_price_usd(broker, symbol: str) -> float:
+    """최근 종가(달러). 못 받으면 0.0.
+
+    ponytail: 종목당 한 번씩 조회한다(10종목이면 조회 10번). 보유 종목이
+    수십 개로 늘어 답이 느려지면 한 번에 받아오는 방식으로 바꾼다.
+    """
+    hit = _price_cache.get(symbol)
+    now = time.monotonic()
+    if hit is not None and now - hit[1] < _PRICE_TTL_SEC:
+        return hit[0]
+
+    try:
+        price = float(broker.last_close_price(symbol))
+    except Exception:  # noqa: BLE001 — 한 종목 때문에 전체 답을 잃지 않는다
+        return 0.0
+    if price > 0:
+        _price_cache[symbol] = (price, now)
+    return price
+
+
+def _value_positions(settings: Settings, cash_krw: float | None, positions: dict) -> dict:
+    """보유 종목의 평가금액·평가손익을 원화로 계산한다.
+
+    현재가를 못 받은 종목은 0원으로 치지 않는다. 0으로 두면 전액 손실처럼
+    보이고 총자산도 그만큼 줄어, 사장님이 있지도 않은 손실을 보게 된다.
+    빼놓고 계산한 뒤 어느 종목이 빠졌는지 함께 알린다.
+    """
+    broker_file = settings.stock_analyzer_path / "modules" / "virtual_broker.py"
+    if not positions or not broker_file.exists():
+        return {}
+
+    try:
+        broker = virtual_trade.broker_module(settings)
+    except virtual_trade.TradeError as exc:
+        return {"valuation_note": f"평가금액을 계산하지 못했습니다: {exc}"}
+
+    fx = broker.krw_per_usd()
+    valued: dict[str, dict] = {}
+    unpriced: list[str] = []
+    stock_value_krw = 0.0
+    unrealized_krw = 0.0
+
+    for symbol, position in positions.items():
+        row = dict(position)
+        qty = float(position.get("qty", 0))
+        avg_usd = float(position.get("avg_price_usd", 0.0))
+        price_usd = _last_price_usd(broker, symbol)
+
+        if price_usd <= 0:
+            unpriced.append(symbol)
+            row["valuation"] = "현재가를 받지 못해 평가금액을 내지 못했습니다"
+        else:
+            value_krw = qty * price_usd * fx
+            cost_krw = qty * avg_usd * fx
+            row["current_price_usd"] = round(price_usd, 4)
+            row["market_value_krw"] = round(value_krw)
+            row["unrealized_pnl_krw"] = round(value_krw - cost_krw)
+            row["unrealized_pnl_pct"] = (
+                round((price_usd / avg_usd - 1) * 100, 2) if avg_usd else None
+            )
+            stock_value_krw += value_krw
+            unrealized_krw += value_krw - cost_krw
+
+        valued[symbol] = row
+
+    result: dict[str, Any] = {
+        "positions": valued,
+        "stock_value_krw": round(stock_value_krw),
+        "unrealized_pnl_krw": round(unrealized_krw),
+        "fx_krw_per_usd": round(fx, 2),
+    }
+    if cash_krw is not None:
+        result["total_equity_krw"] = round(cash_krw + stock_value_krw)
+    if unpriced:
+        result["valuation_note"] = (
+            f"현재가를 받지 못한 종목은 평가금액에서 빠졌습니다: "
+            f"{', '.join(unpriced)}"
+        )
+    return result
 
 
 def _read_json(path: Path) -> Any | None:
@@ -49,15 +136,21 @@ def get_virtual_portfolio(settings: Settings) -> dict:
             "sync_note": sync["note"],
             "note": "가상 브로커가 아직 한 번도 실행되지 않았습니다.",
         }
-    return {
+    cash_krw = data.get("cash_krw")
+    positions = data.get("positions", {})
+    result = {
         "started": True,
-        "cash_krw": data.get("cash_krw"),
-        "positions": data.get("positions", {}),
+        "cash_krw": cash_krw,
+        "positions": positions,
         "pending": data.get("pending", []),
         "realized_pnl_krw": data.get("realized_pnl_krw", 0.0),
         "as_of": sync["as_of"],
         "sync_note": sync["note"],
     }
+    # 평가금액·평가손익은 현재가가 있어야 나온다. 못 구하면 그 항목만 빠지고
+    # 나머지 답은 그대로 나간다.
+    result.update(_value_positions(settings, cash_krw, positions))
+    return result
 
 
 def get_data_freshness(settings: Settings) -> dict:

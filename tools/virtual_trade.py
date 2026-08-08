@@ -11,8 +11,10 @@ import contextlib
 import io
 import json
 import logging
+import os
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Protocol
@@ -71,6 +73,69 @@ class TradeError(RuntimeError):
     """매매 요청·승인이 거부됐을 때. 메시지는 사용자에게 그대로 보여준다."""
 
 
+# 원/달러는 하루에도 움직이지만 초 단위로 볼 값은 아니다. 한 시간 재사용한다.
+_FX_TTL_SEC = 3600
+_fx_cache: tuple[float, float] | None = None  # (환율, 받은 시각)
+
+
+def _inject_fx(broker) -> None:
+    """실시간 원/달러를 브로커에 넣는다. 못 받으면 브로커 기본값을 그대로 둔다.
+
+    브로커의 _FX 기본값은 1,400 고정이다. 러너(app.py)는 시작할 때
+    set_fx()로 실시간 환율을 넣는데, 비서는 별도 프로세스라 아무도 넣어주지
+    않는다. 그대로 두면 평가금액과 매수 환산이 실제 환율만큼 어긋난다.
+    """
+    global _fx_cache
+    now = time.monotonic()
+    if _fx_cache is None or now - _fx_cache[1] > _FX_TTL_SEC:
+        try:
+            from modules.fx import fetch_krw_per_usd  # noqa: PLC0415
+
+            _fx_cache = (fetch_krw_per_usd(fallback=broker.krw_per_usd()), now)
+        except Exception as exc:  # noqa: BLE001 — 환율을 못 받아도 멈추지 않는다
+            log.warning("환율을 받지 못해 브로커 기본값을 씁니다: %s", exc)
+            return
+    broker.set_fx(_fx_cache[0])
+
+
+def broker_module(settings: Settings):
+    """stock-analyzer의 가상 브로커를 이 프로세스에서 쓸 수 있게 불러온다.
+
+    부르기 전에 두 가지를 맞춰야 한다. 둘 다 안 맞으면 조용히 틀린다.
+
+    1. **장부 파일 경로.** 브로커는 STATE_FILE을 import 시점에 환경변수로 한 번만
+       읽고, 없으면 상대경로 "virtual_portfolio.json"을 쓴다. 비서는
+       stock-analyzer 밖에서 도는 별도 프로세스라 그대로 두면 비서 폴더에 빈
+       장부가 새로 생긴다. 승인한 주문이 진짜 포트폴리오에 닿지 않는데
+       사장님은 "예약했습니다"라는 답만 받는다.
+    2. **원/달러.** _inject_fx 참고.
+    """
+    path = str(settings.stock_analyzer_path)
+    if path not in sys.path:
+        # 맨 앞이 아니라 뒤에 붙인다. stock-analyzer 루트에는 app.py 같은
+        # 흔한 이름의 최상위 모듈이 있어서, 앞에 넣으면 이후 같은 이름의
+        # import가 의도치 않게 그쪽으로 잡힌다.
+        sys.path.append(path)
+
+    # setdefault다. 테스트는 임시 장부를 가리키도록 미리 넣어두는데,
+    # 여기서 덮어쓰면 테스트가 진짜 장부에 주문을 쓰게 된다.
+    os.environ.setdefault(
+        "VIRTUAL_PORTFOLIO_FILE",
+        str(settings.stock_analyzer_path / "virtual_portfolio.json"),
+    )
+
+    try:
+        from modules import virtual_broker  # noqa: PLC0415
+    except ImportError as exc:
+        raise TradeError(
+            "stock-analyzer의 가상 브로커를 불러오지 못했습니다: "
+            f"{exc}. STOCK_ANALYZER_PATH 설정을 확인하세요."
+        ) from exc
+
+    _inject_fx(virtual_broker)
+    return virtual_broker
+
+
 class TradeExecutor(Protocol):
     def buy(self, symbol: str, amount_krw: float) -> dict: ...
     def sell(self, symbol: str, qty: int) -> dict: ...
@@ -83,20 +148,7 @@ class VirtualBrokerExecutor:
         self._settings = settings
 
     def _module(self):
-        path = str(self._settings.stock_analyzer_path)
-        if path not in sys.path:
-            # 맨 앞이 아니라 뒤에 붙인다. stock-analyzer 루트에는 app.py 같은
-            # 흔한 이름의 최상위 모듈이 있어서, 앞에 넣으면 이후 같은 이름의
-            # import가 의도치 않게 그쪽으로 잡힌다.
-            sys.path.append(path)
-        try:
-            from modules import virtual_broker  # noqa: PLC0415
-        except ImportError as exc:
-            raise TradeError(
-                "stock-analyzer의 가상 브로커를 불러오지 못했습니다: "
-                f"{exc}. STOCK_ANALYZER_PATH 설정을 확인하세요."
-            ) from exc
-        return virtual_broker
+        return broker_module(self._settings)
 
     def buy(self, symbol: str, amount_krw: float) -> dict:
         """원화 금액으로 매수를 예약한다.
