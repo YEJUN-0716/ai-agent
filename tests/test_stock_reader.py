@@ -3,6 +3,7 @@ import json
 import pytest
 
 from assistant.config import Settings
+from tools import stock_reader
 from tools.stock_reader import (
     StockDataError,
     get_analyst_scores,
@@ -65,6 +66,113 @@ def test_reads_positions_from_portfolio_file(settings):
     assert result["cash_krw"] == 9_000_000
     assert result["positions"]["AAPL"]["qty"] == 3
     assert result["realized_pnl_krw"] == 120_000.0
+
+
+class FakeBroker:
+    """진짜 브로커 대신 정해진 종가와 환율을 준다."""
+
+    def __init__(self, prices: dict[str, float], fx: float = 1400.0) -> None:
+        self._prices = prices
+        self._fx = fx
+
+    def krw_per_usd(self) -> float:
+        return self._fx
+
+    def last_close_price(self, symbol: str) -> float:
+        return self._prices.get(symbol, 0.0)
+
+
+@pytest.fixture
+def valued(settings, monkeypatch):
+    """평가금액 계산이 가짜 브로커를 쓰도록 바꾼다. 가격 캐시도 비운다."""
+    (settings.stock_analyzer_path / "modules").mkdir(parents=True, exist_ok=True)
+    (settings.stock_analyzer_path / "modules" / "virtual_broker.py").write_text(
+        "", encoding="utf-8"
+    )
+    monkeypatch.setattr(stock_reader, "_price_cache", {})
+
+    def install(prices: dict[str, float], fx: float = 1400.0) -> None:
+        monkeypatch.setattr(
+            stock_reader.virtual_trade,
+            "broker_module",
+            lambda _settings: FakeBroker(prices, fx),
+        )
+
+    return install
+
+
+def _write_portfolio(settings, positions: dict, cash_krw: float = 1_000_000) -> None:
+    (settings.stock_analyzer_path / "virtual_portfolio.json").write_text(
+        json.dumps({
+            "cash_krw": cash_krw,
+            "positions": positions,
+            "pending": [],
+            "realized_pnl_krw": 0.0,
+            "trades": [],
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_valuation_is_reported_in_won(settings, valued):
+    # Arrange — 3주를 330달러에 샀고 지금 350달러, 환율 1,400원
+    _write_portfolio(
+        settings,
+        {"AAPL": {"qty": 3, "avg_price_usd": 330.0, "entry_date": "2026-07-20"}},
+    )
+    valued({"AAPL": 350.0}, fx=1400.0)
+
+    # Act
+    result = get_virtual_portfolio(settings)
+
+    # Assert — 평가금액 3×350×1400, 평가손익 3×20×1400
+    assert result["positions"]["AAPL"]["market_value_krw"] == 1_470_000
+    assert result["positions"]["AAPL"]["unrealized_pnl_krw"] == 84_000
+    assert result["stock_value_krw"] == 1_470_000
+    assert result["unrealized_pnl_krw"] == 84_000
+    assert result["total_equity_krw"] == 1_000_000 + 1_470_000
+
+
+def test_unpriced_position_is_not_counted_as_a_total_loss(settings, valued):
+    """현재가를 못 받은 종목을 0원으로 치면 없는 손실이 생긴다.
+
+    2026-08-04에 브로커 보고서가 실제로 "총 자산 nan원"을 찍은 적이 있다.
+    여기서는 0원이 같은 자리를 차지한다 — 사장님은 전액 손실로 읽는다.
+    """
+    # Arrange — MSFT는 가격을 못 받는다
+    _write_portfolio(
+        settings,
+        {
+            "AAPL": {"qty": 3, "avg_price_usd": 330.0, "entry_date": "2026-07-20"},
+            "MSFT": {"qty": 2, "avg_price_usd": 500.0, "entry_date": "2026-07-20"},
+        },
+    )
+    valued({"AAPL": 330.0}, fx=1400.0)
+
+    # Act
+    result = get_virtual_portfolio(settings)
+
+    # Assert — 빠진 종목은 손익 0이 아니라 '모름'으로 남고, 이름을 알린다
+    assert "unrealized_pnl_krw" not in result["positions"]["MSFT"]
+    assert result["unrealized_pnl_krw"] == 0
+    assert result["stock_value_krw"] == 3 * 330 * 1400
+    assert "MSFT" in result["valuation_note"]
+
+
+def test_valuation_uses_the_injected_exchange_rate(settings, valued):
+    # Arrange — 환율이 1,400이 아니면 원화 평가금액도 그만큼 달라야 한다
+    _write_portfolio(
+        settings,
+        {"AAPL": {"qty": 1, "avg_price_usd": 100.0, "entry_date": "2026-07-20"}},
+    )
+    valued({"AAPL": 100.0}, fx=1300.0)
+
+    # Act
+    result = get_virtual_portfolio(settings)
+
+    # Assert
+    assert result["positions"]["AAPL"]["market_value_krw"] == 130_000
+    assert result["fx_krw_per_usd"] == 1300.0
 
 
 def test_raises_readable_error_on_corrupt_json(settings):
