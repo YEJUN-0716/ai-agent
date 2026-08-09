@@ -17,13 +17,15 @@ def _buy_action(ticker="AAA"):
 def _long_plan():
     return {"direction": "long", "valid": True, "confidence": "high", "bias_score": 20,
             "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}, "stop": 93.0,
-            "targets": [102.0, 108.0], "rr": [2.0, 4.0]}
+            "targets": [102.0, 108.0], "rr": [2.0, 4.0],
+            "cost_grade": "B", "risk_pct": 3.12}
 
 
 def _short_plan():
     return {"direction": "short", "valid": True, "confidence": "medium", "bias_score": -18,
             "entry": {"low": 103.0, "high": 105.0, "ref": 104.0}, "stop": 107.0,
-            "targets": [98.0, 92.0], "rr": [2.0, 4.0]}
+            "targets": [98.0, 92.0], "rr": [2.0, 4.0],
+            "cost_grade": "A", "risk_pct": 2.88}
 
 
 def test_long_plan_line_attached_to_buy():
@@ -39,7 +41,10 @@ def test_short_watch_section_listed():
     # 숏 플랜은 매수 액션이 없어도 '숏 관찰' 섹션에 뜬다
     msg = sw.build_message(["BBB"], [], _REBAL, [], plans={"BBB": _short_plan()})
     assert "숏 관찰" in msg
-    assert "*BBB* 숏 (medium)" in msg
+    # 확신도가 아니라 실행등급을 싣는다 — 확신도는 결과와 연결된 것이
+    # 측정되지 않았고(2026-08-10), 실행등급은 비용 후 기대값을 가른다.
+    assert "*BBB* 숏 (실행등급 A · 손절 2.9%)" in msg
+    assert "medium" not in msg
     assert "진입 $103.00~$105.00" in msg
 
 

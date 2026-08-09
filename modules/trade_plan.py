@@ -125,6 +125,7 @@ def _assemble_plan(
     elif not (np.isfinite(t1_rr) and t1_rr >= min_rr):
         reason_invalid = f"손익비 부족 (T1 R:R {t1_rr:.2f} < {min_rr})"
 
+    grade, risk_pct = cost_grade(entry_ref, stop)
     return {
         "direction": direction,
         "current": round(current, 2),
@@ -138,6 +139,10 @@ def _assemble_plan(
         "rr": [round(r, 2) if np.isfinite(r) else None for r in rr],
         "valid": valid,
         "reason_invalid": reason_invalid,
+        # 실행 등급 — 이 계획이 수수료·슬리피지를 얼마나 견디나. confidence 와
+        # 달리 **결과와 연결된 것이 측정된** 유일한 등급이다.
+        "cost_grade": grade,
+        "risk_pct": round(risk_pct, 2),
     }
 
 
@@ -203,12 +208,58 @@ def _short_targets(df: pd.DataFrame, cur: float, entry_ref: float) -> list[float
     return [t1, t2]
 
 
-def _confidence(magnitude: float, confluence: int) -> str:
+def _confidence(magnitude: float) -> str:
+    """ICT 구조가 방향에 동의한 정도. **결과를 예측하지 않는다.**
+
+    이름이 '확신도' 라 "맞을 확률" 로 읽히지만 그런 뜻이 아니다. 2026-08-10
+    측정에서 롱만 놓고 보면 등급별 기대값이 구별되지 않았다:
+
+        high   +0.601R  [+0.456, +0.740]      (날짜 블록 부트스트랩 95%)
+        medium +0.643R  [+0.570, +0.712]
+        low    +0.656R  [+0.564, +0.756]
+        low - high = +0.058R  95% [-0.113, +0.229]  ← 0 을 포함
+
+    한동안 "확신도가 거꾸로다" 로 보였던 건 롱/숏 구성비 때문이었다 — low 는
+    저확신 숏 억제 규칙 탓에 100% 롱이고 high 는 34% 가 숏이다. 숏이 나쁘니
+    숏 비중이 높은 쪽이 나빠 보였을 뿐이다.
+
+    그래서 이 값은 **구조 설명**으로만 쓴다. 실행 가치를 가르는 등급은
+    cost_grade 가 낸다.
+
+    (예전 시그니처는 confluence 도 받았지만 한 번도 쓰지 않았다.)
+    """
     if magnitude >= CONF_HIGH_TH:
         return "high"
     if magnitude >= CONF_MED_TH:
         return "medium"
     return "low"
+
+
+# 손절이 진입가에서 몇 % 떨어져 있나 — 실행 등급의 유일한 재료.
+#
+# 2026-08-10 거래비용 측정(13,336건)에서 위험폭 4분위의 **총 기대값은 거의
+# 같았다**(+0.54~+0.60R). 다른 건 비용 내성뿐이었다:
+#
+#     Q4 손절 >2.34%   손익분기 편도 88.8bp
+#     Q3     >1.75%              53.3bp
+#     Q2     >1.34%              41.7bp
+#     Q1     <=1.34%             29.6bp   ← 실제 비용 구간(편도 10~35bp) 안
+#
+# 결과를 보고 고르는 게 아니라 기하를 보고 고르는 등급이라, 흔한 백테스트
+# 필터보다 데이터마이닝 위험이 낮다. 경계를 옮기려면 측정을 다시 할 것.
+COST_GRADE_BANDS = ((2.34, "A"), (1.75, "B"), (1.34, "C"))
+COST_GRADE_BREAKEVEN_BP = {"A": 88.8, "B": 53.3, "C": 41.7, "D": 29.6}
+
+
+def cost_grade(entry_ref: float, stop: float) -> tuple[str, float]:
+    """(등급, 위험폭 %) — 손절이 멀수록 수수료·슬리피지를 잘 견딘다."""
+    if entry_ref <= 0:
+        return "D", 0.0
+    risk_pct = abs(entry_ref - stop) / entry_ref * 100.0
+    for threshold, grade in COST_GRADE_BANDS:
+        if risk_pct > threshold:
+            return grade, risk_pct
+    return "D", risk_pct
 
 
 def _short_trend_ok(df: pd.DataFrame) -> tuple[bool, str]:
@@ -264,6 +315,9 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
         "entry": {"low": 0.0, "high": 0.0, "ref": 0.0},
         "stop": 0.0, "targets": [], "rr": [], "valid": False,
         "reason_invalid": "데이터 부족", "signals": [],
+        # 계획이 없으면 등급도 없다. 빠뜨리면 화면이 KeyError 로 죽는다 —
+        # 유효 계획과 무효 계획의 키 모양은 같아야 한다.
+        "cost_grade": "D", "risk_pct": 0.0,
     }
     if df is None or df.empty or len(df) < MIN_BARS:
         return empty
@@ -296,7 +350,7 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
             out = dict(empty)
             out.update({"direction": "short", "current": round(cur, 2),
                         "bias_score": adj, "signals": signals,
-                        "confidence": _confidence(conf_mag, len(signals)),
+                        "confidence": _confidence(conf_mag),
                         "confluence": len(signals), "reason_invalid": reason})
             return out
 
@@ -323,7 +377,7 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
 
         plan = _assemble_plan(direction, cur, entry_low, entry_high, stop, targets, min_rr=min_rr)
         plan["bias_score"] = adj
-        plan["confidence"] = _confidence(conf_mag, len(signals))
+        plan["confidence"] = _confidence(conf_mag)
         plan["confluence"] = len(signals)
         plan["signals"] = [f"진입 근거: {struct}"] + signals
         return plan

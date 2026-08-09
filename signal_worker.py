@@ -129,7 +129,7 @@ def build_message(tickers, actions, rebal, failed, warning=None, plans=None):
         lines.append("")
         lines.append("🔻 *숏 관찰* (분석용 · 자동주문 아님)")
         for tk, p in sorted(shorts, key=lambda x: -abs(x[1].get('bias_score', 0)))[:5]:
-            lines.append(f"*{tk}* 숏 ({p['confidence']})\n  {_plan_line(tk, p)}")
+            lines.append(f"*{tk}* 숏 (실행등급 {p['cost_grade']} · 손절 {p['risk_pct']:.1f}%)\n  {_plan_line(tk, p)}")
 
     if failed:
         lines.append("")
