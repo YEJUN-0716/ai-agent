@@ -239,7 +239,10 @@ def toss_get(path, params=None):
 
 
 # 브로커가 주문을 확실히 거부했음을 뜻하는 상태들.
-_DEFINITIVE_FAIL = {"canceled", "rejected", "replaced",
+# 'expired' 는 Alpaca 에만 있는 상태다(토스에 없음). 여기 없으면 만료된 주문이
+# 영영 '살아 있는 주문'으로 세어져 자리와 현금이 안 풀린다. Alpaca 의
+# 'done_for_day' 는 GTC 주문이 오늘만 끝난 것이라 반대로 자리를 계속 잡는다.
+_DEFINITIVE_FAIL = {"canceled", "rejected", "replaced", "expired",
                     "cancel_rejected", "replace_rejected"}
 
 
