@@ -45,6 +45,15 @@ def _plan(**over):
         'valid': True, 'reason_invalid': '', 'signals': ['진입 근거: Bullish OB 지지'],
     }
     base.update(over)
+    # 등급·실행여부는 손으로 적지 않고 진짜 함수로 낸다 — 손으로 적으면
+    # 문턱이 바뀔 때마다 이 픽스처가 조용히 실물과 어긋난다.
+    grade, risk_pct = tp.cost_grade(base['entry']['ref'], base['stop'])
+    actionable, why_not = tp._actionable(
+        base['valid'], base['direction'], grade, base['reason_invalid'])
+    base.setdefault('cost_grade', grade)
+    base.setdefault('risk_pct', round(risk_pct, 2))
+    base.setdefault('actionable', actionable)
+    base.setdefault('reason_not_actionable', why_not)
     return base
 
 
@@ -137,7 +146,7 @@ def test_low_rr_setup_is_held_not_recommended(flat_df, monkeypatch):
     t = app.trader_signal_lines(flat_df, LONG)
 
     assert t['valid'] is False
-    assert '보류' in t['stance']
+    assert '관찰' in t['stance']
     assert '손익비 부족' in t['reason_invalid']
     assert t['entry_line'] == 95.0        # 참고용 라인은 남긴다
 
@@ -203,7 +212,7 @@ def test_no_recommendation_when_the_reward_does_not_cover_the_risk(flat_df, monk
         valid=False, rr=[1.8, 3.0], reason_invalid='손익비 부족 (T1 R:R 1.80 < 2.0)'))
 
     assert '추천' not in html
-    assert '보류' in html and '손익비 부족' in html
+    assert '관찰만' in html and '손익비 부족' in html
 
 
 def test_kelly_note_from_the_risk_team_is_still_quoted(flat_df, monkeypatch):

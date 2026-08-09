@@ -3951,8 +3951,10 @@ def trader_signal_lines(df, manager_report, risk_report=None):
     def _dist(v):
         return None if v is None else (v - cp) / cp * 100
 
-    if not plan['valid']:
-        stance = '진입 보류 — 조건 미충족'
+    if not plan['actionable']:
+        # valid 여도 여기서 걸릴 수 있다 — 기하가 성립하는 것과 비용을
+        # 견디는 것은 다른 질문이다.
+        stance = f"관찰 — {plan['reason_not_actionable']}"
     elif verdict == '매수':
         stance = '분할 매수 검토' if agreement >= 75 else '소액 선진입, 진입 구간 확인 후 비중 확대'
     elif verdict == '매도':
@@ -3976,6 +3978,9 @@ def trader_signal_lines(df, manager_report, risk_report=None):
     return {
         'stance': stance, 'direction': plan['direction'],
         'valid': plan['valid'], 'reason_invalid': plan['reason_invalid'],
+        'actionable': plan['actionable'],
+        'reason_not_actionable': plan['reason_not_actionable'],
+        'cost_grade': plan['cost_grade'], 'risk_pct': plan['risk_pct'],
         'confidence': plan['confidence'],
         'entry_line': entry_line, 'target_line': target_line, 'stop_line': stop_line,
         'entry_low':  plan['entry']['low'] if has_lines else None,
@@ -4839,7 +4844,7 @@ def render_verdict_cards(snap, *, with_trader=True):
 
     # 카드 색은 "지금 뭘 하라는 카드인가"를 따라간다. 게이트에 막혔으면 총괄이
     # 매수여도 초록이 아니다 — 초록은 들어가라는 말로 읽힌다.
-    if not trader['valid']:
+    if not trader['actionable']:
         tl = '#f59e0b'
     elif trader['direction'] == 'short':
         tl = '#ef4444'
@@ -4900,13 +4905,13 @@ def render_verdict_cards(snap, *, with_trader=True):
 
     # 못 할 매매는 못 한다고 말한다. 손익비 0.6:1 을 조용히 그려 주던 자리다.
     gate_html = ''
-    if not trader['valid'] and trader['reason_invalid']:
+    if not trader['actionable'] and trader['reason_not_actionable']:
         gate_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:6px'>"
-                     f"⛔ 진입 보류 — {trader['reason_invalid']}</div>")
+                     f"⛔ 관찰만 — {trader['reason_not_actionable']}</div>")
 
     # 게이트를 통과한 계획만 "추천"이라는 말을 단다. 통과 못 한 계획은 위의
     # 보류 문구가 대신 붙으므로, 화면에는 둘 중 하나만 뜬다.
-    rec_html = ('' if not trader['valid'] else
+    rec_html = ('' if not trader['actionable'] else
                 "<span style=\"padding:1px 7px;border-radius:3px;background:#10b98122;color:#10b981;"
                 "font-family:'JetBrains Mono',monospace\">✅ 추천</span>")
 

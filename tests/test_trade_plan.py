@@ -347,3 +347,67 @@ def test_every_plan_carries_a_grade():
     plan = tp._assemble_plan("long", 100.0, 95.0, 97.0, 93.0, [102.0, 108.0])
     assert plan["cost_grade"] in ("A", "B", "C", "D")
     assert plan["risk_pct"] > 0
+
+
+# ── 실행 문턱 (actionable) ───────────────────────────────────────────
+#
+# valid 와 별개의 질문이다. 한 플래그가 두 질문에 답하면 나중에 어느 쪽을
+# 고쳐야 할지 알 수 없다. 걸러도 라인은 그대로 계산된다 — 없애는 게 아니라
+# 관찰로 내려보내는 것이다.
+
+def test_actionable_needs_valid_geometry_first():
+    plan = tp._assemble_plan("long", 100.0, 95.0, 97.0, 93.0, [98.0], min_rr=2.0)
+    assert plan["valid"] is False          # R:R 미달
+    assert plan["actionable"] is False
+    assert "손익비" in plan["reason_not_actionable"]
+
+
+def test_good_long_at_grade_a_is_actionable():
+    plan = tp._assemble_plan("long", 100.0, 94.0, 96.0, 89.0, [110.0, 120.0])
+    assert plan["valid"] and plan["cost_grade"] == "A"
+    assert plan["actionable"] is True
+    assert plan["reason_not_actionable"] == ""
+
+
+def test_tight_stop_is_valid_but_not_actionable():
+    """기하는 멀쩡한데 손절이 너무 가까워 수수료에 먹히는 계획."""
+    plan = tp._assemble_plan("long", 100.0, 99.4, 99.6, 99.0, [102.0, 104.0])
+    assert plan["valid"] is True           # 정렬·손익비는 통과
+    assert plan["cost_grade"] == "D"
+    assert plan["actionable"] is False
+    assert "수수료" in plan["reason_not_actionable"]
+    # 라인은 그대로 남는다 — 관찰 기록이 있어야 필터를 되돌릴 수 있다
+    assert plan["entry"]["ref"] > 0 and plan["targets"]
+
+
+def test_short_is_never_actionable_whatever_the_grade():
+    """숏은 등급이 못 구한다 — 어느 등급이든 총 기대값이 롱의 1/3."""
+    plan = tp._assemble_plan("short", 100.0, 103.0, 105.0, 112.0, [86.0, 78.0])
+    assert plan["valid"] and plan["cost_grade"] == "A"
+    assert plan["actionable"] is False
+    assert "short" in plan["reason_not_actionable"]
+
+
+def test_vetoed_short_reports_the_veto_reason_not_a_stale_one():
+    """게이트에 막힌 숏의 사유가 빈 계획의 '데이터 부족' 으로 덮이면 안 된다.
+
+    _short_veto 는 empty 를 복사해서 만든다 — 거기에 남아 있던
+    reason_not_actionable 을 갱신하지 않으면 화면이 엉뚱한 말을 한다
+    (실물에서 AAPL 이 '데이터 부족' 으로 뜨던 것, 봉은 1597개였다).
+    """
+    import numpy as np
+
+    n = 300
+    close = pd.Series([100 + 0.25 * i for i in range(n)],   # 꾸준한 상승 = 숏 보류
+                      index=pd.bdate_range("2025-01-01", periods=n))
+    df = pd.DataFrame({
+        "Open": close * 0.998, "High": close * 1.01,
+        "Low": close * 0.99, "Close": close,
+        "Volume": pd.Series([1_000_000] * n, index=close.index),
+    })
+
+    plan = tp.build_trade_plan(df, direction="short")
+    assert plan["actionable"] is False
+    assert "데이터 부족" not in plan["reason_not_actionable"]
+    assert plan["reason_not_actionable"] == plan["reason_invalid"]
+    assert np.isfinite(plan["current"])

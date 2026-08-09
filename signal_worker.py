@@ -116,7 +116,9 @@ def build_message(tickers, actions, rebal, failed, warning=None, plans=None):
             )
             # 매수 신호엔 롱 트레이드 플랜 라인을 붙인다 (있을 때만)
             p = plans.get(a['ticker'])
-            if '매수' in a['action'] and p and p.get('direction') == 'long':
+            # actionable 을 본다 — valid 는 "기하가 성립하나", 이쪽은 "걸
+            # 만한가". 비용에 먹히는 등급(C·D)은 매수 알림에 라인을 안 붙인다.
+            if '매수' in a['action'] and p and p.get('actionable'):
                 pl = _plan_line(a['ticker'], p)
                 if pl:
                     block += f"\n  📐 {pl}"
