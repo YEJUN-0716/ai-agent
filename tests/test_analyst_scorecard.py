@@ -229,3 +229,47 @@ def test_regime_of_needs_two_hundred_bars():
     import app as core
 
     assert core.regime_of(_closes(130.0, n=150)) == ("neutral", 0.0)
+
+
+# ── 못 재면 못 잰다고 한다 ───────────────────────────────────────────
+#
+# 표본이 lag 의 두 배에 못 미치면 Newey–West 가 겹침을 못 잰다. 그때 추정
+# 표준오차가 통상 표준오차보다 작게 나오면 effective_n 이 n 으로 클램프돼
+# "유효표본 = 전체" 가 된다 — 추정기가 무너진 자리에서 가장 확신에 찬 숫자가
+# 나온다. 실제로 국면별 분해에서 bear 20일 × 63일 지평이 t -20.6 을 냈다.
+
+def _days_with_ic(n_days, n_tickers=8):
+    """단면 상관이 계산되는 최소한의 기록 n일치."""
+    days = []
+    for i in range(n_days):
+        scores = {f"T{j}": {"combined": float((j * 7 + i * 3) % 100)}
+                  for j in range(n_tickers)}
+        days.append({"date": f"2026-01-{i + 1:02d}", "scores": scores})
+    return days
+
+
+def _returns_for(days, n_tickers=8):
+    return {d["date"]: {f"T{j}": float((j * 11 + 5) % 100) - 50
+                        for j in range(n_tickers)}
+            for d in days}
+
+
+def test_small_sample_against_long_horizon_refuses_to_judge():
+    days = _days_with_ic(20)
+    stats = sc.score_analysts(days, _returns_for(days), 63)
+
+    got = stats["combined"]
+    assert got["n"] == 20
+    assert got["t_stat"] is None
+    assert got["se"] is None
+    assert got["effective_n"] == 0.0        # 판정선(30)을 절대 못 넘는다
+    assert got["mean_ic"] is not None       # IC 자체는 그대로 보여준다
+
+
+def test_long_enough_sample_still_gets_a_t_stat():
+    """가드가 정상 경로를 막지 않는다 — n > 2*lag 면 그대로 잰다."""
+    days = _days_with_ic(30)
+    stats = sc.score_analysts(days, _returns_for(days), 5)
+
+    assert stats["combined"]["t_stat"] is not None
+    assert stats["combined"]["effective_n"] > 0
