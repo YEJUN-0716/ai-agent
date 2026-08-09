@@ -5,6 +5,7 @@ signal_worker.build_message 렌더 고정 테스트.
 확인한다. build_message 는 순수 포맷 로직이라 합성 actions/plans 로 검증한다.
 """
 import signal_worker as sw
+from modules import trade_plan as tp
 
 _REBAL = {"buy_count": 1, "sell_count": 0, "hold_count": 0}
 
@@ -14,18 +15,29 @@ def _buy_action(ticker="AAA"):
             "price": "$100.00", "alloc": "$1,000", "qty": "10주", "reason": "테스트 매수"}
 
 
+def _grade(plan):
+    """등급·실행여부를 진짜 함수로 채운다 — 손으로 적으면 문턱이 바뀔 때
+    픽스처가 조용히 실물과 어긋난다."""
+    grade, risk_pct = tp.cost_grade(plan["entry"]["ref"], plan["stop"])
+    actionable, why_not = tp._actionable(
+        plan["valid"], plan["direction"], grade, plan.get("reason_invalid", ""))
+    plan.update(cost_grade=grade, risk_pct=round(risk_pct, 2),
+                actionable=actionable, reason_not_actionable=why_not)
+    return plan
+
+
 def _long_plan():
-    return {"direction": "long", "valid": True, "confidence": "high", "bias_score": 20,
-            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}, "stop": 93.0,
-            "targets": [102.0, 108.0], "rr": [2.0, 4.0],
-            "cost_grade": "B", "risk_pct": 3.12}
+    return _grade({"direction": "long", "valid": True, "confidence": "high",
+                   "bias_score": 20, "reason_invalid": "",
+                   "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}, "stop": 93.0,
+                   "targets": [102.0, 108.0], "rr": [2.0, 4.0]})
 
 
 def _short_plan():
-    return {"direction": "short", "valid": True, "confidence": "medium", "bias_score": -18,
-            "entry": {"low": 103.0, "high": 105.0, "ref": 104.0}, "stop": 107.0,
-            "targets": [98.0, 92.0], "rr": [2.0, 4.0],
-            "cost_grade": "A", "risk_pct": 2.88}
+    return _grade({"direction": "short", "valid": True, "confidence": "medium",
+                   "bias_score": -18, "reason_invalid": "",
+                   "entry": {"low": 103.0, "high": 105.0, "ref": 104.0}, "stop": 107.0,
+                   "targets": [98.0, 92.0], "rr": [2.0, 4.0]})
 
 
 def test_long_plan_line_attached_to_buy():

@@ -126,6 +126,7 @@ def _assemble_plan(
         reason_invalid = f"손익비 부족 (T1 R:R {t1_rr:.2f} < {min_rr})"
 
     grade, risk_pct = cost_grade(entry_ref, stop)
+    actionable, why_not = _actionable(valid, direction, grade, reason_invalid)
     return {
         "direction": direction,
         "current": round(current, 2),
@@ -143,6 +144,10 @@ def _assemble_plan(
         # 달리 **결과와 연결된 것이 측정된** 유일한 등급이다.
         "cost_grade": grade,
         "risk_pct": round(risk_pct, 2),
+        # 실행 대상인가 — valid 와 별개다. False 여도 라인은 그대로 계산되고
+        # 기록에도 남는다 ("관찰"). 없애는 게 아니라 내려보내는 것이다.
+        "actionable": actionable,
+        "reason_not_actionable": why_not,
     }
 
 
@@ -250,6 +255,41 @@ def _confidence(magnitude: float) -> str:
 COST_GRADE_BANDS = ((2.34, "A"), (1.75, "B"), (1.34, "C"))
 COST_GRADE_BREAKEVEN_BP = {"A": 88.8, "B": 53.3, "C": 41.7, "D": 29.6}
 
+# ── 실행 문턱 ───────────────────────────────────────────────────────
+# valid 와 **다른 질문**이다. 한 플래그로 두 질문에 답하면 나중에 어느 쪽을
+# 고쳐야 할지 알 수 없게 된다.
+#
+#   valid       기하가 성립하나 (진입/손절/목표 정렬 + T1 R:R >= min_rr)
+#   actionable  실제로 걸 만한가 (비용을 견디나 + 방향이 되나)
+#
+# 걸러도 **계산과 기록은 그대로 한다.** 관찰로 내려보낼 뿐이다 — 필터가
+# 틀렸을 때 반증할 데이터가 없으면 되돌릴 방법도 없다. 2026-08-10 에
+# 6.4년치를 되짚어 이 문턱을 정할 수 있었던 것도 다 기록해 뒀기 때문이다.
+#
+# 근거 (13,336건, 2020-03~2026-08, 편도 20bp 기준 순 기대값):
+#
+#            A       B       C       D
+#   롱    +0.56R  +0.43R  +0.37R  +0.22R     총R 은 +0.61~+0.70 로 거의 평평 —
+#   숏    +0.15R  +0.01R  +0.03R  +0.02R     등급은 비용 내성만 가른다
+#
+# 숏은 등급이 못 구한다. 어느 등급이든 총 기대값이 롱의 1/3 이라 방향 자체가
+# 다른 문제다. 편도 15bp 이하로 거래한다면 숏 A 는 되살릴 여지가 있다.
+ACTIONABLE_GRADES = ("A", "B")
+ACTIONABLE_DIRECTIONS = ("long",)
+
+
+def _actionable(valid: bool, direction: str, grade: str,
+                reason_invalid: str) -> tuple[bool, str]:
+    """실행 대상인가 + 아니면 왜 아닌가. 기하(valid)를 먼저 통과해야 한다."""
+    if not valid:
+        return False, reason_invalid or "유효 셋업 아님"
+    if direction not in ACTIONABLE_DIRECTIONS:
+        return False, f"{direction} 은 비용 후 기대값이 0 근처 — 관찰만"
+    if grade not in ACTIONABLE_GRADES:
+        return False, (f"실행등급 {grade} (손익분기 편도 "
+                       f"{COST_GRADE_BREAKEVEN_BP[grade]:.0f}bp) — 수수료에 먹힌다")
+    return True, ""
+
 
 def cost_grade(entry_ref: float, stop: float) -> tuple[str, float]:
     """(등급, 위험폭 %) — 손절이 멀수록 수수료·슬리피지를 잘 견딘다."""
@@ -318,6 +358,7 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
         # 계획이 없으면 등급도 없다. 빠뜨리면 화면이 KeyError 로 죽는다 —
         # 유효 계획과 무효 계획의 키 모양은 같아야 한다.
         "cost_grade": "D", "risk_pct": 0.0,
+        "actionable": False, "reason_not_actionable": "데이터 부족",
     }
     if df is None or df.empty or len(df) < MIN_BARS:
         return empty
@@ -351,7 +392,10 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
             out.update({"direction": "short", "current": round(cur, 2),
                         "bias_score": adj, "signals": signals,
                         "confidence": _confidence(conf_mag),
-                        "confluence": len(signals), "reason_invalid": reason})
+                        "confluence": len(signals), "reason_invalid": reason,
+                        # empty 의 "데이터 부족" 을 그대로 물려받으면 화면이
+                        # 엉뚱한 사유를 띄운다 — 막힌 진짜 이유는 reason 이다.
+                        "actionable": False, "reason_not_actionable": reason})
             return out
 
         # 저확신 숏 억제 — low 확신도 숏은 기대값이 낮다 (실측 +0.16R). 숏은
