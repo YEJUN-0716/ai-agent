@@ -2,9 +2,14 @@
 페이퍼 트레이딩 자동 실행 스크립트 (토스증권 버전)
 =================================================================
 GitHub Actions cron으로 매일 장마감 후 자동 실행.
-팩터 스코어·시장 레짐 로직은 modules/factor_engine.py 참조.
-토스증권 주문 함수는 modules/toss_trading.py 참조.
-(2026-07-12: Alpaca에서 토스증권으로 이전 → 국내(KRX)+해외(미국) 통합 지원)
+매수 후보는 **트레이드 플랜**(modules/trade_plan.py)이 고른다 — 진입 구간
+지정가로 걸고, 손절/목표 라인으로 청산한다. 시장 레짐·낙폭 컷·킬스위치·섹터
+한도는 그대로다. 토스증권 주문 함수는 modules/toss_trading.py 참조.
+
+2026-08-10: 팩터 엔진(calc_factor_scores/generate_signals)에서 트레이드 플랜으로
+교체. 팩터 경로는 OOS IC −0.0046 으로 예측력이 확인되지 않았고, 트레이드 플랜은
+6.4년 OOS 에서 +0.66R(롱, 실행등급 A·B)이 나왔다. 측정된 규칙으로 장부를 돌린다.
+설계: docs/superpowers/specs/2026-08-10-virtual-broker-trade-plan-design.md
 
 환경변수:
   TOSS_CLIENT_ID        토스증권 오픈 API Client ID   (필수)
@@ -13,14 +18,13 @@ GitHub Actions cron으로 매일 장마감 후 자동 실행.
   TELEGRAM_TOKEN        텔레그램 봇 토큰              (선택)
   TELEGRAM_CHAT_ID      텔레그램 채팅 ID              (선택)
   UNIVERSE              유니버스 이름                  (기본: 'S&P 500 대형 30')
-  TOP_N                 매수 후보 N개                  (기본: 5)
-  CAPITAL_PER_TRADE     종목당 투자금 USD              (기본: 1000)
+  RISK_PCT_PER_TRADE    한 트레이드의 1R = 자본의 몇 % (기본: 0.5)
+  MAX_POSITION_PCT      한 종목 최대 비중 %            (기본: 15)
   MAX_POSITIONS         최대 동시 포지션 수 (bull 기준) (기본: 10)
   NEUTRAL_MAX_POSITIONS neutral 레짐 최대 포지션 수    (기본: MAX_POSITIONS*0.7)
   BEAR_MAX_POSITIONS    bear 레짐 최대 포지션 수       (기본: MAX_POSITIONS*0.4)
   DRY_RUN               true면 주문 전송 안 함          (기본: false)
-  TRAIL_STOP_PCT        트레일링 스톱 %                (기본: 10)
-  BUY_SCORE_MIN         최소 매수 점수                 (기본: 60)
+  TRAIL_STOP_PCT        트레일링 스톱 % (기존 팩터 보유분 마무리용, 기본: 10)
   PORTFOLIO_DD_STOP_PCT 포트폴리오 드로다운 한도 %    (기본: 15, 0이면 비활성)
   MAX_SECTOR_POSITIONS  동일 섹터 최대 보유 종목 수    (기본: 2)
 """
@@ -28,42 +32,30 @@ import json
 import os
 import sys
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
 
-from modules.factor_engine import (
-    TARGET_VOL_PCT,
-    get_market_regime, calc_factor_scores, generate_signals,
-    fetch_returns_matrix,
-)
+from modules.factor_engine import get_market_regime
 from modules.fx import fetch_krw_per_usd
-from modules.portfolio_allocator import (
-    correlation_penalty_scale,
-    risk_parity_position_scale,
-    portfolio_correlation_report,
-)
+from modules.price_panel import PanelCoverageError, load_panel
+from modules.trade_plan import ACTIONABLE_GRADES, build_trade_plan
 # 계좌만 갈아끼운다. BROKER=virtual 이면 실주문 없이 장부로만 체결하고,
 # 전략·매도조건 등 나머지 로직은 실매매와 완전히 동일한 경로를 탄다.
 BROKER = os.environ.get("BROKER", "toss").strip().lower()
 
 if BROKER == "virtual":
     from modules.virtual_broker import (
-        place_notional_buy as _pm_notional_buy,
         place_market_sell  as _pm_market_sell,
-        wait_for_fill      as _pm_wait_fill,
         get_account        as _pt_get_account,
         get_positions      as _pt_get_positions,
     )
 else:
     from modules.toss_trading import (
-        place_notional_buy as _pm_notional_buy,
         place_market_sell  as _pm_market_sell,
-        wait_for_fill      as _pm_wait_fill,
         get_account        as _pt_get_account,
         get_positions      as _pt_get_positions,
     )
@@ -83,10 +75,15 @@ TOSS_ACCOUNT_SEQ   = os.environ.get("TOSS_ACCOUNT_SEQ", "")
 TG_TOKEN      = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
-TOP_N          = int(os.environ.get("TOP_N", "5"))
-CAPITAL_KRW    = float(os.environ.get("CAPITAL_KRW", "500000"))   # KRX 종목 투자금 (원)
-CAPITAL_USD    = float(os.environ.get("CAPITAL_USD",  "100"))      # 미국 종목 투자금 (달러)
 _KRW_PER_USD   = float(os.environ.get("KRW_PER_USD",  "1400"))     # 원/달러 환율 fallback
+# 위험 기준 사이징. 이 시스템의 손절은 진입가에서 1.3~3% 밖에 안 떨어져 있어서
+# 위험을 1% 로 잡으면 한 종목이 자본의 40% 가 된다. 0.5% + 15% 상한이면 동시
+# 5~7종목이 들어간다.
+RISK_PCT_PER_TRADE = float(os.environ.get("RISK_PCT_PER_TRADE", "0.5"))
+MAX_POSITION_PCT   = float(os.environ.get("MAX_POSITION_PCT", "15"))
+# 플랜 계산에 필요한 일봉 길이 — trade_plan.MIN_BARS(60)와 숏 레짐 게이트(70봉)를
+# 모두 덮는다. 달력일 기준이라 휴장일을 감안해 넉넉히 잡는다.
+PLAN_LOOKBACK_DAYS = 400
 MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
 # 레짐별 최대 포지션 수 → bear에서 노출을 줄여 하락 충격 완충
 _REGIME_MAX_POS: dict[str, int] = {
@@ -98,15 +95,12 @@ _REGIME_MAX_POS: dict[str, int] = {
 }
 DRY_RUN        = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 TRAIL_STOP_PCT = float(os.environ.get("TRAIL_STOP_PCT", "10"))
-BUY_SCORE_MIN  = float(os.environ.get("BUY_SCORE_MIN", "60"))
 PORTFOLIO_DD_STOP_PCT = float(os.environ.get("PORTFOLIO_DD_STOP_PCT", "15"))
 MAX_SECTOR_POSITIONS  = int(os.environ.get("MAX_SECTOR_POSITIONS", "2"))
 # 킬스위치 임계치 — 전일 대비 일일손실 / 연속 브로커오류 / 단일주문 크기상한
 KS_MAX_DAILY_LOSS_PCT   = float(os.environ.get("KS_MAX_DAILY_LOSS_PCT", "8"))
 KS_MAX_ERRORS           = int(os.environ.get("KS_MAX_ERRORS", "3"))
 KS_MAX_SINGLE_ORDER_PCT = float(os.environ.get("KS_MAX_SINGLE_ORDER_PCT", "20"))
-# 상관관계 기반 포지션 사이징 방식: "vol_corr"(기본) 또는 "risk_parity"
-SIZING_METHOD = os.environ.get("SIZING_METHOD", "vol_corr")
 
 PEAK_FILE        = "peak_prices.json"
 SIGNAL_LOG_FILE  = "signal_log.json"
@@ -264,13 +258,6 @@ def order_accepted(fill_status: str | None) -> bool:
     체결도 안 된 주문이 어제 종가로 성적표에 올라간다. 그래서 나눈다.
     """
     return fill_status not in _DEFINITIVE_FAIL
-
-
-def place_buy(symbol: str, notional_amount: float, market: str = "KRX",
-              meta: dict | None = None) -> dict:
-    return _pm_notional_buy(symbol, notional_amount, TOSS_CLIENT_ID, TOSS_CLIENT_SECRET,
-                             TOSS_ACCOUNT_SEQ, market=market, dry_run=DRY_RUN,
-                             meta=meta)
 
 
 def place_sell(symbol: str, qty, market: str = "KRX") -> dict:
@@ -566,6 +553,32 @@ def signal_log_summary(signal_log: list) -> dict:
     }
 
 
+def plan_trade_summary(trades: list) -> dict:
+    """플랜 트레이드 성적 — **R 단위**로. 백테스트와 같은 자로 재기 위한 것.
+
+    %수익률로는 백테스트의 +0.66R 과 비교할 수 없다. R 은 위험 1단위 기준이라
+    손절이 촘촘한 종목과 넓은 종목을 같은 무게로 놓기 때문이다.
+
+    체결률을 함께 낸다 — 미체결 폐기를 빼고 세면 승률이 부풀어 보인다
+    (백테스트에서 셋업의 36% 가 진입구간 미도달로 사라졌다).
+    """
+    plans    = [t for t in trades if t.get("plan")]
+    nofill   = [t for t in plans if t.get("outcome") == "nofill"]
+    filled   = [t for t in plans if t.get("side") == "buy"]
+    resolved = [t for t in plans if t.get("outcome") in ("win", "loss", "timeout")]
+    wins     = [t for t in resolved if t.get("outcome") == "win"]
+    n_setups = len(filled) + len(nofill)
+    return {
+        "n_setups":   n_setups,
+        "n_filled":   len(filled),
+        "n_resolved": len(resolved),
+        "avg_r":      round(float(np.mean([t["r_realized"] for t in resolved])), 3)
+                      if resolved else 0.0,
+        "win_rate":   round(len(wins) / len(resolved) * 100, 1) if resolved else 0.0,
+        "fill_rate":  round(len(filled) / n_setups * 100, 1) if n_setups else 0.0,
+    }
+
+
 def check_trailing_stops(positions: list, trail_pct: float = TRAIL_STOP_PCT,
                           peaks: dict = None) -> tuple:
     """고점 대비 trail_pct% 이하로 떨어지면 시장가 매도 (트레일링 스톱).
@@ -648,40 +661,64 @@ def send_tg(msg: str):
         print(f"[TG 오류] {e}", file=sys.stderr)
 
 
-# ── ICT/CRT 병렬 분석 ─────────────────────────────────────────────────
-def _calc_ict_batch(tickers: list[str]) -> dict[str, dict]:
-    """
-    상위 후보 티커의 ICT/CRT 조정 점수를 병렬로 계산.
-    반환: {ticker: {"adjustment": int, "signals": list, "crt": dict}}
-    """
-    from modules.ict_analysis import calc_ict_adjustment
+# ── 트레이드 플랜 후보 ─────────────────────────────────────────────────
+def scan_trade_plans(ohlcv: dict) -> list[dict]:
+    """유니버스 전 종목의 트레이드 플랜 중 **실행 대상(actionable)만** 골라 온다.
 
-    def _analyze(tk: str) -> tuple[str, dict]:
-        try:
-            yahoo_sym = tk.replace(".", "-")
-            raw = yf.download(yahoo_sym, period="3mo", progress=False, auto_adjust=True)
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.droplevel(1)
-            raw = raw.dropna(subset=["Open", "High", "Low", "Close"])
-            if len(raw) < 60:
-                return tk, {"adjustment": 0, "signals": [], "crt": {}}
-            return tk, calc_ict_adjustment(raw)
-        except Exception as e:
-            return tk, {"adjustment": 0, "signals": [f"오류: {e}"], "crt": {}}
+    actionable 은 valid 와 다른 질문이다 — valid 는 기하가 성립하나, actionable
+    은 비용을 견디고 방향이 되나. 문턱은 trade_plan 안에 있다(롱 + 등급 A·B).
+    걸러진 셋업도 라인은 계산되고 화면·성적표에는 남는다. 여기서는 주문만 안 낸다.
+    """
+    out = []
+    for ticker, df in ohlcv.items():
+        plan = build_trade_plan(df)
+        if not plan.get("actionable"):
+            continue
+        out.append({
+            "ticker":    ticker,
+            "current":   plan["current"],
+            "entry_ref": plan["entry"]["ref"],
+            "limit":     plan["entry"]["high"],   # 롱 진입은 구간 상단 지정가
+            "stop":      plan["stop"],
+            "target":    plan["targets"][0],      # T1 선착 청산 (T2는 안 쓴다)
+            "rr":        (plan["rr"] or [None])[0],
+            "grade":     plan["cost_grade"],
+            "risk_pct":  plan["risk_pct"],
+            "signals":   plan.get("signals", []),
+        })
+    return out
 
-    results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {ex.submit(_analyze, t): t for t in tickers}
-        for fut in as_completed(futs):
-            tk = futs[fut]
-            try:
-                _, res = fut.result()
-                results[tk] = res
-            except SystemExit:
-                raise
-            except Exception:
-                results[tk] = {"adjustment": 0, "signals": [], "crt": {}}
-    return results
+
+def rank_plan_candidates(cands: list[dict]) -> list[dict]:
+    """A등급 먼저, 같은 등급 안에서는 현재가가 진입가에 가까운 순.
+
+    등급 안에서는 기대값이 구별되지 않는다고 이미 측정됐다(부트스트랩 구간이
+    0 을 포함). 그래서 안 측정된 순위 기준을 새로 만들지 않고 **체결 확률이
+    높은 쪽**을 앞에 둔다 — 20거래일 안에 안 닿으면 주문 자체가 사라지므로.
+    """
+    def key(c: dict) -> tuple:
+        grade_rank = (ACTIONABLE_GRADES.index(c["grade"])
+                      if c["grade"] in ACTIONABLE_GRADES else len(ACTIONABLE_GRADES))
+        gap = abs(c["current"] - c["entry_ref"]) / c["entry_ref"] if c["entry_ref"] else 9.9
+        return (grade_rank, gap)
+    return sorted(cands, key=key)
+
+
+def plan_position_size(equity_krw: float, entry_ref: float, stop: float, fx: float,
+                       risk_pct: float = RISK_PCT_PER_TRADE,
+                       max_pos_pct: float = MAX_POSITION_PCT) -> int:
+    """위험 기준 수량. 손절까지 맞으면 자본의 risk_pct% 를 잃도록 잡는다.
+
+    금액이 아니라 위험을 고정해야 손절이 촘촘한 종목과 넓은 종목이 장부에
+    같은 무게로 들어간다. 그게 R 단위로 성적을 재는 전제다.
+    1주도 못 사면 0 (소수점 거래 불가).
+    """
+    risk_per_share_krw = (entry_ref - stop) * fx
+    if risk_per_share_krw <= 0 or entry_ref <= 0:
+        return 0
+    qty = int(equity_krw * risk_pct / 100 / risk_per_share_krw)
+    cap_qty = int(equity_krw * max_pos_pct / 100 / (entry_ref * fx))
+    return max(0, min(qty, cap_qty))
 
 
 # ── 메인 ────────────────────────────────────────────────────────────────
@@ -690,36 +727,39 @@ def main():
     mode_tag = "[가상장부]" if BROKER == "virtual" else "[TOSS]"
     print(f"\n{'='*60}")
     print(f"  자동매매 실행  {run_ts}  {mode_tag}")
-    print(f"  DRY_RUN={DRY_RUN}  UNIVERSE={UNIVERSE_NAME}  TOP_N={TOP_N}")
-    print(f"  CAPITAL_KRW={CAPITAL_KRW}  CAPITAL_USD={CAPITAL_USD}  MAX_POS={MAX_POSITIONS}")
+    print(f"  DRY_RUN={DRY_RUN}  UNIVERSE={UNIVERSE_NAME}  MAX_POS={MAX_POSITIONS}")
+    print(f"  위험/트레이드 {RISK_PCT_PER_TRADE}%  종목상한 {MAX_POSITION_PCT}%")
     print(f"  DD_STOP={PORTFOLIO_DD_STOP_PCT}%  MAX_SECTOR={MAX_SECTOR_POSITIONS}")
     print(f"{'='*60}\n")
 
-    # 가상 브로커는 토스 API를 호출하지 않으므로 자격증명이 필요 없다.
-    if BROKER != "virtual" and (
-        not TOSS_CLIENT_ID or not TOSS_CLIENT_SECRET or not TOSS_ACCOUNT_SEQ
-    ):
-        print("[오류] TOSS_CLIENT_ID / TOSS_CLIENT_SECRET / TOSS_ACCOUNT_SEQ 환경변수가 없습니다.")
+    # 트레이드 플랜은 **진입 구간 지정가 대기**로 들어간다. 토스 주문 모듈에는
+    # 그 주문 종류가 없고, 시가 시장가로 대신 사면 손절폭과 R:R 이 계획과
+    # 달라져 백테스트가 잰 +0.66R 이 이 장부에 적용되지 않는다. 조용히 다른
+    # 규칙으로 사느니 멈춘다.
+    if BROKER != "virtual":
+        print(f"[오류] BROKER={BROKER} 에는 지정가 진입 주문이 없습니다. "
+              f"트레이드 플랜 러너는 BROKER=virtual 로 실행하세요.")
         sys.exit(1)
 
     # 0-0. 실시간 환율 (미국 종목 매수여력 원화 환산용)
     _KRW_PER_USD = fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400")))
 
-    # 0-1. 지난 실행에서 예약된 가상 주문을 다음 거래일 시가로 체결한다.
-    if BROKER == "virtual":
-        from modules.virtual_broker import (
-            load_state, save_state, set_fx, settle_pending,
-        )
-        set_fx(_KRW_PER_USD)
-        _vstate_before = load_state()
-        # 체결은 settle_pending 안에서 trades 뒤에 덧붙는다. 부르기 전 길이를
-        # 재두면 이번에 새로 체결된 건만 성적표에 올릴 수 있다.
-        _n_trades_before = len(_vstate_before["trades"])
-        _vstate = settle_pending(_vstate_before, _KRW_PER_USD)
-        save_state(_vstate)
-        _n_logged = record_virtual_fills(_vstate["trades"][_n_trades_before:])
-        if _n_logged:
-            print(f"  [가상] 체결 {_n_logged}건을 성적표에 기록했습니다.")
+    # 0-1. 지난 실행분 정산 — 보유 포지션 청산 판정 → 지정가 진입 체결 → 만료 폐기.
+    #      판정은 러너가 도는 순간의 종가가 아니라 일봉 되짚기로 한다.
+    from modules.virtual_broker import (
+        load_state, place_limit_entry, save_state, set_fx, settle_pending,
+    )
+    set_fx(_KRW_PER_USD)
+    _vstate_before = load_state()
+    # 체결은 settle_pending 안에서 trades 뒤에 덧붙는다. 부르기 전 길이를
+    # 재두면 이번에 새로 체결된 건만 성적표에 올릴 수 있다.
+    _n_trades_before = len(_vstate_before["trades"])
+    _vstate = settle_pending(_vstate_before, _KRW_PER_USD)
+    save_state(_vstate)
+    new_trades = _vstate["trades"][_n_trades_before:]
+    _n_logged = record_virtual_fills(new_trades)
+    if _n_logged:
+        print(f"  [가상] 체결 {_n_logged}건을 성적표에 기록했습니다.")
 
     # 0. 시장 레짐 감지
     print("시장 레짐 감지 중...")
@@ -793,11 +833,18 @@ def main():
     if positions:
         peaks = reconcile_positions(peaks, positions, send_tg)
 
-    # 2-2. 트레일링 스톱 체크
+    # 2-2. 트레일링 스톱 체크 — **플랜 없이 산 기존 보유분만**.
+    #
+    # 플랜 포지션은 손절/목표 라인으로 청산된다(settle_pending). 거기에 트레일링을
+    # 겹치면 백테스트에 없던 규칙이 섞여 R 이 거짓이 된다. 반대로 KHC·GM 등 예전
+    # 팩터 매수분은 라인 없이 산 것이라 사후에 라인을 붙일 수 없다. 그래서 각자
+    # 자기 규칙으로 마무리한다.
+    legacy_positions = [p for p in positions if not (p.get("_raw") or {}).get("plan")]
     sell_results, sell_done = [], set()
-    if positions and TRAIL_STOP_PCT > 0:
-        print(f"\n트레일링 스톱 점검 ({TRAIL_STOP_PCT:.0f}%)...")
-        _stop_fired, peaks = check_trailing_stops(positions, peaks=peaks)
+    if legacy_positions and TRAIL_STOP_PCT > 0:
+        print(f"\n트레일링 스톱 점검 ({TRAIL_STOP_PCT:.0f}%, 기존 팩터 보유 "
+              f"{len(legacy_positions)}종목)...")
+        _stop_fired, peaks = check_trailing_stops(legacy_positions, peaks=peaks)
         for r in _stop_fired:
             if r.get("ok") or r.get("dry_run"):
                 sell_results.append({"symbol": r["symbol"], "ok": True,
@@ -817,98 +864,52 @@ def main():
     tickers = [t for t in raw_tickers if t not in seen and not seen.add(t)]  # type: ignore[func-returns-value]
     print(f"\n유니버스: {UNIVERSE_NAME} → {len(tickers)}개 (중복 제거 후)")
 
-    # 4. 팩터 스코어
-    print(f"팩터 스코어 계산 중... 레짐={regime.upper()} (2~4분)")
-    factor_df = calc_factor_scores(tickers, regime=regime)
-    if factor_df.empty:
-        print("[경고] 팩터 스코어 계산 실패 → 오늘 실행 건너뜀")
-        send_tg("페이퍼 트레이딩: 팩터 스코어 계산 실패, 오늘 실행 건너뜀")
+    # 4. 일봉 패널 — 유니버스 전 종목. 팩터 스코어보다 오히려 가볍다.
+    _panel_end   = datetime.now(timezone.utc).date()
+    _panel_start = _panel_end - timedelta(days=PLAN_LOOKBACK_DAYS)
+    print(f"일봉 로드 중... {len(tickers)}종목 × 최근 {PLAN_LOOKBACK_DAYS}일")
+    try:
+        _, ohlcv = load_panel(tickers, _panel_start, _panel_end)
+    except PanelCoverageError as e:
+        print(f"[경고] 일봉 확보 실패 → 오늘 실행 건너뜀: {e}")
+        send_tg(f"페이퍼 트레이딩: 일봉 확보 실패, 오늘 실행 건너뜀 ({e})")
         sys.exit(0)
-    print(f"  팩터 상위 5개: {factor_df.head(5)['ticker'].tolist()}")
 
-    # 5. 시그널 생성
-    # 후보풀을 TOP_N×5로 넓혀 주가초과·섹터제한 스킵 시 대체 종목 확보
-    # sell_set 침범 방지: 하위 25%와 겹치지 않도록 유니버스 상위 75% 이내로 제한
-    _candidate_n = min(max(TOP_N * 5, 15), max(len(factor_df) * 3 // 4, TOP_N))
+    # 5. 트레이드 플랜 → 실행 대상만 골라 순위
+    print("트레이드 플랜 계산 중...")
+    candidates = rank_plan_candidates(scan_trade_plans(ohlcv))
+    print(f"  실행 대상 {len(candidates)}종목 / 유니버스 {len(ohlcv)}종목 "
+          f"(롱 + 실행등급 {'·'.join(ACTIONABLE_GRADES)})")
+    for c in candidates[:5]:
+        print(f"    {c['ticker']:6s} {c['grade']}  현재 {c['current']:.2f} → "
+              f"진입 {c['limit']:.2f} / 손절 {c['stop']:.2f} / 목표 {c['target']:.2f}"
+              f"  R:R {c['rr']}  위험폭 {c['risk_pct']:.2f}%")
 
-    # 4-1. ICT/CRT 시그널 보조 (_candidate_n과 범위 일치시켜 모든 매수 후보 커버)
-    ict_top_n = min(_candidate_n, len(factor_df))
-    print(f"ICT/CRT 분석 중 (상위 {ict_top_n}개)...")
-    ict_data: dict[str, dict] = {}
-    try:
-        ict_data = _calc_ict_batch(factor_df.head(ict_top_n)["ticker"].tolist())
-    except Exception as _ict_err:
-        print(f"[경고] ICT 배치 분석 실패 → 조정 없이 계속: {_ict_err}")
+    # 6. 지정가 진입 주문
+    #
+    # 자리는 **보유 + 대기 중인 지정가 주문**을 함께 센다. 지정가는 최대
+    # LIMIT_FILL_WINDOW 거래일을 기다리므로, 대기분이 자리를 안 차지하면
+    # 상한이 통째로 꺼지고 20일치 주문이 겹쳐 쌓인다.
+    pending_syms = {o["symbol"] for o in load_state()["pending"]
+                    if o.get("side") == "buy"}
+    occupied = (len(held) - len(sell_done)) + len(pending_syms - set(held))
+    slots    = max(0, effective_max_pos - occupied)
+    print(f"\n자리: 보유 {len(held)} + 대기주문 {len(pending_syms)} "
+          f"→ 신규 {slots}건 가능 (상한 {effective_max_pos})")
 
-    # ICT 시그널 참고용 로그 (composite 점수에는 반영 안 함 — factor_engine에서 이미 처리)
-    for _tk, _res in ict_data.items():
-        _sigs = _res.get("signals", [])
-        if _sigs:
-            print(f"  ICT 참고 [{_tk}] {' / '.join(_sigs[:2])}")
+    order_results:  list[dict] = []
+    skipped_sector: list[str]  = []
+    skipped_size:   list[str]  = []
+    skipped_cash:   list[str]  = []
 
-    signals = generate_signals(factor_df, _candidate_n, min_score=BUY_SCORE_MIN, regime=regime)
-    buy_sigs  = [s for s in signals if s["action"] == "매수"]
-    sell_sigs = [s for s in signals if s["action"] == "매도"]
-    print(f"시그널: 매수 {len(buy_sigs)}건, 매도 {len(sell_sigs)}건")
-
-    # 6. 매도 (팩터 시그널)
-    for sig in sell_sigs:
-        sym = _to_broker_sym(sig["ticker"])
-        if sym and sym in held and sym not in sell_done:
-            qty = held[sym].get("qty", "0")
-            print(f"  [매도] {sym} {qty}주")
-            try:
-                place_sell(sym, qty, market=market_of_symbol(sym))
-                sell_results.append({"symbol": sym, "qty": qty, "ok": True})
-                sell_done.add(sym)
-            except Exception as e:
-                print(f"  [매도 오류] {sym}: {e}")
-                sell_results.append({"symbol": sym, "error": str(e)})
-
-    # 매도 완료 후 buying_power 갱신
-    if sell_done and not DRY_RUN:
-        try:
-            _acct2 = _pt_get_account(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ)
-            buying_power = float(_acct2.get("buying_power", buying_power))
-            print(f"매도 후 갱신 매수여력: {buying_power:,.0f}")
-        except Exception as _e:
-            print(f"[경고] 매도 후 buying_power 갱신 실패: {_e}")
-
-    # 4-2. 상관관계 기반 포지션 사이징 계산
-    corr_scale = pd.Series(dtype=float)
-    try:
-        _corr_universe = sorted(set([s["ticker"] for s in buy_sigs]) | set(held))
-        if len(_corr_universe) >= 2:
-            _returns_mat = fetch_returns_matrix(_corr_universe, lookback_days=60)
-            if not _returns_mat.empty:
-                if SIZING_METHOD == "risk_parity":
-                    corr_scale = risk_parity_position_scale(_returns_mat)
-                else:
-                    corr_scale = correlation_penalty_scale(_returns_mat)
-                _corr_report = portfolio_correlation_report(_returns_mat, corr_threshold=0.7)
-                if _corr_report["high_corr_pairs"]:
-                    for _pair in _corr_report["high_corr_pairs"][:3]:
-                        print(f"  [상관 경고] {_pair['ticker_a']}↔{_pair['ticker_b']}: "
-                              f"{_pair['correlation']:.2f}")
-    except Exception as _corr_err:
-        print(f"  [경고] 상관관계 계산 실패 (사이징 축소 없이 진행): {_corr_err}")
-
-    # 7. 매수 (드로다운 스톱 / 섹터 제한 / 체결 확인)
-    remaining  = effective_max_pos - (len(held) - len(sell_done))
-    buy_results    = []
-    n_bought       = 0
-    skipped_sector = []
-    skipped_price  = []
-
-    # cold cache 시 첫 반복에서 len(held) 건의 yfinance 호출이 몰리는 문제 방지
-    for _s in held:
+    # cold cache 시 첫 반복에서 yfinance 호출이 몰리는 문제 방지
+    for _s in set(held) | pending_syms:
         _get_sector(_s)
 
-    # 이번 실행에서 이미 매수한 섹터 카운트 (snapshot인 held와 별개로 추적)
-    bought_sectors: dict[str, int] = {}
+    ordered_sectors: dict[str, int] = {}
 
-    for sig in buy_sigs:
-        if n_bought >= max(0, min(remaining, TOP_N)):
+    for cand in candidates:
+        if len(order_results) >= slots:
             break
         if dd_blocked:
             print(f"  [드로다운 스톱] 신규 매수 전면 중단 (dd={dd_pct:.1f}%)")
@@ -917,123 +918,78 @@ def main():
             print(f"  [킬스위치] {kill.status()['reason']} → 신규 매수 중단")
             break
 
-        sym  = _to_broker_sym(sig["ticker"])
-        _mkt = ticker_market(sig["ticker"])          # "KRX" or "US" (접미사 있는 원본 티커 기준)
-        if not sym or sym in held:
+        sym = _to_broker_sym(cand["ticker"])
+        if not sym or sym in held or sym in pending_syms:
             continue
 
         # 섹터 집중도 제한
         sym_sector = _get_sector(sym)
         held_in_sector = (
-            sum(1 for s in held if s not in sell_done and _get_sector(s) == sym_sector)
-            + bought_sectors.get(sym_sector, 0)
+            sum(1 for s in (set(held) | pending_syms)
+                if s not in sell_done and _get_sector(s) == sym_sector)
+            + ordered_sectors.get(sym_sector, 0)
         )
         if held_in_sector >= MAX_SECTOR_POSITIONS:
             print(f"  [섹터 제한] {sym} ({sym_sector}) 이미 {held_in_sector}개 → 스킵")
             skipped_sector.append(f"{sym}({sym_sector})")
             continue
 
-        # 시장별 투자금 및 원화 환산 (buying_power는 항상 원화)
-        _capital_base = CAPITAL_KRW if _mkt == "KRX" else CAPITAL_USD
-        _capital_krw  = _capital_base if _mkt == "KRX" else _capital_base * _KRW_PER_USD
-        _unit         = "원" if _mkt == "KRX" else "USD"
-
-        if buying_power < _capital_krw * 0.5:
-            print("  [매수 스킵] 매수여력 부족")
-            break
-
-        # 변동성 기반 포지션 사이징
-        asset_vol = sig.get("vol_ann", 20.0) / 100
-        if asset_vol > 0:
-            _size = _capital_base * TARGET_VOL_PCT / asset_vol
-            _size = max(_capital_base * 0.5, min(_capital_base * 2.0, _size))
-        else:
-            _size = _capital_base
-
-        # 상관관계 페널티 스케일 적용
-        _scale    = float(corr_scale.get(sig["ticker"], 1.0))
-        _size     = round(_size * _scale, 2)
-        _size_krw = _size if _mkt == "KRX" else _size * _KRW_PER_USD
-
-        if buying_power < _size_krw * 0.9:
-            print(f"  [매수 스킵] {sym} 매수여력 부족 (필요 {_size:,.0f}{_unit}, 가용 {buying_power:,.0f}원)")
+        # 위험 기준 수량 — 손절까지 맞으면 자본의 RISK_PCT_PER_TRADE% 를 잃는다.
+        qty = plan_position_size(equity_now, cand["entry_ref"], cand["stop"],
+                                 _KRW_PER_USD)
+        if qty < 1:
+            print(f"  [매수 스킵] {sym} 1주도 못 삼 (소수점 거래 불가, "
+                  f"주가 ${cand['limit']:,.2f})")
+            skipped_size.append(f"{sym}(${cand['limit']:,.0f})")
             continue
 
-        # 소수점 거래 불가 → 주가가 투입금 초과하면 1주도 못 사므로 스킵
-        _sig_price = float(sig.get("price", 0))
-        if _sig_price > 0 and _sig_price > _size:
-            print(f"  [매수 스킵] {sym} 주가 {_sig_price:,.1f}{_unit} > 투입금 {_size:,.0f}{_unit} (소수점 거래 불가)")
-            skipped_price.append(f"{sym}({_sig_price:,.0f}{_unit})")
+        notional_krw = qty * cand["limit"] * _KRW_PER_USD
+        if notional_krw > buying_power:
+            print(f"  [매수 스킵] {sym} 매수여력 부족 "
+                  f"(필요 {notional_krw:,.0f}원, 가용 {buying_power:,.0f}원)")
+            skipped_cash.append(sym)
             continue
 
         # 킬스위치: 단일 주문이 계좌 대비 과도하면 스킵 (사이징 버그·급변 방어)
-        if kill is not None and equity_now > 0 and kill.check_order_size(_size_krw, equity_now):
-            print(f"  [킬스위치] {sym} 주문 {_size_krw:,.0f}원이 계좌 {equity_now:,.0f}원의 "
-                  f"{KS_MAX_SINGLE_ORDER_PCT:.0f}% 초과 → 스킵")
+        if kill is not None and equity_now > 0 and kill.check_order_size(notional_krw, equity_now):
+            print(f"  [킬스위치] {sym} 주문 {notional_krw:,.0f}원이 계좌 "
+                  f"{equity_now:,.0f}원의 {KS_MAX_SINGLE_ORDER_PCT:.0f}% 초과 → 스킵")
             continue
 
-        _ict     = ict_data.get(sig["ticker"], {})
-        _ict_adj = _ict.get("adjustment", 0)
-        _ict_sig = " / ".join(_ict.get("signals", [])[:2])
-        print(f"  [매수] {sym} {_size:,.0f}{_unit}  "
-              f"(스코어 {sig['score']}, ICT {_ict_adj:+d}, RSI {sig['rsi']},"
-              f" 변동성 {sig.get('vol_ann', 0):.1f}%, 섹터 {sym_sector})")
-        if _ict_sig:
-            print(f"    ▶ ICT: {_ict_sig}")
-        try:
-            # 주문 근거를 함께 실어 보낸다. 가상 브로커는 다음 거래일 시가에
-            # 체결되므로, 그때 이 값이 없으면 성적표의 점수 칸이 비어 점수
-            # 구간별 분석에서 통째로 빠진다.
-            result = place_buy(sym, _size, market=market_of_symbol(sym),
-                               meta={"score": sig.get("score"), "rsi": sig.get("rsi")})
-            buy_rec = {
-                "symbol":  sym, "ticker": sig["ticker"], "notional": _size, "ok": True,
-                "price":   sig.get("price", 0),
-                "score":   sig.get("score", 0),
-                "rsi":     sig.get("rsi", 50),
-                "sector":  sym_sector,
-            }
+        print(f"  [지정가 매수] {sym} {qty}주 @ ${cand['limit']:,.2f} "
+              f"({notional_krw:,.0f}원, 등급 {cand['grade']}, R:R {cand['rr']}, "
+              f"섹터 {sym_sector})")
+        if cand["signals"]:
+            print(f"    ▶ {cand['signals'][0]}")
 
-            # 체결 확인 (실거래 모드에서만)
-            if not DRY_RUN and isinstance(result, dict) and result.get("id"):
-                fill = _pm_wait_fill(result["id"], TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ)
-                fill_status = fill.get("status", "unknown")
-                buy_rec["fill_status"] = fill_status
-                if fill_status == "filled":
-                    buy_rec["fill_price"] = float(fill.get("filled_avg_price") or sig.get("price", 0))
-                    print(f"    체결 확인 ✓ {buy_rec['fill_price']:.2f}")
-                elif fill_status == "pending_next_open":
-                    # 가상 브로커는 다음 거래일 시가에 체결한다. 주문은 장부에
-                    # 예약됐지만 체결가는 아직 세상에 없다.
-                    #
-                    # ok 는 "체결이 확인됐다"는 뜻이고, 그 아래 성적표 기록이
-                    # 이 값에 매달려 있다. 여기서 True 로 만들면 체결가 자리에
-                    # 어제 종가가 대신 박혀 성적이 통째로 어긋난다 — 체결 확인
-                    # 검사가 막으려던 바로 그 일이다. 그러니 ok 는 False 로 둔다.
-                    # 한도 계산은 ok 가 아니라 order_accepted() 로 따로 센다.
-                    buy_rec["ok"] = False
-                    print("    예약됨 — 다음 거래일 시가 체결 예정")
-                else:
-                    print(f"    ⚠️ 미체결: {fill_status}")
-                    buy_rec["ok"] = False
+        rec = {"symbol": sym, "ticker": cand["ticker"], "qty": qty,
+               "limit": cand["limit"], "stop": cand["stop"],
+               "target": cand["target"], "rr": cand["rr"],
+               "grade": cand["grade"], "risk_pct": cand["risk_pct"],
+               "notional_krw": notional_krw, "sector": sym_sector, "ok": True}
+        if DRY_RUN:
+            rec["dry_run"] = True
+        else:
+            try:
+                place_limit_entry(
+                    sym, qty, cand["limit"],
+                    plan={"stop": cand["stop"], "target": cand["target"],
+                          "rr": cand["rr"], "grade": cand["grade"],
+                          "risk_pct": cand["risk_pct"]},
+                    market=market_of_symbol(sym),
+                )
+                if kill is not None:
+                    kill.record_success()
+            except Exception as e:
+                print(f"  [매수 오류] {sym}: {e}")
+                order_results.append({"symbol": sym, "error": str(e)})
+                if kill is not None:
+                    kill.record_error()
+                continue
 
-            buy_results.append(buy_rec)
-            # 살아 있는 주문은 매수여력도 자리도 차지한다. 명백한 실패(취소/거부)만
-            # 제외한다 — timeout은 체결됐을 수 있어 보수적으로 잡아둔다(다음 종목
-            # 과다매수 방지). 실제 미체결이면 다음 실행의 포지션 대사에서 맞춰진다.
-            # 시그널 로그 기록은 여기가 아니라 ok(체결 확인)를 따른다.
-            if order_accepted(buy_rec.get("fill_status")):
-                buying_power -= _size_krw
-                n_bought += 1
-                bought_sectors[sym_sector] = bought_sectors.get(sym_sector, 0) + 1
-            if kill is not None:
-                kill.record_success()
-        except Exception as e:
-            print(f"  [매수 오류] {sym}: {e}")
-            buy_results.append({"symbol": sym, "error": str(e)})
-            # 연속 브로커 오류가 임계치에 도달하면 킬스위치가 다음 반복에서 매수를 중단
-            if kill is not None:
-                kill.record_error()
+        order_results.append(rec)
+        buying_power -= notional_krw
+        ordered_sectors[sym_sector] = ordered_sectors.get(sym_sector, 0) + 1
 
     # 8. 사후 처리
     if not DRY_RUN:
@@ -1041,19 +997,14 @@ def main():
             peaks.pop(sym, None)
     save_peak_prices(peaks)
 
+    # 성적표에는 settle_pending 이 확정한 체결만 오른다(record_virtual_fills).
+    # 여기서 주문 시점에 또 올리면 체결가 자리에 어제 종가가 박힌다.
     sig_log = load_signal_log()
     prices_cache = {
-        _to_broker_sym(s["ticker"]): float(s.get("price", 0))
-        for s in signals if s.get("price")
+        _to_broker_sym(tk): float(df["Close"].dropna().iloc[-1])
+        for tk, df in ohlcv.items() if not df["Close"].dropna().empty
     }
     sig_log = resolve_signal_outcomes(sig_log, prices_cache)
-    sig_log = append_signals_to_log(
-        [{"symbol": r["symbol"], "action": "매수",
-          "price": r.get("fill_price", r.get("price", 0)),
-          "score": r.get("score", 0),
-          "rsi":   r.get("rsi", 50)} for r in buy_results if r.get("ok")],
-        sig_log
-    )
     save_signal_log(sig_log)
     sl_summary = signal_log_summary(sig_log)
 
@@ -1063,17 +1014,14 @@ def main():
     perf = calc_performance_metrics(equity_log)
 
     # 9. 요약 & 텔레그램
-    n_sells   = sum(1 for r in sell_results if r.get("ok"))
-    n_buys    = sum(1 for r in buy_results  if r.get("ok"))
-    n_errs    = sum(1 for r in sell_results + buy_results if "error" in r)
-    n_pending = sum(1 for r in buy_results
-                    if not r.get("ok") and r.get("fill_status") in {"timeout", "unknown"})
-    # 가상 예약분은 체결 확인이 안 됐으므로 n_buys 에 안 잡힌다. 그렇다고 빼놓으면
-    # 요약이 "매수 0건"이라고 말한다 — 실제로는 주문이 나갔는데도. 따로 알린다.
-    reserved = [r["symbol"] for r in buy_results
-                if r.get("fill_status") == "pending_next_open"]
+    n_sells = sum(1 for r in sell_results if r.get("ok"))
+    n_errs  = sum(1 for r in sell_results + order_results if "error" in r)
     _trail_sells = [r["symbol"] for r in sell_results
                     if r.get("ok") and "트레일링" in r.get("reason", "")]
+    _filled  = [t for t in new_trades if t.get("plan") and t.get("side") == "buy"]
+    _exited  = [t for t in new_trades if t.get("r_realized") is not None
+                and t.get("outcome") != "nofill"]
+    _nofill  = [t for t in new_trades if t.get("outcome") == "nofill"]
 
     lines = [
         f"*페이퍼 트레이딩* `{run_ts}` {mode_tag}",
@@ -1081,44 +1029,56 @@ def main():
         f"{regime_emoji} 레짐: *{regime.upper()}*  SPY/MA={regime_info['spy_ratio']:.3f}  VIX={regime_info['vix']:.1f}"
         + (f"  (MAX_POS→{effective_max_pos})" if effective_max_pos < MAX_POSITIONS else ""),
         "",
-        f"*매도* {n_sells}건: " + (", ".join(r["symbol"] for r in sell_results if r.get("ok")) or "없음"),
-        f"*매수* {n_buys}건: " + (", ".join(r["symbol"] for r in buy_results  if r.get("ok")) or "없음"),
     ]
-    if reserved:
-        lines.append(f"*예약* {len(reserved)}건: {', '.join(reserved)} (다음 거래일 시가 체결)")
+    if _exited:
+        lines.append("*청산* " + ", ".join(
+            f"{t['symbol']} {t['outcome']} `{t['r_realized']:+.2f}R`" for t in _exited))
+    if _filled:
+        lines.append("*체결* " + ", ".join(
+            f"{t['symbol']} {t['qty']}주 @${t['price_usd']:,.2f}" for t in _filled))
+    if _nofill:
+        lines.append(f"미체결 폐기 {len(_nofill)}건: "
+                     + ", ".join(t["symbol"] for t in _nofill))
+    if n_sells:
+        lines.append(f"*팩터 보유 매도* {n_sells}건: "
+                     + ", ".join(r["symbol"] for r in sell_results if r.get("ok")))
+
+    lines.append(f"*신규 지정가* {len(order_results)}건 / 실행대상 {len(candidates)}종목")
+    for r in order_results:
+        if "error" in r:
+            continue
+        lines.append(f"  `{r['symbol']}` {r['grade']}등급 {r['qty']}주  "
+                     f"진입 {r['limit']:.2f} → 손절 {r['stop']:.2f} / 목표 {r['target']:.2f}  "
+                     f"R:R {r['rr']}")
+
     if _trail_sells:
         lines.append(f"트레일링 스톱 발동: {', '.join(_trail_sells)}")
     if skipped_sector:
         lines.append(f"섹터 제한 스킵: {', '.join(skipped_sector)}")
-    if skipped_price:
-        lines.append(f"주가 초과 스킵: {', '.join(skipped_price)}")
+    if skipped_size:
+        lines.append(f"1주 미달 스킵: {', '.join(skipped_size)}")
+    if skipped_cash:
+        lines.append(f"현금 부족 스킵: {', '.join(skipped_cash)}")
+    # 주문이 0건인 날은 이유를 적어 준다. 기존 팩터 보유분이 자리와 현금을
+    # 붙잡고 있는 동안은 실행 대상이 있어도 못 산다 — 고장이 아니라 설계다.
+    if candidates and not order_results and legacy_positions:
+        lines.append(f"ℹ️ 기존 팩터 보유 {len(legacy_positions)}종목이 자리·현금을 "
+                     f"쥐고 있습니다. 소진되는 대로 플랜 주문이 나갑니다.")
     if dd_blocked:
         lines.append(f"⛔ 드로다운 *{dd_pct:.1f}%* → 신규 매수 중단")
     if n_errs:
         lines.append(f"오류 {n_errs}건 → Actions 로그 확인")
-    if n_pending:
-        lines.append(f"⏳ 미확인 주문 {n_pending}건 (timeout/미체결) → 토스 앱에서 직접 확인 필요")
 
-    top5 = factor_df.head(5)[["ticker", "composite", "rsi"]].to_dict("records")
-    lines.append("\n*팩터 상위 5개*")
-    for r in top5:
-        tk       = r["ticker"]
-        ict_sigs = ict_data.get(tk, {}).get("signals", [])
-        ict_tag  = f" (ICT: {ict_sigs[0][:20]})" if ict_sigs else ""
-        lines.append(f"  {tk}: 스코어 {r['composite']:.0f}{ict_tag}, RSI {r['rsi']:.0f}")
-
-    # 매수 종목 ICT 시그널 하이라이트
-    ict_highlights = []
-    for r in buy_results:
-        if not r.get("ok"):
-            continue
-        tk  = r.get("ticker", r.get("symbol", ""))
-        res = ict_data.get(tk, {})
-        if res.get("signals"):
-            ict_highlights.append(f"  `{tk}` {res['signals'][0]}")
-    if ict_highlights:
-        lines.append("\n*ICT 시그널*")
-        lines.extend(ict_highlights[:4])
+    # 플랜 트레이드 성적 — 백테스트의 +0.66R 과 **같은 단위**다. 아래 '시그널
+    # 정확도'(%수익률)는 팩터 시절 기록이라 단위가 다르니 섞어 읽으면 안 된다.
+    plan_perf = plan_trade_summary(_vstate["trades"])
+    if plan_perf["n_resolved"] >= 3:
+        lines.append(
+            f"\n*플랜 성적* (결판 {plan_perf['n_resolved']}건 / 체결 {plan_perf['n_filled']}"
+            f" / 셋업 {plan_perf['n_setups']})\n"
+            f"  기대값 `{plan_perf['avg_r']:+.2f}R`  승률 {plan_perf['win_rate']:.0f}%  "
+            f"체결률 {plan_perf['fill_rate']:.0f}%"
+        )
 
     # 성과 지표
     if perf:
@@ -1143,7 +1103,8 @@ def main():
     print(msg)
     print("─"*50)
     send_tg(msg)
-    print(f"\n완료. 매도 {n_sells}건 / 매수 {n_buys}건 / 오류 {n_errs}건")
+    print(f"\n완료. 청산 {len(_exited)}건 / 체결 {len(_filled)}건 / "
+          f"신규 주문 {len(order_results)}건 / 오류 {n_errs}건")
 
 
 if __name__ == "__main__":

@@ -169,3 +169,24 @@ ICT 점수를 그 칸에 넣지 않는다 — 한 칸이 두 질문에 답하기
   성과를 볼 때 `plan` 이 붙은 트레이드만 따로 봐야 한다.
 - 유니버스 전 종목 일봉이 필요하다. `price_panel.load_panel` 이 이미 하는 일이라
   새 네트워크 부담은 팩터 스코어를 빼는 만큼 오히려 줄어든다.
+
+## 6. 구현 (2026-08-10)
+
+`modules/virtual_broker.py` — `place_limit_entry` · `scan_limit_fill` ·
+`scan_plan_exit` · `realized_r` · `daily_bars`. `settle_pending` 이 청산 →
+지정가 체결 순으로 돌고, `kind` 없는 옛 주문은 예전대로 시가 체결한다(비서 경로).
+`paper_trade_runner_toss.py` — `scan_trade_plans` · `rank_plan_candidates` ·
+`plan_position_size` · `plan_trade_summary`. 팩터 경로(`calc_factor_scores`,
+`generate_signals`, `_calc_ict_batch`, 변동성·상관 사이징)는 러너에서 빠졌다.
+테스트 `tests/test_plan_broker.py` 15건, 전체 608건 통과.
+
+**BROKER=virtual 을 강제한다.** 토스 주문 모듈에는 지정가 대기 주문이 없다.
+시가 시장가로 대신 사면 손절폭과 R:R 이 계획과 달라져 +0.66R 이 이 장부에
+적용되지 않으므로, 조용히 다른 규칙으로 사느니 시작에서 멈춘다.
+
+**첫 실행에서 드러난 것 — 당분간 신규 주문이 0건이다.** 기존 팩터 보유 10종목이
+MAX_POSITIONS 10 자리를 전부 쥐고 있고, 남은 현금 약 102만원은 위험 기준 1건
+(약 130만원)에도 모자란다. 설계대로 기존 보유를 트레일링으로 소진시키는 동안은
+실행 대상이 나와도 못 산다 — 고장이 아니라 결과다. 러너가 그 이유를 텔레그램에
+한 줄로 적는다. 자리 규칙을 지금 바꾸지 않은 건, 현금이 이미 같은 제약을 걸고
+있어서 규칙만 풀어도 달라지는 게 없기 때문이다.

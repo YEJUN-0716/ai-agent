@@ -24,26 +24,14 @@ on:
         description: "유니버스 이름 (';'로 복수 지정)"
         required: false
         default: "미국 중소형 30;미국 금융주 15;미국 가치배당주 20;미국 AI·빅테크 15;미국 헬스케어 15"
-      top_n:
-        description: "매수 상위 N개"
-        required: false
-        default: "5"
-      capital_usd:
-        description: "미국 종목당 투입금 (달러)"
-        required: false
-        default: "1370"
       krw_per_usd:
         description: "원/달러 환율 (매수여력 비교용)"
         required: false
         default: "1400"
       trail_stop_pct:
-        description: "트레일링 스톱 % (0이면 비활성)"
+        description: "트레일링 스톱 % (기존 팩터 보유분 마무리용, 0이면 비활성)"
         required: false
         default: "10"
-      buy_score_min:
-        description: "최소 매수 점수 (10~90)"
-        required: false
-        default: "60"
       portfolio_dd_stop_pct:
         description: "포트폴리오 드로다운 스톱 % (0이면 비활성)"
         required: false
@@ -104,19 +92,18 @@ jobs:
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
           DART_API_KEY:          ${{ secrets.DART_API_KEY }}
           UNIVERSE:              ${{ github.event.inputs.universe || '미국 중소형 30;미국 금융주 15;미국 가치배당주 20;미국 AI·빅테크 15;미국 헬스케어 15' }}
-          TOP_N:                 ${{ github.event.inputs.top_n || '5' }}
-          CAPITAL_KRW:           "500000"
-          # 1,000만원 / 5종목 ÷ 환율 약 1,460 = 종목당 약 1,370달러
-          CAPITAL_USD:           ${{ github.event.inputs.capital_usd || '1370' }}
           KRW_PER_USD:           ${{ github.event.inputs.krw_per_usd || '1400' }}
-          # 5종목으로는 1,000만 중 410만밖에 안 들어간다. 종목당 기준액
-          # $1,370(약 200만)이 변동성·상관관계 사이징에서 약 82만까지 깎이기
-          # 때문이다. 종목당 금액을 억지로 키우면 한 종목 노출이 2.4배가 되므로,
-          # 금액은 그대로 두고 종목 수로 채운다 — 분산이 늘고 성적표에 쌓이는
-          # 표본도 두 배가 된다. 약 82만 × 10종목 = 약 820만.
+          # 금액이 아니라 **위험**을 고정한다. 1R = 자본의 0.5%, 한 종목은
+          # 자본의 15% 까지. 이 시스템의 손절은 진입가에서 1.3~3% 밖에 안
+          # 떨어져 있어서, 위험을 1% 로 잡으면 한 종목이 자본의 40% 가 된다.
+          # 0.5% + 15% 상한이면 동시 5~7종목이 들어간다.
+          RISK_PCT_PER_TRADE:    "0.5"
+          MAX_POSITION_PCT:      "15"
           MAX_POSITIONS:         "10"
+          # 트레일링은 **기존 팩터 보유분 마무리용**이다. 플랜 포지션은 손절/
+          # 목표 라인으로 청산되므로 트레일링이 안 붙는다 (규칙을 섞으면 R 이
+          # 거짓이 된다).
           TRAIL_STOP_PCT:        ${{ github.event.inputs.trail_stop_pct || '10' }}
-          BUY_SCORE_MIN:         ${{ github.event.inputs.buy_score_min || '60' }}
           PORTFOLIO_DD_STOP_PCT: ${{ github.event.inputs.portfolio_dd_stop_pct || '15' }}
           # 10종목을 채우려면 섹터 한도도 함께 풀어야 한다. 2로 두면 후보가
           # 금융주에 몰려 있어 5~6종목에서 멈춘다. 3이면 한 섹터가 30%를
