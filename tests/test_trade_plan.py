@@ -235,7 +235,7 @@ def test_short_trend_ok_insufficient_blocks():
 def test_short_regime_gate_blocks_uptrend(monkeypatch):
     # 방향은 강한 숏(|ICT|>=12, 저확신 억제 통과)이지만 종목이 상승추세면 레짐이 보류
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": -20, "signals": ["a", "b", "c"]})
+                        lambda df, **kw: {"adjustment": -20, "signals": ["a", "b", "c"]})
     df = _close_frame(np.linspace(100, 150, 90))          # 상승추세
     blocked = tp.build_trade_plan(df, short_trend_filter=True)
     assert blocked["direction"] == "short"
@@ -249,7 +249,7 @@ def test_short_regime_gate_blocks_uptrend(monkeypatch):
 def test_low_conf_short_suppressed(monkeypatch):
     # |ICT| 가 medium 문턱(12) 아래인 숏은 억제된다 (실측상 저확신 숏 기대값 낮음)
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": -11, "signals": ["x"]})
+                        lambda df, **kw: {"adjustment": -11, "signals": ["x"]})
     df = _close_frame(np.linspace(150, 100, 90))   # 하락추세라 레짐은 통과
     plan = tp.build_trade_plan(df)
     assert plan["direction"] == "short"
@@ -260,7 +260,7 @@ def test_low_conf_short_suppressed(monkeypatch):
 def test_medium_conf_short_not_suppressed_for_conf(monkeypatch):
     # |ICT| >= 12 인 숏은 저확신 사유로는 막지 않는다
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": -15, "signals": ["x", "y"]})
+                        lambda df, **kw: {"adjustment": -15, "signals": ["x", "y"]})
     df = _close_frame(np.linspace(150, 100, 90))
     plan = tp.build_trade_plan(df)
     assert plan["direction"] == "short"
@@ -271,7 +271,7 @@ def test_medium_conf_short_not_suppressed_for_conf(monkeypatch):
 def test_forced_direction_overrides_ict_bias(monkeypatch):
     """ICT 는 롱이라 말해도 방향을 주입받았으면 그 방향으로 계획한다."""
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": +20, "signals": ["x"]})
+                        lambda df, **kw: {"adjustment": +20, "signals": ["x"]})
     df = _close_frame(np.linspace(150, 100, 90))       # 하락추세 — 레짐은 통과
     plan = tp.build_trade_plan(df, direction="short")
     assert plan["direction"] == "short"
@@ -280,7 +280,7 @@ def test_forced_direction_overrides_ict_bias(monkeypatch):
 def test_forced_direction_against_structure_is_low_confidence(monkeypatch):
     """반대 방향 구조는 확신의 근거가 될 수 없다 — |ICT| 20 이어도 high 가 아니다."""
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": +20, "signals": ["x"]})
+                        lambda df, **kw: {"adjustment": +20, "signals": ["x"]})
     df = _close_frame(np.linspace(150, 100, 90))
     plan = tp.build_trade_plan(df, direction="short")
     assert plan["confidence"] == "low"
@@ -290,7 +290,7 @@ def test_forced_direction_against_structure_is_low_confidence(monkeypatch):
 def test_forced_short_still_obeys_regime_gate(monkeypatch):
     """방향을 주입해도 게이트는 그대로다 — 상승추세 종목 숏은 여전히 보류."""
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": -20, "signals": ["a", "b"]})
+                        lambda df, **kw: {"adjustment": -20, "signals": ["a", "b"]})
     df = _close_frame(np.linspace(100, 150, 90))       # 상승추세
     plan = tp.build_trade_plan(df, direction="short")
     assert plan["valid"] is False
@@ -300,7 +300,7 @@ def test_forced_short_still_obeys_regime_gate(monkeypatch):
 def test_forced_long_works_without_ict_bias(monkeypatch):
     """ICT 가 방향을 못 정해도(|점수| < 10) 주입된 방향으로 라인까지 간다."""
     monkeypatch.setattr(tp, "calc_ict_adjustment",
-                        lambda df: {"adjustment": 3, "signals": []})
+                        lambda df, **kw: {"adjustment": 3, "signals": []})
     df = _force_crt(_oscillating(), "bullish")
     plan = tp.build_trade_plan(df, direction="long")
     assert plan["direction"] == "long"

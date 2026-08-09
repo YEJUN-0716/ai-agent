@@ -123,7 +123,7 @@ def backtest_trade_plans(
     df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
     fill_window: int = DEFAULT_FILL_WINDOW, hold_window: int = DEFAULT_HOLD_WINDOW,
     cooldown: int = DEFAULT_COOLDOWN, min_history: int = MIN_BARS,
-    sessions: np.ndarray | None = None,
+    sessions: np.ndarray | None = None, scale: int = 1,
 ) -> dict:
     """
     한 종목 OHLCV 전 구간을 걸어가며 유효 플랜을 시뮬레이션한다.
@@ -132,6 +132,11 @@ def backtest_trade_plans(
     sessions 를 주면 당일 청산 단타로 시뮬레이션한다 (`_simulate_outcome` 참고).
     반환: {"all": stats, "long": stats, "short": stats, "trades": [...]}
     """
+    # 창이 scale 배로 넓어지면 워밍업도 그만큼 필요하다. 호출자가 min_history 를
+    # 직접 준 경우에는 건드리지 않는다.
+    if min_history == MIN_BARS and scale != 1:
+        min_history = MIN_BARS * scale
+
     highs = df["High"].to_numpy(dtype=float)
     lows = df["Low"].to_numpy(dtype=float)
     opens = df["Open"].to_numpy(dtype=float) if sessions is not None else None
@@ -140,7 +145,7 @@ def backtest_trade_plans(
 
     i = min_history
     while i < n - 1:
-        plan = build_trade_plan(df.iloc[: i + 1], min_rr=min_rr)
+        plan = build_trade_plan(df.iloc[: i + 1], min_rr=min_rr, scale=scale)
         if not plan["valid"]:
             i += 1
             continue
