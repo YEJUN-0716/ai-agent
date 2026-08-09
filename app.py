@@ -3354,6 +3354,24 @@ def _team_verdict(score):
     return verdict_of(score)
 
 
+# 총괄 판정 옆에 항상 따라붙는 문구. 이 점수의 예측력은 **측정됐고, 없었다.**
+#
+#   차트·ICT 501거래일 × 276종목 (2024-07 ~ 2026-08, 과거 봉 재구성)
+#     1일 IC -0.0012 (t -0.14) · 5일 -0.0035 (t -0.24)
+#    21일 IC +0.0145 (t +0.56) · 63일 -0.0029 (t -0.07)
+#   팩터 가중치 워크포워드(2026-07-27): OOS IC -0.0046 (t -0.28)
+#
+# 판정선은 |t| ≥ 2. 표본은 찼는데 t 가 전부 ±0.6 안이다. 숫자를 지우지 않는
+# 이유는 재설계의 출발점이기 때문이고, 그대로 두지 않는 이유는 화면의
+# "매수" 가 근거 있는 말로 읽히기 때문이다 — 이게 이 시스템에서 실제로 돈을
+# 잃힐 수 있는 유일한 지점이다.
+VERDICT_UNVALIDATED_NOTE = (
+    "⚠️ <b>미검증 판정</b> — 이 점수의 예측력을 501거래일로 측정했고 "
+    "<b>찾지 못했다</b> (1·5·21·63일 전 지평에서 |t| ≤ 0.6, 판정선은 |t| ≥ 2). "
+    "매매 근거로 쓰지 마세요. 성적표 탭에 측정 원본이 있습니다."
+)
+
+
 def _current_analyst_weights():
     """방향성 3인(차트+파동+모멘텀·퀀트+재무·ICT+CRT)의 표시/블렌드 가중치(%, 합 100).
 
@@ -4813,6 +4831,7 @@ def render_verdict_cards(snap, *, with_trader=True):
   </div>
   <div style="font-size:12px;color:var(--text-3)">가장 강한 의견: {mgr['strongest_opinion']}{dissent_html}</div>
   {context_html}
+  <div style="font-size:11px;color:#f59e0b;margin-top:10px;padding-top:9px;border-top:1px solid {mc}30;line-height:1.5">{VERDICT_UNVALIDATED_NOTE}</div>
 </div>""", unsafe_allow_html=True)
 
     if not with_trader:

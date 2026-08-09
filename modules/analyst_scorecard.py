@@ -232,6 +232,28 @@ def score_analysts(days, forward_returns, horizon):
         se = newey_west_se(ics, lag)
         plain_se = float(arr.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
 
+        # 표본이 lag 의 두 배에 못 미치면 Newey–West 는 겹침을 못 잰다. 그때
+        # 추정된 표준오차는 통상 표준오차보다 **작게** 나오기도 하는데, 아래
+        # min(..., n) 이 그걸 "유효표본 = 전체" 로 바꿔 t 를 그대로 통과시킨다
+        # — 추정기가 무너진 바로 그 순간에 가장 확신에 찬 숫자가 나온다.
+        #
+        # 실제로 겪었다: 국면별로 쪼개 bear 20일 × 63일 지평을 재니 유효표본
+        # 20.0 · t -20.6 이 나왔다. lag(62)이 표본(20)보다 크니 계산이 성립할
+        # 수 없는 자리인데 화면에는 '판정 가능' 으로 보일 값이었다.
+        #
+        # 못 재면 못 잰다고 한다 — se=None 이면 t_stat 도 None 이 되고,
+        # 화면과 발행문은 이미 그걸 "통계적 판단 불가" 로 읽는다.
+        if n <= 2 * lag:
+            out[slug] = {
+                "mean_ic":     round(mean_ic, 4),
+                "se":          None,
+                "t_stat":      None,
+                "n":           n,
+                "effective_n": 0.0,
+                "hit_rate":    round(float((arr > 0).mean()) * 100, 1),
+            }
+            continue
+
         # 유효 표본: 겹침 보정으로 표준오차가 커진 만큼 표본이 줄어든 것으로 읽는다.
         if se and se > 0 and not np.isnan(se) and not np.isnan(plain_se):
             effective_n = min(n * (plain_se / se) ** 2, float(n))
