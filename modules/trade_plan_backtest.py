@@ -30,18 +30,36 @@ def _simulate_outcome(
     highs: np.ndarray, lows: np.ndarray, start_idx: int, direction: str,
     entry_low: float, entry_high: float, stop: float, target: float, rr: float,
     *, fill_window: int = DEFAULT_FILL_WINDOW, hold_window: int = DEFAULT_HOLD_WINDOW,
+    sessions: np.ndarray | None = None, opens: np.ndarray | None = None,
+    entry_ref: float | None = None,
 ) -> dict:
     """
     start_idx 다음 봉부터 진입 체결을 찾고, 체결되면 손절/목표를 시뮬레이션.
 
-    반환: {"outcome": "win"|"loss"|"timeout"|"nofill", "r": float,
+    반환: {"outcome": "win"|"loss"|"timeout"|"eod"|"nofill", "r": float,
            "fill_idx": int|None, "exit_idx": int|None}
       long  체결: 이후 봉의 Low  <= entry_high (되돌림 진입)
       short 체결: 이후 봉의 High >= entry_low
+
+    sessions 를 주면 **당일 청산 단타**로 시뮬레이션한다 (opens 도 함께 필요).
+    세션 마지막 봉에서는 손절·목표를 보지 않고 그 봉의 **시가**로 턴다 —
+    러너가 15:45 ET 에 시장가를 내는 것과 같은 규칙이어야, 여기서 잰 숫자가
+    러너를 대표한다. 마감 종가로 재면 러너가 못 내는 15분치가 섞인다.
     """
     n = len(highs)
+    intraday = sessions is not None
+    if intraday and opens is None:
+        raise ValueError("sessions 를 주면 opens 도 필요합니다 (EOD 청산가).")
+
+    def _is_session_end(k: int) -> bool:
+        return intraday and (k + 1 >= n or sessions[k + 1] != sessions[k])
+
+    # 단타는 같은 세션 안에서만 체결을 찾는다. 세션 마지막 봉은 뺀다 —
+    # 거기서 체결되면 같은 봉에서 바로 청산해야 하는데 봉 안의 순서를 모른다.
     fill_idx = None
     for j in range(start_idx + 1, min(start_idx + 1 + fill_window, n)):
+        if intraday and (sessions[j] != sessions[start_idx] or _is_session_end(j)):
+            break
         if direction == "long" and lows[j] <= entry_high:
             fill_idx = j
             break
@@ -51,7 +69,20 @@ def _simulate_outcome(
     if fill_idx is None:
         return {"outcome": "nofill", "r": 0.0, "fill_idx": None, "exit_idx": None}
 
+    # EOD 청산 R 은 **플랜의 entry_ref** 로 재야 한다. rr 이 그 기준으로
+    # 계산돼 있어서, 다른 기준(예: 구간 중간값)을 쓰면 목표가에 딱 닿아 턴
+    # 트레이드의 R 이 rr 과 안 맞는다. 안 주면 구간 중간값으로 대신한다.
+    if entry_ref is None:
+        entry_ref = (entry_low + entry_high) / 2
     for k in range(fill_idx, min(fill_idx + hold_window, n)):
+        if intraday and _is_session_end(k):
+            exit_px = float(opens[k])
+            if direction == "long":
+                r = (exit_px - entry_ref) / (entry_ref - stop)
+            else:
+                r = (entry_ref - exit_px) / (stop - entry_ref)
+            return {"outcome": "eod", "r": round(float(r), 4),
+                    "fill_idx": fill_idx, "exit_idx": k}
         if direction == "long":
             hit_stop = lows[k] <= stop
             hit_tgt = highs[k] >= target
@@ -67,7 +98,7 @@ def _simulate_outcome(
 
 def _stats(trades: list[dict]) -> dict:
     """트레이드 목록 → 체결률·승률·평균R·기대값 집계."""
-    filled = [t for t in trades if t["outcome"] in ("win", "loss", "timeout")]
+    filled = [t for t in trades if t["outcome"] in ("win", "loss", "timeout", "eod")]
     wins = [t for t in filled if t["outcome"] == "win"]
     losses = [t for t in filled if t["outcome"] == "loss"]
     resolved = wins + losses
@@ -77,7 +108,9 @@ def _stats(trades: list[dict]) -> dict:
         "nofill": len(trades) - len(filled),
         "wins": len(wins),
         "losses": len(losses),
-        "timeouts": len(filled) - len(resolved),
+        # 뺄셈으로 세면 안 된다 — EOD 청산이 전부 timeout 으로 잡힌다.
+        "timeouts": len([t for t in trades if t["outcome"] == "timeout"]),
+        "eod_exits": len([t for t in trades if t["outcome"] == "eod"]),
         "win_rate": (len(wins) / len(resolved)) if resolved else float("nan"),
         # avg_r: timeout 을 0 으로 포함한 체결 트레이드 평균 (실현 기대 R)
         "avg_r": (sum(t["r"] for t in filled) / len(filled)) if filled else float("nan"),
@@ -90,15 +123,18 @@ def backtest_trade_plans(
     df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
     fill_window: int = DEFAULT_FILL_WINDOW, hold_window: int = DEFAULT_HOLD_WINDOW,
     cooldown: int = DEFAULT_COOLDOWN, min_history: int = MIN_BARS,
+    sessions: np.ndarray | None = None,
 ) -> dict:
     """
     한 종목 OHLCV 전 구간을 걸어가며 유효 플랜을 시뮬레이션한다.
 
     겹치는 트레이드를 막으려고, 한 셋업이 종료된 뒤 cooldown 봉만큼 건너뛴다.
+    sessions 를 주면 당일 청산 단타로 시뮬레이션한다 (`_simulate_outcome` 참고).
     반환: {"all": stats, "long": stats, "short": stats, "trades": [...]}
     """
     highs = df["High"].to_numpy(dtype=float)
     lows = df["Low"].to_numpy(dtype=float)
+    opens = df["Open"].to_numpy(dtype=float) if sessions is not None else None
     n = len(df)
     trades: list[dict] = []
 
@@ -113,6 +149,7 @@ def backtest_trade_plans(
             plan["entry"]["low"], plan["entry"]["high"],
             plan["stop"], plan["targets"][0], plan["rr"][0],
             fill_window=fill_window, hold_window=hold_window,
+            sessions=sessions, opens=opens, entry_ref=plan["entry"]["ref"],
         )
         # 가격 좌표도 함께 남긴다. R 은 위험 1단위 기준이라 그 자체로는
         # 거래비용을 못 잰다 — 같은 +1R 이어도 손절이 1% 떨어져 있으면
