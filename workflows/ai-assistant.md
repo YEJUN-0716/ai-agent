@@ -12,9 +12,14 @@
    | 항목 | 무엇 |
    |---|---|
    | `ANTHROPIC_API_KEY` | Claude API 키 |
-   | `TELEGRAM_BOT_TOKEN` | @BotFather에게 받은 봇 토큰 |
-   | `TELEGRAM_ALLOWED_CHAT_IDS` | 내 chat_id. 여기 없는 사람은 봇이 무시한다 |
    | `STOCK_ANALYZER_PATH` | stock-analyzer 폴더 경로 |
+   | `TELEGRAM_BOT_TOKEN` | @BotFather에게 받은 봇 토큰 (선택) |
+   | `TELEGRAM_ALLOWED_CHAT_IDS` | 내 chat_id. 여기 없는 사람은 봇이 무시한다 |
+
+   메신저 창구는 텔레그램·디스코드 둘 다 선택이다. **토큰을 비우면 그 창구를
+   열지 않는다** — 텔레그램을 안 쓰기로 했으면 `TELEGRAM_BOT_TOKEN`을 비우고
+   서버를 다시 띄우면 된다. 코드를 지울 필요는 없다. 둘 다 비우면 웹 채팅만
+   돌고, 시작 로그가 그 사실을 알린다.
 
    내 chat_id 확인법: 봇에게 아무 말이나 보낸 뒤
    `https://api.telegram.org/bot<토큰>/getUpdates` 를 브라우저로 연다.

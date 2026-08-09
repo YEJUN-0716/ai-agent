@@ -120,6 +120,14 @@ def _parse_ids(name: str, raw: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _optional_channel(token_name: str, ids_name: str) -> tuple[str, frozenset[int]]:
+    """메신저 창구 한 곳의 토큰과 명단. 토큰이 비어 있으면 그 창구는 안 연다."""
+    token = os.environ.get(token_name, "").strip()
+    if not token:
+        return "", frozenset()
+    return token, _parse_ids(ids_name, _require(ids_name))
+
+
 def _parse_int(name: str, default: int) -> int:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -135,19 +143,15 @@ def _parse_int(name: str, default: int) -> int:
 def load_settings() -> Settings:
     """환경변수를 읽어 검증된 설정을 만든다. 잘못됐으면 ConfigError."""
     api_key = _require("ANTHROPIC_API_KEY")
-    bot_token = _require("TELEGRAM_BOT_TOKEN")
-    chat_ids = _parse_ids(
-        "TELEGRAM_ALLOWED_CHAT_IDS", _require("TELEGRAM_ALLOWED_CHAT_IDS")
+    # 메신저 창구는 둘 다 선택이다. 토큰을 비우면 그 창구를 열지 않는다.
+    # 다만 토큰만 넣고 명단을 비워두면 봇이 접속만 하고 아무에게도 답하지
+    # 않는다 — 조용히 고장나게 두지 않고 여기서 막는다.
+    bot_token, chat_ids = _optional_channel(
+        "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_IDS"
     )
-
-    # 디스코드는 안 써도 된다. 다만 토큰만 넣고 명단을 비워두면 봇이 접속만
-    # 하고 아무에게도 답하지 않는다 — 조용히 고장나게 두지 않고 여기서 막는다.
-    discord_token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    discord_ids: frozenset[int] = frozenset()
-    if discord_token:
-        discord_ids = _parse_ids(
-            "DISCORD_ALLOWED_USER_IDS", _require("DISCORD_ALLOWED_USER_IDS")
-        )
+    discord_token, discord_ids = _optional_channel(
+        "DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USER_IDS"
+    )
 
     stock_path = Path(_require("STOCK_ANALYZER_PATH")).expanduser()
     if not stock_path.is_dir():

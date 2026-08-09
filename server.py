@@ -71,20 +71,22 @@ async def _main() -> None:
     telegram = ChatChannel(settings, brain, name="telegram")
 
     log.info("웹 채팅: http://%s:%s", settings.web_host, settings.web_port)
-    log.info(
-        "텔레그램 폴링 시작 (허용 chat_id: %s)",
-        ", ".join(str(i) for i in sorted(settings.telegram_allowed_chat_ids)),
-    )
 
     # 한쪽이 죽어도 다른 쪽은 계속 돈다. 다만 죽은 사실은 즉시 알려야 한다 —
-    # gather가 끝난 뒤에 로그를 남기면, 텔레그램이 영원히 대기하는 구조라
+    # gather가 끝난 뒤에 로그를 남기면, 창구가 영원히 대기하는 구조라
     # 그 로그는 영원히 출력되지 않는다.
-    tasks = [
-        _supervise("웹 서버", _run_web(settings, brain)),
-        _supervise(
-            "텔레그램", _run_telegram(telegram, settings.telegram_bot_token)
-        ),
-    ]
+    tasks = [_supervise("웹 서버", _run_web(settings, brain))]
+
+    if settings.telegram_bot_token:
+        log.info(
+            "텔레그램 폴링 시작 (허용 chat_id: %s)",
+            ", ".join(str(i) for i in sorted(settings.telegram_allowed_chat_ids)),
+        )
+        tasks.append(
+            _supervise(
+                "텔레그램", _run_telegram(telegram, settings.telegram_bot_token)
+            )
+        )
 
     if settings.discord_bot_token:
         discord_channel = ChatChannel(settings, brain, name="discord")
@@ -98,6 +100,9 @@ async def _main() -> None:
                 discord_bot.run(discord_channel, settings.discord_bot_token),
             )
         )
+
+    if not (settings.telegram_bot_token or settings.discord_bot_token):
+        log.warning("메신저 창구가 하나도 열리지 않았습니다. 웹 채팅만 씁니다.")
 
     await asyncio.gather(*tasks)
 
