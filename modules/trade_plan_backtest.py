@@ -114,9 +114,17 @@ def backtest_trade_plans(
             plan["stop"], plan["targets"][0], plan["rr"][0],
             fill_window=fill_window, hold_window=hold_window,
         )
+        # 가격 좌표도 함께 남긴다. R 은 위험 1단위 기준이라 그 자체로는
+        # 거래비용을 못 잰다 — 같은 +1R 이어도 손절이 1% 떨어져 있으면
+        # 수수료가 5% 떨어진 경우의 다섯 배를 먹는다. 비용을 R 로 바꾸려면
+        # 위험이 가격의 몇 %였는지가 있어야 한다.
         trades.append({
             "idx": i, "direction": plan["direction"],
-            "confidence": plan["confidence"], **res,
+            "confidence": plan["confidence"],
+            "entry_ref": plan["entry"]["ref"],
+            "stop_price": plan["stop"],
+            "target_price": plan["targets"][0],
+            **res,
         })
         landing = res["exit_idx"] or res["fill_idx"] or (i + fill_window)
         i = max(i + 1, landing + cooldown)

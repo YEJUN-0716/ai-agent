@@ -117,3 +117,34 @@ def test_backtest_runs_and_schema():
     assert isinstance(out["trades"], list)
     # 집계 정합성: all.setups == long.setups + short.setups
     assert out["all"]["setups"] == out["long"]["setups"] + out["short"]["setups"]
+
+
+# ── 비용 환산에 필요한 가격 좌표 ─────────────────────────────────────
+#
+# R 은 위험 1단위 기준이라 그 자체로는 거래비용을 못 잰다. 손절이 진입가에서
+# 몇 % 떨어져 있었는지가 있어야 수수료를 R 로 바꿀 수 있다.
+
+def test_trades_carry_price_coordinates():
+    import numpy as np
+    import pandas as pd
+
+    n = 200
+    close = pd.Series([100 + 0.3 * i + 4 * np.sin(i / 8) for i in range(n)],
+                      index=pd.bdate_range("2025-01-01", periods=n))
+    df = pd.DataFrame({
+        "Open": close * 0.995, "High": close * 1.02,
+        "Low": close * 0.98, "Close": close,
+        "Volume": pd.Series([1_000_000] * n, index=close.index),
+    })
+
+    trades = bt.backtest_trade_plans(df)["trades"]
+    assert trades, "이 패널에서 셋업이 하나도 안 나오면 테스트가 무의미하다"
+
+    for t in trades:
+        assert t["entry_ref"] > 0 and t["stop_price"] > 0
+        # 위험폭이 0 이면 비용을 R 로 나눌 수 없다 — 유효 플랜이면 항상 양수다
+        assert abs(t["entry_ref"] - t["stop_price"]) > 0
+        if t["direction"] == "long":
+            assert t["stop_price"] < t["entry_ref"] < t["target_price"]
+        else:
+            assert t["target_price"] < t["entry_ref"] < t["stop_price"]
