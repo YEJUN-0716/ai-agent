@@ -139,6 +139,23 @@ def _fetch_ohlc(symbol: str, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def daily_bars(symbol: str, since: date, until: date | None = None) -> list[tuple]:
+    """[since, until] 일봉을 (날짜, 시, 고, 저, 종) 튜플 목록으로.
+
+    체결·청산 판정을 러너가 도는 순간의 종가가 아니라 **일봉 되짚기**로 하기
+    위한 재료다. 주말·공휴일·러너 실패로 며칠 빠져도 결과가 안 바뀐다.
+    """
+    end = (until or date.today()) + timedelta(days=1)
+    df = _fetch_ohlc(symbol, since, end)
+    if df.empty or "Open" not in df:
+        return []
+    cols = df[["Open", "High", "Low", "Close"]].dropna()
+    return [
+        (idx.date().isoformat(), float(o), float(h), float(lo), float(c))
+        for idx, (o, h, lo, c) in zip(cols.index, cols.to_numpy())
+    ]
+
+
 def next_open_price(symbol: str, after: date) -> tuple[float, str] | None:
     """`after` 다음 거래일의 시가와 그 날짜를 반환. 아직 열리지 않았으면 None."""
     df = _fetch_ohlc(symbol, after + timedelta(days=1),
@@ -165,15 +182,205 @@ def last_close_price(symbol: str) -> float:
     return float(closes.iloc[-1]) if not closes.empty else 0.0
 
 
+# ── 트레이드 플랜 주문 ─────────────────────────────────────────────────
+# 백테스트(modules/trade_plan_backtest._simulate_outcome)가 채점한 규칙 그대로다.
+# 숫자가 갈라지면 장부 성적을 백테스트의 +0.66R 과 같은 단위로 비교할 수 없다.
+LIMIT_FILL_WINDOW = 20    # 진입 구간에 이 거래일 안에 안 닿으면 주문 폐기
+PLAN_HOLD_WINDOW  = 40    # 체결 후 이 거래일 안에 손절/목표 안 나면 시가 청산
+
+
+def scan_limit_fill(bars: list[tuple], limit_price: float,
+                    window: int = LIMIT_FILL_WINDOW) -> dict:
+    """지정가 진입 판정. bars 는 **주문 다음 거래일부터**의 일봉.
+
+    체결가를 limit_price 로 고정하지 않고 `min(시가, limit_price)` 를 쓴다.
+    갭하락으로 진입 구간을 뛰어넘고 열리면 실제로 받는 값은 시가다. 지정가로
+    적어두면 장부가 현실보다 좋아진다.
+
+    반환: {"status": "filled"|"expired"|"waiting", ...}
+    """
+    for day, o, _high, low, _close in bars[:window]:
+        if low <= limit_price:
+            return {"status": "filled", "date": day, "price": min(o, limit_price)}
+    if len(bars) >= window:
+        return {"status": "expired"}
+    return {"status": "waiting"}
+
+
+def scan_plan_exit(bars: list[tuple], stop: float, target: float,
+                   window: int = PLAN_HOLD_WINDOW) -> dict | None:
+    """손절/목표 청산 판정. bars 는 **체결 봉부터**의 일봉. 아직이면 None.
+
+    한 봉에 손절과 목표가 둘 다 걸리면 **손절 우선**이다. 일봉만으로는 어느
+    쪽이 먼저였는지 알 수 없으므로 보수적으로 잡는다 (백테스트와 동일).
+    """
+    for day, o, high, low, _close in bars[:window]:
+        if low <= stop:
+            return {"outcome": "loss", "date": day, "price": min(o, stop)}
+        if high >= target:
+            return {"outcome": "win", "date": day, "price": max(o, target)}
+    if len(bars) > window:
+        day, o = bars[window][0], bars[window][1]
+        return {"outcome": "timeout", "date": day, "price": o}
+    return None
+
+
+def realized_r(entry_fill: float, stop: float, exit_price: float) -> float:
+    """실현 R = (청산가 − 진입가) ÷ (진입가 − 손절가). 롱 기준.
+
+    이 값이 이 장부의 진짜 산출물이다. %수익률과 달리 백테스트의 기대값과
+    **같은 단위**라 직접 비교할 수 있다.
+    """
+    risk = entry_fill - stop
+    if risk <= 0:
+        return 0.0
+    return (exit_price - entry_fill) / risk
+
+
+def place_limit_entry(symbol: str, qty: int, limit_price: float, plan: dict,
+                      market: str = "US", meta: dict | None = None) -> dict:
+    """진입 구간 지정가 매수를 예약한다. LIMIT_FILL_WINDOW 안에 안 닿으면 폐기.
+
+    시가 시장가로 사면 손절폭과 R:R 이 계획과 달라져, 백테스트가 잰 +0.66R 이
+    이 장부에 적용되지 않는다. 그래서 백테스트가 채점한 방식 그대로 기다린다.
+
+    예약 현금은 `qty × limit_price` 로 잡는다. 체결가는 min(시가, 지정가) 라
+    이보다 클 수 없으므로 예약이 부족해지는 일은 없다.
+    """
+    qty = int(qty)
+    if qty < 1:
+        raise ValueError(f"{symbol} 수량이 1주 미만입니다 (소수점 거래 불가).")
+
+    notional_krw = qty * float(limit_price) * (_FX if market != "KRX" else 1.0)
+    state = load_state()
+    available = available_krw(state)
+    if notional_krw > available:
+        raise ValueError(
+            f"{symbol} 매수 {notional_krw:,.0f}원을 예약할 수 없습니다 — "
+            f"가용 현금 {available:,.0f}원.")
+
+    state["pending"].append({
+        "side":         "buy",
+        "kind":         "limit_entry",
+        "symbol":       symbol,
+        "qty":          qty,
+        "limit_price":  float(limit_price),
+        "notional_krw": notional_krw,
+        "placed_date":  market_date().isoformat(),
+        "market":       market,
+        "plan":         dict(plan),
+        "meta":         dict(meta or {}),
+    })
+    save_state(state)
+    print(f"  [가상] 지정가 매수 예약 {symbol} {qty}주 @ ${limit_price:,.2f} "
+          f"(손절 ${plan.get('stop', 0):,.2f} / 목표 ${plan.get('target', 0):,.2f}, "
+          f"등급 {plan.get('grade', '?')}) — {LIMIT_FILL_WINDOW}거래일 대기")
+    return {"ok": True, "id": f"virtual-limit-{symbol}-{market_date().isoformat()}",
+            "virtual": True}
+
+
+def _settle_plan_exits(state: dict, fx: float) -> dict:
+    """플랜이 붙은 보유 포지션을 손절/목표/만료로 청산한다.
+
+    체결 봉부터 되짚으므로 러너가 며칠 빠져도 결과가 같다. 반대로 현재
+    check_trailing_stops 는 러너가 도는 순간의 종가만 봐서 그 사이의 손절
+    이탈을 통째로 놓친다.
+    """
+    for sym, pos in list(state["positions"].items()):
+        plan = pos.get("plan")
+        if not plan:
+            continue
+        entry_date = datetime.strptime(pos["entry_date"], "%Y-%m-%d").date()
+        bars = daily_bars(sym, entry_date)
+        exit_hit = scan_plan_exit(bars, float(plan["stop"]), float(plan["target"]))
+        if exit_hit is None:
+            continue
+
+        qty = pos["qty"]
+        state = _fill_sell(state, {"symbol": sym, "qty": qty},
+                           exit_hit["price"], exit_hit["date"], fx)
+        r = realized_r(float(plan["entry_fill"]), float(plan["stop"]),
+                       exit_hit["price"])
+        state["trades"][-1].update({
+            "outcome":    exit_hit["outcome"],
+            "r_realized": round(r, 3),
+            "grade":      plan.get("grade"),
+            "plan":       True,
+        })
+        print(f"  [가상] 플랜 청산 {sym} {exit_hit['outcome']} "
+              f"@ ${exit_hit['price']:,.2f} ({exit_hit['date']}, {r:+.2f}R)")
+    return state
+
+
+def _settle_limit_entry(state: dict, order: dict, fx: float) -> tuple[dict, bool]:
+    """(state, 대기열에 남길지) — 체결/폐기되면 False."""
+    sym = order["symbol"]
+    placed = datetime.strptime(order["placed_date"], "%Y-%m-%d").date()
+    bars = daily_bars(sym, placed + timedelta(days=1))
+    res = scan_limit_fill(bars, order["limit_price"])
+
+    if res["status"] == "waiting":
+        return state, True
+
+    if res["status"] == "expired":
+        # 미체결 폐기도 기록에 남긴다. 백테스트에서 셋업의 36% 가 여기로 가므로,
+        # 안 남기면 장부 승률이 체결분만 보고 부풀어 보인다.
+        state["trades"].append({
+            "date": bars[-1][0] if bars else placed.isoformat(),
+            "symbol": sym, "side": "nofill", "qty": order["qty"],
+            "outcome": "nofill", "r_realized": 0.0,
+            "grade": (order.get("plan") or {}).get("grade"), "plan": True,
+        })
+        print(f"  [가상] 미체결 폐기 {sym} — {LIMIT_FILL_WINDOW}거래일 안에 "
+              f"${order['limit_price']:,.2f} 미도달")
+        return state, False
+
+    price_usd, fill_date = res["price"], res["date"]
+    cost_krw = order["qty"] * price_usd * fx
+    if cost_krw > state["cash_krw"]:
+        print(f"  [가상] {sym} 매수 불가 — 현금 부족")
+        return state, False
+
+    plan = dict(order.get("plan") or {})
+    plan["entry_fill"] = round(price_usd, 4)
+    state["positions"][sym] = {
+        "qty":           order["qty"],
+        "avg_price_usd": price_usd,
+        "entry_date":    fill_date,
+        "plan":          plan,
+    }
+    state["cash_krw"] -= cost_krw
+    state["trades"].append({
+        "date": fill_date, "symbol": sym, "side": "buy",
+        "qty": order["qty"], "price_usd": round(price_usd, 4),
+        "amount_krw": round(cost_krw, 0),
+        "meta": dict(order.get("meta") or {}),
+        "grade": plan.get("grade"), "stop": plan.get("stop"),
+        "target": plan.get("target"), "rr": plan.get("rr"),
+        "risk_pct": plan.get("risk_pct"), "plan": True,
+    })
+    print(f"  [가상] 지정가 체결 {sym} {order['qty']}주 @ ${price_usd:,.2f} ({fill_date})")
+    return state, False
+
+
 # ── 대기 주문 체결 ─────────────────────────────────────────────────────
 def settle_pending(state: dict, fx_krw_per_usd: float) -> dict:
     """
-    대기 주문을 다음 거래일 시가로 체결한다.
+    대기 주문을 체결한다. 청산이 **먼저**여야 같은 날 현금·자리가 정확하다.
 
-    아직 그 날이 오지 않은 주문은 대기열에 남겨 다음 실행 때 다시 시도한다.
+    kind 가 없는 주문은 예전대로 다음 거래일 시가에 체결한다 — 비서(챗봇)의
+    수동 매수가 이 경로를 쓴다.
     """
+    state = _settle_plan_exits(state, fx_krw_per_usd)
+
     remaining = []
     for order in state["pending"]:
+        if order.get("kind") == "limit_entry":
+            state, keep = _settle_limit_entry(state, order, fx_krw_per_usd)
+            if keep:
+                remaining.append(order)
+            continue
+
         placed = datetime.strptime(order["placed_date"], "%Y-%m-%d").date()
         fill = next_open_price(order["symbol"], placed)
         if fill is None:
