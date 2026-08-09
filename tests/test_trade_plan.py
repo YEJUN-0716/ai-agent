@@ -312,3 +312,38 @@ def test_forced_direction_rejects_unknown_value():
     df = _close_frame(np.linspace(150, 100, 90))
     with pytest.raises(ValueError):
         tp.build_trade_plan(df, direction="매도")
+
+
+# ── 실행 등급 (비용 내성) ────────────────────────────────────────────
+#
+# 확신도는 결과와 연결된 것이 측정되지 않았다 (롱 기준 high/medium/low 의
+# 기대값 95% 구간이 겹친다, 2026-08-10). 실행 가치를 가르는 건 손절 거리다 —
+# 총 기대값은 4분위가 거의 같은데 손익분기 비용이 29.6bp ~ 88.8bp 로 갈린다.
+
+def test_cost_grade_follows_stop_distance():
+    cost_grade = tp.cost_grade
+
+    assert cost_grade(100.0, 97.0)[0] == "A"      # 3.0% > 2.34
+    assert cost_grade(100.0, 98.0)[0] == "B"      # 2.0% > 1.75
+    assert cost_grade(100.0, 98.5)[0] == "C"      # 1.5% > 1.34
+    assert cost_grade(100.0, 99.5)[0] == "D"      # 0.5% — 실제 비용에 죽는다
+
+
+def test_cost_grade_is_direction_agnostic():
+    """숏은 손절이 위에 있다 — 거리는 절댓값으로 잰다."""
+    assert tp.cost_grade(100.0, 103.0) == tp.cost_grade(100.0, 97.0)
+
+
+def test_cost_grade_reports_the_distance():
+    grade, pct = tp.cost_grade(200.0, 194.0)
+    assert grade == "A" and pct == pytest.approx(3.0)
+
+
+def test_every_plan_carries_a_grade():
+    """유효하든 아니든 키 모양은 같아야 한다 — 화면이 KeyError 로 죽는다."""
+    empty = tp.build_trade_plan(pd.DataFrame())
+    assert empty["cost_grade"] == "D" and empty["risk_pct"] == 0.0
+
+    plan = tp._assemble_plan("long", 100.0, 95.0, 97.0, 93.0, [102.0, 108.0])
+    assert plan["cost_grade"] in ("A", "B", "C", "D")
+    assert plan["risk_pct"] > 0

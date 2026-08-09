@@ -5012,7 +5012,8 @@ def trade_plan_report():
     return build_ops_report(
         '트레이드 플랜', '🎯',
         '롱 셋업' if plan['direction'] == 'long' else '숏 셋업',
-        [f"{tk} · 확신도 {plan['confidence'].upper()} · 동의 신호 {plan['confluence']}개",
+        [f"{tk} · 실행등급 {plan['cost_grade']} (손절 {plan['risk_pct']:.1f}%) · "
+         f"ICT 구조 동의 {plan['confidence'].upper()}",
          f"진입 {p(plan['entry']['low'])} ~ {p(plan['entry']['high'])} · 손절 {p(plan['stop'])}",
          f"목표1 {p(plan['targets'][0])} ({rr1})" if plan['targets'] else "목표 산출 불가",
          plan['signals'][0] if plan['signals'] else ''])
@@ -7835,6 +7836,7 @@ def main():
             st.caption("상단 커맨드 바에서 종목을 분석하면 롱/숏 플랜이 그려집니다.")
             return
         try:
+            from modules import trade_plan as _tp
             from modules.ict_analysis import plot_ict_chart
             from modules.trade_plan import build_trade_plan
         except Exception as e:
@@ -7853,8 +7855,14 @@ def main():
 
         _p = lambda v: _fmt_price(v, _krw)   # noqa: E731
         _dir = "🟢 롱" if _plan['direction'] == 'long' else "🔴 숏"
-        st.markdown(f"**{_dir} · 확신도 {_plan['confidence'].upper()} · "
-                    f"동의 신호 {_plan['confluence']}개 · 편향점수 {_plan['bias_score']:+.0f}**")
+        # '확신도' 라고 부르지 않는다 — 그 등급은 결과와 연결된 것이 측정되지
+        # 않았다(롱 기준 high/medium/low 기대값 구별 불가, 2026-08-10). 실행
+        # 가치를 가르는 건 손절 거리(비용 내성)뿐이라 그쪽을 앞에 세운다.
+        st.markdown(f"**{_dir} · 실행등급 {_plan['cost_grade']} "
+                    f"(손절 {_plan['risk_pct']:.1f}% · 손익분기 편도 "
+                    f"{_tp.COST_GRADE_BREAKEVEN_BP[_plan['cost_grade']]:.0f}bp) · "
+                    f"ICT 구조 동의 {_plan['confidence'].upper()} "
+                    f"({_plan['bias_score']:+.0f})**")
         if not _plan['valid']:
             st.info(f"유효 셋업 아님 — {_plan['reason_invalid']}")
         else:
