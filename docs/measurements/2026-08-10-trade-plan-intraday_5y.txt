@@ -1,0 +1,52 @@
+15분봉 트레이드 플랜 측정 · 30종목 · 2021-08-11 13:30:00 ~ 2026-08-07 19:45:00
+당일 청산(15:45 ET 시가) · 비용 6bp 왕복
+
+── 설정 A_봉그대로 (scale=1) ──
+  ── 일봉 규칙을 고를 때 안 본 구간 (~2024-12-19) ──
+  전체                     setups=35872  filled=18128  W/L=2920/9722  eod=5486  winrate=  23%  expectancy=-0.04R  avg=+0.37R
+    └ 비용차감(6bp)     평균 -0.00R  (n=18128)
+    └ 롱                    setups=28015  filled=14383  W/L=2241/7634  eod=4508  winrate=  23%  expectancy=-0.04R  avg=+0.41R
+    └ 숏                    setups= 7857  filled= 3745  W/L= 679/2088  eod= 978  winrate=  25%  expectancy=-0.05R  avg=+0.23R
+
+  ── 본 구간 (2024-12-20~) ──
+  전체                     setups=14975  filled= 6949  W/L=1038/3569  eod=2342  winrate=  23%  expectancy=-0.07R  avg=+0.40R
+    └ 비용차감(6bp)     평균 +0.05R  (n=6949)
+    └ 롱                    setups=11544  filled= 5562  W/L= 781/2856  eod=1925  winrate=  21%  expectancy=-0.09R  avg=+0.41R
+    └ 숏                    setups= 3431  filled= 1387  W/L= 257/ 713  eod= 417  winrate=  26%  expectancy=+0.03R  avg=+0.34R
+
+  ── 연도별 ──
+  2021                   setups= 4108  filled= 2150  W/L= 339/1096  eod= 715  winrate=  24%  expectancy=-0.04R  avg=+0.40R
+    └ 비용차감(6bp)     평균 -0.01R  (n=2150)
+    └ 롱                    setups= 3327  filled= 1706  W/L= 272/ 837  eod= 597  winrate=  25%  expectancy=+0.01R  avg=+0.47R
+    └ 숏                    setups=  781  filled=  444  W/L=  67/ 259  eod= 118  winrate=  21%  expectancy=-0.22R  avg=+0.13R
+  2022                   setups=10872  filled= 5112  W/L= 846/2829  eod=1437  winrate=  23%  expectancy=-0.02R  avg=+0.39R
+    └ 비용차감(6bp)     평균 +0.10R  (n=5112)
+    └ 롱                    setups= 8187  filled= 4022  W/L= 625/2218  eod=1179  winrate=  22%  expectancy=-0.05R  avg=+0.41R
+    └ 숏                    setups= 2685  filled= 1090  W/L= 221/ 611  eod= 258  winrate=  27%  expectancy=+0.08R  avg=+0.29R
+  2023                   setups=10486  filled= 5407  W/L= 886/2892  eod=1629  winrate=  23%  expectancy=-0.04R  avg=+0.37R
+    └ 비용차감(6bp)     평균 -0.03R  (n=5407)
+    └ 롱                    setups= 8321  filled= 4297  W/L= 685/2273  eod=1339  winrate=  23%  expectancy=-0.02R  avg=+0.42R
+    └ 숏                    setups= 2165  filled= 1110  W/L= 201/ 619  eod= 290  winrate=  25%  expectancy=-0.09R  avg=+0.20R
+  2024                   setups=10667  filled= 5535  W/L= 855/2947  eod=1733  winrate=  22%  expectancy=-0.07R  avg=+0.35R
+    └ 비용차감(6bp)     평균 -0.06R  (n=5535)
+    └ 롱                    setups= 8317  filled= 4415  W/L= 664/2338  eod=1413  winrate=  22%  expectancy=-0.07R  avg=+0.38R
+    └ 숏                    setups= 2350  filled= 1120  W/L= 191/ 609  eod= 320  winrate=  24%  expectancy=-0.08R  avg=+0.23R
+  2025                   setups=10321  filled= 4944  W/L= 735/2575  eod=1634  winrate=  22%  expectancy=-0.08R  avg=+0.38R
+    └ 비용차감(6bp)     평균 +0.02R  (n=4944)
+    └ 롱                    setups= 8086  filled= 3966  W/L= 559/2059  eod=1348  winrate=  21%  expectancy=-0.10R  avg=+0.40R
+    └ 숏                    setups= 2235  filled=  978  W/L= 176/ 516  eod= 286  winrate=  25%  expectancy=+0.00R  avg=+0.29R
+  2026                   setups= 4393  filled= 1929  W/L= 297/ 952  eod= 680  winrate=  24%  expectancy=-0.00R  avg=+0.46R
+    └ 비용차감(6bp)     평균 +0.15R  (n=1929)
+    └ 롱                    setups= 3321  filled= 1539  W/L= 217/ 765  eod= 557  winrate=  22%  expectancy=-0.04R  avg=+0.46R
+    └ 숏                    setups= 1072  filled=  390  W/L=  80/ 187  eod= 123  winrate=  30%  expectancy=+0.13R  avg=+0.47R
+
+  ── 비용 민감도 (OOS) ──
+    왕복bp    순평균R    p값      n
+        0     +0.373   0.0000  18128
+        1     +0.310   0.0000  18128
+        2     +0.248   0.0000  18128
+        4     +0.124   0.0000  18128
+        6     -0.001   0.5145  18128
+       10     -0.250   1.0000  18128
+
+  순열검정(OOS, 비용차감): p=0.5145 우연과 구분 안 됨

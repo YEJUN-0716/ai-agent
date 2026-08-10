@@ -151,49 +151,49 @@ def _assemble_plan(
     }
 
 
-def _pick_long_entry(df: pd.DataFrame, cur: float) -> tuple[float, float, str]:
+def _pick_long_entry(df: pd.DataFrame, cur: float, *, scale: int = 1) -> tuple[float, float, str]:
     """롱 진입 구간: 현재가 아래 가장 가까운 미체결 강세 구조 → 폴백은 Discount."""
-    obs = find_order_blocks(df, lookback=80, min_move_pct=1.0)
+    obs = find_order_blocks(df, lookback=80 * scale, min_move_pct=1.0)
     cands = [o for o in obs
              if o["type"] == "bull" and not o["mitigated"] and o["top"] <= cur * (1 + NEAR_ZONE_PCT)]
     if cands:
         ob = max(cands, key=lambda o: o["top"])          # 현재가에 가장 가까운(높은) 지지 OB
         return ob["bottom"], ob["top"], "Bullish OB 지지"
 
-    fvgs = [f for f in find_fvg(df, lookback=80, min_gap_pct=0.03)
+    fvgs = [f for f in find_fvg(df, lookback=80 * scale, min_gap_pct=0.03)
             if f["type"] == "bull" and not f["filled"] and f["top"] <= cur * (1 + NEAR_ZONE_PCT)]
     if fvgs:
         f = max(fvgs, key=lambda f: f["top"])
         return f["bottom"], f["top"], "Bullish FVG 지지"
 
-    pdd = premium_discount(df, lookback=60)
+    pdd = premium_discount(df, lookback=60 * scale)
     return pdd["low"], min(pdd["mid"], cur), "Discount 되돌림"
 
 
-def _pick_short_entry(df: pd.DataFrame, cur: float) -> tuple[float, float, str]:
+def _pick_short_entry(df: pd.DataFrame, cur: float, *, scale: int = 1) -> tuple[float, float, str]:
     """숏 진입 구간: 현재가 위 가장 가까운 미체결 약세 구조 → 폴백은 Premium."""
-    obs = find_order_blocks(df, lookback=80, min_move_pct=1.0)
+    obs = find_order_blocks(df, lookback=80 * scale, min_move_pct=1.0)
     cands = [o for o in obs
              if o["type"] == "bear" and not o["mitigated"] and o["bottom"] >= cur * (1 - NEAR_ZONE_PCT)]
     if cands:
         ob = min(cands, key=lambda o: o["bottom"])        # 현재가에 가장 가까운(낮은) 저항 OB
         return ob["bottom"], ob["top"], "Bearish OB 저항"
 
-    fvgs = [f for f in find_fvg(df, lookback=80, min_gap_pct=0.03)
+    fvgs = [f for f in find_fvg(df, lookback=80 * scale, min_gap_pct=0.03)
             if f["type"] == "bear" and not f["filled"] and f["bottom"] >= cur * (1 - NEAR_ZONE_PCT)]
     if fvgs:
         f = min(fvgs, key=lambda f: f["bottom"])
         return f["bottom"], f["top"], "Bearish FVG 저항"
 
-    pdd = premium_discount(df, lookback=60)
+    pdd = premium_discount(df, lookback=60 * scale)
     return max(pdd["mid"], cur), pdd["high"], "Premium 되돌림"
 
 
-def _long_targets(df: pd.DataFrame, cur: float, entry_ref: float) -> list[float]:
+def _long_targets(df: pd.DataFrame, cur: float, entry_ref: float, *, scale: int = 1) -> list[float]:
     """롱 목표: 위쪽 가장 가까운 스윙 고점 → Premium 고가 → 측정된 연장."""
-    swings = find_swing_points(df.tail(80), lookback=5)
+    swings = find_swing_points(df.tail(80 * scale), lookback=5 * scale)
     highs = sorted(p for p in swings[swings["type"] == "H"]["price"].tolist() if p > cur)
-    pdd = premium_discount(df, lookback=60)
+    pdd = premium_discount(df, lookback=60 * scale)
     t1 = highs[0] if highs else pdd["high"]
     if t1 <= entry_ref:
         t1 = pdd["high"]
@@ -201,11 +201,11 @@ def _long_targets(df: pd.DataFrame, cur: float, entry_ref: float) -> list[float]
     return [t1, t2]
 
 
-def _short_targets(df: pd.DataFrame, cur: float, entry_ref: float) -> list[float]:
+def _short_targets(df: pd.DataFrame, cur: float, entry_ref: float, *, scale: int = 1) -> list[float]:
     """숏 목표: 아래쪽 가장 가까운 스윙 저점 → Discount 저가 → 측정된 연장."""
-    swings = find_swing_points(df.tail(80), lookback=5)
+    swings = find_swing_points(df.tail(80 * scale), lookback=5 * scale)
     lows = sorted((p for p in swings[swings["type"] == "L"]["price"].tolist() if p < cur), reverse=True)
-    pdd = premium_discount(df, lookback=60)
+    pdd = premium_discount(df, lookback=60 * scale)
     t1 = lows[0] if lows else pdd["low"]
     if t1 >= entry_ref:
         t1 = pdd["low"]
@@ -302,27 +302,29 @@ def cost_grade(entry_ref: float, stop: float) -> tuple[str, float]:
     return "D", risk_pct
 
 
-def _short_trend_ok(df: pd.DataFrame) -> tuple[bool, str]:
+def _short_trend_ok(df: pd.DataFrame, *, scale: int = 1) -> tuple[bool, str]:
     """
     숏 레짐 게이트: 종목이 실제 하락 국면일 때만 True.
       현재가 < REGIME_MA 이평  AND  이평이 상승 중이 아님(기울기 <= 0)
     레짐을 확인할 데이터가 부족하면 **막는다**(보수적으로, 확인 안 되면 숏 보류).
     """
     close = df["Close"]
-    if len(close) < REGIME_MA + REGIME_SLOPE_LOOKBACK:
+    ma_win = REGIME_MA * scale
+    slope_win = REGIME_SLOPE_LOOKBACK * scale
+    if len(close) < ma_win + slope_win:
         return False, "레짐 확인 불가 (데이터 부족) — 숏 보류"
-    ma = close.rolling(REGIME_MA).mean()
+    ma = close.rolling(ma_win).mean()
     cur = float(close.iloc[-1])
     ma_now = float(ma.iloc[-1])
-    ma_past = float(ma.iloc[-1 - REGIME_SLOPE_LOOKBACK])
+    ma_past = float(ma.iloc[-1 - slope_win])
     if cur < ma_now and ma_now <= ma_past:
         return True, ""
-    return False, f"상위추세 상승/횡보 — 숏 보류 (현재 {cur:.2f} vs MA{REGIME_MA} {ma_now:.2f})"
+    return False, f"상위추세 상승/횡보 — 숏 보류 (현재 {cur:.2f} vs MA{ma_win} {ma_now:.2f})"
 
 
 def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
                      short_trend_filter: bool = True,
-                     direction: str | None = None) -> dict:
+                     direction: str | None = None, scale: int = 1) -> dict:
     """
     ICT 구조 기반 양방향 트레이드 플랜.
 
@@ -348,6 +350,11 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
     """
     if direction not in (None, "long", "short"):
         raise ValueError(f"direction 은 'long' | 'short' | None 만 됩니다: {direction!r}")
+    # scale — 창(lookback)에 곱하는 배수. 일봉은 1, 15분봉에서 일봉과 같은
+    # 실제 시간을 보려면 26. 이 모듈의 창은 전부 **봉 개수** 기준이라
+    # scale 없이 분봉에 먹이면 "50일 추세"가 이틀이 된다.
+    if not isinstance(scale, int) or scale < 1:
+        raise ValueError(f"scale 은 1 이상의 정수여야 합니다: {scale!r}")
 
     empty = {
         "direction": "none", "bias_score": 0, "confidence": "low", "confluence": 0,
@@ -360,12 +367,12 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
         "cost_grade": "D", "risk_pct": 0.0,
         "actionable": False, "reason_not_actionable": "데이터 부족",
     }
-    if df is None or df.empty or len(df) < MIN_BARS:
+    if df is None or df.empty or len(df) < MIN_BARS * scale:
         return empty
 
     try:
         cur = float(df["Close"].iloc[-1])
-        adj_info = calc_ict_adjustment(df)
+        adj_info = calc_ict_adjustment(df, scale=scale)
         adj = int(adj_info.get("adjustment", 0))
         signals = list(adj_info.get("signals", []))
 
@@ -405,19 +412,19 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
 
         # 숏 레짐 게이트 — 종목이 약세가 아니면 숏 보류 (라인은 계산하지 않음)
         if direction == "short" and short_trend_filter:
-            ok, why = _short_trend_ok(df)
+            ok, why = _short_trend_ok(df, scale=scale)
             if not ok:
                 return _short_veto(why)
 
         atr = _atr(df)
         if direction == "long":
-            entry_low, entry_high, struct = _pick_long_entry(df, cur)
+            entry_low, entry_high, struct = _pick_long_entry(df, cur, scale=scale)
             stop = entry_low - ATR_STOP_BUFFER * atr
-            targets = _long_targets(df, cur, (entry_low + entry_high) / 2.0)
+            targets = _long_targets(df, cur, (entry_low + entry_high) / 2.0, scale=scale)
         else:
-            entry_low, entry_high, struct = _pick_short_entry(df, cur)
+            entry_low, entry_high, struct = _pick_short_entry(df, cur, scale=scale)
             stop = entry_high + ATR_STOP_BUFFER * atr
-            targets = _short_targets(df, cur, (entry_low + entry_high) / 2.0)
+            targets = _short_targets(df, cur, (entry_low + entry_high) / 2.0, scale=scale)
 
         plan = _assemble_plan(direction, cur, entry_low, entry_high, stop, targets, min_rr=min_rr)
         plan["bias_score"] = adj

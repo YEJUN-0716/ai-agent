@@ -364,7 +364,7 @@ def detect_crt_setup(df: pd.DataFrame, period: int = 3) -> dict:
 
 
 # ── 자동매매용 ICT 진입 품질 조정 점수 ──────────────────────────────
-def calc_ict_adjustment(df: pd.DataFrame) -> dict:
+def calc_ict_adjustment(df: pd.DataFrame, *, scale: int = 1) -> dict:
     """
     팩터 composite 점수에 가산·감산할 ICT/CRT 기반 조정값 반환.
     범위: -30 ~ +30
@@ -384,8 +384,12 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
       -8   Premium 구간 상단   — 과도 연장, 추격 위험
 
     반환: {"adjustment": int, "signals": list[str], "crt": dict}
+
+    scale — 창(lookback)에 곱하는 배수. 일봉은 1. 15분봉에서 일봉과 같은
+    실제 시간을 보려면 26(정규장 하루 = 15분봉 26개). 이 함수의 창은 전부
+    **봉 개수**라, scale 없이 분봉에 먹이면 "3개월 구조"가 이틀이 된다.
     """
-    if df.empty or len(df) < 60:
+    if df.empty or len(df) < 60 * scale:
         return {"adjustment": 0, "signals": [], "crt": {}}
 
     try:
@@ -394,7 +398,7 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
         signals = []
 
         # 1. CRT Phase 2
-        crt = detect_crt_setup(df)
+        crt = detect_crt_setup(df, period=3 * scale)
         if crt["setup"] == "bullish":
             adj += 20
             signals.append(f"CRT Bullish Phase2 (${crt['swept_erl']:.2f} ERL 스윕→반전)")
@@ -403,7 +407,7 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
             signals.append(f"CRT Bearish Phase2 (${crt['swept_erl']:.2f} ERL 스윕→반전)")
 
         # 2. FVG — 미충족 갭과 현재가 위치
-        fvgs = find_fvg(df, lookback=60, min_gap_pct=0.03)
+        fvgs = find_fvg(df, lookback=60 * scale, min_gap_pct=0.03)
         for f in fvgs:
             if f["filled"]:
                 continue
@@ -420,7 +424,7 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
                 break
 
         # 3. Order Block — 미충족 OB와 현재가 위치 (유형별 첫 번째 OB만 반영)
-        obs = find_order_blocks(df, lookback=60, min_move_pct=1.0)
+        obs = find_order_blocks(df, lookback=60 * scale, min_move_pct=1.0)
         unmitigated = [o for o in obs if not o["mitigated"]]
         for ob in unmitigated:
             zone_l = ob["bottom"] * 0.98
@@ -438,8 +442,8 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
                 break
 
         # 4. BOS / CHoCH 최근 방향
-        swings = find_swing_points(df.tail(80), lookback=5)
-        events = find_bos_choch(df.tail(80), swings)
+        swings = find_swing_points(df.tail(80 * scale), lookback=5 * scale)
+        events = find_bos_choch(df.tail(80 * scale), swings)
         if events:
             last = events[-1]["type"]
             if "bull" in last:
@@ -450,7 +454,7 @@ def calc_ict_adjustment(df: pd.DataFrame) -> dict:
                 signals.append(f"최근 {last.upper()} (베어리시 구조 전환)")
 
         # 5. Premium / Discount
-        pd_info = premium_discount(df, lookback=60)
+        pd_info = premium_discount(df, lookback=60 * scale)
         if pd_info["zone"] == "discount" and pd_info["position_pct"] < 30:
             adj += 5
             signals.append(f"Discount 하단 ({pd_info['position_pct']:.0f}%) — 저평가 진입")
