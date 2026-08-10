@@ -26,7 +26,8 @@ import pandas as pd  # noqa: E402
 from modules.alpaca_data import get_bars  # noqa: E402
 from modules.intraday_session import regular_hours  # noqa: E402
 
-OUT = Path("data/intraday_panel_15m.parquet")
+# 기간을 달리 받아 나란히 비교할 수 있게 출력 경로를 환경변수로 연다.
+OUT = Path(os.environ.get("OUT", "data/intraday_panel_15m.parquet"))
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
 # paper_trade_runner_toss.UNIVERSE_PRESETS["S&P 500 대형 30"] 과 같은 목록.

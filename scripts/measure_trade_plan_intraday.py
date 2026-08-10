@@ -46,10 +46,14 @@ from modules import trade_plan_backtest as bt  # noqa: E402
 from modules.intraday_session import session_ids  # noqa: E402
 from modules.stat_validation import permutation_test_trades  # noqa: E402
 
-# 1종목으로 먼저 시험할 수 있게 환경변수로 갈아끼운다.
+# 패널·설정·산출물 이름을 환경변수로 연다 — 기간이나 설정을 달리한 측정을
+# 나란히 돌려 놓고 비교하려면 서로 덮어쓰지 않아야 한다.
+#   PANEL  다른 패널 파일        ONLY  설정 하나만 (예: A_봉그대로)
+#   TAG    산출물 이름에 붙일 꼬리표
 PANEL = Path(os.environ.get("PANEL", "data/intraday_panel_15m.parquet"))
-OUT_JSON = Path("data/trade_plan_intraday_result.json")
-OUT_TXT = Path("docs/measurements/2026-08-10-trade-plan-intraday.txt")
+_TAG = os.environ.get("TAG", "")
+OUT_JSON = Path(f"data/trade_plan_intraday_result{_TAG}.json")
+OUT_TXT = Path(f"docs/measurements/2026-08-10-trade-plan-intraday{_TAG}.txt")
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
 # 당일 안에서 진입을 기다리는 최대 봉 수(2시간)와 보유 상한(하루).
@@ -64,10 +68,17 @@ BARS_PER_DAY = 26
 IS_START = pd.Timestamp("2024-12-20")
 
 # 왕복 거래비용(bp). 대형주 15분봉 스프레드 + 슬리피지 가정.
-# 값이 바뀌면 결론이 바뀐다 — 재실행할 때 이 숫자부터 다시 볼 것.
+#
+# **이 숫자가 결론을 정한다.** 15분봉에서 이 규칙의 손절폭은 가격의
+# 0.15~0.26% 다. 왕복 6bp = 0.06% 를 R 로 바꾸면 트레이드당 0.4R 이고,
+# 총기대값이 +0.35R 이라 비용이 수익 전부를 먹는다. 손익분기가 5bp 근처라
+# 가정 하나로 판정이 뒤집힌다 — 그래서 하나만 쓰지 않고 훑는다.
 COST_BPS = 6.0
+COST_SWEEP = (0.0, 1.0, 2.0, 4.0, 6.0, 10.0)
 
 SETTINGS = {"A_봉그대로": 1, "B_일수환산": BARS_PER_DAY}
+if os.environ.get("ONLY"):
+    SETTINGS = {k: v for k, v in SETTINGS.items() if k in os.environ["ONLY"].split(",")}
 
 
 def _ohlcv(panel: pd.DataFrame, tk: str) -> pd.DataFrame:
@@ -89,16 +100,36 @@ def _run_ticker(args):
     return out["trades"]
 
 
-def _net_r(trades: list[dict]) -> list[float]:
-    """비용 차감 R. 체결된 트레이드만."""
+def _net_r(trades: list[dict], cost_bps: float = COST_BPS) -> list[float]:
+    """비용 차감 R. 체결된 트레이드만.
+
+    R 은 위험 1단위 기준이라 그 자체로는 비용을 못 잰다. 손절이 가격의
+    risk_pct 만큼 떨어져 있으면 왕복 cost_bps 는 cost_bps/risk_pct 만큼의
+    R 이다 — 손절이 촘촘할수록 같은 스프레드가 더 크게 먹는다.
+    """
     out = []
     for t in trades:
         if t["outcome"] == "nofill":
             continue
         rp = t["risk_pct"]
-        cost_r = (COST_BPS / 10000.0) / rp if rp and rp == rp else float("nan")
+        cost_r = (cost_bps / 10000.0) / rp if rp and rp == rp else float("nan")
         out.append(t["r"] - cost_r)
     return out
+
+
+def _cost_sweep(trades: list[dict]) -> list[str]:
+    """비용 가정별 순 기대값과 순열검정 p. 판정이 어디서 뒤집히는지 본다."""
+    lines = ["  ── 비용 민감도 (OOS) ──",
+             "    왕복bp    순평균R    p값      n"]
+    for bps in COST_SWEEP:
+        net = [r for r in _net_r(trades, bps) if r == r]
+        if not net:
+            continue
+        arr = np.array(net)
+        p = (permutation_test_trades(arr, seed=42)["p_value"]
+             if len(arr) >= 5 else float("nan"))
+        lines.append(f"    {bps:5.0f}    {arr.mean():+7.3f}   {p:6.4f}  {len(arr):5d}")
+    return lines
 
 
 def _fmt(s: dict) -> str:
@@ -182,6 +213,17 @@ def main() -> int:
         for year in sorted({t["entry_date"].year for t in trades}):
             body.append(_block(str(year), [t for t in trades
                                            if t["entry_date"].year == year]))
+
+        # 트레이드를 남긴다 — 비용 가정을 바꿔 다시 보려고 2시간짜리
+        # 백테스트를 또 돌리는 일이 없도록.
+        tr_path = Path(f"data/intraday_trades_{name}{_TAG}.parquet")
+        pd.DataFrame([{k: t[k] for k in
+                       ("ticker", "entry_date", "direction", "confidence",
+                        "outcome", "r", "risk_pct", "entry_ref", "stop_price")}
+                      for t in trades]).to_parquet(tr_path)
+        print(f"  트레이드 저장: {tr_path}", flush=True)
+
+        body += ["", *_cost_sweep(oos)]
 
         net_oos = [r for r in _net_r(oos) if r == r]
         perm = None
