@@ -42,3 +42,6 @@ data/*
 # 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다
 pit_fundamentals.db
 krx_listing_cache.json
+
+# 15분봉 패널 캐시 (한 번 받으면 되는 측정용, 수십 MB)
+data/intraday_panel_15m.parquet
