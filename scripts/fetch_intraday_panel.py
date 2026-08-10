@@ -87,8 +87,11 @@ def main() -> int:
         print("받은 봉이 없습니다.", file=sys.stderr)
         return 1
 
+    # sort=True 를 명시한다. pandas 가 기본값을 뒤집을 예정이라, 안 적으면
+    # 어느 날 시간축이 뒤섞인 패널이 조용히 나온다.
     panel = pd.concat(
-        {(f, tk): frames[tk][f] for tk in frames for f in FIELDS}, axis=1)
+        {(f, tk): frames[tk][f] for tk in frames for f in FIELDS},
+        axis=1, sort=True)
     panel.columns = pd.MultiIndex.from_tuples(panel.columns)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     panel.to_parquet(OUT)
