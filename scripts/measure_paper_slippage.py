@@ -127,7 +127,17 @@ def _fill_price(res: dict):
 
 
 def _record(rows: list, **kw) -> None:
-    rows.append({"ts": _now(), **kw})
+    """한 건 잴 때마다 **즉시** 파일에 붙인다.
+
+    끝에 몰아서 쓰다가 2026-08-11 실행이 통째로 날아갔다. 측정은 20분간
+    네트워크를 타는 일이고 그 사이 프로세스가 죽는 이유는 얼마든지 있다
+    (세션 종료, PC 절전, 브로커 오류). 장중 호가는 지나가면 다시 못 만든다.
+    """
+    row = {"ts": _now(), **kw}
+    rows.append(row)
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    with OUT.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def run(tickers: list, stop_wait_min: float) -> list:
@@ -222,6 +232,77 @@ def run(tickers: list, stop_wait_min: float) -> list:
     return rows
 
 
+def cmd_report() -> int:
+    """손절 슬리피지를 **브로커 이력에서** 다시 센다 — 로컬 파일 없이.
+
+    스톱 주문은 손절가와 체결가가 둘 다 주문 기록에 남는다. 그래서 이 다리만은
+    측정 프로세스가 죽어도 나중에 되살릴 수 있다(2026-08-11 에 실제로 그랬다).
+    진입·시장가 청산은 제출 시점 호가가 기준이라 그때 안 적으면 복구가 안 된다.
+    """
+    resp = at._request_with_retry(
+        "GET", f"{at.base_url()}/v2/orders", headers=at._headers(),
+        params={"status": "closed", "limit": 500, "direction": "desc"}, timeout=20)
+    resp.raise_for_status()
+    rows = []
+    for o in resp.json():
+        if o.get("status") != "filled" or o.get("type") != "stop":
+            continue
+        stop, fill = float(o.get("stop_price") or 0), float(o.get("filled_avg_price") or 0)
+        if stop <= 0 or fill <= 0:
+            continue
+        rows.append({"ts": o.get("filled_at", ""), "symbol": o.get("symbol"),
+                     "leg": "stop_exit", "ref_price": stop, "fill_price": fill,
+                     "slip_bp": slip_bp("sell", stop, fill), "status": "filled"})
+
+    if not rows:
+        print("브로커 이력에 스톱 체결이 없습니다.")
+        return 0
+    v = summarize(rows)["legs"]["stop_exit"]
+    print(f"손절 스톱 {v['n']}건 (브로커 이력)")
+    print(f"  중앙값 {v['median']:+.2f}bp · 평균 {v['mean']:+.2f}bp · "
+          f"p90 {v['p90']:+.2f}bp · 최대 {v['max']:+.2f}bp")
+    print(f"  손절폭 {STOP_R_PCT * 100:.2f}% 기준 중앙값 = "
+          f"{v['median'] / 1e4 / STOP_R_PCT:+.3f}R")
+    for r in sorted(rows, key=lambda r: -r["slip_bp"])[:5]:
+        print(f"    최악 {r['symbol']:6s} 손절 ${r['ref_price']:.2f} → "
+              f"체결 ${r['fill_price']:.2f}  {r['slip_bp']:+.2f}bp")
+    return 0
+
+
+def cmd_close() -> int:
+    """남은 포지션을 시장가로 전량 청산한다 — 15:45 청산 다리를 재면서.
+
+    측정이 중간에 죽으면 스톱이 안 터진 종목이 계좌에 남는다. 스톱은 day 라
+    장 마감에 만료되고, 포지션만 밤을 넘긴다. 그 상태를 손으로 치우지 않게.
+    """
+    positions = at.get_positions()
+    if not positions:
+        print("보유 포지션 없음.")
+        return 0
+
+    for o in at._request_with_retry(
+            "GET", f"{at.base_url()}/v2/orders", headers=at._headers(),
+            params={"status": "open", "limit": 500}, timeout=20).json():
+        at.cancel_order(str(o.get("id", "")))
+
+    rows: list = []
+    quotes = latest_quotes([p["symbol"] for p in positions])
+    for p in positions:
+        sym = p["symbol"]
+        q = quotes.get(sym)
+        t0 = time.time()
+        res = at.wait_for_fill(at.place_market_sell(sym, p["qty"])["id"], timeout=60)
+        fill = _fill_price(res)
+        _record(rows, symbol=sym, leg="market_exit", status=res.get("status", "?"),
+                ref_price=(q or {}).get("mid"), fill_price=fill,
+                slip_bp=(slip_bp("sell", q["mid"], fill) if q and fill else None),
+                spread_bp=(q or {}).get("spread_bp"),
+                latency_s=round(time.time() - t0, 1))
+        print(f"  {sym}: 시장가 청산 ${fill}")
+    print(f"{len(rows)}종목 청산 → {OUT}")
+    return 0
+
+
 def main() -> int:
     try:
         # 윈도우 기본 콘솔(cp949)이 em-dash 를 못 찍어 진단 메시지가 깨진다.
@@ -230,7 +311,8 @@ def main() -> int:
     except Exception:
         pass
 
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else len(UNIVERSE)
+    arg1 = sys.argv[1] if len(sys.argv) > 1 else ""
+    n = len(UNIVERSE) if not arg1.isdigit() else int(arg1)
     stop_wait_min = float(sys.argv[2]) if len(sys.argv) > 2 else 15.0
 
     if not os.environ.get("ALPACA_API_KEY"):
@@ -241,21 +323,23 @@ def main() -> int:
     if not at.is_paper():
         print("실계좌(ALPACA_PAPER=false)에서는 실행하지 않습니다.", file=sys.stderr)
         return 1
+
+    # report 는 지나간 기록을 세는 것이라 장 시간과 무관하다.
+    if arg1 == "report":
+        return cmd_report()
     if not _market_open():
         print("정규장이 아닙니다 — 호가도 체결도 못 잽니다.", file=sys.stderr)
         return 1
+
+    if arg1 == "close":
+        return cmd_close()
 
     tickers = UNIVERSE[:n]
     print(f"{len(tickers)}종목 · 스톱 {STOP_PCT * 100:.2f}% 아래 · "
           f"대기 {stop_wait_min:.0f}분", flush=True)
 
+    # 행은 잴 때마다 _record 가 바로 파일에 붙인다 (중간에 죽어도 남는다).
     rows = run(tickers, stop_wait_min)
-
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    with OUT.open("a", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
     s = summarize(rows)
     print(f"\n=== 이번 실행 {s['n']}건 → {OUT} ===")
     for leg, v in s["legs"].items():
