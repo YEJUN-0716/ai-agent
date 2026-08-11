@@ -123,6 +123,42 @@ def get_bars(symbols, timeframe: str = "1Min", start=None, end=None,
     return {sym: _to_frame(rows) for sym, rows in collected.items() if rows}
 
 
+def latest_quotes(symbols, api_key: str = "", secret_key: str = "",
+                  feed_name: str = "") -> dict:
+    """현재 호가 → {티커: {"bid", "ask", "mid", "spread_bp", "ts"}}.
+
+    GET /v2/stocks/quotes/latest. 30종목을 한 번에 받는다.
+
+    ⚠️ 무료 플랜은 **IEX 호가**다. 체결은 전 거래소 통합(NBBO) 기준으로
+    일어나므로 여기 스프레드가 실제보다 넓게 나온다. 슬리피지를 이 mid 대비로
+    재면 **보수적(비용 과대)** 이다 — 그 방향이면 판단이 안전한 쪽으로 틀린다.
+
+    호가가 한쪽만 있거나 0 인 종목은 뺀다(IEX 에 그 순간 호가가 없는 경우).
+    """
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    symbols = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not symbols:
+        return {}
+
+    resp = _request_with_retry(
+        "GET", f"{_DATA_BASE}/v2/stocks/quotes/latest",
+        headers=_headers(api_key, secret_key),
+        params={"symbols": ",".join(symbols), "feed": feed_name or feed()},
+        timeout=15)
+    resp.raise_for_status()
+
+    out = {}
+    for sym, q in (resp.json().get("quotes") or {}).items():
+        bid, ask = float(q.get("bp", 0) or 0), float(q.get("ap", 0) or 0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            continue
+        mid = (bid + ask) / 2
+        out[sym] = {"bid": bid, "ask": ask, "mid": mid,
+                    "spread_bp": (ask - bid) / mid * 1e4, "ts": q.get("t")}
+    return out
+
+
 def _to_frame(rows: list) -> pd.DataFrame:
     """Alpaca 봉 리스트 → OHLCV DataFrame.
 

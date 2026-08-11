@@ -261,6 +261,40 @@ def place_market_sell(symbol: str, qty,
     }, client_id, client_secret)
 
 
+def place_stop_sell(symbol: str, qty: int, stop_price: float,
+                    client_id: str = "", client_secret: str = "",
+                    account_seq: str = "", market: str = "US",
+                    dry_run: bool = False) -> dict:
+    """손절 **스톱** 매도. 가격이 stop_price 를 건드리면 시장가로 전환된다.
+
+    백테스트는 손절가에 정확히 체결된다고 가정한다. 실제로는 트리거된 뒤
+    시장가라, 체결가는 손절가보다 **낮게** 나온다(= 슬리피지). 그 차이를
+    재려고 만든 주문이다. 손익분기가 왕복 5bp 라 모르고 켤 수 없다.
+
+    당일(day)로 건다 — 단타는 15:45 에 전량 청산하므로 스톱이 밤을 넘길 일이
+    없고, GTC 로 두면 다음 날 갭에 엉뚱하게 터진다.
+    """
+    qty = int(qty)
+    if qty < 1:
+        raise ValueError(f"{symbol} 스톱 매도 수량이 1주 미만입니다 (소수점 매매 불가).")
+    if stop_price <= 0:
+        raise ValueError(f"{symbol} 손절가가 0 이하입니다: {stop_price}")
+
+    if dry_run:
+        print(f"  [DRY_RUN] 스톱 매도: {symbol} {qty}주 @ ${stop_price:,.2f}")
+        return {"id": "dry_run", "symbol": symbol, "qty": qty,
+                "stop_price": stop_price, "status": "dry_run"}
+
+    return _submit({
+        "symbol":        symbol,
+        "qty":           str(qty),
+        "side":          "sell",
+        "type":          "stop",
+        "stop_price":    str(round(float(stop_price), 2)),
+        "time_in_force": "day",
+    }, client_id, client_secret)
+
+
 # ── 체결 확인 ──────────────────────────────────────────────────────────
 _FILL_TIMEOUT_SEC = 60
 _FILL_POLL_SEC    = 5
