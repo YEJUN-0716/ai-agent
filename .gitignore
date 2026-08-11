@@ -37,6 +37,9 @@ data/*
 # 워크포워드 측정 결과도 앱이 읽는 유일한 재료다 — 측정에 수 분 걸리므로
 # 결과를 저장소에 남겨 어디서 열어도 같은 판정을 보게 한다.
 !data/walkforward_result.json
+# 페이퍼 체결 슬리피지 실측(3a.5). 장중 호가·체결은 지나가면 다시 못 만든다 —
+# scalp_returns 와 같은 부류다. 여러 날 덧붙여 표본을 쌓는다.
+!data/paper_slippage.jsonl
 .pytest_cache/
 
 # 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다
