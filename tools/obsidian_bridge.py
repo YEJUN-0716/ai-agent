@@ -63,6 +63,7 @@ def cmd_init() -> int:
                "- [[Watchlist]] — 관심종목 (내가 쓰면 에이전트가 읽음)\n"
                f"- [[{STOCK_SUB}/Signals|Stock 신호]] · 측정 리포트는 {STOCK_SUB}/Measurements 폴더\n"
                f"- [[{STOCK_SUB}/Scorecard|애널리스트 성적표 — 표본 현황]] — 판정까지 얼마나 왔나\n"
+               f"- [[{STOCK_SUB}/Alpaca|Alpaca 체결 기록]] — 실제 매수·매도와 계좌 잔고\n"
                f"- [[{MEMORY_SUB}/MEMORY|에이전트 메모리]]\n\n"
                "`python tools/obsidian_bridge.py push` 로 최신화, `pull` 로 관심종목 읽기.\n")
 
@@ -223,12 +224,115 @@ def _push_scorecard() -> int:
     return len(days)
 
 
+def _alpaca_keys() -> tuple[str, str]:
+    """Alpaca 키. 환경변수가 없으면 stock-analyzer 의 .env 에서 읽는다.
+
+    비밀값 사본을 하나로 둔다 — 두 곳에 두면 로테이션한 날 한쪽만 바뀐다.
+    작업 스케줄러가 부르는 .cmd 는 .env 를 읽지 않으므로 이 경로가 유일하다.
+    """
+    key = os.environ.get("ALPACA_API_KEY", "")
+    secret = os.environ.get("ALPACA_SECRET_KEY", "")
+    if key and secret:
+        return key, secret
+    env = STOCK_DIR / ".env"
+    if not env.exists():
+        return "", ""
+    found = {}
+    for line in env.read_text(encoding="utf-8").splitlines():
+        if line.startswith("ALPACA_") and "=" in line:
+            k, v = line.split("=", 1)
+            found[k.strip()] = v.strip()
+    return found.get("ALPACA_API_KEY", ""), found.get("ALPACA_SECRET_KEY", "")
+
+
+def _kst(iso: str) -> str:
+    """Alpaca 의 UTC 타임스탬프 → 한국시간 표시.
+
+    나노초 9자리가 붙어 오는 경우가 있어 fromisoformat 이 죽는다. 표시용이라
+    초까지만 잘라 쓴다.
+    """
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")
+        return f"{dt + timedelta(hours=9):%m-%d %H:%M}"
+    except ValueError:
+        return iso[:16]
+
+
+def _push_alpaca() -> int:
+    """Alpaca 계좌의 **체결 기록**을 노트로 남긴다.
+
+    장부를 따로 만들지 않는다 — 진짜 기록은 브로커에 있다. 우리가 옆에서
+    받아 적으면 주문이 거절되거나 부분체결된 날 두 장부가 갈라지고, 그때
+    어느 쪽이 맞는지 알 방법이 없다.
+
+    키가 없거나 네트워크가 죽어도 push 전체를 막지 않는다 — 다른 노트는
+    로컬 파일이라 멀쩡히 갱신된다.
+    """
+    dest = VAULT / STOCK_SUB / "Alpaca.md"
+    key, secret = _alpaca_keys()
+    if not key or not secret:
+        print(f"[건너뜀] Alpaca 키 없음 (환경변수 또는 {STOCK_DIR / '.env'})")
+        return 0
+
+    sys.path.insert(0, str(STOCK_DIR))
+    try:
+        from modules import alpaca_trading as at
+        account = at.get_account(key, secret)
+        positions = at.get_positions(key, secret)
+        resp = at._request_with_retry(
+            "GET", f"{at.base_url()}/v2/orders",
+            headers=at._headers(key, secret),
+            params={"status": "closed", "limit": 100, "direction": "desc"},
+            timeout=20)
+        resp.raise_for_status()
+        orders = [o for o in resp.json() if str(o.get("status")) == "filled"]
+    except Exception as e:
+        print(f"[건너뜀] Alpaca 조회 실패: {e}")
+        return 0
+
+    mode = "페이퍼(모의)" if at.is_paper() else "⚠️ 실계좌"
+    lines = [f"# 💵 Alpaca 체결 기록", "", MANAGED_TAG, "",
+             f"갱신: {datetime.now():%Y-%m-%d %H:%M} · {mode} · 금액 단위 **USD**", "",
+             "## 계좌", "",
+             f"- 평가액: **${account['equity']:,.2f}**",
+             f"- 매수여력: ${account['buying_power']:,.2f}",
+             f"- 보유 종목: {len(positions)}개", ""]
+
+    if positions:
+        lines += ["## 보유 포지션", "",
+                  "| 종목 | 수량 | 평균 매입가 | 현재가 | 평가손익 |", "|---|---|---|---|---|"]
+        for p in positions:
+            pl = float(p["unrealized_pl"] or 0)
+            lines.append(f"| {p['symbol']} | {p['qty']} | ${float(p['avg_entry_price']):,.2f} "
+                         f"| ${float(p['current_price']):,.2f} | {pl:+,.2f} |")
+        lines.append("")
+
+    lines += [f"## 최근 체결 ({len(orders)}건)", "",
+              "| 체결시각(KST) | 종목 | 매매 | 수량 | 체결가 | 금액 | 주문유형 |",
+              "|---|---|---|---|---|---|---|"]
+    for o in orders:
+        qty = float(o.get("filled_qty") or 0)
+        price = float(o.get("filled_avg_price") or 0)
+        side = "🔵 매수" if o.get("side") == "buy" else "🔴 매도"
+        lines.append(f"| {_kst(o.get('filled_at', ''))} | {o.get('symbol', '')} | {side} "
+                     f"| {qty:g} | ${price:,.2f} | ${qty * price:,.2f} | {o.get('type', '')} |")
+    if not orders:
+        lines.append("| — | 아직 체결이 없습니다 | | | | | |")
+
+    _write(dest, "\n".join(lines) + "\n")
+    print(f"Alpaca 체결 {len(orders)}건 · 보유 {len(positions)}종목 → {dest}")
+    return len(orders)
+
+
 def cmd_push() -> int:
     VAULT.mkdir(parents=True, exist_ok=True)
     _push_memory()
     _push_measurements()
     _push_signals()
     _push_scorecard()
+    _push_alpaca()
     print("push 완료.")
     return 0
 
