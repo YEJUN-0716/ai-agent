@@ -113,6 +113,25 @@ def entry_reason(plan: dict) -> str:
     return ""
 
 
+def scan_due(now, last_bar) -> bool:
+    """이번 분에 신호를 다시 그릴 차례인가.
+
+    15분 경계마다 한 번, 경계에서 1분 이상 지난 뒤에. 마감 **직후**의 봉은
+    데이터가 아직 안 실려 있는 일이 있어 한 박자 기다린다.
+    """
+    return now.floor(f"{BAR_MIN}min") != last_bar and now.minute % BAR_MIN >= 1
+
+
+def bar_cutoff(now):
+    """마지막으로 **마감된** 봉의 시작 시각 (UTC naive).
+
+    Alpaca 봉은 **시작 시각**으로 라벨된다. 13:46 에는 13:45 봉이 진행 중이고
+    마감된 마지막 봉은 13:30 이다. 여기서 한 칸 틀리면 미완성 봉의 고/저로
+    구조를 잡아, 백테스트가 본 적 없는 신호가 조용히 생긴다.
+    """
+    return now.floor(f"{BAR_MIN}min").tz_localize(None) - timedelta(minutes=BAR_MIN)
+
+
 def trade_r(entry_ref: float, stop: float, fill: float, exit_px: float) -> float:
     """실현 R. 위험 1단위는 **플랜의** entry_ref-stop 이다.
 
@@ -299,6 +318,29 @@ def _scan(st: dict, equity: float, bar_close, now) -> None:
          held=len(st["held"]), pending=len(st["pending"]))
 
 
+def _shutdown(st: dict, halt: str, now) -> None:
+    """보유 전량 청산 → 대기 주문 취소 → 브로커 쪽 안전망.
+
+    하루의 끝은 **반드시** 여기를 지나간다. 청산이 한 종목 실패해도 나머지를
+    계속 털어야 하므로 종목마다 따로 감싼다 — 한 건 때문에 나머지가 밤을
+    넘기는 것이 최악이다.
+    """
+    for tk, h in list(st["held"].items()):
+        try:
+            _market_exit(st, tk, h, "eod" if halt == "eod" else "halt", now)
+        except Exception as e:
+            _log("error", detail=f"청산 실패 {tk}: {e}")
+    for tk, p in list(st["pending"].items()):
+        try:
+            if not DRY_RUN:
+                at.cancel_order(p["order_id"])
+        except Exception as e:
+            _log("error", detail=f"취소 실패 {tk}: {e}")
+        st["pending"].pop(tk, None)
+    _sweep()
+    _log("stop", reason=halt, day_r=round(st["day_r"], 2))
+
+
 # ── 진입점 ─────────────────────────────────────────────────────────────
 def main() -> int:
     try:
@@ -345,29 +387,14 @@ def main() -> int:
             if st["day_r"] <= -MAX_DAILY_LOSS_R:
                 halt = "daily_loss"
                 break
-            # 15분 경계에서 1분 이상 지났을 때 한 번. 마감 직후의 봉은 데이터가
-            # 아직 안 실려 있는 일이 있어 한 박자 기다린다.
-            bar_close = now.floor(f"{BAR_MIN}min")
-            if bar_close != last_bar and now.minute % BAR_MIN >= 1:
-                # 인덱스는 UTC naive 이고 봉은 **시작 시각**으로 라벨된다.
-                _scan(st, equity, bar_close.tz_localize(None) - timedelta(minutes=BAR_MIN), now)
-                last_bar = bar_close
+            if scan_due(now, last_bar):
+                _scan(st, equity, bar_cutoff(now), now)
+                last_bar = now.floor(f"{BAR_MIN}min")
         except Exception as e:                     # 6시간 반짜리 프로세스다.
             _log("error", detail=f"{type(e).__name__}: {e}")
         time.sleep(POLL_SEC)
 
-    now = _now()
-    for tk, h in list(st["held"].items()):
-        try:
-            _market_exit(st, tk, h, halt if halt == "eod" else "halt", now)
-        except Exception as e:
-            _log("error", detail=f"청산 실패 {tk}: {e}")
-    for tk, p in list(st["pending"].items()):
-        if not DRY_RUN:
-            at.cancel_order(p["order_id"])
-        st["pending"].pop(tk, None)
-    _sweep()
-    _log("stop", reason=halt, day_r=round(st["day_r"], 2))
+    _shutdown(st, halt, _now())
     return 0
 
 
