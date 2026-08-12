@@ -268,6 +268,15 @@ def _run_ticker(args):
             "bias_score": plan["bias_score"], "confluence": plan["confluence"],
             "entry_struct": plan["signals"][0].removeprefix("진입 근거: ")
                             if plan["signals"] else "?",
+            # 슬롯이 언제 비나 — 포트폴리오 시뮬레이션(10자리 경합)에 필요하다.
+            # 트레이드 평균 R 만으로는 연 수익률이 안 나온다. 갭반영판은 체결·
+            # 청산 **봉**이 무보정판과 같다(가격만 다르다) → C 에서 그대로 읽는다.
+            "fill_date": df.index[out["C_상단지정가"]["fill_idx"]]
+                         if out["C_상단지정가"]["fill_idx"] is not None else pd.NaT,
+            "exit_date": df.index[out["C_상단지정가"]["exit_idx"]]
+                         if out["C_상단지정가"]["exit_idx"] is not None else pd.NaT,
+            # 미체결이면 지정가는 이 날 폐기된다 — 그때까지 자리를 물고 있다.
+            "expire_date": df.index[min(i + FILL_WINDOW, n - 1)],
             # 공격적 체결선이 ref 에서 얼마나 떨어져 있나 — C 가 더 무는 값이다.
             "zone_up_r": abs(aggressive - ref) / risk if risk > 0 else float("nan"),
             **{f"{r}_outcome": out[r]["outcome"] for r in RULES},
