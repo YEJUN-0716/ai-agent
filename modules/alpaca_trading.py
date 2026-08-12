@@ -207,8 +207,11 @@ def place_limit_buy(symbol: str, qty: int, limit_price: float,
                     client_id: str = "", client_secret: str = "",
                     account_seq: str = "", market: str = "US",
                     dry_run: bool = False,
-                    extended_hours: bool = False) -> dict:
-    """진입 구간 **지정가** 매수 (GTC — 취소할 때까지 살아 있다).
+                    extended_hours: bool = False, tif: str = "gtc") -> dict:
+    """진입 구간 **지정가** 매수 (기본 GTC — 취소할 때까지 살아 있다).
+
+    단타 러너는 `tif="day"` 로 건다. GTC 로 두면 러너가 하드킬당했을 때 주문이
+    밤을 넘겨, 다음 날 아침에 어제 계획으로 체결된다 — 손절도 안 걸린 채로.
 
     토스에 없어서 트레이드 플랜을 실계좌로 못 돌리던 주문이다. 다만 이건
     **진입만** 건다 — 손절·목표 라인은 아직 안 붙는다. 라인까지 브로커에
@@ -234,7 +237,7 @@ def place_limit_buy(symbol: str, qty: int, limit_price: float,
         "side":            "buy",
         "type":            "limit",
         "limit_price":     str(round(float(limit_price), 2)),
-        "time_in_force":   "gtc",
+        "time_in_force":   tif,
         "extended_hours":  bool(extended_hours),
     }, client_id, client_secret)
 

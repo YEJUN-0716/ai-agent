@@ -26,7 +26,12 @@ python signal_worker.py            # scan universe → Telegram alert → append
 python ic_weight_updater.py        # weekly: recompute IC factor weights → ic_weights.json (~10-60 min)
 python daily_report_toss.py        # Toss P&L report → Telegram
 python paper_trade_runner_toss.py  # current broker path; set DRY_RUN=true to avoid live orders
+python intraday_runner.py          # 3b: 15m day-trade runner on Alpaca paper (stays up all session)
 ```
+
+`intraday_runner.py` runs **one session at a time** and flattens 15 minutes before the close;
+it is not a cron job (stage 5 turns it into a daemon). It needs `.env`
+(`set -a && . ./.env && set +a`) and refuses to run on a live account.
 
 **Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~280 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_krx_listing`, `test_krx_universe`, `test_market_scope`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 

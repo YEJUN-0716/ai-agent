@@ -159,6 +159,35 @@ def latest_quotes(symbols, api_key: str = "", secret_key: str = "",
     return out
 
 
+def latest_trades(symbols, api_key: str = "", secret_key: str = "",
+                  feed_name: str = "") -> dict:
+    """마지막 **체결가** → {티커: price}. GET /v2/stocks/trades/latest.
+
+    목표가 도달 판정에 쓴다. 호가(`latest_quotes`)를 쓰면 안 된다 — 무료 IEX
+    호가는 2026-08-11 측정에서 30건 중 19건이 스프레드 20bp 초과였고 JPM 은
+    622bp 로 찍혔다. 그 mid 로 목표를 재면 오지 않은 목표에 팔거나 온 목표를
+    놓친다. 체결가는 실제로 일어난 거래라 그 왜곡이 없다.
+    """
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    symbols = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not symbols:
+        return {}
+
+    resp = _request_with_retry(
+        "GET", f"{_DATA_BASE}/v2/stocks/trades/latest",
+        headers=_headers(api_key, secret_key),
+        params={"symbols": ",".join(symbols), "feed": feed_name or feed()},
+        timeout=15)
+    resp.raise_for_status()
+    out = {}
+    for sym, t in (resp.json().get("trades") or {}).items():
+        px = float(t.get("p", 0) or 0)
+        if px > 0:
+            out[sym] = px
+    return out
+
+
 def _to_frame(rows: list) -> pd.DataFrame:
     """Alpaca 봉 리스트 → OHLCV DataFrame.
 

@@ -38,13 +38,16 @@ import os
 import statistics
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules import alpaca_trading as at  # noqa: E402
-from modules.alpaca_data import latest_quotes  # noqa: E402
+from modules.alpaca_data import get_bars, latest_quotes  # noqa: E402
+
+_ET_TZ = ZoneInfo("America/New_York")
 
 OUT = Path(os.environ.get("OUT", "data/paper_slippage.jsonl"))
 
@@ -266,7 +269,55 @@ def cmd_report() -> int:
     for r in sorted(rows, key=lambda r: -r["slip_bp"])[:5]:
         print(f"    최악 {r['symbol']:6s} 손절 ${r['ref_price']:.2f} → "
               f"체결 ${r['fill_price']:.2f}  {r['slip_bp']:+.2f}bp")
+    _print_by_date(rows)
     return 0
+
+
+def _spy_range_pct(dates: list) -> dict:
+    """{ET 날짜: SPY 일중 변동폭 %} — 그날이 험한 날이었는지의 기준선.
+
+    슬리피지 숫자만 놓고는 "이 날이 변동성 큰 날이었나"를 알 수 없다.
+    실패해도 측정 자체를 막지는 않는다(기준선일 뿐이다).
+    """
+    try:
+        start = datetime.fromisoformat(min(dates)).replace(tzinfo=timezone.utc)
+        end = datetime.fromisoformat(max(dates)).replace(tzinfo=timezone.utc)
+        bars = get_bars(["SPY"], timeframe="1Day",
+                        start=start - timedelta(days=3), end=end + timedelta(days=1))
+        df = bars.get("SPY")
+        if df is None or df.empty:
+            return {}
+        et = df.index.tz_localize("UTC").tz_convert("America/New_York")
+        return {str(d.date()): (h - lo) / c * 100
+                for d, h, lo, c in zip(et, df["High"], df["Low"], df["Close"])}
+    except Exception as e:
+        print(f"  (SPY 변동폭 조회 실패: {e})")
+        return {}
+
+
+def _print_by_date(rows: list) -> None:
+    """날짜별로 가른다 — **변동성 큰 날**이 3a.5 의 남은 관문이었다.
+
+    2026-08-11 표본 9건은 전부 평온한 오후장이다. 스톱이 몰려 터지는 날에도
+    1bp 인지는 날짜를 갈라 보지 않으면 알 수 없다. 러너(3b)가 돌기 시작하면
+    이 표가 날마다 채워진다 — 스톱 주문은 손절가와 체결가를 브로커가 다 적어
+    두므로 별도 기록 없이 나중에 다시 센다.
+    """
+    buckets: dict = {}
+    for r in rows:
+        d = str(datetime.fromisoformat(
+            r["ts"].replace("Z", "+00:00")).astimezone(_ET_TZ).date())
+        buckets.setdefault(d, []).append(r["slip_bp"])
+    if len(buckets) < 2:
+        return
+    spy = _spy_range_pct(sorted(buckets))
+    print("\n  ── 날짜별 (SPY 일중 변동폭이 그날의 험한 정도) ──")
+    print("    날짜          n   중앙값     최대   SPY변동폭")
+    for d in sorted(buckets):
+        vals = sorted(buckets[d])
+        rng = spy.get(d)
+        print(f"    {d}  {len(vals):3d}  {statistics.median(vals):+7.2f}bp "
+              f"{max(vals):+7.2f}bp   " + (f"{rng:5.2f}%" if rng else "    ?"))
 
 
 def cmd_close() -> int:
