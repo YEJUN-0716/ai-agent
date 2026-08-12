@@ -48,20 +48,39 @@ from modules.trade_plan import MIN_BARS, build_trade_plan  # noqa: E402
 from modules.trade_plan_backtest import _simulate_outcome  # noqa: E402
 from modules.stat_validation import permutation_test_trades  # noqa: E402
 
-PANEL = Path(os.environ.get("PANEL", "data/intraday_panel_15m.parquet"))
-OUT_MD = Path("docs/measurements/2026-08-12-entry-rule.md")
-OUT_PARQUET = Path("data/entry_rule_trades.parquet")
+# MODE=daily 로 **일봉**에도 같은 칼을 댄다. 15분봉에서 죽은 그 가정
+# (`_simulate_outcome`)은 봉 길이와 무관하게 같은 함수다 — 프로덕션이 실제로
+# 돌리는 일봉 규칙이 성한지가 더 급하다.
+MODE = os.environ.get("MODE", "intraday").strip().lower()
+DAILY = MODE == "daily"
+
+if DAILY:
+    # scripts/measure_trade_plan_oos.py 와 같은 값이라야 그 +0.58R 을 대표한다.
+    PANEL = Path(os.environ.get("PANEL", "data/price_panel_v1.parquet"))
+    FILL_WINDOW, HOLD_WINDOW, MIN_LEN = 15, 30, 120
+    COST_BPS = 40.0          # 왕복. 편도 20bp = 한국 증권사 미국주식 실제 자리
+    SUFFIX = "-daily"
+else:
+    PANEL = Path(os.environ.get("PANEL", "data/intraday_panel_15m.parquet"))
+    FILL_WINDOW, HOLD_WINDOW, MIN_LEN = 8, 26, MIN_BARS   # 3a·러너와 같은 값
+    COST_BPS = 6.0
+    SUFFIX = ""
+
+OUT_MD = Path(f"docs/measurements/2026-08-12-entry-rule{SUFFIX}.md")
+OUT_PARQUET = Path(f"data/entry_rule_trades{SUFFIX}.parquet")
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
-# 3a·러너와 같은 값.
-FILL_WINDOW = 8
-HOLD_WINDOW = 26
 COOLDOWN = 3
 MIN_RISK_PCT = 0.30
-COST_BPS = 6.0
 IS_START = pd.Timestamp("2024-12-20")
 
-RULES = ("A_백테스트", "B_ref지정가", "C_상단지정가")
+RULES = ("A_백테스트", "B_ref지정가", "C_상단지정가", "B_갭반영", "C_갭반영")
+# 갭 반영판 = 같은 지정가인데 **체결가만** 실제로 가능한 값으로 바꾼 것.
+# 지정가 아래로 갭 하락하면 지정가가 아니라 그날 시가에 채워진다
+# (`virtual_broker.scan_limit_fill` 이 실제로 min(시가, 지정가) 를 쓴다).
+# 체결 봉·승패는 손절/목표가 정하므로 안 바뀐다 — R 만 다시 낸다.
+_GAP_OF = {"B_갭반영": "B_ref지정가", "C_갭반영": "C_상단지정가"}
+_LIMIT_OF = {"B_ref지정가": "ref", "C_상단지정가": "aggressive"}
 
 
 def _ohlcv(panel: pd.DataFrame, tk: str) -> pd.DataFrame:
@@ -69,62 +88,106 @@ def _ohlcv(panel: pd.DataFrame, tk: str) -> pd.DataFrame:
 
 
 def _sim(rule: str, plan: dict, args: dict) -> dict:
-    """한 셋업 × 한 규칙. 반환 R 은 **플랜 위험** 기준으로 맞춰 놓는다."""
+    """한 셋업 × 한 규칙. 반환 R 은 **플랜 위험** 기준으로 맞춰 놓는다.
+
+    숏은 부호가 전부 뒤집힌다. 공격적 체결선이 롱은 구간 **상단**, 숏은 구간
+    **하단**이다 — 되돌림을 덜 기다리는 쪽이 어디냐가 방향마다 반대다.
+    """
     lo, hi = plan["entry"]["low"], plan["entry"]["high"]
     ref, stop, tgt = plan["entry"]["ref"], plan["stop"], plan["targets"][0]
-    plan_risk = ref - stop
+    long = plan["direction"] == "long"
+    aggressive = hi if long else lo          # 백테스트가 체결로 치는 선
+    plan_risk = (ref - stop) if long else (stop - ref)
 
     if rule == "A_백테스트":
-        fill_at, buy_at, rr = hi, ref, plan["rr"][0]
+        fill_at, buy_at, rr = aggressive, ref, plan["rr"][0]
     elif rule == "B_ref지정가":
-        # 체결 조건을 ref 로 좁힌다. 산 값은 그대로 ref.
+        # 체결 조건을 ref 로 좁힌다. 산(판) 값은 그대로 ref.
         fill_at, buy_at, rr = ref, ref, plan["rr"][0]
     else:
-        # 상단에 걸면 상단에 산다. 위험이 (hi - stop) 으로 커지므로 목표
-        # 손익비도 그 기준으로 다시 낸다 — 그래야 win 의 R 이 실제 이익이다.
-        fill_at, buy_at = hi, hi
-        rr = (tgt - hi) / (hi - stop) if hi > stop else float("nan")
+        # 공격적 선에 걸면 그 값에 산다(판다). 위험이 커지므로 목표 손익비도
+        # 그 기준으로 다시 낸다 — 그래야 win 의 R 이 실제 이익이다.
+        fill_at = buy_at = aggressive
+        risk_c = (buy_at - stop) if long else (stop - buy_at)
+        rr = ((tgt - buy_at) if long else (buy_at - tgt)) / risk_c if risk_c > 0 \
+            else float("nan")
 
+    # 체결 조건은 롱이면 lows <= entry_high, 숏이면 highs >= entry_low 다.
+    e_lo = min(lo, fill_at) if long else fill_at
+    e_hi = fill_at if long else max(hi, fill_at)
     res = _simulate_outcome(
-        args["highs"], args["lows"], args["i"], "long",
-        min(lo, fill_at), fill_at, stop, tgt, rr,
+        args["highs"], args["lows"], args["i"], plan["direction"],
+        e_lo, e_hi, stop, tgt, rr,
         fill_window=FILL_WINDOW, hold_window=HOLD_WINDOW,
         sessions=args["sessions"], opens=args["opens"], entry_ref=buy_at)
 
-    # _simulate_outcome 은 (buy_at - stop) 을 1R 로 세고 나온다. 규칙끼리
+    # _simulate_outcome 은 |buy_at - stop| 을 1R 로 세고 나온다. 규칙끼리
     # 나란히 놓으려면 전부 플랜 위험으로 환산해야 한다.
-    scale = (buy_at - stop) / plan_risk if plan_risk > 0 else float("nan")
+    risk_used = (buy_at - stop) if long else (stop - buy_at)
+    scale = risk_used / plan_risk if plan_risk > 0 else float("nan")
     return {"outcome": res["outcome"], "r": res["r"] * scale,
             "exit_idx": res["exit_idx"], "fill_idx": res["fill_idx"]}
+
+
+def _gap_adjust(res: dict, plan: dict, limit: float, opens, plan_risk: float) -> dict:
+    """지정가 아래로 갭이 났으면 **그날 시가**에 채워진다 — 그 체결가로 R 재계산.
+
+    승패는 손절·목표가 정하므로 안 바뀐다. 바뀌는 것은 얼마에 샀느냐뿐이라
+    R 만 다시 낸다 (timeout 은 원 백테스트가 0 으로 세므로 그대로 0).
+    """
+    j = res["fill_idx"]
+    if j is None or res["outcome"] in ("nofill", "timeout"):
+        return {"outcome": res["outcome"], "r": res["r"] if j is None else 0.0}
+    long = plan["direction"] == "long"
+    fill = min(opens[j], limit) if long else max(opens[j], limit)
+    if res["outcome"] == "loss":
+        exit_px = plan["stop"]
+    elif res["outcome"] == "win":
+        exit_px = plan["targets"][0]
+    else:                                    # eod — 세션 마지막 봉 시가
+        exit_px = opens[res["exit_idx"]]
+    r = (exit_px - fill) if long else (fill - exit_px)
+    return {"outcome": res["outcome"], "r": r / plan_risk}
 
 
 def _run_ticker(args):
     tk, df = args
     highs = df["High"].to_numpy(dtype=float)
     lows = df["Low"].to_numpy(dtype=float)
-    opens = df["Open"].to_numpy(dtype=float)
-    sessions = session_ids(df.index)
+    all_opens = df["Open"].to_numpy(dtype=float)
+    # 일봉은 스윙이라 세션 청산이 없다. 주면 마지막 봉마다 시가로 털어 버린다.
+    opens = None if DAILY else df["Open"].to_numpy(dtype=float)
+    sessions = None if DAILY else session_ids(df.index)
     n = len(df)
     rows = []
 
-    i = MIN_BARS
+    i = MIN_LEN
     while i < n - 1:
         plan = build_trade_plan(df.iloc[: i + 1], scale=1)
-        # 러너와 같은 문턱. 여기서 거르는 것이 3a 가 통과시킨 그 집합이다.
-        if (not plan["valid"] or plan["direction"] != "long"
-                or plan["risk_pct"] < MIN_RISK_PCT):
+        # 분봉은 러너 문턱(롱 + 손절폭 0.30%)에서 자른다 — 3a 가 통과시킨 집합.
+        # 일봉은 valid 면 다 담고 방향·등급은 행에 적어 리포트에서 슬라이스한다.
+        if not plan["valid"] or (not DAILY and (
+                plan["direction"] != "long" or plan["risk_pct"] < MIN_RISK_PCT)):
             i += 1
             continue
 
         ctx = {"highs": highs, "lows": lows, "opens": opens,
                "sessions": sessions, "i": i}
-        out = {r: _sim(r, plan, ctx) for r in RULES}
+        out = {r: _sim(r, plan, ctx) for r in RULES if r not in _GAP_OF}
         ref, stop = plan["entry"]["ref"], plan["stop"]
+        long = plan["direction"] == "long"
+        risk = (ref - stop) if long else (stop - ref)
+        aggressive = plan["entry"]["high"] if long else plan["entry"]["low"]
+        for gap_rule, base in _GAP_OF.items():
+            limit = ref if _LIMIT_OF[base] == "ref" else aggressive
+            out[gap_rule] = _gap_adjust(out[base], plan, limit, all_opens, risk)
         rows.append({
             "ticker": tk, "entry_date": df.index[i],
+            "direction": plan["direction"], "cost_grade": plan["cost_grade"],
+            "actionable": bool(plan["actionable"]),
             "risk_pct": plan["risk_pct"],
-            # 구간 상단이 ref 에서 얼마나 위인가 — C 가 더 무는 값이다.
-            "zone_up_r": (plan["entry"]["high"] - ref) / (ref - stop),
+            # 공격적 체결선이 ref 에서 얼마나 떨어져 있나 — C 가 더 무는 값이다.
+            "zone_up_r": abs(aggressive - ref) / risk if risk > 0 else float("nan"),
             **{f"{r}_outcome": out[r]["outcome"] for r in RULES},
             **{f"{r}_r": out[r]["r"] for r in RULES},
         })
@@ -183,16 +246,30 @@ def _phantom(df: pd.DataFrame, label: str) -> list[str]:
         f"{n_p.sum() / n_a.sum() * 100:.0f}% |"]
 
 
+def _invariants(df: pd.DataFrame) -> tuple[int, int, int]:
+    """(B체결∧A미체결, A·B 둘 다 체결, 그중 R 이 같은 것).
+
+    첫 값이 0 이라야 "A − B = 유령" 이라는 분해가 성립한다. 셋째는 둘 다 같은
+    값에 사므로 같은 봉에 체결되면 R 이 소수점까지 같아야 한다는 확인이다.
+    """
+    fa = df["A_백테스트_outcome"] != "nofill"
+    fb = df["B_ref지정가_outcome"] != "nofill"
+    both = df[fa & fb]
+    same = np.isclose(both["A_백테스트_r"], both["B_ref지정가_r"]).sum()
+    return int((fb & ~fa).sum()), len(both), int(same)
+
+
 def _bands(df: pd.DataFrame) -> list[str]:
     """구간이 좁으면 세 규칙이 같아진다. 좁은 셋업만 남기면 살아나는가?"""
     edges = [0, .2, .4, .6, .8, 1e9]
     names = ["~0.2R", "0.2~0.4R", "0.4~0.6R", "0.6~0.8R", "0.8R+"]
     band = pd.cut(df["zone_up_r"], edges, labels=names)
-    lines = ["| 구간 폭 | 셋업 | A 순평균R | B 체결 | B 순평균R | C 순평균R |",
+    shown = ("A_백테스트", "B_갭반영", "C_갭반영")
+    lines = ["| 구간 폭 | 셋업 | A 순평균R | B 체결 | B갭 순평균R | C갭 순평균R |",
              "|---|---|---|---|---|---|"]
     for name, g in df.groupby(band, observed=True):
         cells = []
-        for rule in RULES:
+        for rule in shown:
             net = _net(g, rule)
             cells.append(f"{net.mean():+.3f}R" if len(net) else "—")
         nb = (g["B_ref지정가_outcome"] != "nofill").sum()
@@ -202,62 +279,106 @@ def _bands(df: pd.DataFrame) -> list[str]:
 
 
 def _write_report(df: pd.DataFrame, span: str) -> str:
+    if DAILY:
+        head = [
+            "# 진입 방식 — **일봉** 트레이드 플랜에 같은 칼을 댄다 (2026-08-12)",
+            "",
+            "15분봉(3a)이 체결 가정에서 죽었다"
+            "(`2026-08-12-entry-rule.md`). 같은 `_simulate_outcome` 이",
+            "일봉도 돌린다 — 프로덕션(가상 브로커·화면 판정·텔레그램·성적표)이",
+            "딛고 선 **+0.58R** 이 성한지 본다.", "",
+            "**결론: 마이너스는 아니지만 0 이다.** 프로덕션이 실제로 거는 것",
+            "(actionable = 롱 + 등급 A/B)의 OOS 순평균이 +0.489R → **+0.022R**",
+            "(p=0.26). 비용 전으로 봐도 +0.657R → +0.189R 이라 **수수료 가정과",
+            "무관하게 이익의 70% 가 살 수 없는 가격에서 나오고 있었다.**",
+            "프로덕션은 `plan[\"entry\"][\"high\"]` 에 지정가를 건다"
+            "(`paper_trade_runner_toss.py:684`) — 아래 C 다.", "",
+            f"279종목 일봉 · {span} · 왕복 {COST_BPS:.0f}bp(편도 20bp)", "",
+        ]
+    else:
+        head = [
+            "# 진입 방식 — 백테스트 규칙 vs 러너가 실제로 할 수 있는 것 (2026-08-12)",
+            "",
+            "**결론: 3a 의 +0.390R 은 실행할 수 없는 진입 위에 서 있었다.**",
+            "실제로 걸 수 있는 주문(갭반영)은 OOS 에서 가장 좋은 것이 **−0.072R** "
+            "(p=0.98) 이다. 비용 전으로 봐도 +0.071R 로 0 근처다.",
+            "15분봉 자동 주문은 **켜면 안 된다.**", "",
+            f"30종목 15분봉 · {span} · 롱 + 손절폭 {MIN_RISK_PCT}% 이상 · "
+            f"왕복 {COST_BPS:.0f}bp", "",
+        ]
     body = [
-        "# 진입 방식 — 백테스트 규칙 vs 러너가 실제로 할 수 있는 것 (2026-08-12)",
-        "",
-        "**결론: 3a 의 +0.390R 은 실행할 수 없는 진입 위에 서 있었다.**",
-        "실행 가능한 두 방식은 OOS 에서 둘 다 음수다 (B −0.238R, C −0.287R).",
-        "15분봉 자동 주문은 **켜면 안 된다.**", "",
-        f"30종목 15분봉 · {span} · 롱 + 손절폭 {MIN_RISK_PCT}% 이상 · "
-        f"왕복 {COST_BPS:.0f}bp", "",
+        *head,
         "| 규칙 | 체결 조건 | 산 값 |",
         "|---|---|---|",
-        "| A_백테스트 | 저가가 구간 **상단**에 닿으면 | **ref**(구간 중간) |",
+        "| A_백테스트 | 저가가 **공격적 선**(롱=구간 상단)에 닿으면 | **ref**(구간 중간) |",
         "| B_ref지정가 | 저가가 **ref** 에 닿아야 | ref |",
-        "| C_상단지정가 | 저가가 구간 **상단**에 닿으면 | **상단** |",
+        "| C_상단지정가 | 저가가 공격적 선에 닿으면 | 공격적 선 |",
+        "| B_갭반영 / C_갭반영 | 같음 | **min(그날 시가, 지정가)** |",
         "",
         "A 는 B 의 체결 수와 C 의 가격을 동시에 가진다 — 실행 가능한 규칙이 "
-        "아니라 **상한**이다. 진짜 선택지는 B 와 C 다.",
-        "R 은 셋 다 플랜 위험(entry_ref − stop) 으로 나눈다.", "",
+        "아니라 **상한**이다.",
+        "**갭반영판이 실제로 걸 수 있는 주문이다.** 지정가 아래로 갭이 나면 "
+        "지정가가 아니라 그날 시가에 채워진다 — `virtual_broker.scan_limit_fill` "
+        "이 이미 그렇게 센다. 무보정 B·C 는 그만큼 불리하게 잡힌 값이라 같이 둔다.",
+        "R 은 전부 플랜 위험(|entry_ref − stop|) 으로 나눈다.", "",
     ]
     oos = df[df["entry_date"] < IS_START]
     ins = df[df["entry_date"] >= IS_START]
-    body += _block(oos, f"일봉 규칙을 고를 때 안 본 구간 (~{(IS_START - pd.Timedelta(days=1)).date()})")
+    body += _block(oos, f"규칙을 고를 때 안 본 구간 (~{(IS_START - pd.Timedelta(days=1)).date()})")
     body += _block(ins, f"본 구간 ({IS_START.date()}~)")
     body += _block(df, "전체")
 
+    if DAILY:
+        # 프로덕션이 실제로 거는 것만 따로 본다. 전체 +0.58R 은 숏·저등급까지
+        # 다 넣은 숫자고, `actionable` (롱 + 실행등급 A/B) 이 화면·텔레그램·
+        # 가상 브로커가 따르는 문턱이다.
+        body += ["## 프로덕션이 실제로 거는 것만 (actionable = 롱 + 등급 A/B)", ""]
+        act = df[df["actionable"]]
+        body += _block(act[act["entry_date"] < IS_START],
+                       "actionable · 안 본 구간")
+        body += _block(act, "actionable · 전체")
+        body += ["## 방향별 (전체)", ""]
+        for d, lab in (("long", "롱"), ("short", "숏")):
+            sub = df[df["direction"] == d]
+            if not sub.empty:
+                body += _block(sub, lab)
+
+    inv, both, same = _invariants(df)
+    n_a = int((df["A_백테스트_outcome"] != "nofill").sum())
+    n_b = int((df["B_ref지정가_outcome"] != "nofill").sum())
     body += [
         "## A 의 수익은 어디서 왔나 — 유령 체결", "",
-        "B 의 체결은 A 의 **부분집합**이다(검증: B 체결인데 A 미체결 0건). 둘 다",
-        "산 값이 ref 라, 둘 다 체결된 건은 R 이 소수점까지 같다(2,372건 중 2,361건).",
-        "그러면 A 와 B 의 차이는 오직 **A 만 산 1,673건**이다 — 가격이 구간",
-        "상단까지만 내려왔는데 백테스트가 중간값에 사 준 건이다. **그 가격에",
-        "시장이 거래된 적이 없다.**", "",
+        f"B 의 체결은 A 의 **부분집합**이다(검증: B 체결인데 A 미체결 {inv}건).",
+        f"둘 다 산 값이 ref 라, 둘 다 체결된 건은 R 이 소수점까지 같다"
+        f"({both:,}건 중 {same:,}건). 그러면 A 와 B 의 차이는 오직 **A 만 산 "
+        f"{n_a - n_b:,}건**이다 — 가격이 공격적 체결선까지만 왔는데 백테스트가",
+        "구간 중간값에 사 준 건이다. **그 가격에 시장이 거래된 적이 없다.**", "",
         "| 구간 | A 체결 | A 순평균 | A 순합 | 실제 가능 | 그 순평균 | 유령 | 그 순평균 | 유령 비중 |",
         "|---|---|---|---|---|---|---|---|---|",
         *_phantom(df, "전체"),
         *_phantom(oos, "OOS"),
+        *(_phantom(df[df["actionable"]], "actionable") if DAILY else []),
         "",
-        "유령 체결이 A 총R 의 **126%** 다. 빼면 남는 게 음수라는 뜻이다.",
-        "이유는 분명하다: 구간 상단만 찍고 곧장 오른 셋업이 가장 크게 이기는데,",
+        "비중이 100% 를 넘으면 **유령을 빼면 남는 게 음수**라는 뜻이다.",
+        "역선택이다: 공격적 체결선만 찍고 곧장 간 셋업이 가장 크게 이기는데,",
         "**그런 판일수록 되돌림이 얕아 지정가가 안 채워진다.** 깊이 되돌리는",
-        "판은 그대로 더 빠진다. 역선택이다.", "",
+        "판은 그대로 더 간다.", "",
         "## 구간을 좁게 잡으면 살아나는가", "",
         "구간이 좁으면 ref 와 상단이 붙어 세 규칙이 같아진다. 그런 셋업만 "
         "남기는 길이 있는지 봤다.", "",
         *_bands(df),
         "",
-        "0.2~0.4R 대가 양수지만 **셋업 100건 · B 체결 37건**이다. 3년치에서 그만큼",
-        "밖에 안 나오는 데다, 수익률을 보고 자른 구간이라 그 자체로 데이터마이닝이다.",
-        "여기에 전략을 올릴 수 없다.", "",
+        "좁은 대가 양수로 나와도 **표본이 몇 건인지** 먼저 볼 것. 수익률을 보고",
+        "자른 구간이라 그 자체가 데이터마이닝이다.", "",
     ]
     zu = df["zone_up_r"]
     body += [
-        "## 진입 구간이 왜 이렇게 넓나", "",
-        f"구간 상단은 ref 에서 중앙값 **{zu.median():.2f}R** 위다 "
+        "## 진입 구간이 얼마나 넓나", "",
+        f"공격적 체결선은 ref 에서 중앙값 **{zu.median():.2f}R** 떨어져 있다 "
         f"(평균 {zu.mean():.2f} · 상위25% {zu.quantile(.75):.2f}).",
-        "손절이 진입가의 0.3% 인 세계에서, 구간 안 어디를 사느냐가 트레이드마다",
-        "0.77R 을 가른다. 진입 구간은 **라인 하나로 좁히지 않으면 계획이 아니다.**", "",
+        "이 값이 구간 안 어디서 사느냐가 트레이드마다 가르는 크기다.",
+        "진입 구간은 **라인 하나로 좁히지 않으면 계획이 아니다.**", "",
+        f"생성: `MODE={MODE} python scripts/measure_entry_rule.py`", "",
     ]
     return "\n".join(body)
 
@@ -284,7 +405,8 @@ def main() -> int:
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else max(os.cpu_count() - 1, 1)
     panel = pd.read_parquet(PANEL)
     tickers = sorted({t for _, t in panel.columns})
-    tasks = [(tk, _ohlcv(panel, tk)) for tk in tickers]
+    tasks = [(tk, d) for tk in tickers
+             if len(d := _ohlcv(panel, tk)) > MIN_LEN + FILL_WINDOW + HOLD_WINDOW]
     span = f"{panel.index[0]} ~ {panel.index[-1]}"
     print(f"{len(tasks)}종목 · {span} · 워커 {workers}", flush=True)
 
