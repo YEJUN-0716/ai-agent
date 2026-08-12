@@ -262,6 +262,12 @@ def _run_ticker(args):
             "direction": plan["direction"], "cost_grade": plan["cost_grade"],
             "actionable": bool(plan["actionable"]),
             "risk_pct": plan["risk_pct"],
+            # 신호의 부품 — 어느 조각이 값을 만드는지 쪼개 보려면 있어야 한다.
+            # entry_struct 는 진입 구간이 **어디서 나왔나**다: 미체결 OB → FVG →
+            # 못 찾으면 Discount 되돌림 폴백(= 최근 60봉 아래 절반, 구조가 아님).
+            "bias_score": plan["bias_score"], "confluence": plan["confluence"],
+            "entry_struct": plan["signals"][0].removeprefix("진입 근거: ")
+                            if plan["signals"] else "?",
             # 공격적 체결선이 ref 에서 얼마나 떨어져 있나 — C 가 더 무는 값이다.
             "zone_up_r": abs(aggressive - ref) / risk if risk > 0 else float("nan"),
             **{f"{r}_outcome": out[r]["outcome"] for r in RULES},
@@ -311,6 +317,114 @@ def _block(df: pd.DataFrame, label: str) -> list[str]:
             f"| {rule} | {len(filled):,} | {len(filled) / len(df) * 100:.0f}% | "
             f"{filled[f'{rule}_r'].mean():+.3f}R | {net.mean():+.3f}R | "
             f"{net.sum():+,.0f}R | {p:.4f} |")
+    return lines + [""]
+
+
+def _tstat(net: np.ndarray) -> float:
+    if len(net) < 2:
+        return float("nan")
+    sd = float(net.std(ddof=1))
+    return float(net.mean() / (sd / np.sqrt(len(net)))) if sd > 0 else float("nan")
+
+
+def _by_signal(df: pd.DataFrame, keys, label: str) -> list[str]:
+    """신호 부품별로 **E_시장가**를 쪼갠다.
+
+    왜 E 냐 — 체결률 95% 라 체결 가정이 거의 안 섞인다. C 로 쪼개면 그룹마다
+    체결률이 같이 움직여서 차이가 신호 때문인지 체결 때문인지 못 가린다.
+    롱 비중·actionable 비중을 같이 낸다: 하위그룹 비교는 **구성비부터** 봐야
+    한다 — 확신도 역전도 국면별 IC 도 구성비에 속은 가짜였다.
+    """
+    lines = [f"| {label} | 셋업 | 롱 | actionable | E 체결 | E 비용전 | "
+             "E 순평균R | t | C갭 순평균R |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for name, g in df.groupby(keys, observed=True):
+        e, c = _net(g, "E_시장가"), _net(g, "C_갭반영")
+        if len(e) == 0:
+            continue
+        fe = _filled(g, "E_시장가")
+        lines.append(
+            f"| {name} | {len(g):,} | {g['direction'].eq('long').mean() * 100:.0f}% | "
+            f"{g['actionable'].mean() * 100:.0f}% | {len(fe):,} | "
+            f"{fe['E_시장가_r'].mean():+.3f}R | {e.mean():+.3f}R | "
+            f"{_tstat(e):+.2f} | "
+            f"{(c.mean() if len(c) else float('nan')):+.3f}R |")
+    return lines + [""]
+
+
+def _signal_section(oos: pd.DataFrame) -> list[str]:
+    """신호를 고치려면 어느 부품을 고쳐야 하나 — 사후 분할이라 **가설 생성용**."""
+    if "entry_struct" not in oos.columns:
+        return []
+    bias = pd.cut(oos["bias_score"].abs(), [10, 15, 20, 25, 1e9], right=False,
+                  labels=["|bias| 10~15", "15~20", "20~25", "25+"])
+    return [
+        "## 신호의 어느 부품이 값을 만드나 (안 본 구간)", "",
+        "어느 라인에 걸어도 0 이면 남은 건 셋업 자체다. 셋업을 만드는 조각은 "
+        "셋(**방향** `calc_ict_adjustment`, **진입 구조** `_pick_long_entry`, "
+        "**문턱** min_rr·NEAR_ZONE_PCT)인데, 어느 조각이 값을 만드는지는 한 번도 "
+        "안 쪼개 봤다. E 기준으로 쪼갠다.", "",
+        "**사후 분할이다 — 여기서 나온 양수는 발견이 아니라 가설이다.** "
+        f"판정선은 유효표본 ≥ {30} · |t| ≥ {2.0} "
+        "(`analyst_scorecard.DECIDE_*`) 이고, 넘어도 **그 규칙만 따로 OOS 로 "
+        "다시 재기 전까지는 프로덕션에 안 넣는다.**", "",
+        "### 진입 구간이 어디서 나왔나", "",
+        *_by_signal(oos, oos["entry_struct"], "진입 근거"),
+        "`Discount 되돌림` 은 구조를 **못 찾았을 때의 폴백**이다 — 최근 60봉의 "
+        "아래 절반이지 미체결 구조가 아니다(`trade_plan._pick_long_entry`). "
+        "이 줄의 비중과 값이 \"폴백을 빼면 되나\" 에 대한 답이다.", "",
+        "### ICT 방향 점수 세기별", "",
+        *_by_signal(oos, bias, "구간"),
+        "점수가 셀수록 좋아지는 단조 관계가 없으면 `BIAS_TH` 를 올리는 건 "
+        "셋업만 줄인다. 방향 점수는 2026-08-09 에 이미 |t| ≤ 0.6 으로 나왔다 — "
+        "여기서도 살아나지 않으면 그 결론이 트레이드 단위에서 재확인된 것이다.", "",
+        "**위 표의 롱 비중을 먼저 볼 것.** |bias| 10~15 는 롱 100% 고 그 위는 "
+        "60% 대다 — 숏이 나쁘니 10~15 가 좋아 보인다. 롱만 놓고 다시 내면 "
+        "10~15 가 **−0.116R 로 제일 나쁘고** 15~20 이 −0.026R 로 제일 낫다. "
+        "단조가 아니라 순서가 뒤집힌다. 구성비에 세 번째로 걸릴 뻔했다.", "",
+    ]
+
+
+def _cost_section(oos: pd.DataFrame, ins: pd.DataFrame) -> list[str]:
+    return [
+        "## 그런데 0 인 것은 **40bp 가정에서**다", "",
+        "위 결론은 전부 왕복 40bp(편도 20bp — 한국 증권사 미국주식) 위에 서 "
+        "있다. 손절폭 중앙이 1.72% 라 40bp 는 **0.23R** 이다. 셋업도 라인도 "
+        "안 건드리고 **비용 가정만** 바꿔 넣으면 부호가 갈린다.", "",
+        "프로덕션이 실제로 거는 것 (actionable · C_갭반영):", "",
+        *_cost_sweep(oos, ins),
+        "**왕복 손익분기는 약 45bp(편도 22bp)다.** 한국 증권사 자리(40bp)가 "
+        "그 바로 밑에 붙어 있어 남는 게 0 으로 눌린 것이지, 규칙이 0 인 게 "
+        "아니다. 판정선(|t| ≥ 2)을 넘으려면 왕복 30bp 아래가 필요하다.", "",
+        "**안 본 구간과 본 구간이 같은 방향으로 움직인다** — 비용을 낮췄을 때 "
+        "한쪽만 살아나는 게 아니라 둘 다 살아난다. 과최적화로 만든 값이 아니다.", "",
+        "**그래서 다음에 손볼 것은 신호가 아니라 비용이다.** Alpaca 는 커미션 "
+        "0 이라 실제 비용이 스프레드·슬리피지뿐이다(페이퍼 실측 손절 0.98bp). "
+        "**단, 이 표는 \"비용이 6bp 라면\" 의 가정이지 실측이 아니다.** 진입은 "
+        "지정가 대기라 손절과 체결 성격이 다르고, 그 왕복 비용은 아직 안 쟀다. "
+        "재기 전에는 이 표를 근거로 러너를 켜지 않는다.", "",
+    ]
+
+
+COST_SWEEP = (0.0, 6.0, 10.0, 20.0, 40.0)
+
+
+def _cost_sweep(oos: pd.DataFrame, ins: pd.DataFrame) -> list[str]:
+    """같은 규칙·같은 트레이드에 **비용 가정만** 바꿔 넣는다.
+
+    사후 분할이 아니다 — 셋업도 라인도 안 건드리고 왕복 bp 만 바꾼다.
+    40bp(왕복)는 한국 증권사 미국주식 자리고, Alpaca 는 커미션 0 이라
+    실제 비용이 한 자릿수 bp 다. **어느 쪽 가정이냐가 부호를 가른다.**
+    """
+    lines = ["| 구간 | 셋업 | " + " | ".join(f"{c:.0f}bp" for c in COST_SWEEP) + " |",
+             "|---|---|" + "---|" * len(COST_SWEEP)]
+    for label, g in (("안 본 구간", oos), ("본 구간", ins)):
+        sub = g[g["actionable"]]
+        cells = []
+        for c in COST_SWEEP:
+            net = _net(sub, "C_갭반영", cost_bps=c)
+            cells.append(f"{net.mean():+.3f}R (t {_tstat(net):+.2f})")
+        lines.append(f"| {label} | {len(sub):,} | " + " | ".join(cells) + " |")
     return lines + [""]
 
 
@@ -429,7 +543,15 @@ def _write_report(df: pd.DataFrame, span: str) -> str:
             "비용 산수가 같이 바뀐다는 뜻이라, 비용 전 숫자만 보고 라인을 "
             "고르면 안 된다.", "",
             "**판정은 안 바뀐다.** 프로덕션(C)이 걸 수 있는 것 중 최선이고 그 "
-            "값이 0 이다. 다음에 손볼 것은 주문 방식이 아니라 신호다.", "",
+            "값이 0 이다. 주문 방식은 여기서 끝났다.", "",
+            "**그 다음 — 신호를 쪼갰더니 비용이 나왔다.** 어느 부품이 값을 "
+            "만드는지 E 기준으로 갈라 봤다(아래 \"신호의 어느 부품이\"). 주력인 "
+            "Bullish OB(셋업 68%)의 **비용 전** 엣지가 +0.050R 인데 40bp 가 "
+            "0.23R 이다 — 신호가 비용의 1/4 이다. 그래서 비용 가정만 바꿔 "
+            "넣어 봤고(아래 \"0 인 것은 40bp 가정에서다\"), **왕복 20bp 에서 "
+            "actionable OOS 가 +0.105R (t +2.86) 로 살아난다.** 왕복 손익분기가 "
+            "약 45bp 인데 한국 증권사 자리(40bp)가 **그 바로 밑에 붙어 있어** "
+            "남는 게 0 으로 눌린 것이다 — 규칙이 0 인 게 아니다.", "",
             f"279종목 일봉 · {span} · 왕복 {COST_BPS:.0f}bp(편도 20bp)", "",
         ]
     else:
@@ -513,6 +635,10 @@ def _write_report(df: pd.DataFrame, span: str) -> str:
             sub = df[df["direction"] == d]
             if not sub.empty:
                 body += _block(sub, lab)
+
+    body += _signal_section(oos)
+    if DAILY:
+        body += _cost_section(oos, ins)
 
     inv, both, same = _invariants(df)
     n_a = int((df["A_백테스트_outcome"] != "nofill").sum())
