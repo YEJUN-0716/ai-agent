@@ -202,16 +202,26 @@ def test_workspace_report_shows_the_verdict_without_trade_prices(flat_df, monkey
         assert banned not in html, banned
 
 
-def test_recommended_badge_on_a_setup_that_clears_the_gate(flat_df, monkeypatch):
-    assert '추천' in _card_html(flat_df, monkeypatch, _plan())
+def test_gate_badge_on_a_setup_that_clears_the_gate(flat_df, monkeypatch):
+    """딱지는 **통과했다는 사실**만 말한다.
+
+    2026-08-12 까지는 "✅ 추천" 이었다. 그 말이 약속하는 초과수익이 측정에서
+    안 나왔다 — 실행 가능한 진입으로 재면 +0.02R (p=0.26) 이다. 게이트는
+    남기되(빼면 −0.11R) 문구는 게이트가 실제로 하는 일에 맞춘다.
+    """
+    html = _card_html(flat_df, monkeypatch, _plan())
+
+    assert '실행 문턱 통과' in html
+    assert '추천' not in html          # 다시 기어들어오면 여기서 잡는다
+    assert '+0.02R' in html            # 근거 수치를 같이 낸다
 
 
 def test_no_recommendation_when_the_reward_does_not_cover_the_risk(flat_df, monkeypatch):
-    """1:2 에 못 미치는 계획은 추천이 아니라 보류로 나간다."""
+    """1:2 에 못 미치는 계획은 딱지가 아니라 보류로 나간다."""
     html = _card_html(flat_df, monkeypatch, _plan(
         valid=False, rr=[1.8, 3.0], reason_invalid='손익비 부족 (T1 R:R 1.80 < 2.0)'))
 
-    assert '추천' not in html
+    assert '실행 문턱 통과' not in html
     assert '관찰만' in html and '손익비 부족' in html
 
 

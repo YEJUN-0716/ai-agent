@@ -52,7 +52,78 @@
       "entry_date": "2026-08-07"
     }
   },
-  "pending": [],
+  "pending": [
+    {
+      "side": "sell",
+      "symbol": "ALLY",
+      "qty": 12,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "BAC",
+      "qty": 10,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "COF",
+      "qty": 2,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "CVS",
+      "qty": 9,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "GM",
+      "qty": 6,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "HPE",
+      "qty": 12,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "KHC",
+      "qty": 22,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "PFE",
+      "qty": 45,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "T",
+      "qty": 28,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    },
+    {
+      "side": "sell",
+      "symbol": "VZ",
+      "qty": 8,
+      "placed_date": "2026-08-12",
+      "market": "US"
+    }
+  ],
   "realized_pnl_krw": 0.0,
   "trades": [
     {

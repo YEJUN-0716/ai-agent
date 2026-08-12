@@ -4909,16 +4909,20 @@ def render_verdict_cards(snap, *, with_trader=True):
         gate_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:6px'>"
                      f"⛔ 관찰만 — {trader['reason_not_actionable']}</div>")
 
-    # 게이트를 통과한 계획만 "추천"이라는 말을 단다. 통과 못 한 계획은 위의
-    # 보류 문구가 대신 붙으므로, 화면에는 둘 중 하나만 뜬다.
+    # 게이트를 통과한 계획에 붙는 딱지. 2026-08-12 까지는 "✅ 추천" 이었는데
+    # 그 말이 약속하는 초과수익이 측정에서 안 나왔다 — 실행 가능한 진입으로
+    # 재면 +0.02R (p=0.26) 이다. 게이트는 남기되(빼면 −0.11R) 말은 게이트가
+    # 실제로 하는 일에 맞춘다: 통과했다는 사실만 말한다.
+    from modules.trade_plan import MEASURED_EDGE_NOTE
     rec_html = ('' if not trader['actionable'] else
                 "<span style=\"padding:1px 7px;border-radius:3px;background:#10b98122;color:#10b981;"
-                "font-family:'JetBrains Mono',monospace\">✅ 추천</span>")
+                "font-family:'JetBrains Mono',monospace\">✅ 실행 문턱 통과</span>")
 
     basis = ' · '.join(x for x in (
         plan_note,
         f"진입 근거: {trader['entry_note']}" if trader['entry_note'] else '',
-        f"손절 기준: {trader['stop_note']}" if trader['stop_note'] else '') if x)
+        f"손절 기준: {trader['stop_note']}" if trader['stop_note'] else '',
+        MEASURED_EDGE_NOTE if trader['actionable'] else '') if x)
     st.markdown(f"""
 <div style="background:{tl}0d;border:1px solid {tl}40;border-radius:10px;padding:14px 18px;margin-top:8px">
   <div style="display:flex;align-items:baseline;gap:8px;font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">
