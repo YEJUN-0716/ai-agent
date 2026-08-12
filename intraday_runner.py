@@ -1,5 +1,19 @@
 #!/usr/bin/env python
-"""3b — 15분봉 단타 러너 (Alpaca 페이퍼)
+"""3b — 15분봉 단타 러너 (Alpaca 페이퍼) · **지금은 막혀 있다**
+
+⛔ 2026-08-12 측정(`docs/measurements/2026-08-12-entry-rule.md`)으로 자동 주문을
+막았다. 3a 의 +0.390R 은 **실행할 수 없는 진입** 위에 서 있었다 — 가격이 진입
+구간 상단까지만 왔는데 백테스트가 구간 중간값에 사 준다. 시장에 없던 가격이고,
+그 유령 체결이 총R 의 126% 다. 실제로 걸 수 있는 두 방식(구간 중간 지정가 /
+구간 상단 지정가)은 OOS 에서 각각 −0.238R, −0.287R 이다.
+
+역선택이 원인이다. 크게 이기는 셋업일수록 되돌림이 얕아 지정가가 안 채워지고,
+깊이 되돌리는 셋업은 그대로 더 빠진다. 진입 구간 상단이 ref 에서 중앙값 0.77R
+위라, 구간 안 어디를 사느냐가 트레이드마다 R 을 통째로 가른다.
+
+**아래 코드는 그대로 쓸 수 있다** — 막힌 것은 진입 규칙이지 주문 처리가 아니다.
+진입을 라인 하나로 좁혀 다시 재고, 양수가 나오면 `RUN_KNOWN_NEGATIVE` 게이트를
+지우면 된다.
 
     set -a && . ./.env && set +a
     python intraday_runner.py            # 장중 상시 실행 (마감 15분 전 전량 청산)
@@ -356,6 +370,15 @@ def main() -> int:
     if not at.is_paper() and os.environ.get("ALLOW_LIVE") != "true":
         print("실계좌에서는 안 돕니다 — 3b 는 페이퍼 검증 단계입니다 "
               "(정말이면 ALLOW_LIVE=true).", file=sys.stderr)
+        return 1
+    # 2026-08-12 측정으로 막아 둔다. 자세한 건 모듈 독스트링 맨 위.
+    if os.environ.get("RUN_KNOWN_NEGATIVE") != "true":
+        print("정지 — 이 규칙은 실행 가능한 형태로는 기대값이 음수입니다.\n"
+              "  docs/measurements/2026-08-12-entry-rule.md\n"
+              "  3a 의 +0.390R 은 시장에 없던 가격에 사는 진입 위에 있었습니다."
+              " 그 유령 체결이 수익의 126% 입니다.\n"
+              "  진입 규칙을 고쳐 다시 재기 전에는 켜지 않습니다 "
+              "(그래도 돌리려면 RUN_KNOWN_NEGATIVE=true).", file=sys.stderr)
         return 1
 
     clk = _clock()
