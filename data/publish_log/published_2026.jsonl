@@ -17,3 +17,8 @@
 {"published_at": "2026-08-11", "horizon": 5, "n": 508}
 {"published_at": "2026-08-11", "horizon": 21, "n": 493}
 {"published_at": "2026-08-11", "horizon": 63, "n": 451}
+{"published_at": "2026-08-12", "kind": "record", "log_date": "2026-08-11"}
+{"published_at": "2026-08-12", "horizon": 1, "n": 512}
+{"published_at": "2026-08-12", "horizon": 5, "n": 509}
+{"published_at": "2026-08-12", "horizon": 21, "n": 494}
+{"published_at": "2026-08-12", "horizon": 63, "n": 452}
