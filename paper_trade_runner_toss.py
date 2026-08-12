@@ -9,6 +9,11 @@ GitHub Actions cron으로 매일 장마감 후 자동 실행.
 2026-08-10: 팩터 엔진(calc_factor_scores/generate_signals)에서 트레이드 플랜으로
 교체. 팩터 경로는 OOS IC −0.0046 으로 예측력이 확인되지 않았고, 트레이드 플랜은
 6.4년 OOS 에서 +0.66R(롱, 실행등급 A·B)이 나왔다. 측정된 규칙으로 장부를 돌린다.
+
+2026-08-12 정정: **그 +0.66R 은 실행할 수 없는 진입 위에서 잰 값이다.** 실제로
+걸 수 있는 지정가로 다시 재면 OOS +0.022R (p=0.26) 이다 — 마이너스는 아니지만
+0 이다. 이 장부를 계속 돌리는 이유는 초과수익을 기대해서가 아니라, **측정으로는
+못 얻는 실체결 기록**을 쌓기 위해서다. 상세: docs/measurements/2026-08-12-entry-rule-daily.md
 설계: docs/superpowers/specs/2026-08-10-virtual-broker-trade-plan-design.md
 
 환경변수:

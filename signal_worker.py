@@ -14,6 +14,7 @@ from datetime import date
 import app as core
 from modules import (analyst_log, analyst_scorecard, analyst_team,
                      krx_universe, price_panel, scalp_log)
+from modules.trade_plan import MEASURED_EDGE_NOTE
 
 
 KRX_SUFFIXES = ('.KS', '.KQ')
@@ -105,6 +106,7 @@ def build_message(tickers, actions, rebal, failed, warning=None, plans=None):
         lines.append(warning)
         lines.append("")
 
+    plan_lines_sent = False
     if not actionable:
         lines.append(f"오늘은 매수/매도 시그널 없음 (관망 {rebal['hold_count']}종목) — 자동 스캔은 정상 작동 중.")
     else:
@@ -122,7 +124,15 @@ def build_message(tickers, actions, rebal, failed, warning=None, plans=None):
                 pl = _plan_line(a['ticker'], p)
                 if pl:
                     block += f"\n  📐 {pl}"
+                    plan_lines_sent = True
             lines.append(block)
+
+    # 라인을 하나라도 내보냈으면 그 라인이 무엇을 약속하는지 같이 적는다.
+    # 2026-08-12 측정 전에는 이 자리가 "+0.66R 규칙" 이라는 뜻이었는데,
+    # 실제로 걸 수 있는 진입으로 재면 +0.02R 이다. 알림이 그걸 말해야 한다.
+    if plan_lines_sent:
+        lines.append("")
+        lines.append(f"_📐 라인 기준: {MEASURED_EDGE_NOTE}_")
 
     # 숏 관찰 — 신호 엔진은 롱 전용이라 숏은 여기서만 '분석용'으로 표시한다.
     shorts = [(tk, p) for tk, p in plans.items()
