@@ -22,7 +22,7 @@ OUT = Path(__file__).parent / "charts"
 
 # measure_entry_rule.py 와 같은 값이라야 한다. 여기서 갈리면 대본이 틀린다.
 COST_BPS = 40.0
-IS_START = pd.Timestamp("2024-12-01")
+IS_START = pd.Timestamp("2024-12-20")
 
 BG, FG, MUTED = "#0b0f14", "#e6edf3", "#7d8590"
 GHOST, REAL, WARN = "#f85149", "#3fb950", "#d29922"
@@ -106,6 +106,7 @@ def chart_r(notes):
     ax.set_ylim(84, 126)
     ax.set_xlim(0, 1)
     ax.set_xticks([])
+    ax.set_yticks([])  # 가격은 라인에 적혀 있다. 눈금은 혼란만 준다.
     ax.set_title("R = 손절까지의 거리.  퍼센트와 달리 위험을 같이 잰다",
                  fontsize=32, weight="bold", pad=28, loc="left")
     ax.tick_params(labelsize=20)
@@ -117,17 +118,15 @@ def chart_fill(notes):
     f, ax = plt.subplots(figsize=(19.2, 10.8), dpi=100)
     ax.axis("off")
 
-    ax.text(0.04, 0.86, "백테스트가 체결을 판정하던 방식", color=MUTED, fontsize=30)
-    ax.text(0.04, 0.72, "이 봉의 저가가 진입 구간에 닿았으면\n→ 체결된 걸로 친다",
-            color=FG, fontsize=44, weight="bold", linespacing=1.5)
-
-    ax.text(0.04, 0.46, "봉은 장이 끝나야 완성된다.\n닿았다는 사실은 '닿고 난 뒤에' 안다.",
-            color=WARN, fontsize=34, linespacing=1.6)
-
-    ax.text(0.04, 0.22, "닿을 걸 미리 알고 주문을 넣은 것",
-            color=GHOST, fontsize=48, weight="bold")
-    ax.text(0.04, 0.10, "현실에서 나에겐 그 정보가 없다",
-            color=MUTED, fontsize=30)
+    t = lambda y, s, **kw: ax.text(0.04, y, s, va="top", linespacing=1.5, **kw)
+    t(0.95, "백테스트가 체결을 판정하던 방식", color=MUTED, fontsize=30)
+    t(0.83, "이 봉의 저가가 진입 구간에 닿았으면\n→ 체결된 걸로 친다",
+      color=FG, fontsize=44, weight="bold")
+    t(0.55, "봉은 장이 끝나야 완성된다.\n닿았다는 사실은 '닿고 난 뒤에' 안다.",
+      color=WARN, fontsize=34)
+    t(0.26, "닿을 걸 미리 알고 주문을 넣은 것",
+      color=GHOST, fontsize=46, weight="bold")
+    t(0.12, "현실에서 나에겐 그 정보가 없다", color=MUTED, fontsize=30)
     save(f, "03_fill_rule.png")
 
 
