@@ -47,6 +47,15 @@ OUT_MD = Path("docs/measurements/2026-08-13-pead.md")
 START = pd.Timestamp("2020-03-31")
 END   = pd.Timestamp("2024-12-31")
 
+# 봉인 해제 (`python scripts/measure_pead.py sealed`). 판정이 끝난 뒤 딱 한 번,
+# 확인용으로만 연다 — 설계서 5절. 갈려도 본 측정의 판정을 바꾸지 않으므로
+# **출력 파일을 따로 쓴다.** 같은 파일에 덮어쓰면 판정을 덮는 것과 구별이 안 된다.
+SEALED = "sealed" in sys.argv
+if SEALED:
+    START = pd.Timestamp("2025-01-01")
+    END   = pd.Timestamp("2026-08-07")
+    OUT_MD = Path("docs/measurements/2026-08-13-pead-sealed.md")
+
 # 문헌값 고정 (Bernard & Thomas 1989). 고른 게 아니라 가져온 값이다.
 HOLD_DAYS     = 60     # 거래일
 SUE_WINDOW    = 8      # σ를 내는 분기 수
@@ -143,7 +152,12 @@ def attach_trades(ev: pd.DataFrame, close: pd.DataFrame) -> pd.DataFrame:
     idx = close.index
     pos_entry = np.searchsorted(idx.values, ev["filed"].values, side="right")
     pos_exit = pos_entry + HOLD_DAYS
-    ok = (pos_exit < len(idx)) & ev["ticker"].isin(close.columns).values
+    # `pos_entry == 0` = 가격 구간이 **시작되기 전에** 공시된 건이다. build_events가
+    # 랭킹 모수로 쓰려고 일부러 남겨둔 것들인데(설계서 3.2), 그대로 두면 전부 패널
+    # 첫날 종가에 산 거래로 잡힌다 — 2016년 공시를 2020-03-31에 사는 셈이고,
+    # 같은 날 같은 가격에 수백 건이 몰려 단면 t와 캘린더 곡선을 통째로 오염시킨다.
+    # 랭킹에는 쓰되 거래로는 세지 않는다.
+    ok = (pos_entry > 0) & (pos_exit < len(idx)) & ev["ticker"].isin(close.columns).values
     ev = ev.loc[ok].copy()
     ev["entry"] = pos_entry[ok]
     ev["exit"] = pos_exit[ok]
@@ -277,6 +291,13 @@ def selftest() -> int:
     p2, _ = calendar_curve(ev2, close, 0.0)
     assert np.isclose(p2.iloc[1], 0.01 / 2), "동일가중 평균이 아니다"
 
+    # 7) 가격 구간 시작 전 공시는 거래로 세지 않는다. 랭킹 모수로 남겨둔 것들이
+    #    전부 패널 첫날 매수로 잡히던 버그를 잡는 줄이다.
+    pre = pd.DataFrame({"ticker": ["A", "A"], "sue": [1.0, 1.0],
+                        "filed": [idx[0] - pd.Timedelta(days=30), idx[0]]})
+    got = attach_trades(pre, close)
+    assert len(got) == 1 and got["entry"].iloc[0] == 1, "구간 전 공시가 첫날 매수로 잡혔다"
+
     print("selftest OK")
     return 0
 
@@ -335,14 +356,27 @@ def main() -> int:
 
     verdict = "통과" if (pass1 and pass2) else "실패"
     body = [
-        "# PEAD (실적 서프라이즈 드리프트) — 측정",
+        "# PEAD — 봉인 구간 확인" if SEALED else "# PEAD (실적 서프라이즈 드리프트) — 측정",
         "",
         f"구간 {START.date()} ~ {END.date()} · 진입 `filed`+1 종가 · {HOLD_DAYS}거래일 보유 · "
         f"상위 10분위 롱온리 · 판정 {COST_BPS:.0f}bp.",
         "사전 등록: `docs/superpowers/specs/2026-08-13-pead-design.md`. "
         "파라미터는 문헌값 고정이라 **고를 게 없었고, 따라서 전 구간이 OOS**다.",
         "",
+    ] + ([
+        "> **이 문서는 판정이 아니다.** 본 측정(`2026-08-13-pead.md`)에서 PEAD는 이미 **실패**로",
+        "> 판정됐고, 봉인 구간은 그 뒤에 딱 한 번 확인용으로 연 것이다. 아래 O/X는 같은 통과선을",
+        "> 같은 코드로 봉인 구간에 적용해본 값일 뿐, **판정을 바꾸지 않는다**(설계서 5절).",
+        "",
+        f"## 봉인 구간에 같은 자를 대면: ①{'O' if pass1 else 'X'} ②{'O' if pass2 else 'X'}",
+    ] if SEALED else [
+        "> **정정 (PR #106 대비).** 첫 판에서는 가격 구간이 시작되기도 전에 공시된 건이",
+        "> 전부 패널 첫날 종가 매수로 잡혔다 — 상위 10분위 1055건 중 638건이 그것이었다.",
+        "> `attach_trades`에서 걸러내고 다시 돌린 값이 이 문서다. 이벤트 수와 ①의 부호가",
+        "> 바뀌었고 **판정(실패)은 그대로다.** 파라미터는 손대지 않았다(튜닝 금지 조항).",
+        "",
         f"## 판정: **{verdict}** (①{'O' if pass1 else 'X'} AND ②{'O' if pass2 else 'X'})",
+    ]) + [
         "",
         "| | 무엇 | 통과선 | 실측 | |",
         "|---|---|---|---|---|",
@@ -418,12 +452,14 @@ def main() -> int:
     ] + yearly(strat_curve, bench, exposure) + [
         "## 이 측정이 안 한 것",
         "",
+        "- **봉인은 이 문서로 열었다. 다시 안 연다.** 파라미터를 바꿔 재실행하면 폐기 사유다."
+        if SEALED else
         f"- **2025-01 ~ 2026-08은 봉인.** 판정 후 딱 한 번 연다. 갈려도 판정을 안 바꾼다.",
         "- **8-K 발표일 진입 미측정.** EDGAR submissions를 새로 받아야 해서 이번 범위 밖이다.",
         "- **자리·현금 제약 없음.** ②를 통과한 뒤에 붙인다 — 못 하면 붙일 이유가 없다.",
         "",
         f"이벤트 {len(ev)}건 중 상위 10분위 {len(top)}건. "
-        "재현: `python scripts/measure_pead.py` · 산수 점검 `... selftest`",
+        f"재현: `python scripts/measure_pead.py{' sealed' if SEALED else ''}` · 산수 점검 `... selftest`",
         "",
     ]
 
