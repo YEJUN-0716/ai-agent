@@ -48,6 +48,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from modules import analyst_log
 from modules.factor_engine import get_market_regime
 from modules.fx import fetch_krw_per_usd
 from modules.price_panel import PanelCoverageError, load_panel
@@ -674,6 +675,47 @@ def scan_trade_plans(ohlcv: dict) -> list[dict]:
     return out
 
 
+def latest_analyst_scores() -> tuple[dict, str | None]:
+    """직전 기록일의 종목별 애널리스트 점수 → ({ticker: {...}}, 그 날짜).
+
+    analyst-log 워크플로는 이 러너보다 뒤(23:00 UTC vs 21:30 UTC)에 돌므로
+    가장 최근 기록은 **어제치**다. 주문을 내는 순간 실제로 알 수 있었던 값이라
+    look-ahead 가 없다 — 오늘 다시 계산해서 채우면 그게 look-ahead 다.
+    """
+    try:
+        days = analyst_log.load_days()
+    except Exception as e:                    # 기록이 없거나 깨져도 주문은 나가야 한다
+        print(f"  [경고] 애널리스트 기록 로드 실패 — 점수 없이 주문: {e}")
+        return {}, None
+    if not days:
+        return {}, None
+    last = days[-1]
+    return last.get("scores") or {}, last.get("date")
+
+
+def order_meta(scores: dict, asof: str | None, ticker: str) -> dict:
+    """주문에 실어 둘 관측 기록. **주문 근거가 아니다.**
+
+    러너는 트레이드 플랜만 보고 산다 — 총괄 판정은 방향에도 자리에도 안 들어간다.
+    그런데 총괄 판정을 언젠가 매매에 붙이려면 **"그 점수가 우리가 실제로 낸
+    주문의 결과를 예측했나"** 를 먼저 물어야 하고, 그때 쓸 표본은 지금부터
+    쌓아야 한다. 붙이기 전에 재는 순서를 지키려고 남기는 줄이다.
+
+    `score` 키에 총괄 판정을 넣는 이유는 signal_scorecard.by_score_bucket 이
+    그 키를 읽기 때문이다. `score_role="observed"` 로 **주문이 쓴 값이 아님**을
+    같이 박아 둔다 — 나중에 이 줄을 근거로 읽으면 안 된다.
+
+    기록에 없는 종목(유니버스가 다르다)은 빈 dict 를 준다. 채울 수 없는 것을
+    중립값으로 채우면 '계산 불가'가 '중립 판단'으로 성적에 섞인다.
+    """
+    row = scores.get(ticker) or {}
+    verdict = row.get("verdict")
+    if verdict is None:
+        return {}
+    return {"score": verdict, "score_role": "observed",
+            "analyst": dict(row), "analyst_asof": asof}
+
+
 def rank_plan_candidates(cands: list[dict]) -> list[dict]:
     """A등급 먼저, 같은 등급 안에서는 현재가가 진입가에 가까운 순.
 
@@ -866,6 +908,15 @@ def main():
               f"진입 {c['limit']:.2f} / 손절 {c['stop']:.2f} / 목표 {c['target']:.2f}"
               f"  R:R {c['rr']}  위험폭 {c['risk_pct']:.2f}%")
 
+    # 5-1. 주문에 실어 둘 총괄 판정 — **관측 기록이지 주문 근거가 아니다**(order_meta).
+    analyst_scores, analyst_asof = latest_analyst_scores()
+    if analyst_scores:
+        covered = sum(1 for c in candidates if c["ticker"] in analyst_scores)
+        print(f"  애널리스트 기록 {analyst_asof} · {len(analyst_scores)}종목 "
+              f"(실행 대상 {len(candidates)}중 {covered}종목 매칭)")
+    else:
+        print("  애널리스트 기록 없음 — 주문에 점수를 안 싣는다")
+
     # 6. 지정가 진입 주문
     #
     # 자리는 **보유 + 대기 중인 지정가 주문**을 함께 센다. 지정가는 최대
@@ -958,6 +1009,7 @@ def main():
                           "rr": cand["rr"], "grade": cand["grade"],
                           "risk_pct": cand["risk_pct"]},
                     market=market_of_symbol(sym),
+                    meta=order_meta(analyst_scores, analyst_asof, cand["ticker"]),
                 )
                 if kill is not None:
                     kill.record_success()

@@ -81,6 +81,32 @@ def test_unknown_score_is_left_empty_not_faked(signal_log):
     assert entry["rsi"] is None
 
 
+def test_order_carries_the_published_verdict_as_an_observation():
+    """트레이드 플랜 주문에 그날 공개돼 있던 총괄 판정이 실리는가.
+
+    2026-08-10 팩터 → 트레이드 플랜 전환 때 `place_limit_entry` 에 meta 를 안
+    실어서, 전환 이후 체결은 성적표 점수 칸이 통째로 비었다(실측 21건 중 6건만
+    점수 있음, 전부 전환 전 건). 고리가 셋인데(주문→체결→성적표) 위 두 테스트가
+    아래 둘을 잡고, 이 테스트가 첫 고리를 잡는다.
+
+    실리는 값은 **주문 근거가 아니라 관측 기록**이다 — score_role 이 그걸 박는다.
+    """
+    scores = {"AAA": {"chart": 61.0, "quant": 58.0, "ict": 70.0, "verdict": 63.4}}
+
+    meta = runner.order_meta(scores, "2026-08-12", "AAA")
+    assert meta["score"] == 63.4               # by_score_bucket 이 읽는 키
+    assert meta["score_role"] == "observed"    # 주문이 쓴 값이 아니다
+    assert meta["analyst"]["ict"] == 70.0      # 3팀 원점수도 같이 남는다
+    assert meta["analyst_asof"] == "2026-08-12"
+
+
+def test_ticker_without_a_verdict_gets_no_faked_score():
+    # 러너 유니버스(95종목)와 애널리스트 기록 유니버스(S&P 500)는 다르다.
+    # 없는 종목을 중립 50 으로 채우면 '기록 없음'이 '중립 판단'으로 성적에 섞인다.
+    assert runner.order_meta({}, None, "AAA") == {}
+    assert runner.order_meta({"AAA": {"chart": 61.0}}, "2026-08-12", "AAA") == {}
+
+
 def test_sell_fills_do_not_enter_the_log(signal_log):
     # 성적표는 진입만 기록하고 결과는 resolve_signal_outcomes 가 채운다.
     n = runner.record_virtual_fills([
