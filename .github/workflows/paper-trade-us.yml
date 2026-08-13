@@ -83,6 +83,14 @@ jobs:
         env:
           PYTHONUTF8:            "1"
           # 가상 장부 모드 — 실주문 없음. 계좌만 갈아끼우고 전략 경로는 동일.
+          #
+          # ⚠️ 실주문(alpaca/toss)으로 바꾸지 말 것 (2026-08-13, PR #96).
+          # 자리 경합·현금 제약을 넣고 5.9년 굴리니 연 5.6%, 같은 패널 동일가중
+          # 매수보유는 19.5% 였다. 비용 0bp 로 놓아도 6.5% 로 진다. 이긴 해 0.
+          # 근거: docs/measurements/2026-08-13-portfolio-vs-benchmark.md
+          # 이 전략은 접었다. 가상 장부는 공개 성적표용으로만 계속 돈다.
+          # 되살리려면 "매수보유 대비 우위"를 먼저 통과시킬 것 — 트레이드
+          # 평균 R 이 플러스라는 건 이 질문의 답이 아니다.
           BROKER:                "virtual"
           VIRTUAL_CAPITAL_KRW:   "10000000"
           TOSS_CLIENT_ID:        ${{ secrets.TOSS_CLIENT_ID }}
