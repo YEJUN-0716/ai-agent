@@ -478,7 +478,7 @@ def timing_report(r6: dict, bench: pd.Series, start, end, years: float) -> list[
         "**주의: 표본이 한 번의 하락장(2022)뿐이다.** 추세 필터의 값은 큰 하락이 "
         "몇 번 오는지에 달려 있는데 5.9년에 한 번은 판정하기에 얇다. 여기서 "
         "이겼더라도 그것만으로 켤 근거는 안 됐을 것이다.", "",
-        f"재현: `python scripts/measure_portfolio.py` · 산수 점검 `... selftest`", "",
+        "재현: `python scripts/measure_portfolio.py` · 산수 점검 `... selftest`", "",
     ]
 
 
