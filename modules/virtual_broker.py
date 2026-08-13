@@ -96,6 +96,9 @@ def _empty_state() -> dict:
         "pending":          [],   # 다음 거래일 시가로 체결될 주문
         "realized_pnl_krw": 0.0,
         "trades":           [],   # 체결 이력
+        # 인덱스 자동운용 러너의 멱등성 기록(입금·배당·보고 월). load_state 가
+        # 여기 없는 키를 버리므로 칸을 먼저 만들어 둔다. 스윙 장부에는 빈 dict.
+        "index_meta":       {},
     }
 
 
@@ -399,9 +402,16 @@ def settle_pending(state: dict, fx_krw_per_usd: float) -> dict:
 
 def _fill_buy(state: dict, order: dict, price_usd: float,
               fill_date: str, fx: float) -> dict:
-    """주문금액 안에서 살 수 있는 최대 정수 수량으로 체결. 토스는 소수점 매매 불가."""
+    """주문금액 안에서 살 수 있는 최대 정수 수량으로 체결. 토스는 소수점 매매 불가.
+
+    주문에 qty 가 실려 있으면 그 수량 그대로 체결한다. 금액만 넘기면 체결 시가가
+    예상보다 낮을 때 계획보다 더 사고, 그 초과분은 다른 자산 몫의 현금이다.
+    """
     price_krw = price_usd * fx
-    qty = int(order["notional_krw"] // price_krw) if price_krw > 0 else 0
+    if order.get("qty"):
+        qty = int(order["qty"])
+    else:
+        qty = int(order["notional_krw"] // price_krw) if price_krw > 0 else 0
     if qty < 1:
         print(f"  [가상] {order['symbol']} 매수 불가 — 1주 가격({price_krw:,.0f}원)이 "
               f"주문금액({order['notional_krw']:,.0f}원)을 초과")
@@ -513,7 +523,8 @@ def place_notional_buy(symbol: str, notional_amount: float,
                        client_id: str = "", client_secret: str = "",
                        account_seq: str = "", market: str = "US",
                        dry_run: bool = False,
-                       meta: dict | None = None) -> dict:
+                       meta: dict | None = None,
+                       qty: int | None = None) -> dict:
     """주문을 대기열에 넣는다. 실제 체결은 다음 실행 때 다음 거래일 시가로.
 
     meta 는 주문 근거(점수·RSI)다. 체결은 다음 거래일에 일어나므로 그 시점에는
@@ -533,6 +544,9 @@ def place_notional_buy(symbol: str, notional_amount: float,
     반대 방향 실수도 같은 날 나왔다. 원화 금액을 그대로 넘기면 여기서 환율이
     곱해져 50만원이 7억원이 된다. 원화를 들고 있는 호출자는 krw_per_usd() 로
     나눠서 넘길 것.
+
+    qty 를 주면 체결 시가와 무관하게 그 수량으로 체결한다(인덱스 자동운용).
+    안 주면 예전대로 주문금액이 허용하는 최대 정수주다.
     """
     amount = float(notional_amount)
     notional_krw = amount if market == "KRX" else amount * _FX
@@ -554,14 +568,17 @@ def place_notional_buy(symbol: str, notional_amount: float,
             f"(현금 {state['cash_krw']:,.0f}원 - 예약 {reserved_krw(state):,.0f}원)."
         )
 
-    state["pending"].append({
+    order = {
         "side":         "buy",
         "symbol":       symbol,
         "notional_krw": notional_krw,
         "placed_date":  market_date().isoformat(),
         "market":       market,
         "meta":         dict(meta or {}),
-    })
+    }
+    if qty is not None:
+        order["qty"] = int(qty)   # 안 주면 주문 dict 도 예전과 글자 그대로 같다
+    state["pending"].append(order)
     save_state(state)
     print(f"  [가상] 매수 예약 {symbol} {notional_krw:,.0f}원 — 다음 거래일 시가 체결")
     return {"ok": True, "id": f"virtual-buy-{symbol}-{market_date().isoformat()}",

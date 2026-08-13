@@ -6,6 +6,7 @@
 그대로 남아 러너가 매일 같은 돈으로 주문을 새로 냈다.
 """
 
+import json
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -82,6 +83,8 @@ def test_price_ignores_the_empty_row_of_a_day_not_yet_traded(broker, monkeypatch
 
 def test_pending_buy_fills_at_next_open_and_spends_cash(broker, monkeypatch):
     broker.place_notional_buy("AAA", 1000.0, market="US")   # 100만원어치
+    # qty 를 안 넘긴 주문은 주문 dict 도 예전 모양 그대로다.
+    assert "qty" not in broker.load_state()["pending"][0]
     monkeypatch.setattr(
         broker, "next_open_price", lambda symbol, after: (100.0, "2026-07-31")
     )
@@ -93,3 +96,52 @@ def test_pending_buy_fills_at_next_open_and_spends_cash(broker, monkeypatch):
     assert state["cash_krw"] == pytest.approx(9_000_000)
     assert state["pending"] == []
     assert state["trades"][0]["side"] == "buy"
+
+
+def test_qty_order_fills_exactly_that_many_shares(broker, monkeypatch):
+    # 예상가 $110 로 3주를 주문했는데 시가가 $100 로 열렸다. 금액만 넘겼다면
+    # 33만원으로 3주가 아니라 3주 값보다 많은 수량을 샀을 것이다.
+    broker.place_notional_buy("AAA", 330.0, market="US", qty=3)
+    monkeypatch.setattr(
+        broker, "next_open_price", lambda symbol, after: (100.0, "2026-07-31")
+    )
+
+    state = broker.settle_pending(broker.load_state(), 1000.0)
+
+    assert state["positions"]["AAA"]["qty"] == 3
+    assert state["cash_krw"] == pytest.approx(10_000_000 - 3 * 100_000)
+
+
+def test_qty_order_is_skipped_when_cash_is_short(broker, monkeypatch):
+    state = broker.load_state()
+    state["cash_krw"] = 250_000.0
+    broker.save_state(state)
+    broker.place_notional_buy("AAA", 200.0, market="US", qty=2)
+
+    monkeypatch.setattr(
+        broker, "next_open_price", lambda symbol, after: (200.0, "2026-07-31")
+    )
+    state = broker.settle_pending(broker.load_state(), 1000.0)
+
+    # 2주 = 40만원 > 현금 25만원 → 한 주도 안 산다(부분 체결 없음).
+    assert state["positions"] == {}
+    assert state["cash_krw"] == pytest.approx(250_000)
+
+
+def test_old_portfolio_file_opens_and_keeps_index_meta(broker, tmp_path):
+    """index_meta 가 없는 예전 장부도 그대로 열리고, 새 칸은 저장 후 살아남는다.
+
+    load_state 는 _empty_state 에 없는 키를 조용히 버린다. 칸을 먼저 안 만들면
+    러너가 "이번 달 입금했다"를 저장해도 다음 실행에서 사라져 두 번 입금한다.
+    """
+    with open(broker.STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"cash_krw": 1_234_567.0, "positions": {}, "pending": [],
+                   "realized_pnl_krw": 0.0, "trades": []}, f)
+
+    state = broker.load_state()
+    assert state["cash_krw"] == pytest.approx(1_234_567)
+    assert state["index_meta"] == {}
+
+    state["index_meta"]["last_deposit_month"] = "2026-09"
+    broker.save_state(state)
+    assert broker.load_state()["index_meta"]["last_deposit_month"] == "2026-09"
