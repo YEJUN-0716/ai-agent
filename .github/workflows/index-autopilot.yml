@@ -1,0 +1,80 @@
+name: 인덱스 자동운용 (매월 1~8일)
+
+on:
+  # 매월 1~8일 매일 깨운다. cron 은 휴장일을 모르므로 날짜로 창을 넓게 잡고,
+  # 중복은 러너가 장부(index_meta)로 막는다 — 몇 번 깨워도 입금은 한 번이다.
+  #
+  # 설계서는 1~5일이었다. 8일로 넓힌 이유: 주문은 다음 거래일 시가에 체결되므로
+  # 5일에 주문하면 6일 실행분이 있어야 체결·보고가 끝난다. 연휴가 겹치면 5일
+  # 창으로는 그 달 보고가 통째로 빠지고, 그건 성공 판정 ①(무인 가동 12/12)의
+  # 실패로 기록된다.
+  schedule:
+    - cron: "30 21 1-8 * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        # 일부러 아래 `|| 'false'` 와 다르다. 예약 실행은 장부에 기록해야 하고
+        # (false), 수동 실행은 실수로 장부를 건드리지 않도록 기본을 true 로 둔다.
+        # 수동으로 진짜 기록하려면 -f dry_run=false 를 명시할 것.
+        # (paper-trade-us.yml 의 2026-07-30 사고와 같은 이유)
+        description: "DRY_RUN (true=기록 안 함, false=장부에 기록)"
+        required: false
+        default: "true"
+
+concurrency:
+  group: index-autopilot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run-index-autopilot:
+    # 브로커 API 를 한 번도 부르지 않으므로 클라우드 러너로 충분하다
+    # (토스 IP 화이트리스트 이슈와 무관).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v5
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 인덱스 적립 실행
+        env:
+          PYTHONUTF8: "1"
+          # ★ 장부 분리. 이 값이 빠지면 러너가 스윙 장부를 보고 죽는다(의도된 방어).
+          #   인덱스 매수가 virtual_portfolio.json 에 한 건이라도 섞이면 두 시스템의
+          #   성적을 영영 분리할 수 없다.
+          VIRTUAL_PORTFOLIO_FILE: index_portfolio.json
+          # 시작 자본 0원. 자본은 매달 입금으로만 들어온다(설계서 11장).
+          VIRTUAL_CAPITAL_KRW: "0"
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_PUBLIC_CHANNEL_ID: ${{ secrets.TELEGRAM_PUBLIC_CHANNEL_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: python index_runner.py
+
+      - name: 인덱스 장부 커밋
+        shell: bash
+        run: |
+          # index_portfolio.json **하나만** 커밋한다. 다른 파일을 여기서 add 하면
+          # 스윙 러너와 같은 파일을 두 워크플로가 밀어 성적이 섞인다.
+          if [ ! -f index_portfolio.json ]; then
+            echo "장부 파일 없음 (DRY_RUN 이거나 첫 실행 전) - 커밋 없음"
+            exit 0
+          fi
+
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+          git add -- index_portfolio.json
+          if git diff --staged --quiet; then
+            echo "변경 없음 - 커밋 없음"
+            exit 0
+          fi
+
+          git commit -m "chore: 인덱스 장부 업데이트 $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main
+          git push
