@@ -95,6 +95,29 @@ def test_same_dividend_is_not_credited_twice(runner, monkeypatch):
     assert vb.load_state()["cash_krw"] == after_first
 
 
+def test_benchmark_receives_dividends_too(runner, monkeypatch):
+    """벤치 ITOT 도 배당을 받아 재투자한다.
+
+    안 주면 벤치가 매년 배당수익률만큼 낮게 나와, 지고 있어도 이긴 것처럼
+    보인다. 성공 판정 ②의 문턱이 −0.5%p 라 그 편향 하나로 판정이 뒤집힌다.
+    """
+    runner.run(now=date(2026, 8, 3))                    # 적립 → 벤치 주수 생김
+    runner.run(now=date(2026, 8, 4))                    # 체결
+    before = vb.load_state()["index_meta"]["bench_itot_shares"]
+    assert before > 0
+
+    paid = date(2026, 8, 5)
+    monkeypatch.setattr(
+        ir, "_dividends_since",
+        lambda sym, since: (1.0, paid.isoformat())
+        if sym == "ITOT" and since < paid else (0.0, None))
+    runner.run(now=date(2026, 8, 6))
+
+    after = vb.load_state()["index_meta"]["bench_itot_shares"]
+    assert after == pytest.approx(before + 1.0 * (1 - ir.DIV_WITHHOLDING)
+                                  * before / PRICES["ITOT"])
+
+
 def test_runner_succeeds_without_telegram(runner, monkeypatch):
     """발송 실패는 러너 실패가 아니다. 대신 보고를 완료로 찍지 않는다."""
     monkeypatch.setattr(ir, "send_tg", lambda msg: False)

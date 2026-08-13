@@ -71,8 +71,13 @@ def _dividends_since(ticker: str, since: date) -> tuple[float, str | None]:
     return float(after.sum()), after.index[-1].date().isoformat()
 
 
-def _apply_dividends(state: dict, fx: float) -> float:
-    """세후 배당을 현금에 더하고 반영일을 기록한다. 반환은 이번에 더한 USD."""
+def _apply_dividends(state: dict, fx: float, prices: dict) -> float:
+    """세후 배당을 현금에 더하고 반영일을 기록한다. 반환은 이번에 더한 USD.
+
+    벤치마크 ITOT 도 같은 배당을 같은 세율로 받아 재투자한다. 안 주면 벤치가
+    매년 배당수익률(ITOT ≈ 1.2%)만큼 낮게 나와, 지고 있어도 이긴 것처럼 보인다 —
+    성공 판정 ②의 문턱이 −0.5%p 라 그 편향 하나로 판정이 뒤집힌다.
+    """
     meta = state.setdefault("index_meta", {})
     seen = meta.setdefault("dividends", {})
     total_usd = 0.0
@@ -86,6 +91,11 @@ def _apply_dividends(state: dict, fx: float) -> float:
         total_usd += cash_usd
         state["cash_krw"] += cash_usd * fx
         seen[sym] = last_day
+        bench = meta.get("bench_itot_shares", 0.0)
+        if sym == "ITOT" and bench and prices.get(sym):
+            # 벤치는 소수점으로 즉시 재투자한다. 배당 창은 보유분과 같은 것을
+            # 쓴다 — 첫 달 체결 하루 차이만 어긋나고 그 뒤로는 같은 구간이다.
+            meta["bench_itot_shares"] = bench + per_share * (1 - DIV_WITHHOLDING) * bench / prices[sym]
         print(f"  [인덱스] 배당 {sym} ${cash_usd:,.2f} (세후, ~{last_day})")
     return total_usd
 
@@ -190,10 +200,10 @@ def run(now: date | None = None) -> dict:
     vb.set_fx(fx)
 
     state = vb.settle_pending(vb.load_state(), fx)      # 지난번 주문부터 체결
-    div_usd = _apply_dividends(state, fx)
+    prices = {t: vb.last_close_price(t) for t in TARGETS}
+    div_usd = _apply_dividends(state, fx, prices)       # 벤치 재투자에 가격이 필요하다
     meta = state.setdefault("index_meta", {})
 
-    prices = {t: vb.last_close_price(t) for t in TARGETS}
     result = {"month": month, "fx": fx, "dividends_usd": div_usd,
               "deposited": False, "orders": [], "reported": False}
 

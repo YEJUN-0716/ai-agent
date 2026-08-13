@@ -19,11 +19,16 @@ def plan_orders(
     prices: dict,
     cash_usd: float,
     targets: dict = TARGETS,
+    whole_shares: bool = True,
 ) -> list[dict]:
     """이번 달 낼 매수 주문. 부족분이 큰 순서, 항상 양의 정수주.
 
     holdings 는 {티커: 보유수량}, prices 는 {티커: 1주 가격(USD)}.
     반환 [{"ticker", "qty", "est_price"}, ...] — 총액은 cash_usd 를 넘지 않는다.
+
+    `whole_shares=False` 는 **측정 전용**이다. 실운용은 소수점 매매를 안 쓴다
+    (설계서 4.1). 마찰을 재려면 "같은 규칙에서 정수주 제약만 뺀 줄"이 필요한데,
+    그걸 측정 스크립트에 따로 짜면 잰 규칙과 도는 규칙이 갈린다.
     """
     if abs(sum(targets.values()) - 1.0) > 1e-9:
         raise ValueError(f"목표비중 합이 1.0 이 아니다: {sum(targets.values())}")
@@ -39,7 +44,8 @@ def plan_orders(
     orders = []
     remaining = cash_usd
     for t in sorted(gaps, key=lambda k: -gaps[k]):
-        qty = int(min(gaps[t], remaining) // prices[t])  # 음수 부족분이면 0 이하
+        avail = min(gaps[t], remaining)                  # 음수 부족분이면 0 이하
+        qty = int(avail // prices[t]) if whole_shares else avail / prices[t]
         if qty <= 0:
             continue
         orders.append({"ticker": t, "qty": qty, "est_price": prices[t]})
@@ -65,6 +71,11 @@ def demo() -> None:
     for o in plan_orders({"AGG": 100}, prices, monthly):
         assert o["qty"] > 0 and isinstance(o["qty"], int), o
         assert o["ticker"] != "AGG", o
+
+    # 측정용 소수점 경로: 같은 규칙인데 이월이 없다 — 그 차이가 곧 마찰이다
+    frac = plan_orders({}, prices, monthly, whole_shares=False)
+    assert abs(sum(o["qty"] * o["est_price"] for o in frac) - monthly) < 1e-9, frac
+    assert {o["ticker"] for o in frac} == set(prices), frac
 
     # 현금 0 이면 아무것도 안 산다
     assert plan_orders({"ITOT": 10}, prices, 0.0) == []
