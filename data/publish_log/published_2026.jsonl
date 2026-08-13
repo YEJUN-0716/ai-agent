@@ -22,3 +22,7 @@
 {"published_at": "2026-08-12", "horizon": 5, "n": 509}
 {"published_at": "2026-08-12", "horizon": 21, "n": 494}
 {"published_at": "2026-08-12", "horizon": 63, "n": 452}
+{"published_at": "2026-08-13", "kind": "record", "log_date": "2026-08-12"}
+{"published_at": "2026-08-13", "horizon": 1, "n": 513}
+{"published_at": "2026-08-13", "horizon": 21, "n": 495}
+{"published_at": "2026-08-13", "horizon": 63, "n": 453}
