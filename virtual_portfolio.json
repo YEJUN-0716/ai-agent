@@ -1,130 +1,195 @@
 {
-  "cash_krw": 1026397.919132832,
-  "positions": {
-    "KHC": {
-      "qty": 22,
-      "avg_price_usd": 26.020000457763672,
-      "entry_date": "2026-07-31"
-    },
-    "GM": {
-      "qty": 6,
-      "avg_price_usd": 88.8499984741211,
-      "entry_date": "2026-07-31"
-    },
-    "COF": {
-      "qty": 2,
-      "avg_price_usd": 210.0,
-      "entry_date": "2026-07-31"
-    },
-    "BAC": {
-      "qty": 10,
-      "avg_price_usd": 61.540000915527344,
-      "entry_date": "2026-07-31"
-    },
-    "HPE": {
-      "qty": 12,
-      "avg_price_usd": 49.0,
-      "entry_date": "2026-07-31"
-    },
-    "ALLY": {
-      "qty": 12,
-      "avg_price_usd": 45.040000915527344,
-      "entry_date": "2026-08-05"
-    },
-    "CVS": {
-      "qty": 9,
-      "avg_price_usd": 93.72000122070312,
-      "entry_date": "2026-08-05"
-    },
-    "T": {
-      "qty": 28,
-      "avg_price_usd": 22.65999984741211,
-      "entry_date": "2026-08-05"
-    },
-    "VZ": {
-      "qty": 8,
-      "avg_price_usd": 46.34000015258789,
-      "entry_date": "2026-08-07"
-    },
-    "PFE": {
-      "qty": 45,
-      "avg_price_usd": 26.219999313354492,
-      "entry_date": "2026-08-07"
-    }
-  },
+  "cash_krw": 10306443.43575751,
+  "positions": {},
   "pending": [
     {
-      "side": "sell",
-      "symbol": "ALLY",
-      "qty": 12,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "F",
+      "qty": 78,
+      "limit_price": 14.01,
+      "notional_krw": 1549758.7990942383,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 13.48,
+        "target": 14.78,
+        "rr": 2.96,
+        "grade": "A",
+        "risk_pct": 2.39
+      },
+      "meta": {
+        "score": 52.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 54.7,
+          "ict": 97.0,
+          "quant": 38.1,
+          "verdict": 52.0
+        },
+        "analyst_asof": "2026-08-12"
+      }
     },
     {
-      "side": "sell",
-      "symbol": "BAC",
-      "qty": 10,
-      "placed_date": "2026-08-12",
-      "market": "US"
-    },
-    {
-      "side": "sell",
-      "symbol": "COF",
-      "qty": 2,
-      "placed_date": "2026-08-12",
-      "market": "US"
-    },
-    {
-      "side": "sell",
-      "symbol": "CVS",
-      "qty": 9,
-      "placed_date": "2026-08-12",
-      "market": "US"
-    },
-    {
-      "side": "sell",
-      "symbol": "GM",
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "ORCL",
       "qty": 6,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "limit_price": 151.99,
+      "notional_krw": 1293295.1181811525,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 142.34,
+        "target": 200.01,
+        "rr": 8.99,
+        "grade": "A",
+        "risk_pct": 3.9
+      },
+      "meta": {
+        "score": 54.5,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 54.4,
+          "ict": 76.2,
+          "quant": 51.1,
+          "verdict": 54.5
+        },
+        "analyst_asof": "2026-08-12"
+      }
     },
     {
-      "side": "sell",
-      "symbol": "HPE",
-      "qty": 12,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "GM",
+      "qty": 13,
+      "limit_price": 81.74,
+      "notional_krw": 1506986.4886743163,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 78.31,
+        "target": 91.85,
+        "rr": 5.58,
+        "grade": "A",
+        "risk_pct": 2.56
+      },
+      "meta": {
+        "score": 64.7,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 67.5,
+          "ict": 92.7,
+          "quant": 53.7,
+          "verdict": 64.7
+        },
+        "analyst_asof": "2026-08-12"
+      }
     },
     {
-      "side": "sell",
-      "symbol": "KHC",
-      "qty": 22,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "AAL",
+      "qty": 60,
+      "limit_price": 14.17,
+      "notional_krw": 1205736.6816650392,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 13.14,
+        "target": 15.4,
+        "rr": 2.76,
+        "grade": "A",
+        "risk_pct": 4.38
+      },
+      "meta": {}
     },
     {
-      "side": "sell",
-      "symbol": "PFE",
-      "qty": 45,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "AVGO",
+      "qty": 2,
+      "limit_price": 386.12,
+      "notional_krw": 1095175.3646777344,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 365.53,
+        "target": 436.99,
+        "rr": 4.82,
+        "grade": "A",
+        "risk_pct": 3.25
+      },
+      "meta": {
+        "score": 67.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 67.4,
+          "ict": 76.3,
+          "quant": 67.4,
+          "verdict": 67.9
+        },
+        "analyst_asof": "2026-08-12"
+      }
     },
     {
-      "side": "sell",
-      "symbol": "T",
-      "qty": 28,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "AMZN",
+      "qty": 4,
+      "limit_price": 232.82,
+      "notional_krw": 1320722.720419922,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 223.7,
+        "target": 274.75,
+        "rr": 7.82,
+        "grade": "A",
+        "risk_pct": 2.52
+      },
+      "meta": {
+        "score": 68.5,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 68.0,
+          "ict": 86.5,
+          "quant": 66.4,
+          "verdict": 68.5
+        },
+        "analyst_asof": "2026-08-12"
+      }
     },
     {
-      "side": "sell",
-      "symbol": "VZ",
-      "qty": 8,
-      "placed_date": "2026-08-12",
-      "market": "US"
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "MSFT",
+      "qty": 2,
+      "limit_price": 498.24,
+      "notional_krw": 1413188.0599218751,
+      "placed_date": "2026-08-13",
+      "market": "US",
+      "plan": {
+        "stop": 481.34,
+        "target": 513.73,
+        "rr": 2.05,
+        "grade": "B",
+        "risk_pct": 2.16
+      },
+      "meta": {
+        "score": 67.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 67.7,
+          "ict": 87.6,
+          "quant": 65.0,
+          "verdict": 67.9
+        },
+        "analyst_asof": "2026-08-12"
+      }
     }
   ],
-  "realized_pnl_krw": 0.0,
+  "realized_pnl_krw": 348347.54105815943,
   "trades": [
     {
       "date": "2026-07-31",
@@ -225,6 +290,107 @@
         "score": 61.5,
         "rsi": 70.4
       }
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "ALLY",
+      "side": "sell",
+      "qty": 12,
+      "price_usd": 44.57,
+      "amount_krw": 758499.0,
+      "pnl_krw": -7999.0,
+      "return_pct": -1.04
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "BAC",
+      "side": "sell",
+      "qty": 10,
+      "price_usd": 65.2,
+      "amount_krw": 924653.0,
+      "pnl_krw": 51905.0,
+      "return_pct": 5.95
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "COF",
+      "side": "sell",
+      "qty": 2,
+      "price_usd": 224.19,
+      "amount_krw": 635884.0,
+      "pnl_krw": 40248.0,
+      "return_pct": 6.76
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "CVS",
+      "side": "sell",
+      "qty": 9,
+      "price_usd": 95.44,
+      "amount_krw": 1218160.0,
+      "pnl_krw": 21953.0,
+      "return_pct": 1.84
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "GM",
+      "side": "sell",
+      "qty": 6,
+      "price_usd": 86.85,
+      "amount_krw": 739014.0,
+      "pnl_krw": -17018.0,
+      "return_pct": -2.25
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "HPE",
+      "side": "sell",
+      "qty": 12,
+      "price_usd": 61.2,
+      "amount_krw": 1041511.0,
+      "pnl_krw": 207622.0,
+      "return_pct": 24.9
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "KHC",
+      "side": "sell",
+      "qty": 22,
+      "price_usd": 24.81,
+      "amount_krw": 774071.0,
+      "pnl_krw": -37752.0,
+      "return_pct": -4.65
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "PFE",
+      "side": "sell",
+      "qty": 45,
+      "price_usd": 26.49,
+      "amount_krw": 1690542.0,
+      "pnl_krw": 17231.0,
+      "return_pct": 1.03
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "T",
+      "side": "sell",
+      "qty": 28,
+      "price_usd": 24.28,
+      "amount_krw": 964136.0,
+      "pnl_krw": 64329.0,
+      "return_pct": 7.15
+    },
+    {
+      "date": "2026-08-13",
+      "symbol": "VZ",
+      "side": "sell",
+      "qty": 8,
+      "price_usd": 47.03,
+      "amount_krw": 533576.0,
+      "pnl_krw": 7828.0,
+      "return_pct": 1.49
     }
-  ]
+  ],
+  "index_meta": {}
 }
