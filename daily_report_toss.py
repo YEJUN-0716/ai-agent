@@ -4,19 +4,13 @@
 GitHub Actions daily-report.yml의 toss-report 잡에서 실행.
 equity_log.json(paper_trade_runner_toss.py가 기록) + 현재 포지션.
 
-계좌만 갈아끼운다. BROKER=virtual 이면 가상 장부(virtual_portfolio.json)를,
-아니면 토스 API를 읽는다. 러너와 같은 규칙이고, 두 브로커가 같은 시그니처를
-제공하므로 보고서 코드는 갈라지지 않는다.
+러너와 같은 장부(virtual_portfolio.json)를 읽는다. 실주문 브로커는 붙이지
+않는다 — 이유는 paper_trade_runner_toss.py 머리말 참조.
 
-이 분기가 없던 동안 러너는 가상 장부로 매매하는데 보고서는 토스 계좌를
-읽었다. 그래서 매일 아침 "보유 포지션 없음"만 왔다 — 실제로는 5종목을
-들고 있는데도.
+보고서가 러너와 다른 계좌를 읽으면 매일 아침 "보유 포지션 없음"만 온다.
+실제로 그런 적이 있다(러너는 가상 장부, 보고서는 토스 계좌였다).
 
 환경변수:
-  BROKER             (virtual | toss, 기본 toss)
-  TOSS_CLIENT_ID     (BROKER=toss 일 때 필수)
-  TOSS_CLIENT_SECRET (BROKER=toss 일 때 필수)
-  TOSS_ACCOUNT_SEQ   (BROKER=toss 일 때 필수, 기본 1)
   TELEGRAM_TOKEN     (필수)
   TELEGRAM_CHAT_ID   (필수)
 """
@@ -30,18 +24,10 @@ import requests
 
 from modules.fx import fetch_krw_per_usd
 
-BROKER = os.environ.get("BROKER", "toss").strip().lower()
-
-if BROKER == "virtual":
-    from modules import virtual_broker as broker
-else:
-    from modules import toss_trading as broker
+from modules import virtual_broker as broker
 
 get_account, get_positions = broker.get_account, broker.get_positions
 
-TOSS_CLIENT_ID     = os.environ.get("TOSS_CLIENT_ID", "")
-TOSS_CLIENT_SECRET = os.environ.get("TOSS_CLIENT_SECRET", "")
-TOSS_ACCOUNT_SEQ   = os.environ.get("TOSS_ACCOUNT_SEQ", "1")
 TG_TOKEN           = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHAT_ID         = os.environ.get("TELEGRAM_CHAT_ID", "")
 EQUITY_LOG_FILE    = "equity_log.json"
@@ -106,22 +92,17 @@ def calc_perf(records: list) -> dict:
 
 def main():
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    mode_tag = "[가상장부]" if BROKER == "virtual" else "[TOSS]"
+    mode_tag = "[가상장부]"
     print(f"P&L 리포트  {today}  {mode_tag}")
 
-    # 가상 장부는 토스 API를 호출하지 않으므로 자격증명이 필요 없다.
-    if BROKER != "virtual" and (not TOSS_CLIENT_ID or not TOSS_CLIENT_SECRET):
-        print("[오류] Toss 환경변수 없음"); sys.exit(1)
-
-    if BROKER == "virtual":
-        # 가상 장부는 달러 보유를 원화로 환산해 평가액을 낸다. 환율을 주입하지
-        # 않으면 모듈 기본값(1,400원)이 쓰여 보고서 총자산이 실제와 어긋난다.
-        broker.set_fx(fetch_krw_per_usd(
-            fallback=float(os.environ.get("KRW_PER_USD", "1400"))
-        ))
+    # 가상 장부는 달러 보유를 원화로 환산해 평가액을 낸다. 환율을 주입하지
+    # 않으면 모듈 기본값(1,400원)이 쓰여 보고서 총자산이 실제와 어긋난다.
+    broker.set_fx(fetch_krw_per_usd(
+        fallback=float(os.environ.get("KRW_PER_USD", "1400"))
+    ))
 
     try:
-        acct = get_account(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ)
+        acct = get_account()
     except Exception as e:
         print(f"[오류] 계정 조회 실패: {e}"); sys.exit(1)
 
@@ -129,7 +110,7 @@ def main():
     buying_power = float(acct.get("buying_power", 0))
 
     try:
-        positions = get_positions(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ)
+        positions = get_positions()
     except Exception as e:
         positions = []
         print(f"[경고] 포지션 조회 실패: {e}")

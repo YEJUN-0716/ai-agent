@@ -1,8 +1,8 @@
 name: 페이퍼 트레이딩 자동 실행 (Toss - 미국)
 
 on:
-  # 가상 장부 모드로 재개 (BROKER=virtual). 실주문은 나가지 않고
-  # 매수·매도가 virtual_portfolio.json 에만 기록된다.
+  # 가상 장부만 돈다. 실주문은 나가지 않고 매수·매도가
+  # virtual_portfolio.json 에만 기록된다.
   schedule:
     - cron: "30 21 * * 1-5"
   workflow_dispatch:
@@ -58,17 +58,13 @@ permissions:
 
 jobs:
   run-paper-trade-us:
-    # BROKER=virtual 인 동안에는 클라우드 러너를 쓴다.
-    #
+    # 가상 장부는 브로커 API를 한 번도 부르지 않으므로 클라우드 러너로 충분하다.
     # 자택 러너를 쓰던 이유는 토스 오픈API의 IP 화이트리스트 하나였다(클라우드
-    # 에서는 oauth2/token 이 403 access_denied). 가상 장부 모드는 토스를 한 번도
-    # 부르지 않으므로 그 제약이 없다.
+    # 에서는 oauth2/token 이 403 access_denied, 07-17~28 12일간 겪음).
+    # 자택 러너는 PC가 꺼져 있으면 잡이 큐에서 기다린다 — 2026-07-31 예약분이
+    # 16시간 기다렸다 실행됐다(실행 자체는 1분).
     #
-    # 대신 자택 러너에는 PC가 꺼져 있으면 잡이 큐에서 기다린다는 문제가 있다.
-    # 2026-07-31 예약분이 러너를 16시간 기다렸다 실행됐다(실행 자체는 1분).
-    #
-    # ⚠️ BROKER 를 toss 로 되돌리면 이 줄도 [self-hosted, Windows] 로 되돌릴 것.
-    #    안 그러면 토스 인증이 403 으로 전량 실패한다(07-17~28 12일간 겪음).
+    # ⚠️ 실주문 브로커를 붙이는 일이 생기면 IP 제약을 먼저 확인할 것.
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -82,20 +78,10 @@ jobs:
       - name: 토스 트레이딩 실행 (미국 종목)
         env:
           PYTHONUTF8:            "1"
-          # 가상 장부 모드 — 실주문 없음. 계좌만 갈아끼우고 전략 경로는 동일.
-          #
-          # ⚠️ 실주문(alpaca/toss)으로 바꾸지 말 것 (2026-08-13, PR #96).
-          # 자리 경합·현금 제약을 넣고 5.9년 굴리니 연 5.6%, 같은 패널 동일가중
-          # 매수보유는 19.5% 였다. 비용 0bp 로 놓아도 6.5% 로 진다. 이긴 해 0.
-          # 근거: docs/measurements/2026-08-13-portfolio-vs-benchmark.md
-          # 이 전략은 접었다. 가상 장부는 공개 성적표용으로만 계속 돈다.
-          # 되살리려면 "매수보유 대비 우위"를 먼저 통과시킬 것 — 트레이드
-          # 평균 R 이 플러스라는 건 이 질문의 답이 아니다.
-          BROKER:                "virtual"
+          # 실주문 없음 — 체결은 virtual_portfolio.json 에만 적힌다.
+          # 실주문 브로커를 다시 붙이지 말 것. 이유는 paper_trade_runner_toss.py
+          # 머리말 (2026-08-13, PR #96·#97).
           VIRTUAL_CAPITAL_KRW:   "10000000"
-          TOSS_CLIENT_ID:        ${{ secrets.TOSS_CLIENT_ID }}
-          TOSS_CLIENT_SECRET:    ${{ secrets.TOSS_CLIENT_SECRET }}
-          TOSS_ACCOUNT_SEQ:      ${{ secrets.TOSS_ACCOUNT_SEQ }}
           TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
           DART_API_KEY:          ${{ secrets.DART_API_KEY }}
@@ -121,7 +107,7 @@ jobs:
           BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '4' }}
           # 가상 브로커에서는 DRY_RUN=false 여야 장부에 체결이 기록된다.
           # true 로 두면 예약조차 남지 않아 데이터가 쌓이지 않는다.
-          # 실주문 위험은 BROKER=virtual 이 차단한다.
+          # 러너에 실주문 경로 자체가 없으므로 DRY_RUN=false 라도 주문은 안 나간다.
           DRY_RUN:               ${{ github.event.inputs.dry_run || 'false' }}
         run: python paper_trade_runner_toss.py
 

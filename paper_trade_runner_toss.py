@@ -1,10 +1,17 @@
 """
-페이퍼 트레이딩 자동 실행 스크립트 (토스증권 버전)
+페이퍼 트레이딩 자동 실행 스크립트 (가상 장부)
 =================================================================
 GitHub Actions cron으로 매일 장마감 후 자동 실행.
 매수 후보는 **트레이드 플랜**(modules/trade_plan.py)이 고른다 — 진입 구간
 지정가로 걸고, 손절/목표 라인으로 청산한다. 시장 레짐·낙폭 컷·킬스위치·섹터
-한도는 그대로다. 토스증권 주문 함수는 modules/toss_trading.py 참조.
+한도는 그대로다. 체결은 modules/virtual_broker.py 가 장부에만 적는다.
+
+⚠️ **실주문 브로커를 다시 붙이지 말 것 (2026-08-13, PR #96·#97).** 자리 경합·
+현금 제약을 넣고 5.9년 굴리니 연 +5.6% 인데 같은 패널 동일가중 매수보유가
++19.5% 다. 비용 0bp 로 놓아도 +6.5% 로 진다(이긴 해 0/7).
+근거: docs/measurements/2026-08-13-portfolio-vs-benchmark.md
+이 전략은 접었고, 이 러너는 **공개 성적표용 가상 장부로만** 돈다. 되살리려면
+트레이드 평균 R 이 아니라 **매수보유 대비 우위**를 먼저 통과시킬 것.
 
 2026-08-10: 팩터 엔진(calc_factor_scores/generate_signals)에서 트레이드 플랜으로
 교체. 팩터 경로는 OOS IC −0.0046 으로 예측력이 확인되지 않았고, 트레이드 플랜은
@@ -17,9 +24,6 @@ GitHub Actions cron으로 매일 장마감 후 자동 실행.
 설계: docs/superpowers/specs/2026-08-10-virtual-broker-trade-plan-design.md
 
 환경변수:
-  TOSS_CLIENT_ID        토스증권 오픈 API Client ID   (필수)
-  TOSS_CLIENT_SECRET    토스증권 오픈 API Client Secret (필수)
-  TOSS_ACCOUNT_SEQ      토스증권 계좌 식별자          (필수)
   TELEGRAM_TOKEN        텔레그램 봇 토큰              (선택)
   TELEGRAM_CHAT_ID      텔레그램 채팅 ID              (선택)
   UNIVERSE              유니버스 이름                  (기본: 'S&P 500 대형 30')
@@ -48,22 +52,11 @@ from modules.factor_engine import get_market_regime
 from modules.fx import fetch_krw_per_usd
 from modules.price_panel import PanelCoverageError, load_panel
 from modules.trade_plan import ACTIONABLE_GRADES, build_trade_plan
-# 계좌만 갈아끼운다. BROKER=virtual 이면 실주문 없이 장부로만 체결하고,
-# 전략·매도조건 등 나머지 로직은 실매매와 완전히 동일한 경로를 탄다.
-BROKER = os.environ.get("BROKER", "toss").strip().lower()
-
-if BROKER == "virtual":
-    from modules.virtual_broker import (
-        place_market_sell  as _pm_market_sell,
-        get_account        as _pt_get_account,
-        get_positions      as _pt_get_positions,
-    )
-else:
-    from modules.toss_trading import (
-        place_market_sell  as _pm_market_sell,
-        get_account        as _pt_get_account,
-        get_positions      as _pt_get_positions,
-    )
+from modules.virtual_broker import (
+    place_market_sell  as _pm_market_sell,
+    get_account        as _pt_get_account,
+    get_positions      as _pt_get_positions,
+)
 
 try:
     from modules.ops_safety import KillSwitch as _KillSwitch
@@ -74,9 +67,6 @@ except Exception:
 warnings.filterwarnings("ignore")
 
 # ── 설정 ──────────────────────────────────────────────────────────────
-TOSS_CLIENT_ID     = os.environ.get("TOSS_CLIENT_ID", "")
-TOSS_CLIENT_SECRET = os.environ.get("TOSS_CLIENT_SECRET", "")
-TOSS_ACCOUNT_SEQ   = os.environ.get("TOSS_ACCOUNT_SEQ", "")
 TG_TOKEN      = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
@@ -231,18 +221,6 @@ def market_of_symbol(sym: str) -> str:
     return "KRX" if sym.isdigit() else "US"
 
 
-# ── 토스증권 헬퍼 (환경변수 바인딩) ──────────────────────────────────────
-def toss_get(path, params=None):
-    """계좌/포지션 등 조회용. modules/toss_trading.py의 get_account 등을
-    직접 쓰지 않고 커스텀 경로가 필요할 때 쓰는 저수준 헬퍼."""
-    from modules.toss_trading import _headers as _toss_headers, _BASE as _TOSS_BASE
-    r = requests.get(f"{_TOSS_BASE}{path}",
-                      headers=_toss_headers(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ),
-                      params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
-
-
 # 브로커가 주문을 확실히 거부했음을 뜻하는 상태들.
 # 'expired' 는 Alpaca 에만 있는 상태다(토스에 없음). 여기 없으면 만료된 주문이
 # 영영 '살아 있는 주문'으로 세어져 자리와 현금이 안 풀린다. Alpaca 의
@@ -269,8 +247,7 @@ def order_accepted(fill_status: str | None) -> bool:
 
 
 def place_sell(symbol: str, qty, market: str = "KRX") -> dict:
-    return _pm_market_sell(symbol, qty, TOSS_CLIENT_ID, TOSS_CLIENT_SECRET,
-                            TOSS_ACCOUNT_SEQ, market=market, dry_run=DRY_RUN)
+    return _pm_market_sell(symbol, qty, market=market, dry_run=DRY_RUN)
 
 
 # ── 고점·시그널 로그 ────────────────────────────────────────────────────
@@ -732,7 +709,7 @@ def plan_position_size(equity_krw: float, entry_ref: float, stop: float, fx: flo
 # ── 메인 ────────────────────────────────────────────────────────────────
 def main():
     run_ts   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    mode_tag = "[가상장부]" if BROKER == "virtual" else "[TOSS]"
+    mode_tag = "[가상장부]"
     print(f"\n{'='*60}")
     print(f"  자동매매 실행  {run_ts}  {mode_tag}")
     print(f"  DRY_RUN={DRY_RUN}  UNIVERSE={UNIVERSE_NAME}  MAX_POS={MAX_POSITIONS}")
@@ -740,14 +717,10 @@ def main():
     print(f"  DD_STOP={PORTFOLIO_DD_STOP_PCT}%  MAX_SECTOR={MAX_SECTOR_POSITIONS}")
     print(f"{'='*60}\n")
 
-    # 트레이드 플랜은 **진입 구간 지정가 대기**로 들어간다. 토스 주문 모듈에는
-    # 그 주문 종류가 없고, 시가 시장가로 대신 사면 손절폭과 R:R 이 계획과
-    # 달라져 백테스트가 잰 +0.66R 이 이 장부에 적용되지 않는다. 조용히 다른
-    # 규칙으로 사느니 멈춘다.
-    if BROKER != "virtual":
-        print(f"[오류] BROKER={BROKER} 에는 지정가 진입 주문이 없습니다. "
-              f"트레이드 플랜 러너는 BROKER=virtual 로 실행하세요.")
-        sys.exit(1)
+    # 트레이드 플랜은 **진입 구간 지정가 대기**로 들어간다. 실주문 브로커를
+    # 붙일 때 그 주문 종류가 없으면(토스가 그랬다) 시가 시장가로 대신 사게
+    # 되는데, 그러면 손절폭과 R:R 이 계획과 달라져 백테스트가 잰 값이 이
+    # 장부에 적용되지 않는다. 조용히 다른 규칙으로 사느니 안 붙인다.
 
     # 0-0. 실시간 환율 (미국 종목 매수여력 원화 환산용)
     _KRW_PER_USD = fetch_krw_per_usd(fallback=float(os.environ.get("KRW_PER_USD", "1400")))
@@ -781,7 +754,7 @@ def main():
 
     # 1. 토스증권 계좌 확인
     try:
-        acct = _pt_get_account(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ)
+        acct = _pt_get_account()
     except Exception as e:
         print(f"[오류] 토스증권 계좌 조회 실패: {e}")
         sys.exit(1)
@@ -828,7 +801,7 @@ def main():
 
     # 2. 현재 보유 포지션
     try:
-        positions = _pt_get_positions(TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, TOSS_ACCOUNT_SEQ)
+        positions = _pt_get_positions()
     except Exception as e:
         print(f"[경고] 포지션 조회 실패: {e}")
         positions = []
