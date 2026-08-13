@@ -37,6 +37,7 @@ import pandas as pd  # noqa: E402
 TRADES = Path("data/entry_rule_trades-daily.parquet")
 PANEL = Path(os.environ.get("PANEL", "data/price_panel_v1.parquet"))
 OUT_MD = Path("docs/measurements/2026-08-13-portfolio-vs-benchmark.md")
+OUT_MD2 = Path("docs/measurements/2026-08-13-timing-vs-exposure.md")
 
 RULE = "C_갭반영"          # 프로덕션이 실제로 거는 라인
 IS_START = pd.Timestamp("2024-12-20")
@@ -80,6 +81,7 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
     taken = skipped_slot = skipped_dup = skipped_cash = 0
     curve: list[tuple[pd.Timestamp, float]] = []
     exposure: list[tuple[pd.Timestamp, float]] = []
+    pos_log: list[dict] = []         # 평가 기준 곡선(mtm_curve)이 쓴다
 
     def close_until(when):
         nonlocal equity
@@ -118,6 +120,12 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
             "filled": filled, "risk_frac": frac, "notional": notional,
         })
         taken += 1
+        if filled:
+            pos_log.append({
+                "ticker": row["ticker"], "notional": notional * equity,
+                "fill_date": row.get("fill_date", pd.NaT), "release": release,
+                "pnl": open_pos[-1]["pnl"],
+            })
         exposure.append((day, sum(p["notional"] for p in open_pos if p["filled"])))
 
     close_until(pd.Timestamp.max)
@@ -125,7 +133,7 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
     return {
         "equity": equity, "curve": eq, "taken": taken,
         "skipped_slot": skipped_slot, "skipped_dup": skipped_dup,
-        "skipped_cash": skipped_cash,
+        "skipped_cash": skipped_cash, "pos_log": pos_log,
         "avg_open": float(np.mean([e for _, e in exposure])) if exposure else 0.0,
     }
 
@@ -141,12 +149,98 @@ def mdd(curve: pd.Series) -> float:
     return float((curve / curve.cummax() - 1.0).min() * 100.0)
 
 
+def closes(start, end) -> pd.DataFrame:
+    close = pd.read_parquet(PANEL)["Close"]
+    return close.loc[(close.index >= start) & (close.index <= end)]
+
+
 def bench_curve(start, end) -> pd.Series:
     """같은 패널 동일가중 매수보유. 시작일에 값이 있는 종목만 산다."""
-    close = pd.read_parquet(PANEL)["Close"]
-    close = close.loc[(close.index >= start) & (close.index <= end)]
+    close = closes(start, end)
     close = close.loc[:, close.iloc[0].notna() & close.iloc[-1].notna()]
     return close.div(close.iloc[0], axis=1).mean(axis=1)
+
+
+def mtm_curve(pos_log: list[dict], close: pd.DataFrame) -> pd.Series:
+    """**매일 평가한** 자본 곡선. 낙폭을 매수보유와 나란히 놓으려면 이게 필요하다.
+
+    실현 곡선(`simulate`의 `curve`)은 판 것만 세서 보유 중 평가손실이 안 보인다.
+    그래서 낙폭이 실제보다 얕게 나오고, 평가 기준인 매수보유와 비교가 안 됐다.
+
+    보유 중 평가손익은 **체결일 종가 대비 당일 종가**로 잡는다. 진입은 구간
+    지정가라 체결가 ≠ 체결일 종가이므로 경로에 그만큼 오차가 있다 — 청산일에는
+    실현값으로 갈아끼워 끝값을 맞춘다. 낙폭의 깊이를 보는 데는 이 정도면 된다
+    (트레이드당 보유가 중앙 5일 안팎이라 오차가 누적되지 않는다).
+    """
+    if not pos_log:
+        return pd.Series(dtype=float)
+    days = close.index
+    realized = pd.Series(0.0, index=days)
+    unreal = pd.Series(0.0, index=days)
+    for p in pos_log:
+        rel = p["release"]
+        realized.loc[days >= rel] += p["pnl"]
+        f = p["fill_date"]
+        if pd.isna(f) or p["ticker"] not in close.columns:
+            continue
+        # 보유 구간 = 체결일 다음 거래일 ~ 청산 전날 (청산일은 실현으로 센다)
+        hold = (days > f) & (days < rel)
+        if not hold.any():
+            continue
+        px = close[p["ticker"]]
+        base = px.asof(f)
+        if pd.isna(base) or base <= 0:
+            continue
+        unreal.loc[hold] += p["notional"] * (px[hold] / base - 1.0).fillna(0.0)
+    return 1.0 + realized + unreal
+
+
+def regime_overlay(start, end, ma_days: int = 200):
+    """종목 선택을 **아예 빼고** 노출만 조절했을 때 어떻게 되나.
+
+    패널 동일가중 지수가 자기 200일 이동평균 위면 100% 노출, 아래면 현금.
+    판정은 **전날 종가까지의 정보만** 쓴다(shift(1)) — 오늘 종가를 보고 오늘
+    비우면 그건 [[유령 체결]]과 같은 종류의 거짓말이다.
+
+    비교 대상은 매수보유가 아니라 **같은 평균 노출을 상시 유지한 줄**이다.
+    항상 절반만 태우는 것도 하락장에서는 덜 잃는다 — 그건 공짜라서 알파가
+    아니다. 타이밍이 값을 하려면 그 공짜 방어를 이겨야 한다.
+    """
+    full = bench_curve(pd.Timestamp.min, end)      # 이동평균을 데울 앞 구간까지
+    ma = full.rolling(ma_days, min_periods=ma_days).mean()
+    on = (full > ma).shift(1)
+    # 이동평균이 아직 없는 초기 구간은 **사 있는 것**으로 둔다. 롱온리 기준선의
+    # 기본값은 투자 상태이고, 모르는 구간을 현금으로 두면 방어를 공짜로 얻는다.
+    on = on.where(ma.shift(1).notna(), True).fillna(True).astype(float)
+    ret = full.pct_change().fillna(0.0)
+    win = (full.index >= start) & (full.index <= end)
+    on, ret = on[win], ret[win]
+    avg_exp = float(on.mean())
+    overlay = (1.0 + ret * on).cumprod()
+    flat = (1.0 + ret * avg_exp).cumprod()
+    return overlay, flat, avg_exp, int((on != on.shift(1)).sum() - 1)
+
+
+def monthly_overlay(start, end, ma_months: int = 10):
+    """같은 아이디어를 **월말 판정**으로. 일봉 판정은 채찍질(whipsaw)에 약하다.
+
+    200일선을 매일 보면 지수가 선 근처에서 흔들릴 때마다 팔았다 샀다 한다 —
+    타이밍이 값을 하는지 묻는데 신호가 아니라 마찰을 재게 된다. 월말 종가로
+    10개월 평균을 보는 건 같은 아이디어의 가장 흔한 구현이고 스위치가 1/10 로
+    준다. 두 구현이 다 지면 아이디어 쪽에 무게가 실린다.
+    """
+    full = bench_curve(pd.Timestamp.min, end)
+    m = full.resample("ME").last()
+    sig = (m > m.rolling(ma_months, min_periods=ma_months).mean()).shift(1)
+    sig = sig.where(m.rolling(ma_months, min_periods=ma_months).mean().shift(1).notna(), True)
+    on = sig.reindex(full.index, method="ffill").fillna(True).astype(float)
+    ret = full.pct_change().fillna(0.0)
+    win = (full.index >= start) & (full.index <= end)
+    on, ret = on[win], ret[win]
+    avg_exp = float(on.mean())
+    overlay = (1.0 + ret * on).cumprod()
+    flat = (1.0 + ret * avg_exp).cumprod()
+    return overlay, flat, avg_exp, int((on != on.shift(1)).sum() - 1)
 
 
 def _year_return(curve: pd.Series, year: int) -> float:
@@ -215,7 +309,22 @@ def selftest() -> int:
     r5 = simulate(df4, 0.0, max_positions=10)
     assert r5["taken"] == 1 and r5["skipped_dup"] == 1, r5
 
-    print("selftest 통과 (6건)")
+    # ── 평가 기준 곡선 ────────────────────────────────────────────────
+    days = pd.bdate_range("2020-01-01", periods=6)
+    close = pd.DataFrame({"A": [100.0, 110.0, 90.0, 95.0, 105.0, 105.0]}, index=days)
+    # 체결일 다음날부터 청산 전날까지는 평가손익이 보이고, 청산일부터 실현값.
+    log = [{"ticker": "A", "notional": 0.5, "fill_date": days[0],
+            "release": days[4], "pnl": 0.02}]
+    m = mtm_curve(log, close)
+    assert abs(m.iloc[0] - 1.0) < 1e-12, m.iloc[0]          # 체결일엔 아직 0
+    assert abs(m.iloc[1] - 1.05) < 1e-12, m.iloc[1]          # +10% × 0.5
+    assert abs(m.iloc[2] - 0.95) < 1e-12, m.iloc[2]          # −10% × 0.5
+    assert abs(m.iloc[4] - 1.02) < 1e-12, m.iloc[4]          # 청산일 = 실현
+    assert abs(m.iloc[5] - 1.02) < 1e-12, m.iloc[5]
+    # 실현 곡선이었다면 낙폭 0 이었을 구간을 평가 곡선은 잡아낸다.
+    assert mdd(m) < -4.9, mdd(m)
+
+    print("selftest 통과 (12건)")
     return 0
 
 
@@ -273,9 +382,10 @@ def main() -> int:
         "노출이 다른 둘을 같은 줄에 놓은 것이므로, 이 표는 "
         "\"위험 대비\" 가 아니라 **\"같은 돈을 어디에 두는 게 나았나\"** 를 묻는다. "
         "실무에서 답해야 하는 질문이 그쪽이다.", "",
-        "**MDD 는 실현 손익 곡선 기준이라 실제보다 얕다** — 미실현 평가손익을 "
+        "**위 MDD 는 실현 손익 곡선 기준이라 실제보다 얕다** — 미실현 평가손익을 "
         "안 세기 때문이다. 매수보유 쪽은 평가 기준이라 더 깊게 나온다. "
-        "낙폭끼리는 나란히 두지 말 것.", "",
+        "이 열끼리는 나란히 두지 말 것. 평가 기준으로 다시 잰 낙폭과 "
+        "\"안 산 것이 값을 했나\" 는 `2026-08-13-timing-vs-exposure.md` 에 있다.", "",
         "## 해마다", "",
         *yearly(dict(rows)[6.0]["curve"], bench, dict(rows)[6.0]["avg_open"]),
         "**원본 매수보유를 이긴 해는 하나도 없다.** 노출을 맞춘 마지막 열과 "
@@ -293,7 +403,83 @@ def main() -> int:
     OUT_MD.parent.mkdir(parents=True, exist_ok=True)
     OUT_MD.write_text(text, encoding="utf-8")
     print(f"저장: {OUT_MD}")
+
+    text2 = "\n".join(timing_report(dict(rows)[6.0], bench, start, end, years))
+    print(text2)
+    OUT_MD2.write_text(text2, encoding="utf-8")
+    print(f"저장: {OUT_MD2}")
     return 0
+
+
+def timing_report(r6: dict, bench: pd.Series, start, end, years: float) -> list[str]:
+    """"안 산 것" 이 값을 했나 — 노출을 맞춘 상대와 낙폭까지 나란히 놓는다."""
+    strat_mtm = mtm_curve(r6["pos_log"], closes(start, end))
+    overlay, flat, avg_exp, switches = regime_overlay(start, end)
+    m_overlay, m_flat, m_exp, m_switches = monthly_overlay(start, end)
+    exp_strat = r6["avg_open"]
+    bench_flat = (1.0 + bench.pct_change().fillna(0.0) * exp_strat).cumprod()
+
+    def _c(curve):
+        return cagr(float(curve.iloc[-1]), years)
+
+    def line(name, curve):
+        return (f"| {name} | ×{curve.iloc[-1]:.3f} | "
+                f"{_c(curve):+.1f}% | {mdd(curve):.1f}% |")
+
+    return [
+        "# \"안 산 것\" 이 값을 했나 — 평가 기준 낙폭과 노출을 맞춘 비교 (2026-08-13)",
+        "",
+        "앞선 측정(`2026-08-13-portfolio-vs-benchmark.md`)에서 전략이 매수보유에 "
+        "졌다. 남은 반론이 하나 있었다 — **위험한 구간에서 안 산 것 자체가 값이 "
+        "아니냐.** 그 반론이 성립하려면 두 가지가 필요하다. (1) 낙폭을 같은 "
+        "기준으로 비교할 수 있어야 하고, (2) **같은 평균 노출을 상시 유지한 상대**"
+        "를 이겨야 한다. 항상 절반만 태우는 것도 하락장에서 덜 잃지만 그건 "
+        "공짜다.", "",
+        f"기간 {start.date()} ~ {end.date()} ({years:.1f}년) · 전부 **매일 평가 기준** "
+        "곡선이라 낙폭을 나란히 놓을 수 있다.", "",
+        "| | 최종 자본 | 연 수익률 | MDD (평가 기준) |",
+        "|---|---|---|---|",
+        line("전략 (6bp, 평가 기준)", strat_mtm),
+        line(f"매수보유 × {exp_strat * 100:.0f}% 상시 (전략과 같은 평균 노출)", bench_flat),
+        line("매수보유 100%", bench),
+        "",
+        f"전략의 평균 노출은 자본의 {exp_strat * 100:.0f}% 다. **같은 노출을 아무 "
+        "판단 없이 상시 유지한 줄**이 두 번째 줄이고, 전략은 거기에도 진다. "
+        "낙폭까지 같은 기준으로 놓고 봐도 그렇다 — 덜 흔들린 대가로 덜 번 것이 "
+        "아니라, **덜 벌고 덜 흔들린 폭도 공짜로 살 수 있는 만큼이었다.**", "",
+        "## 종목 선택을 아예 빼면 — 노출만 조절",
+        "",
+        "패널 동일가중 지수가 자기 200일 이동평균 위면 100%, 아래면 현금. "
+        "판정은 전날 종가까지의 정보만 쓴다(shift(1)). 종목 선택도, 셋업도, "
+        f"진입 라인도 없다. 스위치는 {switches}번 움직였다.", "",
+        "| | 최종 자본 | 연 수익률 | MDD (평가 기준) |",
+        "|---|---|---|---|",
+        line(f"200일선 오버레이 (평균 노출 {avg_exp * 100:.0f}%, 스위치 {switches}회)", overlay),
+        line(f"매수보유 × {avg_exp * 100:.0f}% 상시 (같은 평균 노출, 공짜 방어)", flat),
+        line(f"10개월선 오버레이 (월말 판정, 평균 노출 {m_exp * 100:.0f}%, 스위치 {m_switches}회)",
+             m_overlay),
+        line(f"매수보유 × {m_exp * 100:.0f}% 상시 (같은 평균 노출, 공짜 방어)", m_flat),
+        line("매수보유 100%", bench),
+        "",
+        "**이 표가 반론의 답이다.** 오버레이가 같은 노출의 상시 보유를 이기면 "
+        "타이밍이 값을 한 것이고, 못 이기면 \"안 산 것\" 은 그냥 덜 산 것이다. "
+        "일봉 판정 하나로는 마찰만 잰 것일 수 있어 월말 판정을 같이 뒀다 — "
+        "같은 아이디어의 가장 흔한 구현이고 스위치가 훨씬 적다.", "",
+        f"**월말 판정은 같은 노출 상시보다 연 {_c(m_overlay) - _c(m_flat):+.1f}%p "
+        f"앞선다.** 타이밍이 아무 값도 없다고는 말할 수 없다. 다만 낙폭은 "
+        f"{mdd(m_overlay):.1f}% 대 {mdd(m_flat):.1f}% 로 **더 깊고**, "
+        f"매수보유 100%({_c(bench):+.1f}%)는 못 이긴다. 방어를 샀는데 낙폭이 "
+        "깊어졌다면 그건 방어가 아니다 — 떨어진 뒤에 팔고 오른 뒤에 사서 "
+        "회복을 놓친 것이다.", "",
+        f"**그리고 같은 아이디어인데 일봉 판정은 연 {_c(overlay):+.1f}% 다 — "
+        f"월말 판정과 {_c(m_overlay) - _c(overlay):+.1f}%p 차이.** 판정 주기를 "
+        "바꿨을 뿐인데 결과가 이만큼 움직이면, 잰 것은 신호가 아니라 **마찰**"
+        "이다. 이 정도로 구현에 민감한 것을 실전에 켤 수는 없다.", "",
+        "**주의: 표본이 한 번의 하락장(2022)뿐이다.** 추세 필터의 값은 큰 하락이 "
+        "몇 번 오는지에 달려 있는데 5.9년에 한 번은 판정하기에 얇다. 여기서 "
+        "이겼더라도 그것만으로 켤 근거는 안 됐을 것이다.", "",
+        f"재현: `python scripts/measure_portfolio.py` · 산수 점검 `... selftest`", "",
+    ]
 
 
 if __name__ == "__main__":
