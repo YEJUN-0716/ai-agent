@@ -1,63 +1,47 @@
 {
-  "cash_krw": 10306443.43575751,
-  "positions": {},
-  "pending": [
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "F",
+  "cash_krw": 6065063.204813504,
+  "positions": {
+    "F": {
       "qty": 78,
-      "limit_price": 14.01,
-      "notional_krw": 1549758.7990942383,
-      "placed_date": "2026-08-13",
-      "market": "US",
+      "avg_price_usd": 13.970000267028809,
+      "entry_date": "2026-08-14",
       "plan": {
         "stop": 13.48,
         "target": 14.78,
         "rr": 2.96,
         "grade": "A",
-        "risk_pct": 2.39
-      },
-      "meta": {
-        "score": 52.0,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 54.7,
-          "ict": 97.0,
-          "quant": 38.1,
-          "verdict": 52.0
-        },
-        "analyst_asof": "2026-08-12"
+        "risk_pct": 2.39,
+        "entry_fill": 13.97
       }
     },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "ORCL",
+    "ORCL": {
       "qty": 6,
-      "limit_price": 151.99,
-      "notional_krw": 1293295.1181811525,
-      "placed_date": "2026-08-13",
-      "market": "US",
+      "avg_price_usd": 151.99,
+      "entry_date": "2026-08-14",
       "plan": {
         "stop": 142.34,
         "target": 200.01,
         "rr": 8.99,
         "grade": "A",
-        "risk_pct": 3.9
-      },
-      "meta": {
-        "score": 54.5,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 54.4,
-          "ict": 76.2,
-          "quant": 51.1,
-          "verdict": 54.5
-        },
-        "analyst_asof": "2026-08-12"
+        "risk_pct": 3.9,
+        "entry_fill": 151.99
       }
     },
+    "MSFT": {
+      "qty": 2,
+      "avg_price_usd": 496.3550109863281,
+      "entry_date": "2026-08-14",
+      "plan": {
+        "stop": 481.34,
+        "target": 513.73,
+        "rr": 2.05,
+        "grade": "B",
+        "risk_pct": 2.16,
+        "entry_fill": 496.355
+      }
+    }
+  },
+  "pending": [
     {
       "side": "buy",
       "kind": "limit_entry",
@@ -156,34 +140,6 @@
           "ict": 86.5,
           "quant": 66.4,
           "verdict": 68.5
-        },
-        "analyst_asof": "2026-08-12"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "MSFT",
-      "qty": 2,
-      "limit_price": 498.24,
-      "notional_krw": 1413188.0599218751,
-      "placed_date": "2026-08-13",
-      "market": "US",
-      "plan": {
-        "stop": 481.34,
-        "target": 513.73,
-        "rr": 2.05,
-        "grade": "B",
-        "risk_pct": 2.16
-      },
-      "meta": {
-        "score": 67.9,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 67.7,
-          "ict": 87.6,
-          "quant": 65.0,
-          "verdict": 67.9
         },
         "analyst_asof": "2026-08-12"
       }
@@ -390,6 +346,81 @@
       "amount_krw": 533576.0,
       "pnl_krw": 7828.0,
       "return_pct": 1.49
+    },
+    {
+      "date": "2026-08-14",
+      "symbol": "F",
+      "side": "buy",
+      "qty": 78,
+      "price_usd": 13.97,
+      "amount_krw": 1543482.0,
+      "meta": {
+        "score": 52.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 54.7,
+          "ict": 97.0,
+          "quant": 38.1,
+          "verdict": 52.0
+        },
+        "analyst_asof": "2026-08-12"
+      },
+      "grade": "A",
+      "stop": 13.48,
+      "target": 14.78,
+      "rr": 2.96,
+      "risk_pct": 2.39,
+      "plan": true
+    },
+    {
+      "date": "2026-08-14",
+      "symbol": "ORCL",
+      "side": "buy",
+      "qty": 6,
+      "price_usd": 151.99,
+      "amount_krw": 1291745.0,
+      "meta": {
+        "score": 54.5,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 54.4,
+          "ict": 76.2,
+          "quant": 51.1,
+          "verdict": 54.5
+        },
+        "analyst_asof": "2026-08-12"
+      },
+      "grade": "A",
+      "stop": 142.34,
+      "target": 200.01,
+      "rr": 8.99,
+      "risk_pct": 3.9,
+      "plan": true
+    },
+    {
+      "date": "2026-08-14",
+      "symbol": "MSFT",
+      "side": "buy",
+      "qty": 2,
+      "price_usd": 496.355,
+      "amount_krw": 1406154.0,
+      "meta": {
+        "score": 67.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 67.7,
+          "ict": 87.6,
+          "quant": 65.0,
+          "verdict": 67.9
+        },
+        "analyst_asof": "2026-08-12"
+      },
+      "grade": "B",
+      "stop": 481.34,
+      "target": 513.73,
+      "rr": 2.05,
+      "risk_pct": 2.16,
+      "plan": true
     }
   ],
   "index_meta": {}

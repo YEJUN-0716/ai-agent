@@ -231,6 +231,42 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "F-2026-08-14",
+      "symbol": "F",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-14",
+      "entry_price": 13.97,
+      "score": 52.0,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "ORCL-2026-08-14",
+      "symbol": "ORCL",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-14",
+      "entry_price": 151.99,
+      "score": 54.5,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "MSFT-2026-08-14",
+      "symbol": "MSFT",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-14",
+      "entry_price": 496.355,
+      "score": 67.9,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
