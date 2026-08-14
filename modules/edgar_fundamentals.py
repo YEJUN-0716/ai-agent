@@ -154,13 +154,18 @@ def _valid_us_gaap(facts_json):
     return facts.get("us-gaap")
 
 
-def load_raw(ticker: str, cache_dir: str = None):
+def load_raw(ticker: str, cache_dir: str = None, cik: int = None):
     """
     ticker의 us-gaap 팩트 dict를 반환한다. 없거나 무효면 None.
     유효할 때만 디스크에 캐시한다 (무효는 다음 실행에서 재시도 가능하도록).
+
+    `cik`을 주면 티커 조회를 건너뛴다. **상장폐지 종목에는 필수다** — `get_cik`은
+    SEC의 *현재* 매핑이라 죽은 티커는 없거나, 더 나쁘게는 그 티커를 물려받은
+    다른 회사를 준다(BBBY: 886158 파산 → 1130713 재상장).
     """
     cache_dir = cache_dir or RAW_DIR
-    cik = get_cik(ticker)
+    if cik is None:
+        cik = get_cik(ticker)
     if cik is None:
         return None
 
