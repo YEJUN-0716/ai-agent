@@ -41,6 +41,32 @@ TAG_CHAINS = {
 }
 _INCOME_COLS = ["revenue", "operating_income", "net_income",
                 "operating_cash_flow", "capex"]
+
+# 같은 줄을 **다른 정의**로 내는 발행사가 있다 — GS 의 매출은 `Revenues` 가 아니라
+# `RevenuesNetOfInterestExpense`, ITW 의 순이익은 `NetIncomeLoss` 가 아니라
+# `ProfitLoss`, ADP 의 CapEx 는 `PaymentsToAcquireOtherPropertyPlantAndEquipment` 다.
+#
+# TAG_CHAINS 는 **시대 승계** 태그라(구 SalesRevenueNet → 신 RevenueFromContract…)
+# 합쳐도 같은 정의지만, 아래는 정의 자체가 다르다 — 합치면 소수주주지분·이자수익만큼
+# 값이 튀어 있지도 않은 YoY 점프가 생긴다. **종목마다 하나만 고른다**(_assemble_metric).
+#
+# 은행의 총이자수익(InterestAndDividendIncomeOperating)은 일부러 뺐다 — 분기 수로는
+# 이기지만 순영업수익과 다른 줄이라, 커버리지를 벌면서 정의를 떨어뜨린다.
+ALT_TAGS = {
+    "revenue":    ["RevenuesNetOfInterestExpense",
+                   "RegulatedAndUnregulatedOperatingRevenue",
+                   "RevenueFromContractWithCustomerIncludingAssessedTax"],
+    "net_income": ["ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"],
+    "capex":      ["PaymentsToAcquireOtherPropertyPlantAndEquipment",
+                   "PaymentsToAcquireProductiveAssets",
+                   "PaymentsToAcquireMachineryAndEquipment"],
+}
+# 고르는 자는 세 단계다: (1) 아직 살아 있는가 (2) 최근 분기 수 (3) 전체 분기 수.
+# 셋 다 필요하다 — 2018년에 끊긴 태그가 총량으로 이기고(HAL·TJX), 2023년에 끊긴
+# 태그는 '2019년 이후 분기 수'로도 이긴다(MRK CapEx: 죽은 태그 18 vs 산 태그 14).
+# 동수일 때 전체로 갈라야 짧은 태그가 20년 이력을 통째로 버리지 않는다(BBY).
+TAG_PICK_SINCE = "2019-01-01"
+LIVE_TAG_DAYS = 400   # 후보 중 가장 최근 분기말에서 이만큼 안이면 '살아 있다'
 # 현금흐름표는 10-Q에 **누적(YTD)** 으로 실린다 — Q2는 6개월치, Q3는 9개월치다.
 # 분기 필터(80~100일)에 걸리는 건 Q1뿐이라 그대로 쓰면 AAPL 영업현금흐름이
 # 20년에 18행(연 1행)으로 줄어 TTM이 성립하지 않는다. 이 둘만 _ytd_quarters로
@@ -267,10 +293,21 @@ def _ytd_quarters(us_gaap: dict, tag_chain: list) -> dict:
 
 
 def _assemble_metric(us_gaap: dict, name: str) -> dict:
-    """지표 하나를 {end_str: (filed_str, val)}로. 현금흐름은 누적 차분 경로를 탄다."""
-    chain = TAG_CHAINS[name]
-    return (_ytd_quarters(us_gaap, chain) if name in YTD_TAGS
-            else _assemble_tag(us_gaap, chain))
+    """지표 하나를 {end_str: (filed_str, val)}로. 현금흐름은 누적 차분 경로를 탄다.
+
+    ALT_TAGS 에 대체 정의가 있으면 **조립 후** 분기 수로 하나만 고른다.
+    원시 사실 수로 고르면 연간 공시가 없어 Q4가 유도되지 않는 태그가 뽑히고,
+    그 종목은 해마다 한 분기가 비어 TTM 이 영영 안 선다(CAT).
+    """
+    build = _ytd_quarters if name in YTD_TAGS else _assemble_tag
+    cands = [build(us_gaap, TAG_CHAINS[name])]
+    cands += [build(us_gaap, [t]) for t in ALT_TAGS.get(name, []) if t in us_gaap]
+    ends = [max(d) for d in cands if d]
+    if not ends:
+        return {}
+    alive = (date.fromisoformat(max(ends)) - timedelta(days=LIVE_TAG_DAYS)).isoformat()
+    return max(cands, key=lambda d: (bool(d) and max(d) >= alive,
+                                     sum(1 for e in d if e >= TAG_PICK_SINCE), len(d)))
 
 
 def assemble_income(us_gaap: dict) -> pd.DataFrame:

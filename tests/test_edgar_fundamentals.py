@@ -331,3 +331,46 @@ def test_fetch_shares_history_returns_series(monkeypatch):
     out = ef.fetch_shares_history(["AAPL"])
     assert isinstance(out["AAPL"], pd.Series)
     assert out["AAPL"].iloc[-1] == 1000
+
+
+def _quarters(years, val=1.0):
+    """연도 목록 → 그 해 4분기 팩트. filed는 분기말 + 한 달."""
+    ends = [("03-31", "01-01"), ("06-30", "04-01"), ("09-30", "07-01"), ("12-31", "10-01")]
+    return [_fact(f"{y}-{s}", f"{y}-{e}", val, f"{y + (e == '12-31')}-{'01' if e == '12-31' else f'{int(e[:2]) + 1:02d}'}-15")
+            for y in years for e, s in ends]
+
+
+def _ug(net_income=None, profit_loss=None):
+    ug = {}
+    if net_income:
+        ug["NetIncomeLoss"] = {"units": {"USD": net_income}}
+    if profit_loss:
+        ug["ProfitLoss"] = {"units": {"USD": profit_loss}}
+    return ug
+
+
+def test_pick_alt_tag_when_production_tag_is_dead():
+    """ITW처럼 NetIncomeLoss가 옛날에 끊긴 종목은 ProfitLoss로 간다."""
+    ug = _ug(net_income=_quarters([2014, 2015], val=1.0),
+             profit_loss=_quarters([2022, 2023, 2024], val=2.0))
+    got = ef._assemble_metric(ug, "net_income")
+    assert {v for _, v in got.values()} == {2.0}, "한 정의로만 조립돼야 한다 (섞으면 가짜 YoY)"
+    assert max(got) >= "2024-12-31"
+
+
+def test_dead_alt_tag_loses_even_with_more_recent_quarters():
+    """MRK CapEx 함정 — 2019년 이후 분기 수는 더 많아도 이미 끊긴 태그는 안 뽑는다."""
+    ug = _ug(net_income=_quarters([2024, 2025, 2026], val=1.0),      # 12분기, 살아 있음
+             profit_loss=_quarters([2019, 2020, 2021, 2022], val=2.0))  # 16분기, 2022에 끊김
+    got = ef._assemble_metric(ug, "net_income")
+    assert {v for _, v in got.values()} == {1.0}
+    assert max(got) >= "2026-01-01"
+
+
+def test_tie_on_recent_quarters_keeps_longer_history():
+    """BBY 함정 — 최근 커버리지가 같으면 이력이 긴 쪽을 남긴다."""
+    ug = _ug(net_income=_quarters(range(2009, 2027), val=1.0),
+             profit_loss=_quarters(range(2019, 2027), val=2.0))
+    got = ef._assemble_metric(ug, "net_income")
+    assert {v for _, v in got.values()} == {1.0}
+    assert min(got) < "2010-01-01"

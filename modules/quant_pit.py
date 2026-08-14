@@ -54,11 +54,9 @@ from modules import edgar_fundamentals as ef  # noqa: E402
 # TTM 을 내는 손익·현금흐름 태그. 넷 다 있어야 한 분기로 센다 — 하나가 비면
 # 그 분기의 FCF 나 순이익률이 조용히 다른 분기 값과 섞인다.
 TTM_TAGS = ("revenue", "net_income", "operating_cash_flow", "capex")
-# 현금흐름표는 누적(YTD)으로 실린다 — ef._ytd_quarters 로 따로 조립한다.
-YTD_TAGS = ef.YTD_TAGS
-# 이 둘이 없으면 그 분기는 없는 것으로 친다. 현금흐름은 빠질 수 있다 —
-# ADP 처럼 CapEx 를 `PaymentsToAcquireOtherPropertyPlantAndEquipment` 로 내는
-# 발행사가 279종목 중 70개 가까이 되고, 태그를 새로 모으는 건 이번 범위 밖이다
+# 이 둘이 없으면 그 분기는 없는 것으로 친다. CapEx 대체 태그
+# (`PaymentsToAcquireOtherPropertyPlantAndEquipment` 등)는 이제 ef.ALT_TAGS 에
+# 있어 ADP 같은 종목도 잡히지만, 그래도 못 잡는 종목은 남는다
 # (설계서 2.1). 그 종목은 FCF 품질만 중립 50 이 된다 — 현행 fundamental_score
 # 도 yfinance 가 freeCashflow 를 안 주면 같은 자리에 50 을 넣는다.
 CORE_TAGS = ("revenue", "net_income")
@@ -77,51 +75,11 @@ PER_W, PBR_W = 0.35, 0.25          # ÷ 0.60  (PEG·EV/EBITDA 제외)
 ROE_W, PM_W = 0.40, 0.30           # ÷ 0.70  (ROA 제외)
 
 
-# 발행사마다 같은 줄을 다른 태그로 낸다 — GS 는 매출이 `Revenues` 가 아니라
-# `RevenuesNetOfInterestExpense` 이고, ITW 는 순이익이 `NetIncomeLoss` 가 아니라
-# `ProfitLoss` 다. edgar_fundamentals.TAG_CHAINS 만으로는 279종목 중 58개가
-# 통째로 빠진다(빠지는 쪽이 은행·유틸리티·리츠라 편향까지 생긴다).
-#
-# **production 의 TAG_CHAINS 는 안 건드린다.** 여기서만 대체 태그를 얹는다 —
-# 측정 도중에 factor_engine 이 쓰는 재무값이 바뀌면 무엇이 원인인지 못 가른다.
-# quant_pit 이 통과하면 그때 위로 올린다(설계서 2.1 과 같은 규칙).
-EXTRA_TAGS = {
-    "revenue": ["RevenuesNetOfInterestExpense",
-                "RegulatedAndUnregulatedOperatingRevenue",
-                "RevenueFromContractWithCustomerIncludingAssessedTax"],
-    "net_income": ["ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"],
-}
-
-# 태그를 고를 때 보는 구간. 최근 커버리지가 중요하다 — 2018년에 끊긴 태그가
-# 사실 수가 더 많다고 뽑히면 501일 창에서는 아무 값도 안 나온다.
-TAG_PICK_SINCE = "2019-01-01"
-
-
-def _chain(name: str) -> list:
-    return list(ef.TAG_CHAINS[name]) + EXTRA_TAGS.get(name, [])
-
-
-def _best_series(us_gaap: dict, name: str) -> dict:
-    """대체 목록 중 **최근 분기를 가장 많이 채우는 태그 하나**로 조립한다.
-
-    `_facts_for_chain` 처럼 다 합치면 안 된다 — `NetIncomeLoss` 와 `ProfitLoss`
-    는 소수주주지분만큼 값이 다르고, 같은 이력 안에서 섞이면 있지도 않은 YoY
-    점프가 생긴다. 한 종목 안에서는 한 정의로 간다.
-
-    고르는 자는 **조립 후 분기 수**다. 원시 사실 수로 고르면 CAT 처럼 연간
-    공시가 없어 Q4 가 유도되지 않는 태그가 뽑히고, 그 종목은 해마다 한 분기가
-    비어 TTM 이 영영 안 선다.
-    """
-    best, best_n = {}, 0
-    for tag in _chain(name):
-        if tag not in us_gaap:
-            continue
-        d = (ef._ytd_quarters(us_gaap, [tag]) if name in YTD_TAGS
-             else ef._assemble_tag(us_gaap, [tag]))
-        n = sum(1 for end in d if end >= TAG_PICK_SINCE)
-        if n > best_n:
-            best, best_n = d, n
-    return best
+# 대체 태그 고르기는 **프로덕션(ef.ALT_TAGS · ef._assemble_metric)으로 올라갔다.**
+# 여기 있던 사본은 지웠다 — 두 벌이 갈리면 어느 재료로 잰 건지 못 가른다.
+# 프로덕션 규칙은 여기 있던 것의 상위집합이다(동수일 때 전체 분기 수로 가르고,
+# CapEx 대체 태그가 붙었다). 2026-08-14 백필과는 재료가 다르므로, 이 모듈을
+# 다시 돌리면(봉인 구간 포함) 그때 코드로 새로 잰 것이다.
 
 
 def quarterly(us_gaap: dict) -> pd.DataFrame:
@@ -134,7 +92,7 @@ def quarterly(us_gaap: dict) -> pd.DataFrame:
     행의 `filed` 는 그 분기 태그들의 **가장 늦은** 공시일이다. 마지막 조각이
     나오기 전에는 그 행 전체를 알 수 없다 — min 을 쓰면 look-ahead 다.
     """
-    cols = {n: _best_series(us_gaap, n) for n in TTM_TAGS}
+    cols = {n: ef._assemble_metric(us_gaap, n) for n in TTM_TAGS}
     ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
     rows = []
     for end in ends:
