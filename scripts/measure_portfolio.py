@@ -154,11 +154,42 @@ def closes(start, end) -> pd.DataFrame:
     return close.loc[(close.index >= start) & (close.index <= end)]
 
 
-def bench_curve(start, end) -> pd.Series:
-    """같은 패널 동일가중 매수보유. 시작일에 값이 있는 종목만 산다."""
-    close = closes(start, end)
-    close = close.loc[:, close.iloc[0].notna() & close.iloc[-1].notna()]
-    return close.div(close.iloc[0], axis=1).mean(axis=1)
+def bench_curve(start, end, members=None, close=None) -> pd.Series:
+    """같은 패널 동일가중 매수보유. 시작일에 값이 있는 종목만 산다.
+
+    **`members` 를 주면 매월 동일가중 리밸런스로 바뀐다** (열 `date`·`asset_id`).
+    위 한 줄은 시작일과 종료일에 **둘 다** 값이 있는 종목만 사므로, 상장폐지가 든
+    패널에 그대로 대면 기준선이 "안 죽은 것만 산 줄"이 된다 — 유니버스를 생존자
+    편향 없이 만드는 데 든 일이 벤치마크 한 줄에서 통째로 새는 자리다(소형주
+    설계서 5.1). 그 패널에서는 **그달 구성종목**을 동일가중으로 들고, 상폐 종목은
+    마지막 거래일 종가에 청산해 다음 리밸런스에서 남은 종목에 재분배한다.
+    살아남았는지는 조건에 안 들어간다.
+    """
+    if close is None:
+        close = closes(start, end)
+    if members is None:
+        c = close.loc[:, close.iloc[0].notna() & close.iloc[-1].notna()]
+        return c.div(c.iloc[0], axis=1).mean(axis=1)
+
+    idx = close.index
+    held = close.ffill()          # 상폐 뒤 = 마지막 거래일 종가 = 청산가로 고정
+    dates = sorted(pd.to_datetime(members["date"].unique()))
+    by_date = {d: list(g) for d, g in members.groupby("date")["asset_id"]}
+    ret = np.zeros(len(idx))
+    for i, d in enumerate(dates):
+        lo = int(idx.searchsorted(d, "right")) - 1        # 기준일 종가에 산다
+        hi = (int(idx.searchsorted(dates[i + 1], "right")) - 1
+              if i + 1 < len(dates) else len(idx) - 1)
+        if lo < 0 or hi <= lo:
+            continue
+        seg = held.iloc[lo:hi + 1].reindex(columns=[c for c in by_date[d]
+                                                    if c in held.columns])
+        seg = seg.loc[:, seg.iloc[0].notna() & (seg.iloc[0] > 0)]
+        if seg.shape[1] == 0:
+            continue                                       # ponytail: 그 달은 현금
+        v = seg.div(seg.iloc[0], axis=1).mean(axis=1)
+        ret[lo + 1:hi + 1] = v.pct_change().to_numpy()[1:]
+    return pd.Series(np.cumprod(1.0 + ret), index=idx)
 
 
 def mtm_curve(pos_log: list[dict], close: pd.DataFrame) -> pd.Series:

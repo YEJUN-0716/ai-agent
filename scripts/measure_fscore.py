@@ -1,9 +1,17 @@
 #!/usr/bin/env python
 """F-Score (8항목 Piotroski) — 사전 등록된 대로 한 번 잰다.
 
-    python scripts/measure_fscore.py           # ①② 판정 + 위약 대조
-    python scripts/measure_fscore.py selftest  # 산수 점검 (네트워크 無)
-    python scripts/measure_fscore.py sealed    # 봉인 구간, 판정 뒤 딱 한 번
+    python scripts/measure_fscore.py                    # ①② 판정 + 위약 대조
+    python scripts/measure_fscore.py selftest           # 산수 점검 (네트워크 無)
+    python scripts/measure_fscore.py sealed             # 봉인 구간, 판정 뒤 딱 한 번
+    python scripts/measure_fscore.py smallcap           # 소형주 재측정 (판정 행)
+    python scripts/measure_fscore.py smallcap full      # 2차 행 — 전구간, 참고
+    python scripts/measure_fscore.py smallcap sealed    # 소형주 봉인 구간
+
+**`smallcap` 은 유니버스 하나만 바꾼다.** 항목·문턱·보유·분위·구간·비용은 한 글자도
+안 바뀐다 — 사본을 뜨면 어느 자로 잰 건지 못 가르므로 스위치 하나만 뚫었다
+(`docs/superpowers/specs/2026-08-14-fscore-smallcap-design.md` 3·6절). 통과선은
+①만 다르다: 방향이 있는 가설이므로 **단측 t >= +2** 다(같은 설계서 2절).
 
 설계서: `docs/superpowers/specs/2026-08-14-fscore-design.md`.
 **항목 수(8)·문턱(7)·보유(252)·BM 분위(5분위)는 거기서 못 박았다. 결과를 보고
@@ -44,6 +52,7 @@ quant_pit ②는 95% 구간이 20%p 폭이라 **결과를 보기 전에 이미 "
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import re
 import sys
@@ -62,6 +71,7 @@ from scripts.measure_pead import (  # noqa: E402
     N_BOOT, _block_idx, attach_trades, calendar_curve, excess_cagr_ci,
     rank_percentile,
 )
+from scripts import measure_portfolio as mp  # noqa: E402  — PANEL 을 갈아끼운다
 from scripts.measure_portfolio import (  # noqa: E402
     bench_curve, cagr, closes, mdd, yearly,
 )
@@ -72,13 +82,28 @@ OUT_MD = Path("docs/measurements/2026-08-14-fscore.md")
 START = pd.Timestamp("2020-03-31")
 END = pd.Timestamp("2024-12-31")
 
+# 소형주 재측정 — **바꾸는 건 유니버스 하나뿐**이다.
+SMALLCAP = "smallcap" in sys.argv
+FULL = "full" in sys.argv          # 2차 행: 전구간. 판정 행이 아니다.
+SMALLCAP_UNIVERSE = Path("data/smallcap_universe.parquet")
+SMALLCAP_PANEL = Path("data/smallcap_panel.parquet")
+EVENTS_CACHE = Path("data/smallcap_events.parquet")
+EVENTS_STATS = Path("data/smallcap_events_stats.json")
+if SMALLCAP:
+    mp.PANEL = SMALLCAP_PANEL      # `closes` 가 읽는 자리. 값 계산은 전부 그대로다.
+    OUT_MD = Path("docs/measurements/2026-08-14-fscore-smallcap.md")
+    if FULL:
+        START = pd.Timestamp("2017-09-01")
+        OUT_MD = Path("docs/measurements/2026-08-14-fscore-smallcap-full.md")
+
 # 봉인 해제. 판정이 끝난 뒤 딱 한 번, 확인용으로만 연다. 갈려도 본 측정의 판정을
 # 바꾸지 않으므로 **출력 파일을 따로 쓴다**(PEAD·quant_pit 과 같은 규칙).
 SEALED = "sealed" in sys.argv
 if SEALED:
     START = pd.Timestamp("2025-01-01")
     END = pd.Timestamp("2026-08-07")
-    OUT_MD = Path("docs/measurements/2026-08-14-fscore-sealed.md")
+    OUT_MD = Path(f"docs/measurements/2026-08-14-fscore{'-smallcap' if SMALLCAP else ''}"
+                  "-sealed.md")
 
 # 문헌값 고정 (Piotroski 2000). 고른 게 아니라 가져온 값이다.
 HOLD_DAYS = 252        # 거래일 (약 1년)
@@ -115,6 +140,10 @@ ITEMS = ("F1 ROA>0", "F2 영업현금흐름>0", "F3 ROA개선", "F4 발생주의
 
 _BAL_COLS = list(ef.BALANCE_TAGS)
 
+# 왜 떨어졌나. 소형주는 분기가 성겨 `_spans_ok` 가 더 자주 발동한다 — 설계서 5.4 가
+# 보고서에 내라고 한 수다. 캐시에서 읽은 실행은 사이드카 json 에서 되살린다.
+STATS = {"span_bad": 0, "material_bad": 0}
+
 
 # ---------------------------------------------------------------- 재료 조립
 
@@ -147,7 +176,8 @@ def shares_by_end(us_gaap: dict) -> pd.DataFrame:
     return df.drop_duplicates("end", keep="first")
 
 
-def ticker_frame(ticker: str, us_gaap: dict | None = None) -> pd.DataFrame:
+def ticker_frame(ticker: str, us_gaap: dict | None = None,
+                 cik: int | None = None) -> pd.DataFrame:
     """한 종목의 분기 재료 한 판. index 없음, `end` 오름차순.
 
     손익·현금흐름은 `quant_pit.quarterly`, 대차대조표·주식수는 위 두 조립기.
@@ -155,7 +185,7 @@ def ticker_frame(ticker: str, us_gaap: dict | None = None) -> pd.DataFrame:
     10-Q 안에서 손익 기간말과 대차대조표 시점이 같은 날인 게 정상이고, 며칠
     어긋나는 건 결산일 관행이지 다른 분기가 아니다.
     """
-    ug = us_gaap if us_gaap is not None else ef.load_raw(ticker)
+    ug = us_gaap if us_gaap is not None else ef.load_raw(ticker, cik=cik)
     if ug is None:
         return pd.DataFrame()
     q = qp.quarterly(ug)
@@ -216,6 +246,7 @@ def fscore_rows(m: pd.DataFrame, ticker: str = "") -> list[dict]:
     out = []
     for i in range(8, len(m)):
         if not _spans_ok(ends, i):
+            STATS["span_bad"] += 1     # 설계서 5.4 — 소형주는 분기가 더 성기다
             continue
         roa = _div(ttm(ni, i), A[i - 4])          # 기초 총자산 — 문헌 그대로
         roa_p = _div(ttm(ni, i - 4), A[i - 8])
@@ -226,6 +257,7 @@ def fscore_rows(m: pd.DataFrame, ticker: str = "") -> list[dict]:
         need = (roa, roa_p, ttm(ocf, i), acc, lev_c, lev_p, cur_c, cur_p,
                 SH[i], SH[i - 4], at_c, at_p)
         if not all(np.isfinite(v) for v in need) or SH[i - 4] <= 0:
+            STATS["material_bad"] += 1
             continue                              # 모름은 0점이 아니라 결측이다
         items = (roa > 0, ttm(ocf, i) > 0, roa > roa_p, acc > roa,
                  lev_c < lev_p, cur_c > cur_p, SH[i] <= SH[i - 4] * 1.01, at_c > at_p)
@@ -240,15 +272,60 @@ def build_events(tickers) -> pd.DataFrame:
     """[ticker, end, filed, fscore, equity, shares] — filed 오름차순.
 
     가격 구간 밖 분기도 남긴다(BM 분위 모수). 거래로 세는 건 `attach_trades` 가 자른다.
+
+    종목 이름이 `"CIK:티커"`(소형주 asset_id)면 **CIK 로 companyfacts 를 받는다.**
+    `ef.get_cik` 은 SEC 의 *현재* 매핑이라 죽은 티커는 없거나, 더 나쁘게는 그 티커를
+    물려받은 다른 회사를 준다(BBBY: 886158 파산 → 1130713 재상장).
     """
     rows = []
-    for tk in tickers:
-        rows += fscore_rows(ticker_frame(tk), tk)
+    for n, tk in enumerate(tickers, 1):
+        cik, sep, sym = tk.partition(":")
+        rows += fscore_rows(ticker_frame(sym if sep else tk,
+                                         cik=int(cik) if sep else None), tk)
+        if n % 500 == 0:
+            print(f"  분기 점수 조립 {n}/{len(tickers)} · {len(rows)}건", flush=True)
     ev = pd.DataFrame(rows, columns=["ticker", "end", "filed", "fscore",
                                      "equity", "shares"])
     # 같은 filed 에 두 분기가 실렸으면 최신 분기 하나만 (end 오름차순이므로 뒤).
     ev = ev.sort_values(["ticker", "end"]).drop_duplicates(["ticker", "filed"], keep="last")
     return ev.sort_values("filed", kind="stable").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- 소형주 유니버스
+
+def smallcap_members(start, end) -> pd.DataFrame:
+    """[date, asset_id] — 그 창의 **월별** 구성종목. 벤치마크가 이걸로 리밸런스한다.
+
+    창 시작 **직전** 기준일까지 포함한다. 안 그러면 첫 리밸런스가 올 때까지
+    기준선이 현금으로 놀고, 그만큼 넘기 쉬운 자가 된다(봉인 구간처럼 창이
+    월 중간에서 시작하면 한 달이 통째로 빈다).
+    """
+    u = pd.read_parquet(SMALLCAP_UNIVERSE)
+    dates = pd.to_datetime(sorted(u["date"].unique()))
+    prior = dates[dates <= start]
+    lo = prior[-1] if len(prior) else start
+    return u.loc[(u["date"] >= lo) & (u["date"] <= end), ["date", "asset_id"]]
+
+
+def smallcap_events(names) -> pd.DataFrame:
+    """소형주 분기 점수. **한 번 만들어 캐시하고 세 창이 나눠 쓴다.**
+
+    점수는 창과 무관하다 — 창은 거래를 자를 때만 쓴다(`attach_trades`). 3,508개
+    companyfacts 를 파싱하는 데 십수 분이 걸리므로 본구간·전구간·봉인이 같은
+    파일을 읽는다. 캐시를 지우면 그대로 다시 만든다.
+    """
+    if EVENTS_CACHE.exists():
+        ev = pd.read_parquet(EVENTS_CACHE)
+        if EVENTS_STATS.exists():
+            STATS.update(json.loads(EVENTS_STATS.read_text(encoding="utf-8")))
+    else:
+        all_names = sorted(pd.read_parquet(SMALLCAP_UNIVERSE)["asset_id"].unique())
+        ev = build_events(all_names[:LIMIT or None])
+        if not LIMIT:            # 연기 테스트 결과를 캐시로 남기지 않는다
+            ev.to_parquet(EVENTS_CACHE, index=False)
+            EVENTS_STATS.write_text(json.dumps({**STATS, "names": len(all_names)},
+                                               ensure_ascii=False), encoding="utf-8")
+    return ev.loc[ev["ticker"].isin(set(names))].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------- 고BM 스크린
@@ -313,8 +390,14 @@ def daily_ics(panel: pd.DataFrame, close: pd.DataFrame, horizon: int) -> np.ndar
 
     매일 뜨지 않는 이유: 252일 선행 구간이 거의 통째로 겹쳐 독립 표본이 아니게
     된다. 21거래일 간격으로 뜨고 블록 12(=252일)로 자기상관을 흡수한다.
+
+    **선도수익도 상폐를 마지막 거래일 종가로 청산한다.** `close.shift(-horizon)` 을
+    그냥 쓰면 지평 안에 죽은 종목의 선도수익이 NaN 이 되어 단면에서 빠진다 —
+    설계서 5.1·5.2 가 막은 것과 같은 편향이 ①로 들어오는 **세 번째 문**이고,
+    거기서도 없어지는 건 큰 손실 쪽이다. 분모는 `close` 그대로라 그날 거래되고
+    있던 종목만 단면에 든다(청산가로 되살아나지는 않는다).
     """
-    fwd = close.shift(-horizon) / close - 1.0
+    fwd = close.ffill().shift(-horizon) / close - 1.0
     ics = []
     for i in range(0, len(close) - horizon, IC_STEP):
         day = panel.iloc[i]
@@ -460,6 +543,30 @@ def selftest() -> int:
     loud = rng.normal(0, 0.020, 1000)
     assert mde_pp(loud) > mde_pp(quiet) > 0
 
+    # 9) **상폐 거래가 안 사라진다** (소형주 설계서 5.2). 보유 중에 값이 끊기는
+    #    종목을 넣어, 그 거래가 버려지지 않고 마지막 거래일 종가로 청산되는지.
+    #    통과선이 아니라 **배선 검사**다 — 여기가 새면 롱온리에서 손실만 골라
+    #    사라지고, 유니버스를 편향 없이 만든 일이 통째로 헛수고가 된다.
+    d2 = pd.date_range("2021-01-04", periods=30, freq="B")
+    px2 = pd.DataFrame({"D": [100.0] * 10 + [50.0] + [np.nan] * 19,
+                        "S": 100.0 * 1.001 ** np.arange(30.0)}, index=d2)
+    tr = attach_trades(pd.DataFrame({"ticker": ["D"], "filed": [d2[0]]}), px2, hold=20)
+    assert len(tr) == 1, "보유 중 상폐 거래가 통째로 사라졌다"
+    assert np.isclose(tr["gross"].iloc[0], -0.5), tr["gross"].iloc[0]
+    assert bool(tr["delisted"].iloc[0])
+    port_d, _ = calendar_curve(tr, px2, 0.0, min_held=1)
+    assert np.isclose(port_d.iloc[10], -0.5), port_d.iloc[10]     # 상폐 직전 낙폭
+    assert np.allclose(port_d.iloc[11:22].values, 0.0), "청산 뒤가 현금이 아니다"
+
+    # 10) **벤치마크가 죽은 종목을 센다** (설계서 5.1). 예전 한 줄은 시작·종료일에
+    #     둘 다 값이 있는 종목만 사서 D 를 통째로 빼먹었다 — 그러면 기준선이
+    #     살아남은 S 하나짜리가 되고, 전략은 부당하게 불리해진다.
+    mem = pd.DataFrame({"date": [d2[0]] * 2, "asset_id": ["D", "S"]})
+    b = bench_curve(None, None, members=mem, close=px2)
+    survivor_only = float(px2["S"].iloc[-1] / px2["S"].iloc[0])
+    assert b.iloc[-1] < survivor_only, "상폐 종목의 손실이 기준선에서 사라졌다"
+    assert np.isclose(b.iloc[-1], (0.5 + survivor_only) / 2, atol=1e-9), b.iloc[-1]
+
     print("selftest OK")
     return 0
 
@@ -467,13 +574,26 @@ def selftest() -> int:
 # ---------------------------------------------------------------- 리포트
 
 def main() -> int:
+    try:                       # 윈도우 콘솔은 cp949 다 — 리포트를 찍다 죽는다
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     close = closes(START, END)
-    bench = bench_curve(START, END)
+    if SMALLCAP:
+        # 유니버스 하나만 바꾼다. 종목의 키는 티커가 아니라 asset_id(`"CIK:티커"`)다.
+        members = smallcap_members(START, END)
+        n_members = members["asset_id"].nunique()
+        tickers = sorted(set(members["asset_id"]) & set(close.columns))[:LIMIT or None]
+        close = close[tickers]
+        bench = bench_curve(START, END, members=members, close=close)
+        ev_all = smallcap_events(tickers)
+    else:
+        n_members = 0
+        bench = bench_curve(START, END)
+        tickers = list(close.columns)[:LIMIT or None]
+        ev_all = build_events(tickers)
     bench_ret = bench.pct_change().fillna(0.0).values
     years = (close.index[-1] - close.index[0]).days / 365.25
-
-    tickers = list(close.columns)[:LIMIT or None]
-    ev_all = build_events(tickers)
     print(f"분기 점수 {len(ev_all)}건 / 종목 {ev_all['ticker'].nunique()}")
 
     # ① 단면 — 전 유니버스, 스크린 없음. 거래 가능 여부와 무관하게 점수만 본다.
@@ -487,7 +607,10 @@ def main() -> int:
     # 아니라 **못 잰 것**이다 — 봉인 구간처럼 짧은 창에서 X 로 찍으면 검출력 문제를
     # 반증으로 읽게 된다. ②의 △ 와 같은 표기를 쓴다.
     ic_underpowered = not np.isfinite(t_ic)
-    pass1 = n_ic >= IC_BLOCK * 2 and abs(t_ic) >= 2
+    # 소형주 재측정의 통과선은 **단측 t >= +2** 다. 방향이 있는 가설에는 통과선도
+    # 방향이 있어야 한다 — 대형주에서 양측으로 적었다가 부호가 반대인 O 를 받은
+    # 자리를 고친 것이다(소형주 설계서 2절). 대형주 판정은 그때 적은 대로 둔다.
+    pass1 = n_ic >= IC_BLOCK * 2 and (t_ic >= 2 if SMALLCAP else abs(t_ic) >= 2)
     mark1 = "△" if ic_underpowered else ("O" if pass1 else "X")
 
     # ② 포트폴리오 — 고BM 5분위 ∩ F>=7.
@@ -522,16 +645,45 @@ def main() -> int:
                else ("통과" if (pass1 and pass2) else "실패"))
     mark = "△" if underpowered else ("O" if pass2 else "X")
 
+    title = ("# F-Score" + (" 소형주" if SMALLCAP else "")
+             + (" — 봉인 구간 확인" if SEALED else
+                " — 전구간 2차 행 (판정 아님)" if FULL else
+                " 재측정 — 유니버스 하나만 바꿨다" if SMALLCAP else
+                " (8항목 Piotroski) — 측정"))
+    ic_rule = ("날짜 블록 부트스트랩 **t >= +2** (단측)" if SMALLCAP
+               else "날짜 블록 부트스트랩 \\|t\\| >= 2")
+    n_dead = int(top["delisted"].sum()) if len(top) else 0
+    n_dead_all = int(ev["delisted"].sum()) if len(ev) else 0
+    panel_rep = Path("data/smallcap_panel_report.json")
+    n_recycled = (len(json.loads(panel_rep.read_text(encoding="utf-8"))["dropped_recycled"])
+                  if (SMALLCAP and panel_rep.exists()) else 0)
+
     body = [
-        "# F-Score — 봉인 구간 확인" if SEALED else "# F-Score (8항목 Piotroski) — 측정",
+        title,
         "",
         f"구간 {START.date()} ~ {END.date()} · 진입 `filed`+1 종가 · {HOLD_DAYS}거래일 보유 · "
         f"고BM 5분위 ∩ F>={SCORE_AT} 롱온리 · 판정 {COST_BPS:.0f}bp.",
+    ] + ([
+        f"유니버스: **소형주 월별 패널**(시총 순위 {1001}~{3000}위, 상장폐지 포함) — "
+        f"이 창의 구성종목 {n_members}개 중 조정 일봉이 있는 {len(tickers)}개. "
+        "종목의 키는 티커가 아니라 `\"CIK:티커\"` 다.",
+        "사전 등록: `docs/superpowers/specs/2026-08-14-fscore-smallcap-design.md`. "
+        "**항목·문턱·보유·분위·구간·비용은 대형주 측정과 한 글자도 안 바꿨다** — "
+        "한 번에 하나만 바꿔야 차이를 유니버스에 돌릴 수 있다.",
+    ] if SMALLCAP else [
         "사전 등록: `docs/superpowers/specs/2026-08-14-fscore-design.md`. "
         "**파라미터는 문헌값 고정이라 고를 게 없었고, 따라서 전 구간이 OOS**다.",
+    ]) + [
         "",
     ] + ([
-        "> **이 문서는 판정이 아니다.** 본 측정(`2026-08-14-fscore.md`)의 판정이 끝난 뒤",
+        "> **이 문서는 판정이 아니다 — 2차 행이다.** 사전 등록 4절에서 전구간"
+        f"({START.date()}~)을 판정 행이 아니라 참고로 미리 적어뒀다. 판정은",
+        "> 본구간(`2026-08-14-fscore-smallcap.md`)으로만 한다. 둘을 보고 좋은 쪽을",
+        "> 고르면 그게 튜닝이다.",
+        "",
+    ] if (FULL and not SEALED) else []) + ([
+        "> **이 문서는 판정이 아니다.** 본 측정"
+        f"(`2026-08-14-fscore{'-smallcap' if SMALLCAP else ''}.md`)의 판정이 끝난 뒤",
         "> 봉인 구간을 딱 한 번 확인용으로 연 것이다. 아래 O/X 는 같은 통과선을 같은 코드로",
         "> 봉인 구간에 적용해본 값일 뿐, **판정을 바꾸지 않는다**(설계서 5절).",
         ">",
@@ -547,7 +699,7 @@ def main() -> int:
         "| | 무엇 | 통과선 | 실측 | |",
         "|---|---|---|---|---|",
         f"| ① 단면 | 8항목 F-Score {HOLD_DAYS}일 선도수익 IC (전 유니버스) | "
-        f"날짜 블록 부트스트랩 \\|t\\| >= 2 | 평균 IC {m_ic:+.4f} · t={t_ic:+.2f} "
+        f"{ic_rule} | 평균 IC {m_ic:+.4f} · t={t_ic:+.2f} "
         f"(단면 {n_ic}개) | {mark1}"
         f"{' (부호 반대)' if pass1 and m_ic < 0 else ''} |",
         f"| ② 포트폴리오 | 같은 노출 매수보유 대비 초과 연수익 | 부트스트랩 95% 하한 > 0 | "
@@ -556,6 +708,31 @@ def main() -> int:
         "**하나만 통과하면 실패다.** 이 저장소는 ①만 보고 다섯 번 속았다.",
         "",
     ] + ([
+        f"**대형주에 같은 자를 댔을 때 ①은 IC −0.0801 · t=−4.04 였다**"
+        f"(`2026-08-14-fscore.md`). 소형주는 {m_ic:+.4f} · t={t_ic:+.2f} 로 **부호가 뒤집혔지만"
+        f" 통과선을 못 넘는다.** 부호가 바뀐 것 자체를 결과로 읽으면 안 된다 —",
+        "통과선을 못 넘은 t 는 방향을 말할 자격이 없다는 뜻이다.",
+        "",
+    ] if (SMALLCAP and np.isfinite(t_ic)) else []) + ([
+        "### 상폐가 어디로 들어왔나 — 재기 전에 막아둔 자리 (설계서 5.1·5.2)",
+        "",
+        f"- **벤치마크는 매월 동일가중 리밸런스**다. 그달 구성종목을 동일가중으로 들고,",
+        "  상폐 종목은 마지막 거래일 종가에 청산해 다음 리밸런스에서 재분배한다. 예전"
+        " 한 줄(`시작·종료일에 둘 다 값이 있는 종목만`)을 그대로 썼으면 기준선이",
+        "  **\"안 죽은 것만 산 줄\"** 이 됐다.",
+        f"- **보유 중 상폐 {n_dead_all}건**(고BM ∩ F>={SCORE_AT} 바구니 안 {n_dead}건)은"
+        " 버리지 않고 마지막 거래일 종가에 청산했다. 예전 코드는 창에 NaN 이 있으면",
+        "  그 거래를 뺐다 — 롱온리에서 **손실만 골라 없애는 필터**다.",
+        "- **이 청산가는 낙관 쪽으로 틀린다.** 파산 종목은 거래정지 전에 이미 흘러내리고",
+        "  정리매매 가격은 더 낮다. 통과가 나오면 이 자리를 먼저 다시 봐야 한다.",
+        "",
+    ] if SMALLCAP else []) + ([
+        f"**①의 부호가 음(-)이고 \\|t\\|={abs(t_ic):.2f} 다.** 통과선은 단측이므로 판정은 X 지만,",
+        "대형주에서 나온 음의 IC 가 소형주에서도 같은 부호로 나왔다는 건 \"신호가 없다\"와",
+        "다른 이야기다 — **반대 방향의 단면 정보**다. 판정은 실패로 하고 관측은 관측대로",
+        "적어둔다(설계서 2절). 여기서 통과선을 뒤집으면 그게 튜닝이다.",
+        "",
+    ] if (SMALLCAP and np.isfinite(t_ic) and t_ic <= -2) else []) + ([
         "### ①의 O 를 지지 증거로 읽으면 안 된다 — 부호가 가설과 반대다",
         "",
         "사전 등록한 통과선은 **양측 \\|t\\| >= 2** 였고 실측은 그 바를 넘었다. 그런데 부호가",
@@ -590,6 +767,15 @@ def main() -> int:
         "**이 측정은 ②를 판정할 힘이 없다.** 통과도 실패도 아니라 미측정으로 적는다 — "
         "재기 전에 정한 규칙이고, 결과를 보고 만든 변명이 아니다.",
         "",
+    ] + ([
+        f"**사전 등록이 여기서 틀렸다.** 설계서 5.3 은 \"유효 종목 1,800 은 대형주 192 의 9배다."
+        f" ②의 검출력은 여기서 온다\" 고 적었는데, 실측 MDE 는 대형주 9.29 → **{mde:.2f}** 로",
+        "오히려 두 배 나빠졌다. MDE 는 **기준선의 변동성**이 정하지 종목 수가 정하는 게 아니다 —"
+        " 소형주 동일가중 지수는 대형주보다 훨씬 거칠다.",
+        "종목을 아홉 배로 늘려도 그 거칠기를 못 이긴다. **다음 사전 등록은 표본 수가 아니라"
+        " 기준선 변동성으로 검출력을 미리 계산해야 한다.**",
+        "",
+    ] if (SMALLCAP and underpowered) else []) + [
         "## 다섯 줄 — 설계서가 항상 같이 내라고 한 것",
         "",
         "| 줄 | 연수익 | MDD | 비고 |",
@@ -612,6 +798,16 @@ def main() -> int:
         "아니라 구성이다 — quant_pit ②에서 실제로 그랬다. BM 스크린 없는 줄은 스크린이 무슨",
         "일을 하는지 보는 줄이고, 문헌형이 아니므로 통과선이 아니다.",
         "",
+    ] + ([
+        f"**여기서는 위약이 전략을 이겼다** ({cagr(float((1 + plc_port).cumprod().iloc[-1]), years):+.1f}%"
+        f" 대 {cagr(float(strat_curve.iloc[-1]), years):+.1f}%). 같은 달·같은 자리 수에 점수만 섞은 줄이"
+        " 더 벌었다는 건,",
+        "이 바구니의 수익이 F-Score 가 고른 종목에서 온 게 아니라 **고BM 스크린과 그 구간의"
+        " 유니버스 자체**에서 왔다는 뜻이다.",
+        "점추정을 판정으로 읽으면 안 되는 이유가 이 줄에 있다.",
+        "",
+    ] if (SMALLCAP and cagr(float((1 + plc_port).cumprod().iloc[-1]), years)
+          > cagr(float(strat_curve.iloc[-1]), years)) else []) + [
         "## 비용 스윕 (왕복 bp, 진입일 전액)",
         "",
         "| | " + " | ".join(f"{c:.0f}bp" for c in COST_SWEEP) + " |",
@@ -643,9 +839,19 @@ def main() -> int:
         "| 분기 건수 | " + " | ".join(
             str(int((ev_all["fscore"] == s).sum())) for s in range(9)) + " |",
         "",
-        f"8항목을 다 채운 종목 {ev_all['ticker'].nunique()}/{len(tickers)}. 나머지는 은행·보험·리츠로,",
+        f"8항목을 다 채운 종목 {ev_all['ticker'].nunique()}/{len(tickers)}."
+        + ("" if SMALLCAP else " 나머지는 은행·보험·리츠로,"),
+    ] + ([
+        f"떨어진 분기는 재료 결측 {STATS['material_bad']:,}건 · **간격 불량"
+        f"(`_spans_ok`) {STATS['span_bad']:,}건** 이다 — 소형주는 분기 공시가 성겨 이 검사가",
+        "더 자주 발동한다(설계서 5.4). 파일럿에서 42.7% 였던 커버리지가 여기서 실측으로 나온다.",
+        "**정의는 안 바꾼다.** 커버리지가 낮다고 항목을 빼거나 분모를 가변으로 바꾸면 두 측정을",
+        "비교할 수 없게 된다. 빠지는 건 소형 은행·리츠·보험과 분기 공시가 성긴 소형 filer 다 —",
+        "**결손이 아니라 정의역이다.**",
+    ] if SMALLCAP else [
         "유동자산/부채를 구분한 대차대조표를 안 낸다. **결손이 아니라 정의역이다** — Piotroski",
         "원 논문도 금융업을 제외했다(설계서 2.2).",
+    ]) + [
         "",
         "## 이 자의 한계 — 재고 나서 알게 된 것",
         "",
@@ -664,8 +870,26 @@ def main() -> int:
         "",
         "## 이 측정이 안 한 것",
         "",
+    ] + ([
+        "- **마이크로캡 미측정.** 시총 모집단이 기준일당 4,887종목뿐이라 순위 3,000위 하한이",
+        "  **$433M** 이다(실제 러셀2000 하한은 $100M대). 본구간 시총 중앙값 $1.72B · 최소 $275M.",
+        "  **F-Score 효과는 마이크로캡에서 가장 크다고 알려져 있고 그 구간이 통째로 빠져 있다** —",
+        "  그래서 실패해도 \"소형주에 없다\"가 아니라 **\"이 크기대에는 없다\"** 로만 적는다. 결과를",
+        "  보고 붙이는 변명이 아니라 재기 전에 적어둔 한계다(설계서 5.5).",
+        "- **월별 구성 변경을 거래에는 안 넣었다.** 벤치마크만 매월 리밸런스고, ①과 전략은 이 창에"
+        " 한 번이라도 든 종목을 정의역으로 쓴다(설계서 4절이 종목 수를 그렇게 셌다).",
+        f"- **재활용 티커의 이전 주인 {n_recycled}종목을 패널에서 뺐다** — 재기 전에 몰랐던 자리다."
+        " 시세 제공자는 심볼로 **현재 주인의 연속 이력**을 준다(파산한 `886158:BBBY` 의 2023-04",
+        "  종가가 $19 로 나왔다 — 그때 진짜 BBBY 는 $0.25 였다). 죽은 회사의 봉을 구할 방법이"
+        " 없어 통째로 뺐고, **그만큼 상폐가 덜 들어 있다(낙관 쪽)**. 유니버스의 시가총액도 같은",
+        "  봉으로 만들어졌으므로 그 영향은 남아 있다.",
+        f"- **2차 행은 따로 낸다** — 전구간(2017-09~) `2026-08-14-fscore-smallcap-full.md`."
+        if not FULL else
+        "- **이 문서가 2차 행이다.** 판정 행은 본구간 `2026-08-14-fscore-smallcap.md` 다.",
+    ] if SMALLCAP else [
         "- **소형주 미측정.** 유니버스가 S&P 대형주라 F-Score 가 가장 안 먹힐 자리다. 실패해도",
         "  \"F-Score 가 없다\"가 아니라 **\"S&P 279종목·본 구간에서는 없다\"** 로만 적는다(설계서 3.1).",
+    ]) + [
         "- **F8(매출총이익률 개선) 미사용.** `GrossProfit` 커버리지 33.0% 로 `MIN_COVERAGE`(70%)",
         "  미달이라 재기 전에 뺐다. 9항목 문헌 재현은 이 재료로는 불가능하다.",
         "- **봉인은 이 문서로 열었다. 다시 안 연다.**" if SEALED else
@@ -677,8 +901,9 @@ def main() -> int:
     ] + yearly(strat_curve, bench, exposure) + [
         f"분기 점수 {len(ev_all)}건 · 거래 가능 {len(ev)}건 · 고BM ∩ F>={SCORE_AT} {len(top)}건. "
         f"부트스트랩 {N_BOOT}회 · 시드 {SEED}.",
-        f"재현: `python scripts/measure_fscore.py{' sealed' if SEALED else ''}` · "
-        "산수 점검 `... selftest`",
+        f"재현: `python scripts/measure_fscore.py"
+        f"{' smallcap' if SMALLCAP else ''}{' full' if FULL else ''}"
+        f"{' sealed' if SEALED else ''}` · 산수 점검 `... selftest`",
         "",
     ]
 
