@@ -148,7 +148,15 @@ def rank_percentile(ev: pd.DataFrame) -> np.ndarray:
 # ---------------------------------------------------------------- 거래
 
 def attach_trades(ev: pd.DataFrame, close: pd.DataFrame, hold: int = HOLD_DAYS) -> pd.DataFrame:
-    """진입 = filed 다음 거래일 종가, 청산 = `hold` 거래일 뒤 종가. 못 거는 건 뺀다."""
+    """진입 = filed 다음 거래일 종가, 청산 = `hold` 거래일 뒤 종가. 못 거는 건 뺀다.
+
+    **보유 중 상장폐지는 마지막 거래일 종가에 청산한다** — 잔여 보유기간은 현금이다.
+    예전에는 창에 NaN 이 하나라도 있으면 그 거래를 통째로 뺐다. 상폐가 든 패널에서
+    그건 **손실만 골라 버리는 필터**다(롱온리에서 상폐는 대개 큰 손실이다). 대형주
+    패널에는 상폐가 없어서 무해했던 가정이고, 데이터가 바뀌면 무해하던 가정이
+    편향이 된다 — 소형주 설계서 5.2 절.
+
+    진입일 종가가 없으면 그 거래는 여전히 뺀다. **못 산 걸 산 것으로 치지는 않는다.**"""
     idx = close.index
     pos_entry = np.searchsorted(idx.values, ev["filed"].values, side="right")
     pos_exit = pos_entry + hold
@@ -164,13 +172,18 @@ def attach_trades(ev: pd.DataFrame, close: pd.DataFrame, hold: int = HOLD_DAYS) 
 
     px = close.values
     col = {c: i for i, c in enumerate(close.columns)}
-    rets, alive = [], []
+    rets, alive, dead = [], [], []
     for tk, a, b in zip(ev["ticker"], ev["entry"], ev["exit"]):
         s = px[a:b + 1, col[tk]]
-        good = not np.isnan(s).any() and s[0] > 0
-        alive.append(good)
-        rets.append(s[-1] / s[0] - 1.0 if good else np.nan)
+        have = np.isfinite(s)
+        buyable = bool(have[0] and s[0] > 0)
+        alive.append(buyable)
+        # have 의 마지막 값 = 청산가. 창이 다 살아 있으면 그건 그냥 마지막 종가고,
+        # 중간에 죽었으면 마지막 거래일 종가다. 같은 한 줄이 두 경우를 다 편다.
+        rets.append(s[have][-1] / s[0] - 1.0 if buyable else np.nan)
+        dead.append(buyable and not bool(have[-1]))
     ev["gross"] = rets
+    ev["delisted"] = dead        # 보유 중 상폐 = 조기 청산. 보고서가 세는 수다.
     return ev.loc[alive].reset_index(drop=True)
 
 

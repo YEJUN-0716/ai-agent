@@ -205,8 +205,12 @@ def step_shares(force=False) -> tuple:
 
 
 # ── 3. 미조정 일봉 ─────────────────────────────────────────────────────
-def _bars_tolerant(batch, end):
+def _bars_tolerant(batch, end, start=None, adjustment="raw"):
     """배치를 받되, **400 일 때만** 반으로 갈라 나머지를 살린다.
+
+    `start`·`adjustment` 는 조정 일봉 수급(`scripts/fetch_smallcap_panel.py`)이
+    같은 관용 규칙을 쓰려고 뚫은 것이다 — 400 만 삼킨다는 이 판단이 두 벌로
+    갈리면 한쪽만 고치는 날이 온다.
 
     심볼 하나가 배치 전체를 400 으로 죽이는 걸 실제로 겪었다(대시 심볼).
     표기는 `su.alpaca_symbol` 이 거르지만, 못 걸러낸 게 하나 나왔다고
@@ -216,10 +220,10 @@ def _bars_tolerant(batch, end):
     403(`subscription does not permit querying recent SIP data`)이 "심볼 거절"로
     둔갑해 빈 샤드를 조용히 쌓았다. 관용은 아는 실패에만 베푼다.
     """
+    start = (start or START_DATE).to_pydatetime().replace(tzinfo=timezone.utc)
     try:
-        return ad.get_bars(batch, timeframe="1Day",
-                           start=START_DATE.to_pydatetime().replace(tzinfo=timezone.utc),
-                           end=end, feed_name="sip", adjustment="raw",
+        return ad.get_bars(batch, timeframe="1Day", start=start,
+                           end=end, feed_name="sip", adjustment=adjustment,
                            max_pages=400)
     except requests.HTTPError as exc:
         if exc.response is None or exc.response.status_code != 400:
@@ -228,8 +232,8 @@ def _bars_tolerant(batch, end):
             _say(f"  거절된 심볼: {batch[0]}")
             return {}
         mid = len(batch) // 2
-        return {**_bars_tolerant(batch[:mid], end),
-                **_bars_tolerant(batch[mid:], end)}
+        return {**_bars_tolerant(batch[:mid], end, pd.Timestamp(start), adjustment),
+                **_bars_tolerant(batch[mid:], end, pd.Timestamp(start), adjustment)}
 
 
 
