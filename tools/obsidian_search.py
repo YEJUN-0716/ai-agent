@@ -138,12 +138,17 @@ def search_notes(settings: Settings, query: str, limit: int = 5) -> dict:
     }
 
 
-def resolve_in_vault(settings: Settings, note_path: str) -> Path:
+def resolve_in_vault(
+    settings: Settings, note_path: str, must_exist: bool = True
+) -> Path:
     """볼트 안의 노트 경로로 바꾼다. 볼트 밖이면 거절한다.
 
     경로는 모델이 정한다. 검증 없이 열면 `../../.env`로 볼트 밖 파일이
     통째로 새어나간다. 심볼릭 링크도 resolve가 실제 위치까지 따라가므로
     볼트 안에 걸어둔 바깥 링크도 여기서 걸린다.
+
+    쓰기(`obsidian_write`)도 이 함수를 거친다 — 아직 없는 노트를 만들 때만
+    must_exist=False다. 검증을 두 벌로 나누면 한쪽만 느슨해진다.
     """
     if not note_path.strip():
         raise SearchError("노트 경로가 비어 있습니다.")
@@ -154,7 +159,7 @@ def resolve_in_vault(settings: Settings, note_path: str) -> Path:
         raise SearchError(f"볼트 밖의 파일은 열 수 없습니다: {note_path}")
     if target.suffix.lower() != ".md":
         raise SearchError(f"노트(.md)만 열 수 있습니다: {note_path}")
-    if not target.is_file():
+    if must_exist and not target.is_file():
         raise SearchError(f"그런 노트가 없습니다: {note_path}")
     return target
 
