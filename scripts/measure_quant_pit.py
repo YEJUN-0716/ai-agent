@@ -442,7 +442,7 @@ def main() -> int:
         "",
         "## 애널리스트 셋을 같은 자로",
         "",
-        f"| 슬러그 | 평균 IC | t (Newey–West) | 유효표본 | 적중률 |",
+        "| 슬러그 | 평균 IC | t (Newey–West) | 유효표본 | 적중률 |",
         "|---|---|---|---|---|",
     ]
     for slug in ("chart", SLUG, "ict"):
