@@ -1144,77 +1144,73 @@ def _get_fs_val(df, *kw, col=0):
             except: pass
     return None
 
+# F-Score 는 **8항목**이다 — 원본 9항목 중 F8(매출총이익률 개선)을 뺐다.
+# EDGAR 279종목 실측 커버리지: GrossProfit 33.0% · CostOfRevenue 55.6%(대체로도
+# 51%). edgar_fundamentals.MIN_COVERAGE(70%) 아래라, 다른 지표였으면 그 모듈의
+# '커버리지 미달 지표는 전 종목에서 제외' 규칙이 이미 지웠을 태그다. 은행·보험·
+# 리츠는 매출총이익을 아예 안 낸다 — 태그를 더 모아도 안 풀린다.
+# 나머지 여덟의 재료는 전부 78.5% 이상(assets 100 · current_* 78.5 · LTD 87.8).
+FSCORE_ITEMS = 8
+
+
 def calc_piotroski_fscore(ticker):
+    """8항목 Piotroski F-Score → (점수 0~8, 항목별 시그널). 한 항목이라도 재료가
+    없으면 **(None, 시그널)** 을 낸다.
+
+    **모르는 항목을 0점으로 치지 않는다.** 예전 코드는 결측을 '❓' 로 표시하면서
+    점수는 안 주고 분모는 9 로 뒀다 — 은행·리츠의 F-Score 가 낮은 게 부실해서가
+    아니라 태그가 없어서였다. '모름'이 '실패'로 읽히던 자리다.
+
+    항목별 분모를 종목마다 바꾸지도 않는다(5/6 vs 5/8). 그러면 정의가 다른 두
+    점수를 한 화면에서 나란히 세우게 된다 — 중립 50 채우기와 같은 오류다.
+    """
     try:
         t   = yf.Ticker(ticker)
         info= t.info
         fin, bal, cf = t.financials, t.balance_sheet, t.cashflow
-        score, sig = 0, {}
         gv = _get_fs_val
 
-        roa = info.get('returnOnAssets')
-        if roa and roa > 0: score+=1; sig['F1 ROA>0']='✅'
-        else:                           sig['F1 ROA>0']='❌'
-
-        ocf = gv(cf,'operating') or gv(cf,'cash','operation')
-        if ocf and ocf > 0: score+=1; sig['F2 영업현금흐름>0']='✅'
-        else:                           sig['F2 영업현금흐름>0']='❌'
-
-        ni_c=gv(fin,'net income');    ni_p=gv(fin,'net income',col=1)
-        ta_c=gv(bal,'total assets');  ta_p=gv(bal,'total assets',col=1)
+        ocf  = gv(cf,'operating') or gv(cf,'cash','operation')
+        ni_c = gv(fin,'net income');   ni_p = gv(fin,'net income',col=1)
+        ta_c = gv(bal,'total assets'); ta_p = gv(bal,'total assets',col=1)
         roa_c = ni_c/ta_c if ni_c is not None and ta_c else None
         roa_p = ni_p/ta_p if ni_p is not None and ta_p else None
-        if roa_c is not None and roa_p is not None:
-            if roa_c > roa_p: score+=1; sig['F3 ROA개선']='✅'
-            else:              sig['F3 ROA개선']='❌'
-        else: sig['F3 ROA개선']='❓'
 
-        if ocf is not None and ta_c and roa_c is not None:
-            if ocf/ta_c > roa_c: score+=1; sig['F4 발생주의']='✅'
-            else:                  sig['F4 발생주의']='❌'
-        else: sig['F4 발생주의']='❓'
-
-        ltd_c=gv(bal,'long','debt');  ltd_p=gv(bal,'long','debt',col=1)
+        ltd_c = gv(bal,'long','debt');  ltd_p = gv(bal,'long','debt',col=1)
         lev_c = ltd_c/ta_c if ltd_c is not None and ta_c else None
         lev_p = ltd_p/ta_p if ltd_p is not None and ta_p else None
-        if lev_c is not None and lev_p is not None:
-            if lev_c < lev_p: score+=1; sig['F5 레버리지감소']='✅'
-            else:              sig['F5 레버리지감소']='❌'
-        else: sig['F5 레버리지감소']='❓'
 
-        ca_c=gv(bal,'current assets');  cl_c=gv(bal,'current liabilities')
-        ca_p=gv(bal,'current assets',col=1); cl_p=gv(bal,'current liabilities',col=1)
+        ca_c = gv(bal,'current assets');       cl_c = gv(bal,'current liabilities')
+        ca_p = gv(bal,'current assets',col=1); cl_p = gv(bal,'current liabilities',col=1)
         cr_c = ca_c/cl_c if ca_c is not None and cl_c else None
         cr_p = ca_p/cl_p if ca_p is not None and cl_p else None
-        if cr_c is not None and cr_p is not None:
-            if cr_c > cr_p: score+=1; sig['F6 유동성개선']='✅'
-            else:            sig['F6 유동성개선']='❌'
-        else: sig['F6 유동성개선']='❓'
 
         sh_c = gv(bal,'ordinary shares') or gv(bal,'common stock')
         sh_p = gv(bal,'ordinary shares',col=1) or gv(bal,'common stock',col=1)
-        if sh_c and sh_p:
-            if sh_c <= sh_p*1.01: score+=1; sig['F7 주식수불증가']='✅'
-            else:                   sig['F7 주식수불증가']='❌'
-        else: sig['F7 주식수불증가']='❓'
 
-        rev_c=gv(fin,'total revenue'); rev_p=gv(fin,'total revenue',col=1)
-        gp_c =gv(fin,'gross profit');  gp_p =gv(fin,'gross profit',col=1)
-        gm_c = gp_c/rev_c if gp_c is not None and rev_c else None
-        gm_p = gp_p/rev_p if gp_p is not None and rev_p else None
-        if gm_c is not None and gm_p is not None:
-            if gm_c > gm_p: score+=1; sig['F8 매출총이익률개선']='✅'
-            else:            sig['F8 매출총이익률개선']='❌'
-        else: sig['F8 매출총이익률개선']='❓'
+        rev_c = gv(fin,'total revenue'); rev_p = gv(fin,'total revenue',col=1)
+        at_c  = rev_c/ta_c if rev_c is not None and ta_c else None
+        at_p  = rev_p/ta_p if rev_p is not None and ta_p else None
 
-        at_c = rev_c/ta_c if rev_c is not None and ta_c else None
-        at_p = rev_p/ta_p if rev_p is not None and ta_p else None
-        if at_c is not None and at_p is not None:
-            if at_c > at_p: score+=1; sig['F9 자산회전율개선']='✅'
-            else:            sig['F9 자산회전율개선']='❌'
-        else: sig['F9 자산회전율개선']='❓'
+        # 값은 True(1점) / False(0점) / None(재료 없음). ROA 0.0 은 결측이 아니다.
+        roa = info.get('returnOnAssets')
+        items = {
+            'F1 ROA>0':          None if roa is None else roa > 0,
+            'F2 영업현금흐름>0':  None if ocf is None else ocf > 0,
+            'F3 ROA개선':        None if roa_c is None or roa_p is None else roa_c > roa_p,
+            'F4 발생주의':        None if ocf is None or ta_c in (None, 0) or roa_c is None
+                                 else ocf/ta_c > roa_c,
+            'F5 레버리지감소':    None if lev_c is None or lev_p is None else lev_c < lev_p,
+            'F6 유동성개선':      None if cr_c is None or cr_p is None else cr_c > cr_p,
+            'F7 주식수불증가':    None if not sh_c or not sh_p else sh_c <= sh_p*1.01,
+            'F9 자산회전율개선':  None if at_c is None or at_p is None else at_c > at_p,
+        }
+        assert len(items) == FSCORE_ITEMS
 
-        return score, sig
+        sig = {k: ('❓' if v is None else ('✅' if v else '❌')) for k, v in items.items()}
+        if any(v is None for v in items.values()):
+            return None, sig
+        return sum(items.values()), sig
     except Exception as e:
         return None, {'오류': str(e)}
 
@@ -1295,7 +1291,7 @@ def fundamental_score(ticker, df=None):
 
         # ── F-Score (10%) ─────────────────────────────
         fs, fsig = calc_piotroski_fscore(ticker)
-        det['F-Score']      = float(fs/9*100) if fs is not None else 50.0
+        det['F-Score']      = float(fs/FSCORE_ITEMS*100) if fs is not None else 50.0
         det['F-Score값']    = fs
         det['F-Score시그널'] = fsig
 
@@ -5942,7 +5938,8 @@ def main():
                     mdd_v = f_det.get('MDD값')
                     st.caption(f"MDD: {f'{mdd_v:.1f}%' if mdd_v is not None else 'N/A'}")
                     fs_v = f_det.get('F-Score값')
-                    st.caption(f"Piotroski F-Score: {f'{fs_v}/9' if fs_v is not None else 'N/A'}")
+                    st.caption(f"Piotroski F-Score: "
+                               f"{f'{fs_v}/{FSCORE_ITEMS}' if fs_v is not None else 'N/A (재료 결측)'}")
                     for sk, sv in f_det.get('F-Score시그널', {}).items():
                         if '오류' not in sk: st.caption(f"  {sv} {sk}")
                     if dcf_det:
