@@ -70,7 +70,8 @@ def _iso(dt: datetime) -> str:
 # ── 분봉 이력 (REST) ───────────────────────────────────────────────────
 def get_bars(symbols, timeframe: str = "1Min", start=None, end=None,
              api_key: str = "", secret_key: str = "",
-             feed_name: str = "", max_pages: int = 20) -> dict:
+             feed_name: str = "", max_pages: int = 20,
+             adjustment: str = "all") -> dict:
     """여러 종목의 봉을 한 번에 받는다 → {티커: DataFrame}.
 
     GET /v2/stocks/bars. timeframe 은 "1Min"/"5Min"/"15Min"/"1Hour"/"1Day".
@@ -100,7 +101,10 @@ def get_bars(symbols, timeframe: str = "1Min", start=None, end=None,
         "start":      _iso(start),
         "end":        _iso(end),
         "limit":      10000,
-        "adjustment": "all",   # 분할·배당 반영. 안 하면 분할일에 갭이 신호가 된다.
+        # 기본은 분할·배당 반영. 안 하면 분할일의 갭이 신호가 된다.
+        # 시가총액을 계산할 때만 "raw" — 조정 종가에 당시 주식수를 곱하면
+        # 나중에 분할한 회사의 과거 시총이 틀린다.
+        "adjustment": adjustment,
         "feed":       feed_name or feed(),
     }
     hdrs = _headers(api_key, secret_key)

@@ -1,0 +1,51 @@
+{
+  "built_at": "2026-08-14T11:32:45.595934+00:00",
+  "spans": {
+    "listings": 31996,
+    "tickers": 30523,
+    "recycled_tickers": 1400,
+    "snapshots": 69,
+    "non_common_tickers_dropped": 1779
+  },
+  "shares": {
+    "rows": 409124,
+    "ciks": 12589,
+    "listings_with_shares": 18368,
+    "lag_days": 90
+  },
+  "prices": {
+    "rows": 16455301,
+    "listings": 12351,
+    "panel_end": "2026-08-13"
+  },
+  "pool": {
+    "median_per_date": 4886.5,
+    "min_per_date": 4205
+  },
+  "universe": {
+    "rows": 216000,
+    "dates": 108,
+    "listings": 5558,
+    "median_members": 2000.0,
+    "mktcap_floor_median": 432843456.5738268,
+    "mktcap_median": 1638574422.0745049
+  },
+  "selftest": {
+    "passed": true,
+    "checks": {
+      "delistings_every_year": true,
+      "no_duplicate_rows": true,
+      "rank_matches_mktcap": true
+    },
+    "delistings_by_year": {
+      "2017": 185,
+      "2018": 305,
+      "2019": 281,
+      "2020": 363,
+      "2021": 398,
+      "2022": 325,
+      "2023": 339,
+      "2024": 364
+    }
+  }
+}
