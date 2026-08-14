@@ -147,11 +147,11 @@ def rank_percentile(ev: pd.DataFrame) -> np.ndarray:
 
 # ---------------------------------------------------------------- 거래
 
-def attach_trades(ev: pd.DataFrame, close: pd.DataFrame) -> pd.DataFrame:
-    """진입 = filed 다음 거래일 종가, 청산 = 60거래일 뒤 종가. 못 거는 건 뺀다."""
+def attach_trades(ev: pd.DataFrame, close: pd.DataFrame, hold: int = HOLD_DAYS) -> pd.DataFrame:
+    """진입 = filed 다음 거래일 종가, 청산 = `hold` 거래일 뒤 종가. 못 거는 건 뺀다."""
     idx = close.index
     pos_entry = np.searchsorted(idx.values, ev["filed"].values, side="right")
-    pos_exit = pos_entry + HOLD_DAYS
+    pos_exit = pos_entry + hold
     # `pos_entry == 0` = 가격 구간이 **시작되기 전에** 공시된 건이다. build_events가
     # 랭킹 모수로 쓰려고 일부러 남겨둔 것들인데(설계서 3.2), 그대로 두면 전부 패널
     # 첫날 종가에 산 거래로 잡힌다 — 2016년 공시를 2020-03-31에 사는 셈이고,
@@ -174,11 +174,13 @@ def attach_trades(ev: pd.DataFrame, close: pd.DataFrame) -> pd.DataFrame:
     return ev.loc[alive].reset_index(drop=True)
 
 
-def calendar_curve(ev: pd.DataFrame, close: pd.DataFrame, cost_bps: float):
+def calendar_curve(ev: pd.DataFrame, close: pd.DataFrame, cost_bps: float,
+                   min_held: int = 1):
     """캘린더타임 곡선. 날짜 t의 수익률 = 그날 보유 중인 포지션의 동일가중 평균.
 
-    보유 종목이 0이면 현금(0%). 자리·현금 제약 없음 — 학계 표준형이고 동시에
-    `bench_curve`와 같은 자로 잰 값이라 직접 비교된다.
+    보유 종목이 `min_held` 미만이면 현금(0%). 기본값 1 = 자리 제약 없음(학계
+    표준형)이고 동시에 `bench_curve`와 같은 자로 잰 값이라 직접 비교된다.
+    2 이상은 바구니가 얇은 날의 한 종목 잡음을 곡선에서 빼려는 쪽이 쓴다.
 
     왕복 비용은 진입에 전액 문다. 포지션이 평균에 들어오는 첫날(진입 다음날)에
     걸며, 그날 자본의 1/보유수만 그 종목에 들어가 있으므로 비용도 그만큼 나뉜다.
@@ -193,7 +195,7 @@ def calendar_curve(ev: pd.DataFrame, close: pd.DataFrame, cost_bps: float):
         held[a + 1:b + 1, col[tk]] += 1.0     # 진입일 종가에 샀으므로 수익은 다음날부터
         cost[a + 1] += cost_bps / 1e4
     n_held = held.sum(axis=1)
-    on = n_held > 0
+    on = n_held >= min_held
     port = np.zeros(n_days)
     port[on] = ((held * ret).sum(axis=1)[on] - cost[on]) / n_held[on]
     return pd.Series(port, index=close.index), float(on.mean())
@@ -201,16 +203,16 @@ def calendar_curve(ev: pd.DataFrame, close: pd.DataFrame, cost_bps: float):
 
 # ---------------------------------------------------------------- 통계
 
-def _block_idx(n: int, rng) -> np.ndarray:
+def _block_idx(n: int, rng, block: int = BLOCK) -> np.ndarray:
     """길이 n을 block 단위로 재표본한 인덱스 (N_BOOT, n).
 
     `stat_validation.block_bootstrap_sharpe_ci`와 같은 재표본 방식이지만 그 함수는
     통계량이 Sharpe로 박혀 있다. 여기 필요한 건 초과 CAGR과 단면 평균이라
     재표본만 6줄로 따로 둔다.
     """
-    nb = int(np.ceil(n / BLOCK))
+    nb = int(np.ceil(n / block))
     starts = rng.integers(0, n, size=(N_BOOT, nb))
-    return ((starts[:, :, None] + np.arange(BLOCK)) % n).reshape(N_BOOT, -1)[:, :n]
+    return ((starts[:, :, None] + np.arange(block)) % n).reshape(N_BOOT, -1)[:, :n]
 
 
 def date_block_t(values: np.ndarray, dates: np.ndarray) -> tuple:
