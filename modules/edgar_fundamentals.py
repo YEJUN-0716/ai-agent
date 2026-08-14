@@ -41,6 +41,12 @@ TAG_CHAINS = {
 }
 _INCOME_COLS = ["revenue", "operating_income", "net_income",
                 "operating_cash_flow", "capex"]
+# 현금흐름표는 10-Q에 **누적(YTD)** 으로 실린다 — Q2는 6개월치, Q3는 9개월치다.
+# 분기 필터(80~100일)에 걸리는 건 Q1뿐이라 그대로 쓰면 AAPL 영업현금흐름이
+# 20년에 18행(연 1행)으로 줄어 TTM이 성립하지 않는다. 이 둘만 _ytd_quarters로
+# 같은 회계연도끼리 차분해 분기값을 만든다.
+YTD_TAGS = ("operating_cash_flow", "capex")
+YTD_MAX_DAYS = 380
 SHARES_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding",
                "WeightedAverageNumberOfSharesOutstandingBasic"]
 # 자본총계 — ROE = net_income_TTM / equity 계산용. instant(시점) 팩트라
@@ -176,10 +182,15 @@ def _dedup_earliest(facts: list, key) -> list:
 
 def _derive_q4(quarters: list, annuals: list) -> list:
     """
-    연간 팩트마다 그 안에 든 분기가 정확히 3개이고 Q4가 없으면
+    연간 팩트마다 그 안에 든 분기가 정확히 3개이면
     Q4 = 연간 - (3개 분기 합)으로 유도한다.
     Q4.start = 셋 중 가장 늦은 end, Q4.end = 연간 end, Q4.filed = 연간 filed.
-    3개가 아니거나 Q4가 이미 있으면 유도하지 않는다 (추측 금지).
+    3개가 아니면 유도하지 않는다 (추측 금지).
+
+    Q4가 3개월 팩트로 이미 있어도 그게 **연간보다 늦게** 공시됐으면 유도한다.
+    CAT의 2024 4분기가 그렇다 — 10-K(2025-02-14)에 연간만 실리고 그 분기 팩트는
+    14개월 뒤 비교표시 8-K(2026-03-26)에 처음 나온다. 그대로 두면 2025년 내내
+    TTM에 구멍이 난다. 두 후보 중 무엇을 쓸지는 _assemble_tag가 최초 공시로 고른다.
     """
     tol = timedelta(days=CONTAINMENT_TOL_DAYS)
     derived = []
@@ -189,9 +200,11 @@ def _derive_q4(quarters: list, annuals: list) -> list:
         inside = [q for q in quarters
                   if date.fromisoformat(q["start"]) >= As - tol
                   and date.fromisoformat(q["end"]) <= Ae + tol]
-        if any(abs((date.fromisoformat(q["end"]) - Ae).days) <= CONTAINMENT_TOL_DAYS
-               for q in inside):
-            continue  # Q4 이미 존재
+        is_q4 = lambda q: abs((date.fromisoformat(q["end"]) - Ae).days) <= CONTAINMENT_TOL_DAYS
+        existing = [q for q in inside if is_q4(q)]
+        if existing and min(q["filed"] for q in existing) <= a["filed"]:
+            continue  # Q4가 이미 같거나 더 이르게 공시돼 있다 — 보고된 값을 쓴다
+        inside = [q for q in inside if not is_q4(q)]
         if len(inside) == 3:
             q4_start = max(date.fromisoformat(q["end"]) for q in inside)
             derived.append({
@@ -205,7 +218,14 @@ def _derive_q4(quarters: list, annuals: list) -> list:
 
 
 def _assemble_tag(us_gaap: dict, tag_chain: list) -> dict:
-    """한 손익 태그를 {end_str: (filed_str, val)}로 조립. 분기 + 유도 Q4."""
+    """한 손익 태그를 {end_str: (filed_str, val)}로 조립. 분기 + 유도 Q4.
+
+    같은 분기말이 두 번 나오면 **최초 공시**를 남긴다. _dedup_earliest는 (start,end)
+    기준이라 유도 Q4에는 성립하지 않는다 — 다음 해 10-K가 비교표시로 같은 연도를
+    다시 싣고 그 start가 하루 어긋나면 Q4가 한 번 더 유도되고 filed가 **1년 뒤**로
+    밀린다(CAT의 2024-12-31 분기가 filed 2026-03-26으로 찍혀 2025년 내내 TTM에
+    구멍이 났다). 시점 데이터에서는 최초 공시가 사실이다.
+    """
     raw = _facts_for_chain(us_gaap, tag_chain, "USD")
     if not raw:
         return {}
@@ -214,8 +234,43 @@ def _assemble_tag(us_gaap: dict, tag_chain: list) -> dict:
     allq = _derive_q4(quarters, annuals)
     out = {}
     for f in sorted(allq, key=lambda f: f["filed"]):
-        out[f["end"]] = (f["filed"], float(f["val"]))  # dedup으로 end는 이미 유일
+        out.setdefault(f["end"], (f["filed"], float(f["val"])))
     return out
+
+
+def _ytd_quarters(us_gaap: dict, tag_chain: list) -> dict:
+    """누적 공시 태그 → {end_str: (filed_str, 그 분기 값)}. 현금흐름표 전용.
+
+    같은 회계연도(start가 같은 것)끼리 모아 앞 누적을 뺀다. 10-K의 연간 팩트도
+    start가 같으므로 같은 그룹에 들어가 Q4 = FY − Q3누적으로 저절로 떨어진다.
+    """
+    raw = [f for f in _facts_for_chain(us_gaap, tag_chain, "USD")
+           if 0 < _duration_days(f) <= YTD_MAX_DAYS]
+    facts = _dedup_earliest(raw, key=lambda f: (f["start"], f["end"]))
+    by_year = {}
+    for f in facts:
+        by_year.setdefault(f["start"], []).append(f)
+    out = {}
+    for start, group in by_year.items():
+        group.sort(key=lambda f: f["end"])
+        prev_end, prev_val = date.fromisoformat(start), 0.0
+        for f in group:
+            end = date.fromisoformat(f["end"])
+            # 앞 누적이 빠진 자리에서 빼면 두 분기 합이 한 분기로 잡힌다.
+            # 직전 것과 90일 간격일 때만 분기로 인정한다.
+            if QUARTER_MIN_DAYS <= (end - prev_end).days <= QUARTER_MAX_DAYS:
+                got = (f["filed"], float(f["val"]) - prev_val)
+                if f["end"] not in out or got[0] < out[f["end"]][0]:
+                    out[f["end"]] = got
+            prev_end, prev_val = end, float(f["val"])
+    return out
+
+
+def _assemble_metric(us_gaap: dict, name: str) -> dict:
+    """지표 하나를 {end_str: (filed_str, val)}로. 현금흐름은 누적 차분 경로를 탄다."""
+    chain = TAG_CHAINS[name]
+    return (_ytd_quarters(us_gaap, chain) if name in YTD_TAGS
+            else _assemble_tag(us_gaap, chain))
 
 
 def assemble_income(us_gaap: dict) -> pd.DataFrame:
@@ -223,9 +278,12 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
     us-gaap → 분기 손익·현금흐름 DataFrame
     (index=filed, cols=[revenue, operating_income, net_income, operating_cash_flow, capex]).
     같은 분기의 태그들은 같은 공시(filed)에서 오므로 end 기준으로 정렬한다.
-    현금흐름 태그도 duration 팩트라 손익과 동일한 분기+Q4유도 기계를 통과한다.
+    현금흐름 태그는 누적(YTD) 공시라 _ytd_quarters로 따로 조립한다.
+
+    행의 filed는 그 분기 태그들의 **가장 늦은** 공시일이다. 마지막 조각이 나오기
+    전에는 그 행 전체를 알 수 없다 — min을 쓰면 look-ahead다.
     """
-    cols = {name: _assemble_tag(us_gaap, chain) for name, chain in TAG_CHAINS.items()}
+    cols = {name: _assemble_metric(us_gaap, name) for name in TAG_CHAINS}
     ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
     if not ends:
         return pd.DataFrame()
@@ -233,7 +291,7 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
     rows = []
     for end in ends:
         fileds = [cols[n][end][0] for n in cols if end in cols[n]]
-        row = {"filed": pd.Timestamp(min(fileds))}
+        row = {"filed": pd.Timestamp(max(fileds))}
         for n in cols:
             row[n] = cols[n][end][1] if end in cols[n] else np.nan
         rows.append(row)

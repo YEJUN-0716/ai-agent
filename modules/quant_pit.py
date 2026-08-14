@@ -54,8 +54,8 @@ from modules import edgar_fundamentals as ef  # noqa: E402
 # TTM 을 내는 손익·현금흐름 태그. 넷 다 있어야 한 분기로 센다 — 하나가 비면
 # 그 분기의 FCF 나 순이익률이 조용히 다른 분기 값과 섞인다.
 TTM_TAGS = ("revenue", "net_income", "operating_cash_flow", "capex")
-# 현금흐름표는 누적(YTD)으로 실린다 — _ytd_quarters 로 따로 조립한다.
-YTD_TAGS = ("operating_cash_flow", "capex")
+# 현금흐름표는 누적(YTD)으로 실린다 — ef._ytd_quarters 로 따로 조립한다.
+YTD_TAGS = ef.YTD_TAGS
 # 이 둘이 없으면 그 분기는 없는 것으로 친다. 현금흐름은 빠질 수 있다 —
 # ADP 처럼 CapEx 를 `PaymentsToAcquireOtherPropertyPlantAndEquipment` 로 내는
 # 발행사가 279종목 중 70개 가까이 되고, 태그를 새로 모으는 건 이번 범위 밖이다
@@ -75,13 +75,6 @@ WEIGHT_SUM = 0.80
 # 항목 안쪽 비율도 현행 그대로 두고 남은 것만 재정규화한다.
 PER_W, PBR_W = 0.35, 0.25          # ÷ 0.60  (PEG·EV/EBITDA 제외)
 ROE_W, PM_W = 0.40, 0.30           # ÷ 0.70  (ROA 제외)
-
-
-# 현금흐름표는 10-Q 에 **누적(YTD)** 으로 실린다 — Q2 는 6개월치, Q3 는 9개월치다.
-# edgar_fundamentals 의 분기 필터(80~100일)에 걸리는 건 Q1 뿐이라, 그대로 쓰면
-# AAPL 의 영업현금흐름이 20년에 18행(연 1행)으로 줄고 TTM 이 성립하지 않는다.
-# 같은 회계연도(start 가 같은 것)끼리 모아 앞 누적을 빼서 분기값을 만든다.
-YTD_MAX_DAYS = 380
 
 
 # 발행사마다 같은 줄을 다른 태그로 낸다 — GS 는 매출이 `Revenues` 가 아니라
@@ -108,27 +101,6 @@ def _chain(name: str) -> list:
     return list(ef.TAG_CHAINS[name]) + EXTRA_TAGS.get(name, [])
 
 
-def _assemble_earliest(us_gaap: dict, tag_chain: list) -> dict:
-    """`ef._assemble_tag` 과 같은 조립인데 같은 분기말이 두 번 나오면 **최초 공시**를 남긴다.
-
-    `_assemble_tag` 은 filed 오름차순으로 덮어써서 마지막 것이 남는다 (주석의
-    "dedup 으로 end 는 이미 유일" 은 유도 Q4 에는 성립하지 않는다). 다음 해
-    10-K 가 비교표시로 같은 연도를 다시 싣고 그 start 가 하루 어긋나면 Q4 가
-    한 번 더 유도되고, 그 행의 filed 가 **1년 뒤**로 밀린다.
-    CAT 의 2024-12-31 분기가 실제로 그랬다 — filed 가 2026-03-26 으로 찍혀
-    2025년 내내 TTM 에 구멍이 났다. 시점 측정에서는 최초 공시가 사실이다.
-    """
-    raw = ef._facts_for_chain(us_gaap, tag_chain, "USD")
-    if not raw:
-        return {}
-    quarters = ef._dedup_earliest(ef._quarter_facts(raw), key=lambda f: (f["start"], f["end"]))
-    annuals = ef._dedup_earliest(ef._annual_facts(raw), key=lambda f: (f["start"], f["end"]))
-    out = {}
-    for f in sorted(ef._derive_q4(quarters, annuals), key=lambda f: f["filed"]):
-        out.setdefault(f["end"], (f["filed"], float(f["val"])))
-    return out
-
-
 def _best_series(us_gaap: dict, name: str) -> dict:
     """대체 목록 중 **최근 분기를 가장 많이 채우는 태그 하나**로 조립한다.
 
@@ -144,37 +116,12 @@ def _best_series(us_gaap: dict, name: str) -> dict:
     for tag in _chain(name):
         if tag not in us_gaap:
             continue
-        d = (_ytd_quarters(us_gaap, [tag]) if name in YTD_TAGS
-             else _assemble_earliest(us_gaap, [tag]))
+        d = (ef._ytd_quarters(us_gaap, [tag]) if name in YTD_TAGS
+             else ef._assemble_tag(us_gaap, [tag]))
         n = sum(1 for end in d if end >= TAG_PICK_SINCE)
         if n > best_n:
             best, best_n = d, n
     return best
-
-
-def _ytd_quarters(us_gaap: dict, tag_chain: list) -> dict:
-    """누적 공시 태그 → {end: (filed, 그 분기 값)}. 현금흐름표 전용."""
-    raw = [f for f in ef._facts_for_chain(us_gaap, tag_chain, "USD")
-           if 0 < ef._duration_days(f) <= YTD_MAX_DAYS]
-    facts = ef._dedup_earliest(raw, key=lambda f: (f["start"], f["end"]))
-    by_year = {}
-    for f in facts:
-        by_year.setdefault(f["start"], []).append(f)
-    out = {}
-    for start, group in by_year.items():
-        group.sort(key=lambda f: f["end"])
-        prev_end, prev_val = pd.Timestamp(start), 0.0
-        for f in group:
-            end = pd.Timestamp(f["end"])
-            # 앞 누적이 빠진 자리에서 빼면 두 분기 합이 한 분기로 잡힌다.
-            # 직전 것과 90일 간격일 때만 분기로 인정한다.
-            if ef.QUARTER_MIN_DAYS <= (end - prev_end).days <= ef.QUARTER_MAX_DAYS:
-                got = (f["filed"], float(f["val"]) - prev_val)
-                # 같은 분기말이 두 번 나오면 최초 공시 — _assemble_earliest 와 같은 이유.
-                if f["end"] not in out or got[0] < out[f["end"]][0]:
-                    out[f["end"]] = got
-            prev_end, prev_val = end, float(f["val"])
-    return out
 
 
 def quarterly(us_gaap: dict) -> pd.DataFrame:
