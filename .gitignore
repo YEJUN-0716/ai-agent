@@ -40,6 +40,15 @@ data/*
 # 페이퍼 체결 슬리피지 실측(3a.5). 장중 호가·체결은 지나가면 다시 못 만든다 —
 # scalp_returns 와 같은 부류다. 여러 날 덧붙여 표본을 쌓는다.
 !data/paper_slippage.jsonl
+# 소형주 유니버스 — 생존자 편향 없는 패널의 유일한 재료다.
+# 스냅샷은 웨이백에 있는 남의 물건이라 다시 못 받을 수 있다(이번 실행에서도
+# 70개 중 1개를 못 받았다). 재료(snapshots)와 그걸 편 상장 구간표
+# (listing_spans), 그리고 결과 패널을 남긴다 — 러너마다 다시 만들게 두면
+# 이 유니버스로 잰 측정이 실행할 때마다 달라진다.
+!data/smallcap/
+data/smallcap/prices/
+!data/smallcap_universe.parquet
+!data/smallcap_universe_report.json
 .pytest_cache/
 
 # 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다
