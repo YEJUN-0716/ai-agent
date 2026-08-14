@@ -15,6 +15,7 @@ from assistant.config import Settings
 from tools import (
     assistant_notes,
     obsidian_search,
+    obsidian_write,
     stock_reader,
     study_materials,
     study_reader,
@@ -72,7 +73,12 @@ SYSTEM_PROMPT = """당신은 사장님의 개인 업무 비서입니다. 한국�
 - search_notes(검색)와 read_note(읽기)는 **공짜입니다.** 이 PC의 파일을 읽을 뿐입니다.
   사장님이 예전에 적어둔 것이나 정리해 둔 자료의 내용은 여기서 먼저 찾으십시오.
   비용이 드는 ask_material은 볼트에서 못 찾았을 때만 씁니다.
-- 노트는 읽기만 합니다. 고치거나 지우는 권한은 없습니다.
+- **쓸 수 있는 곳은 볼트의 `비서` 폴더 하나뿐입니다.** create_note로 새 노트를
+  만들고, append_note로 그 폴더의 노트 맨 뒤에 덧붙일 수 있습니다.
+- **다른 폴더의 노트는 읽기만 합니다.** 사장님이 직접 쓴 노트와 '학업' 정리는
+  고치거나 지울 수 없습니다. 그렇게 해달라고 하셔도 불가능하다고 말하십시오.
+- 이미 있는 내용을 지우고 다시 쓰는 것도 불가능합니다 — 덧붙이기만 됩니다.
+- 노트를 쓰면 무엇을 어디에 썼는지 경로와 함께 보고합니다.
 - 검색해서 안 나오면 "볼트에 없다"고 말합니다. 노트에 없는 내용을 지어내지 마십시오.
 - 답할 때 어느 노트에서 봤는지 노트 제목을 함께 알려주십시오.
 """
@@ -326,6 +332,37 @@ class Brain:
                 return f"읽지 못했습니다: {exc}"
 
         @beta_tool
+        def create_note(name: str, text: str) -> str:
+            """볼트의 '비서' 폴더에 새 노트를 만든다.
+
+            같은 이름이 이미 있으면 거절된다 — 덮어쓰지 않는다.
+
+            Args:
+                name: 노트 이름(제목). 파일 이름이 된다.
+                text: 노트 본문. 마크다운을 쓸 수 있다.
+            """
+            try:
+                return str(obsidian_write.create_note(settings, name, text))
+            except obsidian_write.WriteError as exc:
+                return f"만들지 못했습니다: {exc}"
+
+        @beta_tool
+        def append_note(note_path: str, text: str, heading: str = "") -> str:
+            """'비서' 폴더의 노트 맨 뒤에 덧붙인다. 위의 내용은 그대로 남는다.
+
+            Args:
+                note_path: search_notes가 알려준 노트 경로.
+                text: 덧붙일 내용.
+                heading: 덧붙이는 덩어리의 소제목. 비우면 날짜만 붙는다.
+            """
+            try:
+                return str(
+                    obsidian_write.append_note(settings, note_path, text, heading)
+                )
+            except obsidian_write.WriteError as exc:
+                return f"덧붙이지 못했습니다: {exc}"
+
+        @beta_tool
         def request_trade(
             side: str, symbol: str, amount_krw: float = 0, qty: int = 0
         ) -> str:
@@ -375,6 +412,8 @@ class Brain:
             ask_material,
             search_notes,
             read_note,
+            create_note,
+            append_note,
             request_trade,
             list_pending_requests,
         ]

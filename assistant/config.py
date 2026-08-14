@@ -26,8 +26,12 @@ STUDY_INBOX_NAME = "자료넣는곳"
 
 # 자료넣는곳 안의 이 폴더는 '이미 정리한 것'이다. 새 자료를 훑을 때 건너뛴다.
 STUDY_DONE_NAME = "처리완료"
-# 볼트 안에서 비서가 노트를 쓰는 유일한 폴더. 사장님의 다른 노트는 건드리지 않는다.
+# 볼트 안에서 학업 자료 정리가 쌓이는 폴더.
 STUDY_NOTES_NAME = "학업"
+
+# 비서가 사장님 지시로 노트를 쓰는 폴더. 볼트 안에서 쓰기가 허용된 유일한 곳이다.
+# 사고가 나도 이 폴더 하나만 보면 되도록 가둬 둔다.
+ASSISTANT_NOTES_NAME = "비서"
 
 
 class ConfigError(RuntimeError):
@@ -75,6 +79,11 @@ class Settings:
     @property
     def study_notes_dir(self) -> Path:
         return self.obsidian_vault / STUDY_NOTES_NAME
+
+    @property
+    def assistant_notes_dir(self) -> Path:
+        """비서가 노트를 쓸 수 있는 유일한 폴더."""
+        return self.obsidian_vault / ASSISTANT_NOTES_NAME
 
     @property
     def materials_path(self) -> Path:
