@@ -374,3 +374,40 @@ def test_tie_on_recent_quarters_keeps_longer_history():
     got = ef._assemble_metric(ug, "net_income")
     assert {v for _, v in got.values()} == {1.0}
     assert min(got) < "2010-01-01"
+
+
+def _ifact(end, val, filed):
+    """시점(instant) 팩트 — start가 없다."""
+    return {"end": end, "val": val, "filed": filed, "form": "10-Q"}
+
+
+def _bs_ug(primary, secondary):
+    return {"StockholdersEquity": {"units": {"USD": primary}},
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest":
+                {"units": {"USD": secondary}}}
+
+
+def test_instant_tag_priority_beats_quarter_count():
+    """대차대조표는 분기 수로 안 고른다 — 지배주주 자본이 최근에 있으면 그걸 쓴다."""
+    ug = _bs_ug([_ifact(f"202{y}-03-31", 10, f"202{y}-05-01") for y in (4, 5, 6)],
+                [_ifact(f"20{y}-03-31", 99, f"20{y}-05-01") for y in range(10, 26)])
+    got = ef._assemble_instant(ug, ef.EQUITY_TAGS)
+    assert {v for _, v in got.values()} == {10}, "분기 수가 많다고 소수주주지분 포함으로 넘어가면 안 된다"
+
+
+def test_instant_tag_falls_back_when_primary_is_stale():
+    """지배주주 자본이 옛날에 끊긴 종목은 소수주주지분 포함으로 떨어진다."""
+    ug = _bs_ug([_ifact("2012-03-31", 10, "2012-05-01")],
+                [_ifact(f"202{y}-03-31", 99, f"202{y}-05-01") for y in (4, 5, 6)])
+    got = ef._assemble_instant(ug, ef.EQUITY_TAGS)
+    assert {v for _, v in got.values()} == {99}
+
+
+def test_assemble_balance_row_filed_is_latest_piece():
+    """한 시점의 항목들이 다른 날 공시되면 행의 filed는 마지막 조각이다(min은 look-ahead)."""
+    ug = {"Assets": {"units": {"USD": [_ifact("2024-03-31", 100, "2024-05-01")]}},
+          "AssetsCurrent": {"units": {"USD": [_ifact("2024-03-31", 40, "2024-06-15")]}}}
+    bal = ef.assemble_balance(ug)
+    assert list(bal.index) == [pd.Timestamp("2024-06-15")]
+    assert bal["assets"].iloc[0] == 100 and bal["current_assets"].iloc[0] == 40
+    assert bal["equity"].isna().all()

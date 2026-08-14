@@ -38,6 +38,13 @@ TAG_CHAINS = {
     # 설비투자(CapEx) — 지출이라 양수로 보고됨 → FCF에서 차감
     "capex":            ["PaymentsToAcquirePropertyPlantAndEquipment",
                          "PaymentsForCapitalImprovements"],
+    # 아래 셋은 안전성·F-Score 재료다. assemble_income 에는 안 들어간다 —
+    # 열은 _INCOME_COLS 가 정한다. 필요한 쪽이 _assemble_metric 으로 직접 부른다.
+    "interest_expense": ["InterestExpense", "InterestExpenseNonoperating",
+                         "InterestExpenseDebt", "InterestIncomeExpenseNet"],
+    "cost_of_revenue":  ["CostOfGoodsAndServicesSold", "CostOfRevenue",
+                         "CostOfGoodsSold", "CostOfServices"],
+    "gross_profit":     ["GrossProfit"],
 }
 _INCOME_COLS = ["revenue", "operating_income", "net_income",
                 "operating_cash_flow", "capex"]
@@ -76,9 +83,27 @@ YTD_MAX_DAYS = 380
 SHARES_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding",
                "WeightedAverageNumberOfSharesOutstandingBasic"]
 # 자본총계 — ROE = net_income_TTM / equity 계산용. instant(시점) 팩트라
-# duration 필터에 안 걸리므로 별도 조립기(assemble_equity)를 쓴다.
+# duration 필터에 안 걸리므로 별도 조립기(_assemble_instant)를 쓴다.
 EQUITY_TAGS = ["StockholdersEquity",
                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+
+# 대차대조표(instant) 재료 — 안전성(D/E·유동비율)·F-Score(ROA·레버리지·유동성).
+# **여기서는 분기 수로 고르지 않는다. 목록 순서가 정의 우선순위다.**
+# 자본총계를 손익처럼 분기 수로 고르면 두 태그를 다 내는 230종목 중 152종목이
+# 소수주주지분 포함 태그로 넘어간다(실측). ROE 분자는 지배주주 순이익이라
+# 분모만 바뀌면 그건 커버리지가 아니라 어긋남이다. 손익 쪽 ALT_TAGS 와 규칙이
+# 다른 이유는 거기엔 우선순위가 없기 때문이다 — GS 는 `Revenues` 자체가 없다.
+BALANCE_TAGS = {
+    "equity":              EQUITY_TAGS,
+    "assets":              ["Assets"],
+    "current_assets":      ["AssetsCurrent"],
+    "current_liabilities": ["LiabilitiesCurrent"],
+    "long_term_debt":      ["LongTermDebtNoncurrent", "LongTermDebt",
+                            "LongTermDebtAndCapitalLeaseObligations"],
+    "short_term_debt":     ["DebtCurrent", "ShortTermBorrowings",
+                            "LongTermDebtCurrent", "OtherShortTermBorrowings"],
+}
+_BALANCE_COLS = list(BALANCE_TAGS)
 
 # company_tickers.json이 잘못된 CIK를 주는 종목의 수동 교정.
 # XOM은 2115436(수수료신고 ffd만)이 아니라 34088(us-gaap 438태그)이다.
@@ -320,7 +345,7 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
     행의 filed는 그 분기 태그들의 **가장 늦은** 공시일이다. 마지막 조각이 나오기
     전에는 그 행 전체를 알 수 없다 — min을 쓰면 look-ahead다.
     """
-    cols = {name: _assemble_metric(us_gaap, name) for name in TAG_CHAINS}
+    cols = {name: _assemble_metric(us_gaap, name) for name in _INCOME_COLS}
     ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
     if not ends:
         return pd.DataFrame()
@@ -342,20 +367,58 @@ def _instant_facts(raw: list) -> list:
     return [f for f in raw if "start" not in f and "end" in f]
 
 
+def _assemble_instant(us_gaap: dict, tags: list) -> dict:
+    """시점 팩트를 {end_str: (filed_str, val)}로. **목록 순서가 정의 우선순위다.**
+
+    최근(TAG_PICK_SINCE 이후) 값이 있는 **첫** 태그를 쓴다. 하나도 없으면 값이
+    있는 첫 태그로 떨어진다. 태그를 합치지 않는 이유는 손익과 같다 — 지배주주
+    자본과 소수주주지분 포함 자본이 한 이력 안에서 섞이면 없는 증자가 보인다.
+    """
+    fallback = {}
+    for t in tags:
+        instants = _dedup_earliest(_instant_facts(_facts_for_chain(us_gaap, [t], "USD")),
+                                   key=lambda f: f["end"])
+        d = {f["end"]: (f["filed"], float(f["val"])) for f in instants}
+        if any(e >= TAG_PICK_SINCE for e in d):
+            return d
+        fallback = fallback or d
+    return fallback
+
+
 def assemble_equity(us_gaap: dict) -> pd.Series:
     """
     us-gaap → 자본총계 Series (index=filed). 대차대조표는 instant 팩트라
     duration 필터가 아니라 _instant_facts로 뽑고, 같은 시점(end)은 최초 공시만 남긴다.
     filed 인덱스라 <= as_of 필터로 look-ahead 없이 소비할 수 있다.
     """
-    raw = _facts_for_chain(us_gaap, EQUITY_TAGS, "USD")
-    instants = _dedup_earliest(_instant_facts(raw), key=lambda f: f["end"])
-    if not instants:
+    d = _assemble_instant(us_gaap, EQUITY_TAGS)
+    if not d:
         return pd.Series(dtype=float)
     data = {}
-    for f in sorted(instants, key=lambda f: f["filed"]):
-        data[pd.Timestamp(f["filed"])] = float(f["val"])
+    for filed, val in sorted(d.values()):
+        data[pd.Timestamp(filed)] = val
     return pd.Series(data).sort_index()
+
+
+def assemble_balance(us_gaap: dict) -> pd.DataFrame:
+    """
+    us-gaap → 대차대조표 DataFrame (index=filed, cols=_BALANCE_COLS).
+    행은 같은 시점(end)끼리 묶고, 행의 filed 는 그 시점 항목들의 **가장 늦은**
+    공시일이다 — assemble_income 과 같은 이유로 min 은 look-ahead 다.
+    """
+    cols = {n: _assemble_instant(us_gaap, tags) for n, tags in BALANCE_TAGS.items()}
+    ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
+    if not ends:
+        return pd.DataFrame()
+
+    rows = []
+    for end in ends:
+        have = [n for n in cols if end in cols[n]]
+        row = {"filed": pd.Timestamp(max(cols[n][end][0] for n in have))}
+        row.update({n: (cols[n][end][1] if end in cols[n] else np.nan) for n in cols})
+        rows.append(row)
+    return (pd.DataFrame(rows).set_index("filed").sort_index()[_BALANCE_COLS]
+            .dropna(how="all"))
 
 
 def assemble_shares(us_gaap: dict) -> pd.Series:
@@ -385,7 +448,7 @@ def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None)
     """
     global _last_coverage
     result, failed = {}, []
-    metric_hit = {m: 0 for m in TAG_CHAINS}
+    metric_hit = {m: 0 for m in _INCOME_COLS}
 
     for tk in tickers:
         ug = load_raw(tk)
@@ -398,7 +461,7 @@ def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None)
         if df.empty:
             failed.append(tk)
         else:
-            for m in TAG_CHAINS:
+            for m in _INCOME_COLS:
                 if m in df.columns and df[m].notna().any():
                     metric_hit[m] += 1
 
