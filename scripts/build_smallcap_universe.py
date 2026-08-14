@@ -299,6 +299,7 @@ def build(force=()):
     spans_by_ticker = dict(tuple(spans.groupby("ticker", sort=False)))
 
     caps, last_bar, panel_end, n_rows = [], {}, pd.Timestamp.min, 0
+    n_recycled = 0
     for path in shard_paths:
         if not os.path.exists(path):
             continue
@@ -317,6 +318,9 @@ def build(force=()):
             continue
 
         closes = su.slice_closes(closes_by_ticker, part_spans)
+        # 재활용 티커의 이전 주인은 다른 회사의 봉이다 — 시가총액도 그만큼 틀린다.
+        closes, dropped_recycled = su.drop_recycled_predecessors(closes, part_spans)
+        n_recycled += len(dropped_recycled)
         shares = {row.listing_id: by_cik[row.cik]
                   for row in part_spans.itertuples(index=False)
                   if row.cik in by_cik}
@@ -340,7 +344,8 @@ def build(force=()):
         "shares":   {**s_rep, "listings_with_shares": int(len(spans)),
                      "lag_days": SHARES_LAG_DAYS},
         "prices":   {"rows": int(n_rows), "listings": int(len(last_bar)),
-                     "panel_end": str(panel_end.date())},
+                     "panel_end": str(panel_end.date()),
+                     "dropped_recycled_predecessors": int(n_recycled)},
         # 모집단(pool)이 곧 이 유니버스의 천장이다. 순위 1,001~3,000 을 뽑는데
         # 시총을 잴 수 있는 종목이 3,500개뿐이면, 그건 '소형주'가 아니라
         # '잴 수 있었던 것 중 아래쪽'이다. 하한 시총을 같이 적어 그걸 드러낸다.

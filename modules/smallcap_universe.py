@@ -129,6 +129,40 @@ def slice_closes(closes_by_ticker: dict, spans: pd.DataFrame) -> dict:
     return out
 
 
+# 재활용 티커의 **이전 주인**은 봉을 못 구한다 — 2026-08-14 실측으로 알게 된 것.
+#
+# 파산한 `886158:BBBY` 의 2023-04 종가가 $19 로 나왔다. 그때 진짜 BBBY 는 $0.25 고,
+# $19 는 2025년에 그 티커를 물려받은 회사(1130713)의 값이다. 시세 제공자는 심볼로
+# **현재 주인의 연속 이력**을 주므로, 상장 구간으로 자르면 꼬리만 잘리고 **몸통이
+# 남는다** — 죽은 회사 자리에 산 회사의 수익률·시가총액이 앉는다.
+#
+# 가려내는 자: 이전 주인인데 마지막 봉이 마지막 목격일보다 이만큼 뒤면 그 계열은
+# 다음 주인 것이다(스냅샷 간격이 한 달 남짓이라 진짜 상폐면 목격일 근처에서 끝난다).
+LATE_BAR_TOL_DAYS = 90
+
+
+def drop_recycled_predecessors(closes: dict, spans: pd.DataFrame,
+                               tol_days: int = LATE_BAR_TOL_DAYS) -> tuple:
+    """{listing_id: 종가} → (남은 것, 뺀 listing_id 목록).
+
+    **자르지 않고 통째로 뺀다.** 어디까지가 누구 것인지 못 가르는 계열은 반만 쓸
+    수도 없다. 그만큼 죽은 종목이 덜 들어가고 그건 낙관 쪽 편향이다 — 못 구하는
+    데이터를 있는 척하는 것보다는 낫지만, 공짜는 아니다.
+    """
+    if spans.empty:
+        return dict(closes), []
+    last_owner = set(spans.sort_values("first_seen").groupby("ticker").tail(1)["listing_id"])
+    seen_last = spans.drop_duplicates("listing_id").set_index("listing_id")["last_seen"]
+    out, dropped = {}, []
+    for lid, s in closes.items():
+        if (lid not in last_owner and lid in seen_last.index and len(s)
+                and (s.index[-1] - seen_last[lid]).days > tol_days):
+            dropped.append(lid)
+            continue
+        out[lid] = s
+    return out, dropped
+
+
 # ── 시점 시가총액 ──────────────────────────────────────────────────────
 def _asof(series: pd.Series, when: pd.Timestamp, max_stale_days: int):
     """`when` 이전 마지막 값. 그 값이 너무 오래되면 None (모르는 것으로 친다)."""

@@ -62,7 +62,12 @@ LATE_BAR_TOL_DAYS = 90
 # 유니버스 첫 기준일이 2017-08-31 이고 2차 행이 2017-09-01 부터다. 그보다 앞은
 # 이 측정이 쓰지 않는다 — 미조정가 패널(2016~)과 시작이 다른 건 그래서다.
 START_DATE = pd.Timestamp("2017-01-01")
-BATCH      = 100
+
+# 배치를 **티커 자신의 해시**로 가른다. 목록을 앞에서부터 100개씩 자르면 티커가
+# 하나만 늘거나 줄어도 그 뒤 모든 배치의 경계가 밀리고, 샤드 이름이 내용 해시라
+# **전부 다시 받게 된다** (유니버스를 다시 지은 날 40분을 그렇게 썼다).
+# 버킷 수를 고정해 두면 바뀐 티커가 든 버킷만 새 이름이 된다.
+N_BUCKETS  = 64      # 5,456 티커 기준 버킷당 85개 — Alpaca 배치 한도 안
 
 # 이만큼도 안 남으면 멈춘다. 12GB 짜리 수급 도중에 디스크가 차면 반쯤 쓰인
 # JSON 이 캐시로 남아 다음 실행이 그걸 재사용한다.
@@ -73,24 +78,34 @@ def _free_gb() -> float:
     return shutil.disk_usage(os.path.abspath(os.sep)).free / 1e9
 
 
+def _bucketed(tickers) -> dict:
+    """{버킷 번호: [티커...]} — 티커 자신의 해시로 가른 고정 배치."""
+    out = {}
+    for t in tickers:
+        b = int(hashlib.sha1(t.encode()).hexdigest(), 16) % N_BUCKETS
+        out.setdefault(b, []).append(t)
+    return {b: sorted(v) for b, v in sorted(out.items())}
+
+
 # ── 1. 조정 일봉 ───────────────────────────────────────────────────────
 def step_prices(force: bool = False) -> str:
     u = pd.read_parquet(UNIVERSE)
     spans = pd.read_parquet(SPANS)
     tickers = sorted(u["ticker"].unique())
     keep = set(u["asset_id"].unique())
+    wanted = set(u["ticker"].unique())
     _say(f"조정 일봉 — 티커 {len(tickers)} · 상장 이력 {len(keep)}")
 
     os.makedirs(SHARD_DIR, exist_ok=True)
     end = datetime.now(timezone.utc) - timedelta(days=1)   # 무료 SIP 는 최근을 안 준다
-    batches = [tickers[i:i + BATCH] for i in range(0, len(tickers), BATCH)]
+    batches = _bucketed(tickers)
 
     paths = []
-    for n, batch in enumerate(batches, 1):
-        # 샤드 이름은 배치 내용의 해시다. 번호로 두면 티커가 하나만 늘어도
-        # 경계가 밀려 다른 묶음이 조용히 재사용된다 (미조정 수급에서 겪었다).
-        key = hashlib.sha1(",".join(batch).encode()).hexdigest()[:16]
-        shard = os.path.join(SHARD_DIR, f"{key}.parquet")
+    for n, (bucket, batch) in enumerate(batches.items(), 1):
+        # 이름 = 버킷 번호 + **그 버킷 내용의 해시**. 해시를 빼면 티커가 바뀐 버킷을
+        # 조용히 재사용하고, 번호를 빼면 위 주석의 40분이 다시 온다. 둘 다 필요하다.
+        key = hashlib.sha1(",".join(batch).encode()).hexdigest()[:12]
+        shard = os.path.join(SHARD_DIR, f"{bucket:02d}-{key}.parquet")
         paths.append(shard)
         if os.path.exists(shard) and not force:
             continue
@@ -122,7 +137,10 @@ def step_prices(force: bool = False) -> str:
             continue
         sliced = su.slice_closes(closes_by_ticker, pd.concat(part, ignore_index=True))
         for aid, s in sliced.items():
-            if aid not in keep or len(s) == 0:
+            # 샤드에는 예전 유니버스에서 받아둔 티커가 남아 있을 수 있다. 지금
+            # 목록에 없는 건 안 쓴다 — 캐시가 있고 없고에 따라 패널이 갈리면
+            # 같은 코드로 같은 패널이 안 나온다.
+            if aid not in keep or len(s) == 0 or aid.partition(":")[2] not in wanted:
                 continue
             if (aid not in last_owner
                     and (s.index[-1] - seen_last[aid]).days > LATE_BAR_TOL_DAYS):

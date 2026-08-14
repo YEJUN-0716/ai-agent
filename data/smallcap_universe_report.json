@@ -1,5 +1,5 @@
 {
-  "built_at": "2026-08-14T11:32:45.595934+00:00",
+  "built_at": "2026-08-14T14:40:26.889609+00:00",
   "spans": {
     "listings": 31996,
     "tickers": 30523,
@@ -15,20 +15,21 @@
   },
   "prices": {
     "rows": 16455301,
-    "listings": 12351,
-    "panel_end": "2026-08-13"
+    "listings": 12213,
+    "panel_end": "2026-08-13",
+    "dropped_recycled_predecessors": 138
   },
   "pool": {
-    "median_per_date": 4886.5,
-    "min_per_date": 4205
+    "median_per_date": 4885.0,
+    "min_per_date": 4154
   },
   "universe": {
     "rows": 216000,
     "dates": 108,
-    "listings": 5558,
+    "listings": 5539,
     "median_members": 2000.0,
-    "mktcap_floor_median": 432843456.5738268,
-    "mktcap_median": 1638574422.0745049
+    "mktcap_floor_median": 428510241.5686059,
+    "mktcap_median": 1617408256.9721203
   },
   "selftest": {
     "passed": true,
@@ -38,14 +39,14 @@
       "rank_matches_mktcap": true
     },
     "delistings_by_year": {
-      "2017": 185,
-      "2018": 305,
-      "2019": 281,
-      "2020": 363,
-      "2021": 398,
-      "2022": 325,
-      "2023": 339,
-      "2024": 364
+      "2017": 186,
+      "2018": 310,
+      "2019": 277,
+      "2020": 352,
+      "2021": 388,
+      "2022": 309,
+      "2023": 328,
+      "2024": 360
     }
   }
 }
