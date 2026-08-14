@@ -51,6 +51,7 @@ quant_pit ②는 95% 구간이 20%p 폭이라 **결과를 보기 전에 이미 "
 """
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import os
@@ -314,17 +315,23 @@ def smallcap_events(names) -> pd.DataFrame:
     companyfacts 를 파싱하는 데 십수 분이 걸리므로 본구간·전구간·봉인이 같은
     파일을 읽는다. 캐시를 지우면 그대로 다시 만든다.
     """
-    if EVENTS_CACHE.exists():
+    all_names = sorted(pd.read_parquet(SMALLCAP_UNIVERSE)["asset_id"].unique())
+    # 캐시 이름이 아니라 **내용으로** 유효성을 판단한다. 유니버스를 다시 지으면
+    # 종목이 바뀌는데, 그때 캐시가 그대로 살아 있으면 **다른 자로 잰 점수**를
+    # 조용히 재사용한다 (일봉 샤드를 순번으로 이름 붙였다가 같은 사고를 냈다).
+    key = hashlib.sha1("\n".join(all_names).encode()).hexdigest()[:16]
+    stats = (json.loads(EVENTS_STATS.read_text(encoding="utf-8"))
+             if EVENTS_STATS.exists() else {})
+    if EVENTS_CACHE.exists() and stats.get("universe_key") == key:
         ev = pd.read_parquet(EVENTS_CACHE)
-        if EVENTS_STATS.exists():
-            STATS.update(json.loads(EVENTS_STATS.read_text(encoding="utf-8")))
+        STATS.update({k: v for k, v in stats.items() if k in STATS})
     else:
-        all_names = sorted(pd.read_parquet(SMALLCAP_UNIVERSE)["asset_id"].unique())
         ev = build_events(all_names[:LIMIT or None])
         if not LIMIT:            # 연기 테스트 결과를 캐시로 남기지 않는다
             ev.to_parquet(EVENTS_CACHE, index=False)
-            EVENTS_STATS.write_text(json.dumps({**STATS, "names": len(all_names)},
-                                               ensure_ascii=False), encoding="utf-8")
+            EVENTS_STATS.write_text(
+                json.dumps({**STATS, "names": len(all_names), "universe_key": key},
+                           ensure_ascii=False), encoding="utf-8")
     return ev.loc[ev["ticker"].isin(set(names))].reset_index(drop=True)
 
 
