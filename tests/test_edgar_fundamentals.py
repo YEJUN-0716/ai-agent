@@ -143,6 +143,23 @@ def test_no_derive_when_q4_already_present():
     assert len(q4) == 1 and q4[0]["val"] == 4   # 원본 유지, 유도 안 함
 
 
+def test_derive_when_reported_q4_arrives_later(monkeypatch):
+    """Q4 3개월 팩트가 연간보다 **늦게** 공시되면 유도해서 그 자리를 메운다 (CAT 2024Q4).
+
+    10-K는 2025-02-14에 나왔는데 그 분기 팩트는 14개월 뒤 비교표시 8-K에 처음 실린다.
+    그대로 두면 2025년 내내 TTM에 구멍이 난다.
+    """
+    ug = {"Revenues": {"units": {"USD": [
+        _fact("2020-01-01", "2020-03-31", 1, "2020-05-01"),
+        _fact("2020-04-01", "2020-06-30", 2, "2020-08-01"),
+        _fact("2020-07-01", "2020-09-30", 3, "2020-11-01"),
+        _fact("2020-01-01", "2020-12-31", 10, "2021-02-01", form="10-K"),
+        _fact("2020-10-01", "2020-12-31", 4, "2022-04-01", form="8-K"),  # 14개월 뒤
+    ]}}}
+    d = ef._assemble_tag(ug, ["Revenues"])
+    assert d["2020-12-31"] == ("2021-02-01", 4.0)   # 유도값, 10-K 공시일
+
+
 def test_no_derive_when_quarter_missing():
     """Q1~Q3 중 하나라도 없으면 Q4를 만들지 않는다 — 추측 금지."""
     quarters = [
@@ -181,6 +198,61 @@ def test_assemble_income_contract():
     assert df.index.is_monotonic_increasing
     # net_income TTM = 1+2+3+4(유도) = 10
     assert df["net_income"].sum() == 0 + 1 + 2 + 3 + (10 - 6)
+
+
+def test_ytd_cash_flow_becomes_four_quarters():
+    """현금흐름표는 누적으로 실린다 — 같은 회계연도끼리 차분해 4분기가 나와야 한다.
+
+    분기 필터만 쓰면 Q1(90일) 하나만 걸려서 연 1행이 된다(AAPL 20년에 18행).
+    """
+    ug = {"NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+        _fact("2020-01-01", "2020-03-31", 10, "2020-05-01"),   # Q1 누적 = 10
+        _fact("2020-01-01", "2020-06-30", 30, "2020-08-01"),   # 반기 누적 → Q2 = 20
+        _fact("2020-01-01", "2020-09-30", 60, "2020-11-01"),   # 3분기 누적 → Q3 = 30
+        _fact("2020-01-01", "2020-12-31", 100, "2021-02-01", form="10-K"),  # FY → Q4 = 40
+    ]}}}
+    d = ef._ytd_quarters(ug, ["NetCashProvidedByUsedInOperatingActivities"])
+    assert [d[k][1] for k in sorted(d)] == [10, 20, 30, 40]
+    assert d["2020-12-31"][0] == "2021-02-01"   # Q4는 10-K 공시일에 알려진다
+
+
+def test_ytd_skips_quarter_when_previous_missing():
+    """앞 누적이 없으면 두 분기 합을 한 분기로 잡지 않는다 — 그 자리는 비운다."""
+    ug = {"NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+        _fact("2020-01-01", "2020-03-31", 10, "2020-05-01"),
+        _fact("2020-01-01", "2020-09-30", 60, "2020-11-01"),   # 반기 누적 결측
+    ]}}}
+    d = ef._ytd_quarters(ug, ["NetCashProvidedByUsedInOperatingActivities"])
+    assert sorted(d) == ["2020-03-31"]
+
+
+def test_derived_q4_keeps_earliest_filed():
+    """이듬해 10-K가 비교표시로 같은 분기를 다시 실어도 filed는 최초 공시로 남는다.
+
+    CAT 2024-12-31이 filed 2026-03-26으로 밀려 2025년 내내 TTM에 구멍이 났던 자리다.
+    """
+    ug = {"NetIncomeLoss": {"units": {"USD": [
+        _fact("2020-01-01", "2020-03-31", 1, "2020-05-01"),
+        _fact("2020-04-01", "2020-06-30", 2, "2020-08-01"),
+        _fact("2020-07-01", "2020-09-30", 3, "2020-11-01"),
+        _fact("2020-01-01", "2020-12-31", 10, "2021-02-01", form="10-K"),
+        # 이듬해 10-K의 비교표시 — start가 하루 어긋나 Q4가 한 번 더 유도된다
+        _fact("2019-12-30", "2020-12-31", 10, "2022-02-01", form="10-K"),
+    ]}}}
+    d = ef._assemble_tag(ug, ["NetIncomeLoss"])
+    assert d["2020-12-31"] == ("2021-02-01", 4.0)
+
+
+def test_row_filed_is_latest_piece():
+    """행의 filed는 그 분기 태그들의 가장 늦은 공시일 — min을 쓰면 look-ahead다."""
+    ug = {
+        "NetIncomeLoss": {"units": {"USD": [
+            _fact("2020-01-01", "2020-03-31", 1, "2020-05-01")]}},
+        "OperatingIncomeLoss": {"units": {"USD": [
+            _fact("2020-01-01", "2020-03-31", 2, "2020-05-20")]}},  # 늦게 나온 조각
+    }
+    df = ef.assemble_income(ug)
+    assert df.index[0] == pd.Timestamp("2020-05-20")
 
 
 def test_assemble_shares_no_q4_derivation():
