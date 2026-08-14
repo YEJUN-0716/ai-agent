@@ -30,6 +30,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -58,6 +59,20 @@ REPORT    = "data/smallcap_panel_report.json"
 # 목격일 근처에서 끝난다). 그런 열은 자르지 않고 **통째로 뺀다** — 어디까지가
 # 누구 것인지 못 가르는 계열은 반만 쓸 수도 없다.
 LATE_BAR_TOL_DAYS = 90
+
+# 조정 종가는 **조정 사고 이전까지만** 쓸 수 있다 — 2026-08-15 실측으로 알게 된 것.
+#
+#   874499:GPOR  0.138 · 0.138 · **72.95** · 68.01 …
+#   910612:CBL   0.062 · 0.062 · **20.88** · 21.40 …
+#
+# 파산·감자·역분할을 지난 종목은 그 이전 구간이 **바닥에 눌린 평평한 그루터기**로
+# 남고, 사고 당일 하루에 300~3,000배가 뛴다. 시총 $275M 이상인 종목이 하루에
+# 10배 오르는 일은 없다 — 저건 가격이 아니라 조정 계수가 반쯤 발린 자국이다.
+# 한 봉이 통째로 **0.0** 인 경우도 있었다(`1517130:PME`).
+#
+# 그래서 **마지막 불연속 뒤부터만** 쓴다. 그 앞은 이 종목의 가격 이력이 아니다.
+# 캘린더 곡선은 동일가중이라 이런 봉 하나가 그날 바구니 수익을 통째로 결정한다.
+MAX_DAY_MOVE = 10.0
 
 # 유니버스 첫 기준일이 2017-08-31 이고 2차 행이 2017-09-01 부터다. 그보다 앞은
 # 이 측정이 쓰지 않는다 — 미조정가 패널(2016~)과 시작이 다른 건 그래서다.
@@ -123,7 +138,7 @@ def step_prices(force: bool = False) -> str:
     spans_by_ticker = dict(tuple(spans.groupby("ticker", sort=False)))
     last_owner = set(spans.sort_values("first_seen").groupby("ticker").tail(1)["listing_id"])
     seen_last = spans.set_index("listing_id")["last_seen"]
-    longs, dropped = [], []
+    longs, dropped, cut = [], [], []
     for path in paths:
         if not os.path.exists(path):
             continue
@@ -146,6 +161,16 @@ def step_prices(force: bool = False) -> str:
                     and (s.index[-1] - seen_last[aid]).days > LATE_BAR_TOL_DAYS):
                 dropped.append(aid)          # 다음 주인의 이력이다 — 위 주석
                 continue
+            s = s[s > 0]                     # 0.0 은 가격이 아니다
+            if len(s) < 2:
+                continue
+            jump = np.flatnonzero(np.abs(np.diff(np.log(s.to_numpy(float))))
+                                  > np.log(MAX_DAY_MOVE))
+            if len(jump):                    # 마지막 조정 사고 뒤부터만 쓴다
+                s = s.iloc[jump[-1] + 1:]
+                cut.append(aid)
+            if len(s) == 0:
+                continue
             longs.append(pd.DataFrame({"asset_id": aid, "date": s.index,
                                        "close": s.to_numpy()}))
 
@@ -162,10 +187,12 @@ def step_prices(force: bool = False) -> str:
                    "start": str(wide.index.min().date()),
                    "end": str(wide.index.max().date()),
                    "adjustment": "all",
-                   "dropped_recycled": sorted(dropped)}, f, ensure_ascii=False, indent=2)
+                   "dropped_recycled": sorted(dropped),
+                   "cut_at_adjustment_jump": sorted(cut)}, f, ensure_ascii=False, indent=2)
     _say(f"패널 {PANEL} — {wide.shape[0]}일 × {wide.shape[1]}종목 "
          f"({wide.index.min().date()} ~ {wide.index.max().date()}) · "
-         f"재활용 티커 이전 주인 {len(dropped)}종목 제외")
+         f"재활용 티커 이전 주인 {len(dropped)}종목 제외 · "
+         f"조정 사고로 앞구간을 자른 종목 {len(cut)}")
     return PANEL
 
 
