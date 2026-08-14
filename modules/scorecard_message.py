@@ -41,6 +41,18 @@ def _slug_name(slug):
     return SLUG_NAMES.get(slug, slug)
 
 
+def _publishable(slugs):
+    """발행할 슬러그만 — 이름을 아는 것들.
+
+    성적표는 `score_analysts` 가 **기록에서 찾아낸** 슬러그를 그대로 돈다.
+    측정용 슬러그(`quant_pit`)를 백필에 채우면 그날 밤 성적표가 판정 전의
+    측정 결과를 그대로 채널에 내보낸다 — 사전 등록의 봉인이 발행으로 새는
+    자리다. 이름을 아는 슬러그만 낸다. 새 애널리스트를 실제로 붙일 때는
+    SLUG_NAMES 에 이름을 넣는 것이 그 발행 스위치가 된다.
+    """
+    return [s for s in sorted(slugs) if s in SLUG_NAMES]
+
+
 def _missing_slug_lines(missing_slugs):
     """종합 점수에서 빠진 슬러그 공개 문구 — 조용히 빼지 않는다.
 
@@ -68,7 +80,7 @@ def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
     """
     lines = [f"📊 {horizon}일 지평 성적표", ""]
 
-    for slug in sorted(stats):
+    for slug in _publishable(stats):
         s = stats[slug]
         effective_n = float(s.get("effective_n") or 0)
         lines.append(f"*{_slug_name(slug)}*")
@@ -114,7 +126,7 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs,
     tie_notes = tie_notes or {}
     lines = [f"🧬 {date_str} 예측 기록 (국면: {regime})", ""]
 
-    for slug in sorted(top_by_slug):
+    for slug in _publishable(top_by_slug):
         entries = top_by_slug[slug]
         if not entries:
             continue

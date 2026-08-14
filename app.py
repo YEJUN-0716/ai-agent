@@ -1093,6 +1093,16 @@ def _score_roa(v):
     elif r < 15: return 85
     else:        return 95
 
+def _score_profit_margin(v):
+    """순이익률 점수 (소수 입력 — yfinance profitMargins 와 같은 단위).
+
+    fundamental_score 안에 인라인으로 있던 사다리를 꺼냈다. modules/quant_pit.py
+    가 같은 문턱을 써야 하는데, 복사하면 언젠가 갈라지고 그러면 '재료만 바꾼
+    측정'이라는 말이 성립하지 않는다."""
+    if v is None or np.isnan(v): return 50
+    pp = v * 100
+    return 10 if pp<0 else (40 if pp<5 else (60 if pp<10 else (80 if pp<20 else 90)))
+
 def _score_int_coverage(v):
     if v is None or np.isnan(v): return 50
     if v > 15:   return 95
@@ -1250,10 +1260,8 @@ def fundamental_score(ticker, df=None):
                     pass
             if pm is None and _dd.get('margin') is not None:
                 pm = _dd['margin'] / 100  # DART는 영업이익률 — 순이익률 미제공이라 근사치로만 사용
-        pm_s = 50
-        if pm is not None:   # 0.0도 의미 있는 값 — if pm: 쓰면 0% 기업이 중립 처리됨
-            pp = pm*100
-            pm_s = 10 if pp<0 else (40 if pp<5 else (60 if pp<10 else (80 if pp<20 else 90)))
+        # 0.0도 의미 있는 값 — if pm: 쓰면 0% 기업이 중립 처리됨
+        pm_s = _score_profit_margin(pm) if pm is not None else 50
         det['수익성'] = _score_roe(roe)*0.4 + _score_roa(roa)*0.3 + pm_s*0.3
         det['ROE'] = roe; det['ROA'] = roa; det['순이익률'] = pm
 
