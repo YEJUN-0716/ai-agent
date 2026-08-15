@@ -71,6 +71,7 @@ from modules import quant_pit as qp  # noqa: E402
 from scripts.measure_pead import (  # noqa: E402
     N_BOOT, _block_idx, attach_trades, calendar_curve, excess_cagr_ci,
     rank_percentile,
+    MDE_LIMIT_PP, mde_pp,
 )
 from scripts import measure_portfolio as mp  # noqa: E402  — PANEL 을 갈아끼운다
 from scripts.measure_portfolio import (  # noqa: E402
@@ -123,8 +124,7 @@ IC_BLOCK = 12          # 12 x 21일 = 252일. 겹치는 선행 구간을 블록�
 SEED = 20260814
 BLOCK = 20             # 캘린더타임 곡선의 날짜 블록 (measure_pead 와 같은 값)
 
-# 검출력 하한 — 설계서 3.2. **결과를 보기 전에 박은 값이다.**
-MDE_LIMIT_PP = 10.0    # 연 %p
+# 유효성 가드 — **결과를 보기 전에 박은 값이다.**
 MIN_HELD = 3           # 이만큼 못 채운 날은 현금
 MIN_AVG_POSITIONS = 5.0
 
@@ -428,14 +428,19 @@ def block_t(values: np.ndarray, block: int) -> tuple:
 
 # ---------------------------------------------------------------- 검출력
 
-def mde_pp(flat_ret: np.ndarray) -> float:
-    """최소검출가능효과(연 %p) — **매수보유 줄만으로** 낸다.
+def mde_baseline_pp(flat_ret: np.ndarray) -> float:
+    """기준선 줄만으로 낸 MDE(연 %p) — **참고값이다. 게이트도 하한도 아니다.**
 
-    ②의 통과선은 초과 연수익의 부트스트랩 95% 하한이므로, 검출 가능한 최소 효과는
-    그 추정량의 표준오차 × 1.96 이다. 전략을 보기 전에 낼 수 있게 초과 계열의
-    변동성을 **기준선 자신의 변동성으로 대신** 놓는다. 전략이 기준선보다 얌전할
-    수는 없으므로 이 값은 실제 MDE 의 **하한**이다 — 이것만으로 이미 한계를
-    넘으면 판정할 힘이 없는 게 확실하다는 뜻이고, 그게 이 가드가 필요한 방향이다.
+    초과 계열의 변동성 자리에 기준선 자신의 변동성을 넣은 값이다. 주변 분포가 같을 때
+    `Var(초과) = 2σ²(1−ρ)` 이고 이 값은 `σ` 를 재므로, 실제 MDE 와 같아지는 **경계는
+    ρ=0.5** 다. ρ<0.5(전략과 기준선이 갈라짐)면 실제가 더 크고, ρ>0.5(붙음)면 실제가
+    더 작다 — **양방향으로 틀리므로 하한으로 읽으면 안 된다.** 같은 파일 `selftest()`
+    의 8b 가 양쪽을 다 못 박아 뒀다.
+
+    두 번 다 틀렸다. 2026-08-14 F-Score 대형주는 이 값(9.29)으로 게이트를 통과시켰는데
+    실제 반폭은 11.94 였고(작게 틀림), 소형주는 18.70 을 찍었는데 실제는 16.49 였다
+    (크게 틀림). 그래서 **게이트는 `measure_pead.mde_pp` 로 옮겼고** 이 함수는 리포트의
+    참고 줄로만 남는다 (설계서 3절).
     """
     idx = _block_idx(len(flat_ret), np.random.default_rng(SEED), BLOCK)
     boot = np.expm1(np.log1p(flat_ret)[idx].mean(axis=1) * 252) * 100
@@ -544,11 +549,22 @@ def selftest() -> int:
     for _, g in sh.groupby(sh["filed"].dt.to_period("M")):
         assert sorted(g["fscore"]) == sorted(ev.loc[g.index, "fscore"]), "달 안 분포가 변했다"
 
-    # 8) MDE 는 길이·변동성이 커질수록 커진다. 방향만 확인한다.
+    # 8) 기준선 참고값은 길이·변동성이 커질수록 커진다. 방향만 확인한다.
     rng = np.random.default_rng(0)
     quiet = rng.normal(0, 0.005, 1000)
     loud = rng.normal(0, 0.020, 1000)
-    assert mde_pp(loud) > mde_pp(quiet) > 0
+    assert mde_baseline_pp(loud) > mde_baseline_pp(quiet) > 0
+
+    # 8b) **게이트는 하한이 아니라 실측이다.** 갈라진 두 줄의 MDE 가 기준선 줄만으로
+    #     낸 하한보다 커야 하고, 붙은 두 줄은 그보다 작아야 한다 — 2026-08-15 롱숏에서
+    #     이 부등호를 반대로 알고 있었다가 게이트가 3.5배 빗나갔다.
+    #     주변 분포가 같으면 Var(초과) = 2σ²(1−ρ) 이고 하한은 σ 를 재므로 **경계는 ρ=0.5**
+    #     다. 경계에서는 잡음 씨앗에 따라 부등호가 갈리니 양쪽으로 떼어놓고 잰다.
+    #     위약이 두 다리를 붙여놓으면 MDE 가 작게 나온다는 이 저장소의 결론이 곧 오른쪽
+    #     부등호다.
+    split = rng.normal(0, 0.005, 1000)                                        # ρ=0   — 갈라진 두 줄
+    tight = 0.9 * quiet + np.sqrt(1 - 0.9 ** 2) * rng.normal(0, 0.005, 1000)  # ρ=0.9 — 위약처럼 붙은 두 줄
+    assert mde_pp(split, quiet) > mde_baseline_pp(quiet) > mde_pp(tight, quiet)
 
     # 9) **상폐 거래가 안 사라진다** (소형주 설계서 5.2). 보유 중에 값이 끊기는
     #    종목을 넣어, 그 거래가 버려지지 않고 마지막 거래일 종가로 청산되는지.
@@ -631,8 +647,12 @@ def main() -> int:
     port, exposure = calendar_curve(top, close, COST_BPS, MIN_HELD)
     flat_ret = bench_ret * exposure
 
-    # **MDE 를 전략 결과보다 먼저 낸다** (설계서 3.2). 매수보유 줄만으로 나온다.
-    mde = mde_pp(flat_ret)
+    # **MDE 를 점추정보다 먼저 낸다.** 실제 두 줄로 재되 `mde_pp` 가 반폭만
+    # 반환하므로 여기서 효과의 크기도 부호도 알 수 없다 — 판정을 보고 게이트를
+    # 고를 방법이 구조적으로 없다 (2026-08-16 설계서 1절). 아래 `excess_cagr_ci`
+    # 호출은 이 두 줄 **다음에** 온다.
+    mde = mde_pp(port.values, flat_ret)
+    mde_base = mde_baseline_pp(flat_ret)    # 참고 — 기준선 줄만. 하한이 아니다(경계 ρ=0.5)
     underpowered = mde > MDE_LIMIT_PP or avg_pos < MIN_AVG_POSITIONS
 
     pt, lo, hi = excess_cagr_ci(port.values, flat_ret)
@@ -723,7 +743,7 @@ def main() -> int:
     ] if (SMALLCAP and np.isfinite(t_ic)) else []) + ([
         "### 상폐가 어디로 들어왔나 — 재기 전에 막아둔 자리 (설계서 5.1·5.2)",
         "",
-        f"- **벤치마크는 매월 동일가중 리밸런스**다. 그달 구성종목을 동일가중으로 들고,",
+        "- **벤치마크는 매월 동일가중 리밸런스**다. 그달 구성종목을 동일가중으로 들고,",
         "  상폐 종목은 마지막 거래일 종가에 청산해 다음 리밸런스에서 재분배한다. 예전"
         " 한 줄(`시작·종료일에 둘 다 값이 있는 종목만`)을 그대로 썼으면 기준선이",
         "  **\"안 죽은 것만 산 줄\"** 이 됐다.",
@@ -755,29 +775,32 @@ def main() -> int:
         f"21일 IC({ic_stats[21][1]:+.4f}) · BM 스크린 없는 F>={SCORE_AT} 바구니 · 위약보다 나쁜 전략 줄.",
         "",
     ] if (pass1 and m_ic < 0) else []) + [
-        "## 검출력 — 전략을 보기 전에 낸 값 (설계서 3.2)",
+        "## 검출력 — 판정을 보기 전에 낸 값 (2026-08-16 설계서 1절)",
         "",
         "| | 값 | 한계 | |",
         "|---|---|---|---|",
-        f"| MDE (연 %p, 하한) | {mde:.2f} | <= {MDE_LIMIT_PP:.0f} | "
+        f"| **MDE (연 %p, 실제 두 줄)** | **{mde:.2f}** | <= {MDE_LIMIT_PP:.0f} | "
         f"{'X' if mde > MDE_LIMIT_PP else 'O'} |",
+        f"| MDE 참고 (기준선 줄만) | {mde_base:.2f} | 참고 | |",
         f"| 평균 자리 수 (전 구간) | {avg_pos:.2f} | >= {MIN_AVG_POSITIONS:.0f} | "
         f"{'X' if avg_pos < MIN_AVG_POSITIONS else 'O'} |",
         f"| 보유일 평균 자리 수 | {float(n_held[n_held > 0].mean()) if (n_held > 0).any() else float('nan'):.2f}"
         " | 참고 | |",
         "",
-        "MDE 는 **매수보유 줄만으로** 낸다 — 초과 연수익 추정량의 부트스트랩 표준오차 × 1.96 이고,",
-        "초과 계열의 변동성 자리에 기준선 자신의 변동성을 넣었으므로 **실제 MDE 의 하한**이다.",
-        "quant_pit ②는 95% 구간이 20%p 폭이라 결과를 보기 전에 이미 결론이 정해져 있었다.",
-        "이 표를 먼저 내는 건 그 자를 또 쓰지 않기 위해서다."
+        "MDE 는 **실제 두 줄의 초과 연수익 95% 구간 반폭**이다. `mde_pp` 는 반폭만 반환하고",
+        "점추정을 반환하지 않으므로, 이 값을 내는 동안 효과의 크기도 부호도 안 보인다.",
+        "둘째 줄(기준선 줄만으로 낸 참고값)은 2026-08-16 이전에 게이트로 쓰던 값이다 — 대형주에서는",
+        "9.29 를 찍어 통과시켰는데 실제는 11.94 였고(작게), 소형주에서는 18.70 인데 실제는 16.49 였다",
+        "(크게). **양방향으로 틀리므로 하한이 아니다** (설계서 3절)."
         if not underpowered else
         "**이 측정은 ②를 판정할 힘이 없다.** 통과도 실패도 아니라 미측정으로 적는다 — "
         "재기 전에 정한 규칙이고, 결과를 보고 만든 변명이 아니다.",
         "",
     ] + ([
         f"**사전 등록이 여기서 틀렸다.** 설계서 5.3 은 \"유효 종목 1,800 은 대형주 192 의 9배다."
-        f" ②의 검출력은 여기서 온다\" 고 적었는데, 실측 MDE 는 대형주 9.29 → **{mde:.2f}** 로",
-        "오히려 두 배 나빠졌다. MDE 는 **기준선의 변동성**이 정하지 종목 수가 정하는 게 아니다 —"
+        f" ②의 검출력은 여기서 온다\" 고 적었는데, 실측 MDE 는 대형주 11.94 → **{mde:.2f}** 로",
+        "오히려 더 나빠졌다(둘 다 **실제 두 줄**로 잰 값이다). MDE 는 **기준선의 변동성**이",
+        "정하지 종목 수가 정하는 게 아니다 —"
         " 소형주 동일가중 지수는 대형주보다 훨씬 거칠다.",
         "종목을 아홉 배로 늘려도 그 거칠기를 못 이긴다. **다음 사전 등록은 표본 수가 아니라"
         " 기준선 변동성으로 검출력을 미리 계산해야 한다.**",
@@ -890,7 +913,7 @@ def main() -> int:
         "  종가가 $19 로 나왔다 — 그때 진짜 BBBY 는 $0.25 였다). 죽은 회사의 봉을 구할 방법이"
         " 없어 통째로 뺐고, **그만큼 상폐가 덜 들어 있다(낙관 쪽)**. 유니버스의 시가총액도 같은",
         "  봉으로 만들어졌으므로 그 영향은 남아 있다.",
-        f"- **2차 행은 따로 낸다** — 전구간(2017-09~) `2026-08-14-fscore-smallcap-full.md`."
+        "- **2차 행은 따로 낸다** — 전구간(2017-09~) `2026-08-14-fscore-smallcap-full.md`."
         if not FULL else
         "- **이 문서가 2차 행이다.** 판정 행은 본구간 `2026-08-14-fscore-smallcap.md` 다.",
     ] if SMALLCAP else [

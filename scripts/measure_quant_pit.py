@@ -54,7 +54,7 @@ from modules.trade_plan import build_trade_plan  # noqa: E402
 from scripts.measure_entry_rule import (  # noqa: E402
     COOLDOWN, FILL_WINDOW, MIN_LEN, _gap_adjust, _sim,
 )
-from scripts.measure_pead import _block_idx, excess_cagr_ci  # noqa: E402
+from scripts.measure_pead import MDE_LIMIT_PP, _block_idx, excess_cagr_ci  # noqa: E402
 from scripts.measure_portfolio import (  # noqa: E402
     MAX_POSITIONS, bench_curve, cagr, closes, mdd, simulate,
 )
@@ -399,8 +399,14 @@ def main() -> int:
         f"{'O' if pass1 else 'X'} |",
         f"| ② 매매 | 총괄 판정 방향 러너 − 현행 러너 | 초과 연수익 95% 하한 > 0 | "
         f"{pt:+.2f}%p · 95% [{lo:+.2f}, {hi:+.2f}] | {'O' if pass2 else 'X'} |",
+        f"| ② 검출력 | 이 설계가 잴 수 있는 최소 효과 (구간 반폭) | "
+        f"참고 — 게이트 {MDE_LIMIT_PP:.0f}%p | MDE {(hi - lo) / 2.0:.2f}%p | "
+        f"{'O' if (hi - lo) / 2.0 <= MDE_LIMIT_PP else 'X'} |",
         "",
         "**하나만 통과하면 실패다.** ①만 보고 이 저장소는 다섯 번 속았다.",
+        "",
+        "> **검출력 줄은 판정에 안 들어간다** (2026-08-16 설계서 5절). 게이트를 넘으면 ②는",
+        "> \"실패\"가 아니라 **\"미측정\"** 으로 읽는다.",
         "",
         "## 세 줄 + 매수보유",
         "",
