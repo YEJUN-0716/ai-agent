@@ -224,6 +224,12 @@ def run(now: date | None = None) -> dict:
     if (not state["pending"] and meta.get("last_deposit_month") == month
             and meta.get("last_report_month") != month):
         msg = build_report(state, fx, prices)
+        if DRY_RUN:
+            # 드라이런은 주문을 안 내므로 pending 이 비고, 그래서 적립 당일 바로 이
+            # 경로를 탄다 — 실전이라면 다음 실행 몫이다. 현금은 매수분만큼 안 줄었고
+            # 보유는 아직 0 이라, 이월·보유·평가 세 줄은 체결 전 값이다. 이 경고가
+            # 없으면 리허설 출력을 실전 결과로 읽게 된다.
+            msg += "\n※ DRY_RUN — 체결 전이라 이월·보유·평가 세 줄은 실제와 다릅니다"
         print(msg)
         if not DRY_RUN and send_tg(msg):
             meta["last_report_month"] = month

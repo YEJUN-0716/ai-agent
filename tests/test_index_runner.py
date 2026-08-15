@@ -157,3 +157,31 @@ def test_orders_never_exceed_cash(runner):
     state = vb.load_state()
     assert vb.available_krw(state) >= 0
     assert state["cash_krw"] > 0        # 이월 현금은 남아 있다
+
+
+def test_dry_run_report_admits_it_is_pre_settlement(runner, monkeypatch, capsys):
+    """드라이런 보고서는 체결 전 값이라고 스스로 밝힌다.
+
+    드라이런은 주문을 안 내므로 pending 이 비고, 그래서 적립 당일 바로 보고
+    경로를 탄다 — 실전이라면 다음 실행 몫이다. 그 출력의 이월·보유·평가는
+    매수가 반영되기 전 값이고, 경고가 없으면 리허설을 실전 결과로 읽게 된다.
+    """
+    monkeypatch.setattr(ir, "DRY_RUN", True)
+    result = runner.run(now=date(2026, 8, 3))
+
+    assert result["deposited"] and result["orders"]
+    out = capsys.readouterr().out
+    assert "[인덱스 자동운용] 2026-08 (1회차)" in out
+    assert "※ DRY_RUN — 체결 전이라 이월·보유·평가 세 줄은 실제와 다릅니다" in out
+    assert not runner.sent           # 드라이런은 발송하지 않는다
+
+
+def test_real_run_report_has_no_dry_run_warning(runner, capsys):
+    """실전 보고는 체결 뒤에 나가므로 경고를 달지 않는다."""
+    runner.run(now=date(2026, 8, 3))        # 주문만, 보고 없음
+    capsys.readouterr()
+    second = runner.run(now=date(2026, 8, 4))   # 체결 뒤 보고
+
+    assert second["reported"]
+    assert "DRY_RUN" not in capsys.readouterr().out
+    assert "DRY_RUN" not in runner.sent[0]
