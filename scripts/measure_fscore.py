@@ -70,7 +70,7 @@ from modules import edgar_fundamentals as ef  # noqa: E402
 from modules import quant_pit as qp  # noqa: E402
 from scripts.measure_pead import (  # noqa: E402
     N_BOOT, _block_idx, attach_trades, calendar_curve, excess_cagr_ci,
-    rank_percentile,
+    rank_percentile, universe_members,
     MDE_LIMIT_PP, mde_pp,
 )
 from scripts import measure_portfolio as mp  # noqa: E402  — PANEL 을 갈아끼운다
@@ -84,19 +84,40 @@ OUT_MD = Path("docs/measurements/2026-08-14-fscore.md")
 START = pd.Timestamp("2020-03-31")
 END = pd.Timestamp("2024-12-31")
 
-# 소형주 재측정 — **바꾸는 건 유니버스 하나뿐**이다.
+# 소형주·대형주 재측정 — **바꾸는 건 유니버스(대형주는 창까지)뿐**이다.
 SMALLCAP = "smallcap" in sys.argv
+LARGECAP = "largecap" in sys.argv  # 설계서 `2026-08-16-largecap-repanel-design.md`
 FULL = "full" in sys.argv          # 2차 행: 전구간. 판정 행이 아니다.
-SMALLCAP_UNIVERSE = Path("data/smallcap_universe.parquet")
-SMALLCAP_PANEL = Path("data/smallcap_panel.parquet")
+OLDWIN = "oldwin" in sys.argv      # 대형주 참고 행: 옛 창 × 새 유니버스. 판정 아님.
+# 월별 구성종목 패널을 쓰는 모드. 종목의 키가 티커가 아니라 asset_id(`"CIK:티커"`)고,
+# 벤치마크가 매월 리밸런스하며, ①이 단측이다 — 소형주와 대형주가 같은 자를 쓴다.
+PANELED = SMALLCAP or LARGECAP
+UNIVERSE_PATH = Path("data/smallcap_universe.parquet")
+PANEL_PATH = Path("data/smallcap_panel.parquet")
+PANEL_REPORT = Path("data/smallcap_panel_report.json")
 EVENTS_CACHE = Path("data/smallcap_events.parquet")
 EVENTS_STATS = Path("data/smallcap_events_stats.json")
 if SMALLCAP:
-    mp.PANEL = SMALLCAP_PANEL      # `closes` 가 읽는 자리. 값 계산은 전부 그대로다.
+    mp.PANEL = PANEL_PATH          # `closes` 가 읽는 자리. 값 계산은 전부 그대로다.
     OUT_MD = Path("docs/measurements/2026-08-14-fscore-smallcap.md")
     if FULL:
         START = pd.Timestamp("2017-09-01")
         OUT_MD = Path("docs/measurements/2026-08-14-fscore-smallcap-full.md")
+if LARGECAP:
+    UNIVERSE_PATH = Path("data/largecap_universe.parquet")
+    PANEL_PATH = Path("data/largecap_panel.parquet")
+    PANEL_REPORT = Path("data/largecap_panel_report.json")
+    EVENTS_CACHE = Path("data/largecap_events.parquet")
+    EVENTS_STATS = Path("data/largecap_events_stats.json")
+    mp.PANEL = PANEL_PATH
+    # 봉인 없음 — 2025-01~ 은 `2026-08-14-fscore-sealed.md` 로 이미 열었다(설계서 6.1).
+    START = pd.Timestamp("2017-09-01")
+    END = pd.Timestamp("2026-08-07")
+    OUT_MD = Path("docs/measurements/2026-08-16-fscore-largecap.md")
+    if OLDWIN:                     # 창과 유니버스를 분리하는 참고 행 (설계서 6.4)
+        START = pd.Timestamp("2020-03-31")
+        END = pd.Timestamp("2024-12-31")
+        OUT_MD = Path("docs/measurements/2026-08-16-fscore-largecap-oldwin.md")
 
 # 봉인 해제. 판정이 끝난 뒤 딱 한 번, 확인용으로만 연다. 갈려도 본 측정의 판정을
 # 바꾸지 않으므로 **출력 파일을 따로 쓴다**(PEAD·quant_pit 과 같은 규칙).
@@ -292,30 +313,25 @@ def build_events(tickers) -> pd.DataFrame:
     return ev.sort_values("filed", kind="stable").reset_index(drop=True)
 
 
-# ---------------------------------------------------------------- 소형주 유니버스
+# ---------------------------------------------------------------- 월별 구성종목
 
-def smallcap_members(start, end) -> pd.DataFrame:
+def panel_members(start, end) -> pd.DataFrame:
     """[date, asset_id] — 그 창의 **월별** 구성종목. 벤치마크가 이걸로 리밸런스한다.
 
-    창 시작 **직전** 기준일까지 포함한다. 안 그러면 첫 리밸런스가 올 때까지
-    기준선이 현금으로 놀고, 그만큼 넘기 쉬운 자가 된다(봉인 구간처럼 창이
-    월 중간에서 시작하면 한 달이 통째로 빈다).
+    대형주가 두 번째 사용자가 되면서 본체를 `measure_pead.universe_members` 로
+    올렸다 — 자가 두 벌로 갈리면 한쪽만 고치는 날이 온다.
     """
-    u = pd.read_parquet(SMALLCAP_UNIVERSE)
-    dates = pd.to_datetime(sorted(u["date"].unique()))
-    prior = dates[dates <= start]
-    lo = prior[-1] if len(prior) else start
-    return u.loc[(u["date"] >= lo) & (u["date"] <= end), ["date", "asset_id"]]
+    return universe_members(UNIVERSE_PATH, start, end)
 
 
-def smallcap_events(names) -> pd.DataFrame:
+def panel_events(names) -> pd.DataFrame:
     """소형주 분기 점수. **한 번 만들어 캐시하고 세 창이 나눠 쓴다.**
 
     점수는 창과 무관하다 — 창은 거래를 자를 때만 쓴다(`attach_trades`). 3,508개
     companyfacts 를 파싱하는 데 십수 분이 걸리므로 본구간·전구간·봉인이 같은
     파일을 읽는다. 캐시를 지우면 그대로 다시 만든다.
     """
-    all_names = sorted(pd.read_parquet(SMALLCAP_UNIVERSE)["asset_id"].unique())
+    all_names = sorted(pd.read_parquet(UNIVERSE_PATH)["asset_id"].unique())
     # 캐시 이름이 아니라 **내용으로** 유효성을 판단한다. 유니버스를 다시 지으면
     # 종목이 바뀌는데, 그때 캐시가 그대로 살아 있으면 **다른 자로 잰 점수**를
     # 조용히 재사용한다 (일봉 샤드를 순번으로 이름 붙였다가 같은 사고를 냈다).
@@ -602,14 +618,16 @@ def main() -> int:
     except Exception:
         pass
     close = closes(START, END)
-    if SMALLCAP:
-        # 유니버스 하나만 바꾼다. 종목의 키는 티커가 아니라 asset_id(`"CIK:티커"`)다.
-        members = smallcap_members(START, END)
+    if PANELED:
+        # 유니버스(대형주는 창까지)만 바꾼다. 종목의 키는 티커가 아니라
+        # asset_id(`"CIK:티커"`)다. `members` 를 안 주면 기준선이 "시작일과 종료일에
+        # 둘 다 값이 있는 종목만 산 줄"이 되어 생존자 편향이 벤치마크로 통째로 샌다.
+        members = panel_members(START, END)
         n_members = members["asset_id"].nunique()
         tickers = sorted(set(members["asset_id"]) & set(close.columns))[:LIMIT or None]
         close = close[tickers]
         bench = bench_curve(START, END, members=members, close=close)
-        ev_all = smallcap_events(tickers)
+        ev_all = panel_events(tickers)
     else:
         n_members = 0
         bench = bench_curve(START, END)
@@ -633,7 +651,7 @@ def main() -> int:
     # 소형주 재측정의 통과선은 **단측 t >= +2** 다. 방향이 있는 가설에는 통과선도
     # 방향이 있어야 한다 — 대형주에서 양측으로 적었다가 부호가 반대인 O 를 받은
     # 자리를 고친 것이다(소형주 설계서 2절). 대형주 판정은 그때 적은 대로 둔다.
-    pass1 = n_ic >= IC_BLOCK * 2 and (t_ic >= 2 if SMALLCAP else abs(t_ic) >= 2)
+    pass1 = n_ic >= IC_BLOCK * 2 and (t_ic >= 2 if PANELED else abs(t_ic) >= 2)
     mark1 = "△" if ic_underpowered else ("O" if pass1 else "X")
 
     # ② 포트폴리오 — 고BM 5분위 ∩ F>=7.
@@ -672,18 +690,19 @@ def main() -> int:
                else ("통과" if (pass1 and pass2) else "실패"))
     mark = "△" if underpowered else ("O" if pass2 else "X")
 
-    title = ("# F-Score" + (" 소형주" if SMALLCAP else "")
+    title = ("# F-Score" + (" 소형주" if SMALLCAP else " 대형주" if LARGECAP else "")
              + (" — 봉인 구간 확인" if SEALED else
                 " — 전구간 2차 행 (판정 아님)" if FULL else
+                " — 참고 행 (옛 창 × 새 유니버스)" if (LARGECAP and OLDWIN) else
+                " 재측정 — 자를 길게, 편향 없이 다시 만들었다" if LARGECAP else
                 " 재측정 — 유니버스 하나만 바꿨다" if SMALLCAP else
                 " (8항목 Piotroski) — 측정"))
-    ic_rule = ("날짜 블록 부트스트랩 **t >= +2** (단측)" if SMALLCAP
+    ic_rule = ("날짜 블록 부트스트랩 **t >= +2** (단측)" if PANELED
                else "날짜 블록 부트스트랩 \\|t\\| >= 2")
     n_dead = int(top["delisted"].sum()) if len(top) else 0
     n_dead_all = int(ev["delisted"].sum()) if len(ev) else 0
-    panel_rep = Path("data/smallcap_panel_report.json")
-    n_recycled = (len(json.loads(panel_rep.read_text(encoding="utf-8"))["dropped_recycled"])
-                  if (SMALLCAP and panel_rep.exists()) else 0)
+    n_recycled = (len(json.loads(PANEL_REPORT.read_text(encoding="utf-8"))["dropped_recycled"])
+                  if (PANELED and PANEL_REPORT.exists()) else 0)
 
     body = [
         title,
@@ -698,6 +717,14 @@ def main() -> int:
         "**항목·문턱·보유·분위·구간·비용은 대형주 측정과 한 글자도 안 바꿨다** — "
         "한 번에 하나만 바꿔야 차이를 유니버스에 돌릴 수 있다.",
     ] if SMALLCAP else [
+        f"유니버스: **대형주 월별 패널**(시총 순위 1~1,000위 = 러셀1000 규칙, 상장폐지 포함) — "
+        f"이 창의 구성종목 {n_members}개 중 조정 일봉이 있는 {len(tickers)}개. "
+        "종목의 키는 티커가 아니라 `\"CIK:티커\"` 다. 예전 유니버스는 **손으로 적은 현재상장 "
+        "279종목**이었고, 그 파일이 스스로 \"생존자 편향이 있다\"고 적어둔 물건이었다.",
+        "사전 등록: `docs/superpowers/specs/2026-08-16-largecap-repanel-design.md` "
+        "(항목·문턱·보유·분위·비용은 `2026-08-14-fscore-design.md` 그대로). "
+        "**바뀐 건 유니버스와 창 둘뿐이다.**",
+    ] if LARGECAP else [
         "사전 등록: `docs/superpowers/specs/2026-08-14-fscore-design.md`. "
         "**파라미터는 문헌값 고정이라 고를 게 없었고, 따라서 전 구간이 OOS**다.",
     ]) + [
@@ -719,7 +746,23 @@ def main() -> int:
         "> 사실이다 — 여기서 뭐가 나오든 본 측정의 판정을 못 건드린다.",
         "",
         f"## 봉인 구간에 같은 자를 대면: ①{mark1} ②{mark}",
-    ] if SEALED else [
+    ] if SEALED else ([
+        "> **이 문서는 판정이 아니다 — 참고 행이다.** 창과 유니버스가 같이 바뀌면 숫자가",
+        "> 움직여도 원인을 모른다. 이 행은 **옛 창에 새 유니버스만** 대서 유니버스 효과를",
+        "> 떼어낸 것이다. 판정 행은 `2026-08-16-fscore-largecap.md` 하나다(설계서 6.4).",
+        "",
+        f"## 참고: ①{mark1} ②{mark}",
+    ] if OLDWIN else [
+        "> **새 데이터로 하는 새 검정이 아니다.** 2020-03~2026-08 의 답은 이미 봤다"
+        "(`2026-08-14-fscore.md`,",
+        "> `2026-08-14-fscore-sealed.md`). 처음 보는 건 **2017-09~2020-03 의 2.6년, 창의 29%** 뿐이다.",
+        "> 이 사전 등록이 묶는 것은 데이터의 새로움이 아니라 **결정 규칙**이다.",
+        "",
+        "> **봉인 구간은 없다.** 이미 본 구간을 봉인이라 부르면 거짓말이고, 빼놓으면 선택적",
+        "> 보고다. 그래서 전부 넣었다(설계서 6.1).",
+        "",
+        f"## 판정: **{verdict}** (①{mark1} AND ②{mark})",
+    ]) if LARGECAP else [
         f"## 판정: **{verdict}** (①{mark1} AND ②{mark})",
     ]) + [
         "",
@@ -741,6 +784,16 @@ def main() -> int:
         "통과선을 못 넘은 t 는 방향을 말할 자격이 없다는 뜻이다.",
         "",
     ] if (SMALLCAP and np.isfinite(t_ic)) else []) + ([
+        "**옛 대형주 측정의 ①은 IC −0.0801 · t=−4.04 였다**(`2026-08-14-fscore.md`). 항목도"
+        " 통과선도 같은데,",
+        f"손으로 적은 현재상장 279종목을 **생존자 편향 없는 월별 1,000종목**으로 바꾸자"
+        f" {m_ic:+.4f} · t={t_ic:+.2f} 로 사라졌다.",
+        "그 −4.04 는 **신호가 아니라 유니버스가 만든 값이었을 가능성이 크다.** 창과 유니버스가"
+        " 같이 바뀌었으므로",
+        "어느 쪽인지는 참고 행(`2026-08-16-fscore-largecap-oldwin.md` — **옛 창** × 새 유니버스)이"
+        " 답한다.",
+        "",
+    ] if (LARGECAP and not OLDWIN and np.isfinite(t_ic)) else []) + ([
         "### 상폐가 어디로 들어왔나 — 재기 전에 막아둔 자리 (설계서 5.1·5.2)",
         "",
         "- **벤치마크는 매월 동일가중 리밸런스**다. 그달 구성종목을 동일가중으로 들고,",
@@ -753,7 +806,7 @@ def main() -> int:
         "- **이 청산가는 낙관 쪽으로 틀린다.** 파산 종목은 거래정지 전에 이미 흘러내리고",
         "  정리매매 가격은 더 낮다. 통과가 나오면 이 자리를 먼저 다시 봐야 한다.",
         "",
-    ] if SMALLCAP else []) + ([
+    ] if PANELED else []) + ([
         f"**①의 부호가 음(-)이고 \\|t\\|={abs(t_ic):.2f} 다.** 통과선은 단측이므로 판정은 X 지만,",
         "대형주에서 나온 음의 IC 가 소형주에서도 같은 부호로 나왔다는 건 \"신호가 없다\"와",
         "다른 이야기다 — **반대 방향의 단면 정보**다. 판정은 실패로 하고 관측은 관측대로",
@@ -917,12 +970,27 @@ def main() -> int:
         if not FULL else
         "- **이 문서가 2차 행이다.** 판정 행은 본구간 `2026-08-14-fscore-smallcap.md` 다.",
     ] if SMALLCAP else [
+        "- **2017-08 이전은 못 잰다.** 웨이백 `company_tickers.json` 첫 스냅샷이 2017-08-28 이고,",
+        "  그 전에 죽은 종목은 어느 스냅샷에도 없다. **창의 천장이라 여기서 미측정이 나오면**",
+        "  **대형주 노선은 닫힌다**(설계서 10절).",
+        "- **마이크로캡 미측정.** 시총 순위 1~1,000 위라 하한 중앙값이 $6.70B 다 — 실제 S&P 500",
+        "  하한($5~8B)과 겹친다. F-Score 효과가 가장 크다고 알려진 구간은 여기 없다.",
+        "- **월별 구성 변경을 거래에는 안 넣었다.** 벤치마크만 매월 리밸런스고, ①과 전략은 이 창에",
+        "  한 번이라도 든 종목을 정의역으로 쓴다.",
+        f"- **재활용 티커의 이전 주인 {n_recycled}종목을 패널에서 뺐다.** 시세 제공자는 심볼로",
+        "  **현재 주인의 연속 이력**을 준다. 죽은 회사의 봉을 구할 방법이 없어 통째로 뺐고,",
+        "  **그만큼 상폐가 덜 들어 있다(낙관 쪽)**.",
+        "- **참고 행은 따로 낸다** — 옛 창 × 새 유니버스 `2026-08-16-fscore-largecap-oldwin.md`."
+        if not OLDWIN else
+        "- **이 문서가 참고 행이다.** 판정 행은 `2026-08-16-fscore-largecap.md` 다.",
+    ] if LARGECAP else [
         "- **소형주 미측정.** 유니버스가 S&P 대형주라 F-Score 가 가장 안 먹힐 자리다. 실패해도",
         "  \"F-Score 가 없다\"가 아니라 **\"S&P 279종목·본 구간에서는 없다\"** 로만 적는다(설계서 3.1).",
     ]) + [
         "- **F8(매출총이익률 개선) 미사용.** `GrossProfit` 커버리지 33.0% 로 `MIN_COVERAGE`(70%)",
         "  미달이라 재기 전에 뺐다. 9항목 문헌 재현은 이 재료로는 불가능하다.",
         "- **봉인은 이 문서로 열었다. 다시 안 연다.**" if SEALED else
+        "- **봉인 없음.** 2025-01~ 은 이미 열어 발행한 구간이라 창에 그대로 넣었다." if LARGECAP else
         "- **2025-01 ~ 2026-08 은 봉인.** 판정 후 딱 한 번 연다. 갈려도 판정을 안 바꾼다.",
         "- **자리·현금 제약은 하한(3)뿐.** ②를 통과한 뒤에 붙인다 — 못 하면 붙일 이유가 없다.",
         "",
@@ -932,7 +1000,8 @@ def main() -> int:
         f"분기 점수 {len(ev_all)}건 · 거래 가능 {len(ev)}건 · 고BM ∩ F>={SCORE_AT} {len(top)}건. "
         f"부트스트랩 {N_BOOT}회 · 시드 {SEED}.",
         f"재현: `python scripts/measure_fscore.py"
-        f"{' smallcap' if SMALLCAP else ''}{' full' if FULL else ''}"
+        f"{' smallcap' if SMALLCAP else ''}{' largecap' if LARGECAP else ''}"
+        f"{' full' if FULL else ''}{' oldwin' if OLDWIN else ''}"
         f"{' sealed' if SEALED else ''}` · 산수 점검 `... selftest`",
         "",
     ]

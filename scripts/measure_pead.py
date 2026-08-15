@@ -37,6 +37,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from modules import edgar_fundamentals as ef  # noqa: E402
+from scripts import measure_portfolio as mp  # noqa: E402  — PANEL 을 갈아끼운다
 from scripts.measure_portfolio import (  # noqa: E402
     bench_curve, cagr, closes, mdd, yearly,
 )
@@ -55,6 +56,29 @@ if SEALED:
     START = pd.Timestamp("2025-01-01")
     END   = pd.Timestamp("2026-08-07")
     OUT_MD = Path("docs/measurements/2026-08-13-pead-sealed.md")
+
+# 대형주 재측정 — **바꾸는 건 유니버스와 창 둘뿐이다** (설계서
+# `2026-08-16-largecap-repanel-design.md`). 파라미터는 한 글자도 안 바꾼다.
+#
+#   python scripts/measure_pead.py largecap          # 판정 행 (8.93년)
+#   python scripts/measure_pead.py largecap oldwin   # 참고 행 (옛 창 × 새 유니버스)
+#
+# 봉인 구간을 안 둔다 — 2025-01~ 은 `2026-08-13-pead-sealed.md` 로 이미 열었다.
+# 이미 본 구간을 봉인이라 부르면 거짓말이고, 빼놓으면 선택적 보고다.
+LARGECAP = "largecap" in sys.argv
+OLDWIN   = "oldwin" in sys.argv        # 창과 유니버스를 분리하는 참고 행. 판정 아님.
+LARGECAP_UNIVERSE = Path("data/largecap_universe.parquet")
+LARGECAP_PANEL    = Path("data/largecap_panel.parquet")
+EVENTS_CACHE      = Path("data/largecap_pead_events.parquet")
+if LARGECAP:
+    mp.PANEL = LARGECAP_PANEL          # `closes` 가 읽는 자리. 값 계산은 그대로다.
+    START  = pd.Timestamp("2017-09-01")
+    END    = pd.Timestamp("2026-08-07")
+    OUT_MD = Path("docs/measurements/2026-08-16-pead-largecap.md")
+    if OLDWIN:
+        START  = pd.Timestamp("2020-03-31")
+        END    = pd.Timestamp("2024-12-31")
+        OUT_MD = Path("docs/measurements/2026-08-16-pead-largecap-oldwin.md")
 
 # 문헌값 고정 (Bernard & Thomas 1989). 고른 게 아니라 가져온 값이다.
 HOLD_DAYS     = 60     # 거래일
@@ -90,7 +114,11 @@ def net_income_quarters(ticker: str) -> pd.DataFrame:
     "1년 전 같은 분기" 짝이 조용히 어긋난다. 파싱을 새로 짜는 게 아니라 **같은
     모듈의 조립기를 한 단계 아래에서** 부른다.
     """
-    ug = ef.load_raw(ticker)
+    # 이름이 `"CIK:티커"`(유니버스 asset_id)면 **CIK 로 받는다.** `ef.get_cik` 은
+    # SEC 의 *현재* 매핑이라 죽은 티커에 쓰면 없거나, 더 나쁘게는 그 티커를 물려받은
+    # 다른 회사를 준다(BBBY: 886158 파산 → 1130713 재상장). 소형주에서 실제로 밟았다.
+    cik, sep, sym = ticker.partition(":")
+    ug = ef.load_raw(sym if sep else ticker, cik=int(cik) if sep else None)
     if ug is None:
         return pd.DataFrame()
     tag = ef._assemble_tag(ug, ef.TAG_CHAINS["net_income"])
@@ -132,6 +160,44 @@ def build_events(tickers) -> pd.DataFrame:
         frames.append(ev.drop_duplicates("filed", keep="last"))
     ev = pd.concat(frames, ignore_index=True)
     return ev.sort_values("filed", kind="stable").reset_index(drop=True)
+
+
+def universe_members(path, start, end) -> pd.DataFrame:
+    """[date, asset_id] — 그 창의 **월별** 구성종목. 벤치마크가 이걸로 리밸런스한다.
+
+    창 시작 **직전** 기준일까지 포함한다. 안 그러면 첫 리밸런스가 올 때까지
+    기준선이 현금으로 놀고, 그만큼 넘기 쉬운 자가 된다.
+
+    (소형주 `measure_fscore.smallcap_members` 와 같은 함수다. 대형주가 두 번째
+    사용자가 되면서 여기로 올렸다 — 자가 두 벌로 갈리면 한쪽만 고치는 날이 온다.)
+    """
+    u = pd.read_parquet(path)
+    dates = pd.to_datetime(sorted(u["date"].unique()))
+    prior = dates[dates <= start]
+    lo = prior[-1] if len(prior) else start
+    return u.loc[(u["date"] >= lo) & (u["date"] <= end), ["date", "asset_id"]]
+
+
+def cached_events(names, cache: Path) -> pd.DataFrame:
+    """`build_events` 를 한 번만 돌리고 여러 창이 나눠 쓴다.
+
+    점수는 창과 무관하다 — 창은 거래를 자를 때만 쓴다(`attach_trades`). 캐시의
+    유효성은 파일 이름이 아니라 **내용**(종목 목록의 해시)으로 본다. 유니버스를
+    다시 지으면 종목이 바뀌는데 캐시가 살아 있으면 **다른 자로 잰 점수**를
+    조용히 재사용한다 (일봉 샤드를 순번으로 이름 붙였다가 같은 사고를 냈다).
+    """
+    import hashlib
+    import json
+    key = hashlib.sha1("\n".join(sorted(names)).encode()).hexdigest()[:16]
+    meta = cache.with_suffix(".json")
+    if cache.exists() and meta.exists():
+        if json.loads(meta.read_text(encoding="utf-8")).get("universe_key") == key:
+            return pd.read_parquet(cache)
+    ev = build_events(names)
+    ev.to_parquet(cache, index=False)
+    meta.write_text(json.dumps({"universe_key": key, "names": len(names)}),
+                    encoding="utf-8")
+    return ev
 
 
 def rank_percentile(ev: pd.DataFrame) -> np.ndarray:
@@ -337,6 +403,30 @@ def selftest() -> int:
     got = attach_trades(pre, close)
     assert len(got) == 1 and got["entry"].iloc[0] == 1, "구간 전 공시가 첫날 매수로 잡혔다"
 
+    # 8) 이름이 `"CIK:티커"` 면 **CIK 로** companyfacts 를 받는다. 티커로 받으면
+    #    `ef.get_cik` 의 *현재* 매핑을 타서 죽은 티커에 다음 주인이 붙는다.
+    seen, orig = {}, ef.load_raw
+    try:
+        ef.load_raw = lambda t, cik=None: seen.update(t=t, cik=cik)
+        net_income_quarters("886158:BBBY")
+        assert seen == {"t": "BBBY", "cik": 886158}, f"asset_id 를 CIK 로 안 풀었다: {seen}"
+        net_income_quarters("AAPL")
+        assert seen == {"t": "AAPL", "cik": None}, f"평범한 티커가 갈렸다: {seen}"
+    finally:
+        ef.load_raw = orig
+
+    # 9) 벤치마크에 members 를 주면 **월별 리밸런스**다. 안 주면 시작일과 종료일에
+    #    둘 다 값이 있는 종목만 사므로, 상폐가 든 패널에서 기준선이 "안 죽은 것만
+    #    산 줄"이 된다 — 설계서 7절이 "제일 조용히 틀릴 자리"로 꼽은 곳.
+    d = pd.date_range("2021-01-04", periods=40, freq="B")
+    px = pd.DataFrame({"A": np.linspace(100, 200, 40),
+                       "B": np.r_[np.linspace(100, 50, 20), np.full(20, np.nan)]}, index=d)
+    mem = pd.DataFrame({"date": [d[0], d[0], d[20]], "asset_id": ["A", "B", "A"]})
+    naive = bench_curve(d[0], d[-1], close=px)
+    fair = bench_curve(d[0], d[-1], members=mem, close=px)
+    assert np.isclose(naive.iloc[-1], 2.0), "members 없는 줄이 죽은 종목을 안 뺐다"
+    assert fair.iloc[-1] < naive.iloc[-1], "members 를 줘도 상폐 손실이 안 들어갔다"
+
     print("selftest OK")
     return 0
 
@@ -349,10 +439,22 @@ def main() -> int:
     except Exception:
         pass
     close = closes(START, END)
-    bench = bench_curve(START, END)
+    if LARGECAP:
+        # 유니버스와 창만 바꾼다. 종목의 키는 티커가 아니라 asset_id(`"CIK:티커"`)다.
+        # **벤치마크에 `members` 를 안 주면** 기준선이 "시작일과 종료일에 둘 다 값이
+        # 있는 종목만 산 줄"이 되어, 생존자 편향을 빼려고 한 일이 여기서 통째로
+        # 샌다 (설계서 7절 — 이 작업에서 제일 조용히 틀릴 자리).
+        members = universe_members(LARGECAP_UNIVERSE, START, END)
+        close = close[sorted(set(members["asset_id"]) & set(close.columns))]
+        bench = bench_curve(START, END, members=members, close=close)
+        all_names = sorted(pd.read_parquet(LARGECAP_UNIVERSE)["asset_id"].unique())
+        ev = cached_events(all_names, EVENTS_CACHE)
+        ev = ev.loc[ev["ticker"].isin(set(close.columns))].reset_index(drop=True)
+    else:
+        bench = bench_curve(START, END)
+        ev = build_events(list(close.columns))
     bench_ret = bench.pct_change().fillna(0.0).values
 
-    ev = build_events(list(close.columns))
     ev["pct"] = rank_percentile(ev)
     ev = ev.dropna(subset=["pct"])
     ev = attach_trades(ev, close)
@@ -374,17 +476,33 @@ def main() -> int:
     m_bot, t_bot = date_block_t(ex_bot, close.index.values[bot["entry"].values])
     ls = np.concatenate([ex_top, -ex_bot])
     m_ls, t_ls = date_block_t(ls, np.concatenate([d_top, close.index.values[bot["entry"].values]]))
-    pass1 = len(top) >= MIN_EVENTS and abs(t_top) >= 2
+    # 대형주 재측정의 ①은 **단측 t >= +2** 다. 가설이 방향을 가지면 통과선도 방향을
+    # 가져야 한다 — 양측 |t|>=2 는 부호가 반대인데 통과하는 자리를 남긴다(설계서 6.2).
+    # 단측이 양측보다 **엄격하다**. 결과를 유리하게 만드는 변경이 아니다.
+    pass1 = len(top) >= MIN_EVENTS and (t_top >= 2 if LARGECAP else abs(t_top) >= 2)
 
     # ② 포트폴리오 — 캘린더타임 vs 같은 평균 노출 매수보유, 6bp.
     port, exposure = calendar_curve(top, close, COST_BPS)
     flat_ret = bench_ret * exposure
+    # **MDE 를 점추정보다 먼저 낸다.** `mde_pp` 는 구간 반폭만 반환하고 효과의
+    # 크기도 부호도 안 준다 — 판정을 보고 게이트를 고를 방법이 구조적으로 없다
+    # (설계서 6.3). 아래 `excess_cagr_ci` 호출은 이 줄 **다음에** 온다.
+    mde = mde_pp(port.values, flat_ret)
+    underpowered = mde > MDE_LIMIT_PP
     pt, lo, hi = excess_cagr_ci(port.values, flat_ret)
     pass2 = lo > 0
+    # 게이트를 못 넘으면 ②는 실패가 아니라 **미측정**이다. 점추정을 읽지 않는다.
+    mark2 = "△" if (LARGECAP and underpowered) else ("O" if pass2 else "X")
 
     strat_curve = (1 + port).cumprod()
     flat_curve = pd.Series((1 + flat_ret).cumprod(), index=close.index)
     years = (close.index[-1] - close.index[0]).days / 365.25
+
+    # 위약 줄을 여기서 낸다 — 리포트 문장 안에서 계산하면 "통과했을 때 무슨 말을
+    # 할지"를 문장이 정하게 된다. 값 먼저, 문장은 그 값으로 쓴다.
+    plc_cagr = cagr(float((1 + calendar_curve(mid, close, COST_BPS)[0]).cumprod().iloc[-1]), years)
+    strat_cagr = cagr(float(strat_curve.iloc[-1]), years)
+    bench_cagr = cagr(float(bench.iloc[-1]), years)
 
     # 공짜 진단 — filed 당일 초과수익. 유의하게 크면 filed ≈ 발표일이고,
     # 0에 가까우면 뉴스가 이미 소화된 뒤라는 뜻이다. 해석 규칙(설계서 3.1)을
@@ -397,16 +515,41 @@ def main() -> int:
     keep = ~np.isnan(d0)
     m_d0, t_d0 = date_block_t(d0[keep], close.index.values[day_pos[keep]])
 
-    verdict = "통과" if (pass1 and pass2) else "실패"
+    verdict = ("미측정" if (LARGECAP and underpowered) else
+               "통과" if (pass1 and pass2) else "실패")
     body = [
-        "# PEAD — 봉인 구간 확인" if SEALED else "# PEAD (실적 서프라이즈 드리프트) — 측정",
+        "# PEAD — 봉인 구간 확인" if SEALED else
+        "# PEAD 대형주 — 참고 행 (옛 창 × 새 유니버스)" if (LARGECAP and OLDWIN) else
+        "# PEAD 대형주 재측정 — 자를 길게, 편향 없이 다시 만들었다" if LARGECAP else
+        "# PEAD (실적 서프라이즈 드리프트) — 측정",
         "",
         f"구간 {START.date()} ~ {END.date()} · 진입 `filed`+1 종가 · {HOLD_DAYS}거래일 보유 · "
         f"상위 10분위 롱온리 · 판정 {COST_BPS:.0f}bp.",
+        "사전 등록: `docs/superpowers/specs/2026-08-16-largecap-repanel-design.md` "
+        "(파라미터는 `2026-08-13-pead-design.md` 그대로). **바뀐 건 유니버스와 창 둘뿐이다.**"
+        if LARGECAP else
         "사전 등록: `docs/superpowers/specs/2026-08-13-pead-design.md`. "
         "파라미터는 문헌값 고정이라 **고를 게 없었고, 따라서 전 구간이 OOS**다.",
         "",
     ] + ([
+        "> **이 문서는 판정이 아니다 — 참고 행이다.** 창과 유니버스가 같이 바뀌면 숫자가",
+        "> 움직여도 원인을 모른다. 이 행은 **옛 창(2020-03~2024-12)에 새 유니버스만** 대서",
+        "> 유니버스 효과를 떼어낸 것이다. 판정 행은 `2026-08-16-pead-largecap.md` 하나다",
+        "> (설계서 6.4).",
+        "",
+        f"## 참고: ①{'O' if pass1 else 'X'} ②{mark2}",
+    ] if (LARGECAP and OLDWIN) else [
+        "> **새 데이터로 하는 새 검정이 아니다.** 2020-03~2026-08 의 답은 이미 봤다"
+        "(`2026-08-13-pead.md`,",
+        "> `2026-08-13-pead-sealed.md`). 처음 보는 건 **2017-09~2020-03 의 2.6년, 창의 29%** 뿐이다.",
+        "> 이 사전 등록이 묶는 것은 데이터의 새로움이 아니라 **결정 규칙**이다 — 판정선과",
+        "> 검출력 게이트를 돌리기 전에 문서에 못 박았고, 파라미터는 한 글자도 안 바꿨다.",
+        "",
+        "> **봉인 구간은 없다.** 2025-01~ 은 두 가설 다 이미 열었다. 이미 본 구간을 봉인이라",
+        "> 부르면 거짓말이고, 빼놓으면 선택적 보고다. 그래서 전부 넣었다(설계서 6.1).",
+        "",
+        f"## 판정: **{verdict}** (①{'O' if pass1 else 'X'} AND ②{mark2})",
+    ] if LARGECAP else [
         "> **이 문서는 판정이 아니다.** 본 측정(`2026-08-13-pead.md`)에서 PEAD는 이미 **실패**로",
         "> 판정됐고, 봉인 구간은 그 뒤에 딱 한 번 확인용으로 연 것이다. 아래 O/X는 같은 통과선을",
         "> 같은 코드로 봉인 구간에 적용해본 값일 뿐, **판정을 바꾸지 않는다**(설계서 5절).",
@@ -423,17 +566,27 @@ def main() -> int:
         "",
         "| | 무엇 | 통과선 | 실측 | |",
         "|---|---|---|---|---|",
-        f"| ① 단면 | 상위 10분위 60일 초과수익 | 유효표본 ≥ {MIN_EVENTS} · \\|t\\| ≥ 2 | "
+        f"| ① 단면 | 상위 10분위 60일 초과수익 | 유효표본 ≥ {MIN_EVENTS} · "
+        + ("t ≥ +2 (단측)" if LARGECAP else "\\|t\\| ≥ 2") + " | "
         f"n={len(top)} · 평균 {m_top * 100:+.2f}% · t={t_top:+.2f} | {'O' if pass1 else 'X'} |",
         f"| ② 포트폴리오 | 같은 노출 매수보유 대비 초과 연수익 | 부트스트랩 95% 하한 > 0 | "
-        f"{pt:+.2f}%p · 95% [{lo:+.2f}, {hi:+.2f}] | {'O' if pass2 else 'X'} |",
+        + ("**게이트 미달 — 읽지 않는다**" if (LARGECAP and underpowered) else
+           f"{pt:+.2f}%p · 95% [{lo:+.2f}, {hi:+.2f}]") + f" | {mark2} |",
         f"| ② 검출력 | 이 설계가 잴 수 있는 최소 효과 (구간 반폭) | "
-        f"참고 — 게이트 {MDE_LIMIT_PP:.0f}%p | MDE {(hi - lo) / 2.0:.2f}%p | "
-        f"{'O' if (hi - lo) / 2.0 <= MDE_LIMIT_PP else 'X'} |",
+        + (f"**게이트** {MDE_LIMIT_PP:.0f}%p" if LARGECAP
+           else f"참고 — 게이트 {MDE_LIMIT_PP:.0f}%p")
+        + f" | MDE {mde:.2f}%p | {'O' if not underpowered else 'X'} |",
         "",
         "**하나만 통과하면 실패다.** 이 저장소는 ①만 보고 다섯 번 속았고, ②를 넉 달 안 재서",
         "전략 하나를 통째로 날렸다.",
         "",
+    ] + ([
+        "> **검출력 게이트는 ②를 읽기 전에 걸었다.** `mde_pp` 는 구간 반폭만 반환하고 효과의",
+        "> 크기도 부호도 안 준다 — 결과를 보고 게이트를 고를 방법이 구조적으로 없다(설계서 6.3).",
+        "> 게이트를 못 넘으면 ②는 \"실패\"가 아니라 **\"미측정\"** 이고, 그러면 창을 더 못 늘리므로",
+        "> (웨이백 첫 스냅샷 2017-08-28 이 천장) **대형주 노선은 거기서 닫힌다.**",
+        "",
+    ] if LARGECAP else [
         "> **검출력 줄은 판정에 안 들어간다** (2026-08-16 설계서 5절 — 이 측정은 재실행하지",
         "> 않는다). 게이트를 넘으면 ②는 \"실패\"가 아니라 **\"미측정\"** 으로 읽는다.",
         "",
@@ -443,6 +596,7 @@ def main() -> int:
         "> 내려갔고, **판정은 그대로 X·X 다.** 자를 고치면 옛 측정도 다시 돌려 값을 맞춘다 —",
         "> 문서만 그대로 두면 재현이 안 되는 기록이 된다.",
         "",
+    ]) + [
         "## 네 줄 — 설계서가 항상 같이 내라고 한 것",
         "",
         "| 줄 | 연수익 | MDD | 비고 |",
@@ -485,13 +639,23 @@ def main() -> int:
         "## 위약 대조 — ②의 점추정을 그냥 읽으면 안 되는 이유",
         "",
         f"같은 기계에 **중위 10분위**(45~55%, 신호가 없는 자리)를 넣으면 "
-        f"연 {cagr(float((1 + calendar_curve(mid, close, COST_BPS)[0]).cumprod().iloc[-1]), years):+.1f}% "
-        f"(n={len(mid)}) 가 나온다.",
+        f"연 {plc_cagr:+.1f}% (n={len(mid)}) 가 나온다.",
         "",
-        "②의 점추정이 양수인 건 신호 때문이 아니라 **구성 때문이다** — 60일 겹치기로 50종목",
-        "안팎만 들고 매일 동일가중으로 재조정한 바구니를, 279종목 매수보유와 비교하는 구조가",
-        "그 정도 차이를 만든다. 그래서 95% 하한이 통과선인 것이고, 하한은 못 넘었다.",
-        "이 줄은 판정 기준이 아니라 **해석용**이다 — 통과선은 사전 등록된 그대로다.",
+        "②의 점추정에는 신호와 **구성**이 섞여 있다 — 60일 겹치기로 수십 종목만 들고 매일",
+        "동일가중으로 재조정한 바구니를, "
+        + ("월별 리밸런스하는 1,000종목 동일가중" if LARGECAP else "279종목")
+        + " 매수보유와 비교하는 구조 자체가",
+        "차이를 만든다. 위약 줄이 그 몫이다:",
+        "",
+        f"| 전략 | 위약(중위 10분위) | 기준선 |",
+        "|---|---|---|",
+        f"| {strat_cagr:+.1f}% | {plc_cagr:+.1f}% | {bench_cagr:+.1f}% |",
+        "",
+        f"**전략이 위약을 넘는 폭은 {strat_cagr - plc_cagr:+.1f}%p 다.** 위약은 사전 등록된 통과선이"
+        " 아니지만(통과선은",
+        "매수보유 대비 95% 하한 하나다) 먼저 읽는다 — **판정이 통과여도 이 줄과 구별이 안 되면**",
+        "**그 통과는 신호가 아니라 구성이다.** 이 줄에는 위약의 신뢰구간이 없다는 것도 같이 적는다:",
+        "두 줄의 차이를 검정한 게 아니라 점추정 두 개를 나란히 놓은 것뿐이다.",
         "",
         "## 공짜 진단 — `filed` 당일 초과수익",
         "",
@@ -509,12 +673,17 @@ def main() -> int:
         "",
         "- **봉인은 이 문서로 열었다. 다시 안 연다.** 파라미터를 바꿔 재실행하면 폐기 사유다."
         if SEALED else
+        "- **2017-08 이전은 못 잰다.** 웨이백 `company_tickers.json` 첫 스냅샷이 2017-08-28 이고,"
+        " 그 전에 죽은 종목은 어느 스냅샷에도 없다. 창의 천장이다."
+        if LARGECAP else
         "- **2025-01 ~ 2026-08은 봉인.** 판정 후 딱 한 번 연다. 갈려도 판정을 안 바꾼다.",
         "- **8-K 발표일 진입 미측정.** EDGAR submissions를 새로 받아야 해서 이번 범위 밖이다.",
         "- **자리·현금 제약 없음.** ②를 통과한 뒤에 붙인다 — 못 하면 붙일 이유가 없다.",
         "",
         f"이벤트 {len(ev)}건 중 상위 10분위 {len(top)}건. "
-        f"재현: `python scripts/measure_pead.py{' sealed' if SEALED else ''}` · 산수 점검 `... selftest`",
+        f"재현: `python scripts/measure_pead.py{' sealed' if SEALED else ''}"
+        f"{' largecap' if LARGECAP else ''}{' oldwin' if OLDWIN else ''}` · "
+        "산수 점검 `... selftest`",
         "",
     ]
 
