@@ -47,7 +47,7 @@ import pandas as pd   # noqa: E402
 
 from scripts.measure_fscore import (  # noqa: E402
     BM_TOP, END, HOLD_DAYS, MIN_HELD, SCORE_AT, START, attach_bm,
-    shuffle_scores, smallcap_events, smallcap_members,
+    shuffle_scores, panel_events, panel_members,
 )
 from scripts.measure_pead import (  # noqa: E402
     MDE_LIMIT_PP, attach_trades, calendar_curve, mde_pp,
@@ -113,13 +113,13 @@ def main(n_shuffle: int = N_SHUFFLE) -> int:
         pass
 
     close = closes(START, END)
-    members = smallcap_members(START, END)
+    members = panel_members(START, END)
     names = sorted(set(members["asset_id"]) & set(close.columns))
     close = close[names]
     bench_ret = bench_curve(START, END, members=members,
                             close=close).pct_change().fillna(0.0).values
 
-    ev = attach_bm(attach_trades(smallcap_events(names), close, HOLD_DAYS), close)
+    ev = attach_bm(attach_trades(panel_events(names), close, HOLD_DAYS), close)
     print(f"거래 가능 {len(ev)}건 · 종목 {ev['ticker'].nunique()} · "
           f"{START.date()}~{END.date()}")
 
@@ -147,10 +147,10 @@ def main(n_shuffle: int = N_SHUFFLE) -> int:
     # 창을 늘리면 검출력이 는다(√T). 전구간은 2차 행이 아니라 **판정 후보**다.
     print(f"\n## 전구간 2017-09-01 ~ {END.date()} — 같은 계산")
     close_f = closes(pd.Timestamp("2017-09-01"), END)
-    mem_f = smallcap_members(pd.Timestamp("2017-09-01"), END)
+    mem_f = panel_members(pd.Timestamp("2017-09-01"), END)
     names_f = sorted(set(mem_f["asset_id"]) & set(close_f.columns))
     close_f = close_f[names_f]
-    ev_f = attach_bm(attach_trades(smallcap_events(names_f), close_f, HOLD_DAYS), close_f)
+    ev_f = attach_bm(attach_trades(panel_events(names_f), close_f, HOLD_DAYS), close_f)
     print(f"거래 가능 {len(ev_f)}건")
     print("\n| 설계 (전 유니버스 스프레드) | **MDE (실제)** | 위약 중앙값 | 얇은 쪽 | 게이트 |")
     print("|---|---|---|---|---|")

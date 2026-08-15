@@ -49,6 +49,15 @@ data/*
 data/smallcap/prices/
 !data/smallcap_universe.parquet
 !data/smallcap_universe_report.json
+# 대형주 유니버스 — 같은 캐시(market_caps)의 상위 1,000위 슬라이스. 파생물이지만
+# 판정의 근거라 남긴다. 패널(largecap_panel)과 일봉 샤드는 Alpaca 에서 다시 받는다.
+!data/largecap_universe.parquet
+!data/largecap_universe_report.json
+data/largecap/
+data/largecap_panel.parquet
+data/largecap_panel_report.json
+data/largecap_events*.
+data/largecap_pead_events*.
 .pytest_cache/
 
 # 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다

@@ -1,0 +1,57 @@
+{
+  "built_at": "2026-08-15T15:21:00.871415+00:00",
+  "rule": {
+    "top_exclude": 0,
+    "size": 1000
+  },
+  "source": {
+    "market_caps": "data/smallcap\\market_caps.parquet",
+    "network_requests": 0
+  },
+  "prices": {
+    "listings": 12449,
+    "panel_end": "2026-08-13"
+  },
+  "universe": {
+    "rows": 108000,
+    "dates": 108,
+    "listings": 2340,
+    "ciks": 1877,
+    "median_members": 1000.0,
+    "mktcap_floor_median": 6701609555.035812,
+    "mktcap_median": 20663792553.737904
+  },
+  "selftest": {
+    "passed": true,
+    "checks": {
+      "delistings_every_year": true,
+      "no_duplicate_rows": true,
+      "rank_matches_mktcap": true
+    },
+    "delistings_by_year": {
+      "2017": 61,
+      "2018": 91,
+      "2019": 136,
+      "2020": 148,
+      "2021": 104,
+      "2022": 115,
+      "2023": 107,
+      "2024": 73
+    }
+  },
+  "negative_control": {
+    "members": 275,
+    "of": 276,
+    "delistings_by_year": {
+      "2017": 0,
+      "2018": 0,
+      "2019": 0,
+      "2020": 0,
+      "2021": 0,
+      "2022": 0,
+      "2023": 0,
+      "2024": 0
+    },
+    "passed": true
+  }
+}

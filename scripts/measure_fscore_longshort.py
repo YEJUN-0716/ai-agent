@@ -43,7 +43,7 @@ import pandas as pd   # noqa: E402
 
 from scripts.measure_fscore import (  # noqa: E402
     END, HOLD_DAYS, MIN_HELD, SCORE_AT, SEALED, START,
-    excess_cagr_ci, shuffle_scores, smallcap_events, smallcap_members,
+    excess_cagr_ci, shuffle_scores, panel_events, panel_members,
 )
 from scripts.measure_pead import N_BOOT, attach_trades, calendar_curve  # noqa: E402
 from scripts.measure_portfolio import bench_curve, cagr, closes, mdd    # noqa: E402
@@ -143,14 +143,14 @@ def selftest() -> int:
 
 def main() -> int:
     close = closes(START, END)
-    members = smallcap_members(START, END)
+    members = panel_members(START, END)
     n_members = members["asset_id"].nunique()
     names = sorted(set(members["asset_id"]) & set(close.columns))
     close = close[names]
     bench = bench_curve(START, END, members=members, close=close)
     years = (close.index[-1] - close.index[0]).days / 365.25
 
-    ev = attach_trades(smallcap_events(names), close, HOLD_DAYS)
+    ev = attach_trades(panel_events(names), close, HOLD_DAYS)
     print(f"거래 가능 {len(ev)}건 · 종목 {ev['ticker'].nunique()} · "
           f"{START.date()}~{END.date()}")
 

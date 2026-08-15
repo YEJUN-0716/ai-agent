@@ -5,6 +5,11 @@
     python scripts/fetch_smallcap_panel.py           # 둘 다 (기본)
     python scripts/fetch_smallcap_panel.py prices    # 조정 일봉만
     python scripts/fetch_smallcap_panel.py facts     # companyfacts 만
+    python scripts/fetch_smallcap_panel.py largecap  # 대형주 유니버스로 같은 일
+
+**대형주도 같은 자로 받는다.** `largecap` 인자는 유니버스·출력 경로만 갈아끼운다
+(설계서 `2026-08-16-largecap-repanel-design.md` 7절 — 새 스크립트를 안 만든다).
+받는 방법이 두 벌로 갈리면 한쪽만 고치는 날이 온다.
 
 **조정(`adjustment="all"`) 일봉이다.** 유니버스는 시가총액을 재려고 미조정가로
 지었지만(조정가 × 당시 주식수 = 틀린 시총), 수익률은 반대다 — 미조정가로 재면
@@ -235,7 +240,25 @@ def step_facts(limit: int = 0) -> int:
     return got
 
 
+def use_largecap():
+    """유니버스와 출력 경로만 대형주 쪽으로. 계산은 한 줄도 안 바뀐다.
+
+    일봉 시작을 2016-01-01 로 당기는 건 PEAD 의 랭킹 창(250 달력일)이 창
+    시작일(2017-09-01) 앞을 먹기 때문이다. 소형주는 2017-01-01 이라 여유가
+    8개월뿐이었다 — 대형주에서는 넉넉히 잡는다.
+    """
+    global SHARD_DIR, UNIVERSE, PANEL, REPORT, START_DATE
+    SHARD_DIR  = "data/largecap/prices_adj"
+    UNIVERSE   = "data/largecap_universe.parquet"
+    PANEL      = "data/largecap_panel.parquet"
+    REPORT     = "data/largecap_panel_report.json"
+    START_DATE = pd.Timestamp("2016-01-01")
+
+
 def main(argv) -> int:
+    if "largecap" in argv[1:]:
+        use_largecap()
+        _say(f"대형주 모드 — {UNIVERSE} → {PANEL}")
     steps = [a for a in argv[1:] if a in ("prices", "facts")] or ["prices", "facts"]
     if "prices" in steps:
         step_prices(force="--force" in argv)
