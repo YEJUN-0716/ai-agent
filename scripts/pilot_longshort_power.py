@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.argv.append("smallcap")          # measure_fscore 의 유니버스 스위치
@@ -155,7 +154,7 @@ def main(n_shuffle: int = N_SHUFFLE) -> int:
         print(f"| {k} | **{med:.2f}** | {mn:.2f} ~ {mx:.2f} | {sz} | "
               f"{'O' if med <= MDE_LIMIT_PP else 'X'} |")
 
-    print(f"\n## 본구간 — 문턱만 넓히면")
+    print("\n## 본구간 — 문턱만 넓히면")
     print("\n| 설계 (전 유니버스 스프레드) | MDE 중앙값 | 범위 | 얇은 쪽 | 게이트 |")
     print("|---|---|---|---|---|")
     for k, (med, mn, mx, sz) in variants(ev, close, None, n_shuffle).items():
