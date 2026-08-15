@@ -124,7 +124,7 @@ IC_BLOCK = 12          # 12 x 21일 = 252일. 겹치는 선행 구간을 블록�
 SEED = 20260814
 BLOCK = 20             # 캘린더타임 곡선의 날짜 블록 (measure_pead 와 같은 값)
 
-# 검출력 하한 — 설계서 3.2. **결과를 보기 전에 박은 값이다.**
+# 유효성 가드 — **결과를 보기 전에 박은 값이다.**
 MIN_HELD = 3           # 이만큼 못 채운 날은 현금
 MIN_AVG_POSITIONS = 5.0
 
@@ -428,17 +428,19 @@ def block_t(values: np.ndarray, block: int) -> tuple:
 
 # ---------------------------------------------------------------- 검출력
 
-def mde_floor_pp(flat_ret: np.ndarray) -> float:
-    """MDE 의 **하한**(연 %p) — 기준선 줄만으로 낸다. **게이트가 아니다.**
+def mde_baseline_pp(flat_ret: np.ndarray) -> float:
+    """기준선 줄만으로 낸 MDE(연 %p) — **참고값이다. 게이트도 하한도 아니다.**
 
-    초과 계열의 변동성 자리에 기준선 자신의 변동성을 넣은 값이다. 전략과 기준선이
-    완전히 붙어 있을 때만 이 값이 실제 MDE 와 같고, 갈라질수록 실제가 더 크다.
-    그래서 이건 "이것만으로 이미 한계를 넘으면 판정할 힘이 없는 게 확실하다"는
-    방향으로만 읽을 수 있다.
+    초과 계열의 변동성 자리에 기준선 자신의 변동성을 넣은 값이다. 주변 분포가 같을 때
+    `Var(초과) = 2σ²(1−ρ)` 이고 이 값은 `σ` 를 재므로, 실제 MDE 와 같아지는 **경계는
+    ρ=0.5** 다. ρ<0.5(전략과 기준선이 갈라짐)면 실제가 더 크고, ρ>0.5(붙음)면 실제가
+    더 작다 — **양방향으로 틀리므로 하한으로 읽으면 안 된다.** 같은 파일 `selftest()`
+    의 8b 가 양쪽을 다 못 박아 뒀다.
 
-    2026-08-14 F-Score 대형주 측정이 이 값(9.29)으로 게이트를 통과시켰는데 실제
-    반폭은 11.94 였다. 그래서 **게이트는 `measure_pead.mde_pp` 로 옮겼고** 이
-    함수는 리포트의 참고 줄로만 남는다 (설계서 3절).
+    두 번 다 틀렸다. 2026-08-14 F-Score 대형주는 이 값(9.29)으로 게이트를 통과시켰는데
+    실제 반폭은 11.94 였고(작게 틀림), 소형주는 18.70 을 찍었는데 실제는 16.49 였다
+    (크게 틀림). 그래서 **게이트는 `measure_pead.mde_pp` 로 옮겼고** 이 함수는 리포트의
+    참고 줄로만 남는다 (설계서 3절).
     """
     idx = _block_idx(len(flat_ret), np.random.default_rng(SEED), BLOCK)
     boot = np.expm1(np.log1p(flat_ret)[idx].mean(axis=1) * 252) * 100
@@ -547,11 +549,11 @@ def selftest() -> int:
     for _, g in sh.groupby(sh["filed"].dt.to_period("M")):
         assert sorted(g["fscore"]) == sorted(ev.loc[g.index, "fscore"]), "달 안 분포가 변했다"
 
-    # 8) MDE 하한은 길이·변동성이 커질수록 커진다. 방향만 확인한다.
+    # 8) 기준선 참고값은 길이·변동성이 커질수록 커진다. 방향만 확인한다.
     rng = np.random.default_rng(0)
     quiet = rng.normal(0, 0.005, 1000)
     loud = rng.normal(0, 0.020, 1000)
-    assert mde_floor_pp(loud) > mde_floor_pp(quiet) > 0
+    assert mde_baseline_pp(loud) > mde_baseline_pp(quiet) > 0
 
     # 8b) **게이트는 하한이 아니라 실측이다.** 갈라진 두 줄의 MDE 가 기준선 줄만으로
     #     낸 하한보다 커야 하고, 붙은 두 줄은 그보다 작아야 한다 — 2026-08-15 롱숏에서
@@ -562,7 +564,7 @@ def selftest() -> int:
     #     부등호다.
     split = rng.normal(0, 0.005, 1000)                                        # ρ=0   — 갈라진 두 줄
     tight = 0.9 * quiet + np.sqrt(1 - 0.9 ** 2) * rng.normal(0, 0.005, 1000)  # ρ=0.9 — 위약처럼 붙은 두 줄
-    assert mde_pp(split, quiet) > mde_floor_pp(quiet) > mde_pp(tight, quiet)
+    assert mde_pp(split, quiet) > mde_baseline_pp(quiet) > mde_pp(tight, quiet)
 
     # 9) **상폐 거래가 안 사라진다** (소형주 설계서 5.2). 보유 중에 값이 끊기는
     #    종목을 넣어, 그 거래가 버려지지 않고 마지막 거래일 종가로 청산되는지.
@@ -650,7 +652,7 @@ def main() -> int:
     # 고를 방법이 구조적으로 없다 (2026-08-16 설계서 1절). 아래 `excess_cagr_ci`
     # 호출은 이 두 줄 **다음에** 온다.
     mde = mde_pp(port.values, flat_ret)
-    mde_floor = mde_floor_pp(flat_ret)      # 참고 — 기준선 줄만으로 낸 하한
+    mde_base = mde_baseline_pp(flat_ret)    # 참고 — 기준선 줄만. 하한이 아니다(경계 ρ=0.5)
     underpowered = mde > MDE_LIMIT_PP or avg_pos < MIN_AVG_POSITIONS
 
     pt, lo, hi = excess_cagr_ci(port.values, flat_ret)
@@ -779,7 +781,7 @@ def main() -> int:
         "|---|---|---|---|",
         f"| **MDE (연 %p, 실제 두 줄)** | **{mde:.2f}** | <= {MDE_LIMIT_PP:.0f} | "
         f"{'X' if mde > MDE_LIMIT_PP else 'O'} |",
-        f"| MDE 하한 (기준선 줄만) | {mde_floor:.2f} | 참고 | |",
+        f"| MDE 참고 (기준선 줄만) | {mde_base:.2f} | 참고 | |",
         f"| 평균 자리 수 (전 구간) | {avg_pos:.2f} | >= {MIN_AVG_POSITIONS:.0f} | "
         f"{'X' if avg_pos < MIN_AVG_POSITIONS else 'O'} |",
         f"| 보유일 평균 자리 수 | {float(n_held[n_held > 0].mean()) if (n_held > 0).any() else float('nan'):.2f}"
@@ -787,17 +789,18 @@ def main() -> int:
         "",
         "MDE 는 **실제 두 줄의 초과 연수익 95% 구간 반폭**이다. `mde_pp` 는 반폭만 반환하고",
         "점추정을 반환하지 않으므로, 이 값을 내는 동안 효과의 크기도 부호도 안 보인다.",
-        "둘째 줄(기준선 줄만으로 낸 하한)은 2026-08-16 이전에 게이트로 쓰던 값이다 — 첫 판에서는",
-        "9.29 를 찍어 게이트를 통과시켰는데 실제 반폭은 11.94 였다. 하한을 게이트로 쓰면",
-        "**힘이 없는 측정이 통과한다**는 게 그때 드러났다 (설계서 3절)."
+        "둘째 줄(기준선 줄만으로 낸 참고값)은 2026-08-16 이전에 게이트로 쓰던 값이다 — 대형주에서는",
+        "9.29 를 찍어 통과시켰는데 실제는 11.94 였고(작게), 소형주에서는 18.70 인데 실제는 16.49 였다",
+        "(크게). **양방향으로 틀리므로 하한이 아니다** (설계서 3절)."
         if not underpowered else
         "**이 측정은 ②를 판정할 힘이 없다.** 통과도 실패도 아니라 미측정으로 적는다 — "
         "재기 전에 정한 규칙이고, 결과를 보고 만든 변명이 아니다.",
         "",
     ] + ([
         f"**사전 등록이 여기서 틀렸다.** 설계서 5.3 은 \"유효 종목 1,800 은 대형주 192 의 9배다."
-        f" ②의 검출력은 여기서 온다\" 고 적었는데, 실측 MDE 는 대형주 9.29 → **{mde:.2f}** 로",
-        "오히려 두 배 나빠졌다. MDE 는 **기준선의 변동성**이 정하지 종목 수가 정하는 게 아니다 —"
+        f" ②의 검출력은 여기서 온다\" 고 적었는데, 실측 MDE 는 대형주 11.94 → **{mde:.2f}** 로",
+        "오히려 더 나빠졌다(둘 다 **실제 두 줄**로 잰 값이다). MDE 는 **기준선의 변동성**이",
+        "정하지 종목 수가 정하는 게 아니다 —"
         " 소형주 동일가중 지수는 대형주보다 훨씬 거칠다.",
         "종목을 아홉 배로 늘려도 그 거칠기를 못 이긴다. **다음 사전 등록은 표본 수가 아니라"
         " 기준선 변동성으로 검출력을 미리 계산해야 한다.**",
