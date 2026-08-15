@@ -80,6 +80,20 @@ if LARGECAP:
         END    = pd.Timestamp("2024-12-31")
         OUT_MD = Path("docs/measurements/2026-08-16-pead-largecap-oldwin.md")
 
+# 귀속 검사 — **바꾸는 건 ②의 상대 하나다**: 같은 노출 매수보유 → 중위 분위 곡선
+# (설계서 `2026-08-16-pead-signal-vs-construction-design.md`). 파라미터는 안 바꾼다.
+#
+#   python scripts/measure_pead.py largecap midbase
+#
+# 통과가 나온 largecap 리포트 안에 이미 반대 증거가 있다 — 롱숏 t=+0.55, 위약과의
+# 폭 1.8%p 미검정. 이 측정은 그 통과를 깨러 간다.
+MIDBASE = "midbase" in sys.argv
+MIDBASE_MDE_LIMIT_PP = 3.0            # 설계서 3절 — "결정이 바뀌는 최소 폭". 못 박았다.
+MIDBASE_WIDTHS = (0.10, 0.20, 0.30)   # 설계서 4절 — 이 순서로만 넓히고 되돌아가지 않는다.
+MIDBASE_SPLIT = pd.Timestamp("2020-03-31")   # 처음 본 2.6년 / 나머지 (참고 행)
+if MIDBASE:
+    OUT_MD = Path("docs/measurements/2026-08-16-pead-signal-vs-construction.md")
+
 # 문헌값 고정 (Bernard & Thomas 1989). 고른 게 아니라 가져온 값이다.
 HOLD_DAYS     = 60     # 거래일
 SUE_WINDOW    = 8      # σ를 내는 분기 수
@@ -341,6 +355,27 @@ def mde_pp(strat: np.ndarray, base: np.ndarray) -> float:
     return (hi - lo) / 2.0
 
 
+# ------------------------------------------------------- 귀속 검사 (midbase)
+
+def midbase_legs(ev: pd.DataFrame, width: float):
+    """폭 `width` 의 상위 다리와 중위 다리. 설계서 4절 표 그대로.
+
+    10% → `pct>=0.90` / `[0.45, 0.55)`, 20% → `>=0.80` / `[0.40, 0.60)`, …
+    """
+    top = ev.loc[ev["pct"] >= 1 - width]
+    mid = ev.loc[(ev["pct"] >= 0.5 - width / 2) & (ev["pct"] < 0.5 + width / 2)]
+    return top.reset_index(drop=True), mid.reset_index(drop=True)
+
+
+def pick_rung(mdes, limit: float = MIDBASE_MDE_LIMIT_PP):
+    """게이트를 **처음** 넘는 폭의 인덱스. 없으면 None.
+
+    넘은 뒤에 더 넓혀보지 않고, 판정을 본 뒤 다른 폭으로 되돌아가지 않는다
+    (설계서 4절). `mde_pp` 는 효과의 크기도 부호도 안 주므로 여기까지 눈가림이다.
+    """
+    return next((i for i, m in enumerate(mdes) if m <= limit), None)
+
+
 # ---------------------------------------------------------------- 자체검사
 
 def selftest() -> int:
@@ -427,17 +462,32 @@ def selftest() -> int:
     assert np.isclose(naive.iloc[-1], 2.0), "members 없는 줄이 죽은 종목을 안 뺐다"
     assert fair.iloc[-1] < naive.iloc[-1], "members 를 줘도 상폐 손실이 안 들어갔다"
 
+    # 10) 귀속 검사의 두 다리 — 경계가 설계서 4절 표와 같아야 한다. 상위는 닫힌
+    #     하한, 중위는 [닫힘, 열림) 이라 0.55 는 중위가 아니다.
+    q = pd.DataFrame({"pct": [0.34, 0.35, 0.45, 0.5449, 0.55, 0.699, 0.70, 0.80, 0.90, 1.0]})
+    t10, m10 = midbase_legs(q, 0.10)
+    assert list(t10["pct"]) == [0.90, 1.0], f"10% 상위 다리가 다르다: {list(t10['pct'])}"
+    assert list(m10["pct"]) == [0.45, 0.5449], f"10% 중위 다리가 다르다: {list(m10['pct'])}"
+    t30, m30 = midbase_legs(q, 0.30)
+    assert list(t30["pct"]) == [0.70, 0.80, 0.90, 1.0], "30% 상위 다리가 다르다"
+    assert list(m30["pct"]) == [0.35, 0.45, 0.5449, 0.55], "30% 중위 다리가 다르다"
+
+    # 11) 폭은 **처음** 게이트를 넘는 데서 멈추고 되돌아가지 않는다 (설계서 4절).
+    assert pick_rung([9.0, 2.0, 1.0], 3.0) == 1, "더 좋은 뒤 폭으로 되돌아갔다"
+    assert pick_rung([1.0, 0.5, 0.4], 3.0) == 0, "첫 폭이 넘었는데 안 멈췄다"
+    assert pick_rung([9.0, 8.0, 7.0], 3.0) is None, "세 폭 다 못 넘으면 미측정이다"
+
     print("selftest OK")
     return 0
 
 
 # ---------------------------------------------------------------- 리포트
 
-def main() -> int:
-    try:                       # 윈도우 콘솔은 cp949 다 — 리포트를 찍다 죽는다
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+def prepare():
+    """가격 패널 · 기준선 · 거래가 붙은 이벤트. 판정 행과 귀속 검사가 **같은 자**를 쓴다.
+
+    이 함수를 두 벌로 갈면 한쪽만 고치는 날이 온다 (`universe_members` 와 같은 이유).
+    """
     close = closes(START, END)
     if LARGECAP:
         # 유니버스와 창만 바꾼다. 종목의 키는 티커가 아니라 asset_id(`"CIK:티커"`)다.
@@ -453,11 +503,19 @@ def main() -> int:
     else:
         bench = bench_curve(START, END)
         ev = build_events(list(close.columns))
-    bench_ret = bench.pct_change().fillna(0.0).values
 
     ev["pct"] = rank_percentile(ev)
     ev = ev.dropna(subset=["pct"])
-    ev = attach_trades(ev, close)
+    return close, bench, attach_trades(ev, close)
+
+
+def main() -> int:
+    try:                       # 윈도우 콘솔은 cp949 다 — 리포트를 찍다 죽는다
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    close, bench, ev = prepare()
+    bench_ret = bench.pct_change().fillna(0.0).values
 
     top = ev.loc[ev["pct"] >= TOP_PCT].reset_index(drop=True)
     bot = ev.loc[ev["pct"] < 1 - TOP_PCT].reset_index(drop=True)
@@ -695,5 +753,301 @@ def main() -> int:
     return 0
 
 
+def main_midbase() -> int:
+    """귀속 검사 — **구성이 같은 대조군 대비, SUE 순서가 초과수익을 만드나**(설계서 1절).
+
+    더 좋은 전략을 찾는 게 아니다. 파라미터를 한 글자도 안 바꾸고, 바꾸는 건 ②의
+    상대 하나(매수보유 → 중위 분위)다.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    close, bench, ev = prepare()
+    bv = bench.values
+    bench_ret = bench.pct_change().fillna(0.0).values
+    years = (close.index[-1] - close.index[0]).days / 365.25
+
+    def excess(df):
+        b = bv[df["exit"].values] / bv[df["entry"].values] - 1.0
+        return df["gross"].values - COST_BPS / 1e4 - b
+
+    def entered(df):
+        return close.index.values[df["entry"].values]
+
+    # --- 폭 사다리. **MDE 만 먼저 전부 낸다** (설계서 4절). `mde_pp` 는 구간 반폭만
+    #     반환하고 효과의 크기도 부호도 안 주므로, 폭을 고르는 동안 눈가림이 유지된다.
+    #     아래 `excess_cagr_ci` 호출은 폭이 정해진 **다음에** 온다 (490행 규율).
+    rungs = []
+    for w in MIDBASE_WIDTHS:
+        t_leg, m_leg = midbase_legs(ev, w)
+        p_top, e_top = calendar_curve(t_leg, close, COST_BPS)
+        p_mid, e_mid = calendar_curve(m_leg, close, COST_BPS)
+        rungs.append(dict(w=w, top=t_leg, mid=m_leg, p_top=p_top, p_mid=p_mid,
+                          e_top=e_top, e_mid=e_mid,
+                          mde=mde_pp(p_top.values, p_mid.values)))
+    k = pick_rung([r["mde"] for r in rungs])
+    underpowered = k is None
+    # 30% 도 못 넘으면 미측정이다. 판정 문장은 사전 등록된 기본 폭(10%)으로 적는다.
+    r = rungs[0 if underpowered else k]
+    top, mid = r["top"], r["mid"]
+
+    # --- ① 단면. 두 다리를 **같은 날짜로 짝지어** 뽑는다 — `date_block_t` 가 고유
+    #     날짜로 reduceat 한 뒤 날짜 블록을 재표본하므로 같은 날 상위·중위가 한 블록이다.
+    ex_top, ex_mid = excess(top), excess(mid)
+    d_top, d_mid = entered(top), entered(mid)
+    m_top, t_top = date_block_t(ex_top, d_top)
+    m_mid, t_mid = date_block_t(ex_mid, d_mid)
+    # concat 추정량의 평균은 (n_top·m_top − n_mid·m_mid)/(n_top+n_mid) 라 두 다리가
+    # 비슷한 크기면 **진짜 차이의 약 1/2** 이다. t 는 영향받지 않는다 (설계서 6.2).
+    m_ls, t_ls = date_block_t(np.concatenate([ex_top, -ex_mid]),
+                              np.concatenate([d_top, d_mid]))
+    pass1 = min(len(top), len(mid)) >= MIN_EVENTS and t_ls >= 2
+
+    # --- ② 포트폴리오. 게이트를 못 넘었으면 점추정을 **계산하지도 않는다.**
+    if underpowered:
+        pt = lo = hi = None
+        pass2 = False
+    else:
+        pt, lo, hi = excess_cagr_ci(r["p_top"].values, r["p_mid"].values)
+        pass2 = lo > 0
+    mark2 = "△" if underpowered else ("O" if pass2 else "X")
+    verdict = "미측정" if underpowered else ("통과" if (pass1 and pass2) else "실패")
+
+    cagr_top = cagr(float((1 + r["p_top"]).cumprod().iloc[-1]), years)
+    cagr_mid = cagr(float((1 + r["p_mid"]).cumprod().iloc[-1]), years)
+
+    # --- 참고 행 (판정 아님, 설계서 7절)
+    ladder = []
+    for q in range(10):
+        qlo, qhi = q / 10, (q + 1) / 10
+        sel = ev.loc[(ev["pct"] >= qlo) & (ev["pct"] < qhi if q < 9 else ev["pct"] <= 1.0)]
+        lm, lt = date_block_t(excess(sel), entered(sel))
+        ladder.append((qlo, qhi, len(sel), lm, lt))
+    # 단조성을 값으로 본다. **t 만 보면 안 된다** — 상위 칸이 t 는 제일 큰데 평균은
+    # 가운데 칸이 더 큰 모양이 실제로 나온다(칸마다 분산이 다르다).
+    best_m = max(ladder, key=lambda x: x[3])
+    best_t = max(ladder, key=lambda x: x[4])
+    monotone = best_m[1] >= 1.0 and best_t[1] >= 1.0
+
+    subs = []
+    for lo_d, hi_d in ((START, MIDBASE_SPLIT), (MIDBASE_SPLIT, END + pd.Timedelta(days=1))):
+        a, b = np.datetime64(lo_d), np.datetime64(hi_d)
+        st, sm = (d_top >= a) & (d_top < b), (d_mid >= a) & (d_mid < b)
+        s_m, s_t = date_block_t(np.concatenate([ex_top[st], -ex_mid[sm]]),
+                                np.concatenate([d_top[st], d_mid[sm]]))
+        cm = (close.index >= lo_d) & (close.index < hi_d)
+        s_pt, s_lo, s_hi = excess_cagr_ci(r["p_top"].values[cm], r["p_mid"].values[cm])
+        subs.append((lo_d, hi_d - pd.Timedelta(days=1), int(st.sum()), int(sm.sum()),
+                     s_m, s_t, s_pt, s_lo, s_hi))
+
+    # 짝짓기가 실제로 정밀도를 샀나 — 같은 폭에서 상대만 매수보유로 돌린 반폭.
+    # 설계서 3절의 전제("두 다리를 같은 풀에서 뽑으면 상관이 높아 MDE 가 작게 나온다")를
+    # 사후에 확인하는 줄이다. `mde_pp` 라 여전히 효과의 크기도 부호도 안 나온다.
+    mde_flat = mde_pp(r["p_top"].values, bench_ret * r["e_top"])
+
+    z_top, _ = calendar_curve(top, close, 0.0)
+    z_mid, _ = calendar_curve(mid, close, 0.0)
+    z_pt, z_lo, z_hi = excess_cagr_ci(z_top.values, z_mid.values)
+
+    # --- 리포트. **값으로 쓰는 문장은 값에서 나온다** (설계서 6.6 — largecap 에서
+    #     상수 문자열로 박힌 "하한은 못 넘었다"가 통과가 나오자 거짓말을 했다).
+    cell2 = ("**게이트 미달 — 읽지 않는다**" if underpowered
+             else f"{pt:+.2f}%p · 95% [{lo:+.2f}, {hi:+.2f}]")
+    body = [
+        "# PEAD 통과는 신호였나 구성이었나 — 귀속 검사",
+        "",
+        f"구간 {START.date()} ~ {END.date()} · 진입 `filed`+1 종가 · {HOLD_DAYS}거래일 보유 · "
+        f"판정 {COST_BPS:.0f}bp · 폭 {r['w'] * 100:.0f}%.",
+        "사전 등록: `docs/superpowers/specs/2026-08-16-pead-signal-vs-construction-design.md`.",
+        "",
+        "> **전략 개선이 아니라 귀속 검사다.** 답하는 질문은 하나 — **구성이 같은 대조군",
+        "> 대비, SUE 순서가 초과수익을 만드나.** 파라미터는 한 글자도 안 바꿨고, 바꾼 건",
+        "> ②의 상대 하나다: 같은 노출 매수보유 → **중위 분위 곡선**. 통과해도 수익이",
+        "> 커지지 않는다 — 통과는 \"그 8.4%p 중 일부가 신호였다\", 실패는 \"그 8.4%p 는",
+        "> 바구니 구성이었다\"는 뜻이다.",
+        "",
+        f"## 판정: **{verdict}** (①{'O' if pass1 else 'X'} AND ②{mark2})",
+        "",
+        "| | 무엇 | 통과선 | 실측 | |",
+        "|---|---|---|---|---|",
+        f"| ① 단면 | 상위 − 중위 60일 초과수익 | 유효표본 ≥ {MIN_EVENTS} · t ≥ +2 (단측) | "
+        f"n={len(top)}/{len(mid)} · {m_ls * 100:+.2f}% · t={t_ls:+.2f} | {'O' if pass1 else 'X'} |",
+        f"| ② 포트폴리오 | 두 캘린더타임 곡선 **차이**의 연수익 | 부트스트랩 95% 하한 > 0 | "
+        f"{cell2} | {mark2} |",
+        f"| ② 검출력 | 그 차이 추정량의 95% 반폭 | **게이트** {MIDBASE_MDE_LIMIT_PP:.0f}%p | "
+        f"MDE {r['mde']:.2f}%p | {'X' if underpowered else 'O'} |",
+        "",
+        "**하나만 통과하면 실패다.** ①은 단면에서 순서가 살아 있나, ②는 그게 들고 있는",
+        "동안 돈으로 남나 — 다른 실패 모드를 잡는다.",
+        "",
+        "### ①의 점추정을 \"차이\"로 읽으면 안 된다",
+        "",
+        "| 다리 | n | 60일 초과수익 | t |",
+        "|---|---|---|---|",
+        f"| 상위 {r['w'] * 100:.0f}% | {len(top)} | {m_top * 100:+.2f}% | {t_top:+.2f} |",
+        f"| 중위 {r['w'] * 100:.0f}% | {len(mid)} | {m_mid * 100:+.2f}% | {t_mid:+.2f} |",
+        f"| concat 추정량 | {len(top) + len(mid)} | {m_ls * 100:+.2f}% | {t_ls:+.2f} |",
+        "",
+        f"concat 의 평균은 `(n_top·m_top − n_mid·m_mid)/(n_top+n_mid)` 라 두 다리가 비슷한",
+        f"크기일 때 **진짜 차이의 약 절반**이다 — 실제 차이는 "
+        f"{(m_top - m_mid) * 100:+.2f}%p 이고 concat 은 {m_ls * 100:+.2f}% 다. "
+        "**t 는 영향받지 않는다**(분자·분모가 같이 줄어든다).",
+        "",
+        "### 노출은 보정하지 않았다 — 대신 나란히 낸다",
+        "",
+        "| 줄 | 연수익 | MDD | 평균 노출 |",
+        "|---|---|---|---|",
+        f"| 상위 {r['w'] * 100:.0f}% ({COST_BPS:.0f}bp) | {cagr_top:+.1f}% | "
+        f"{mdd((1 + r['p_top']).cumprod()):.1f}% | {r['e_top'] * 100:.0f}% |",
+        f"| 중위 {r['w'] * 100:.0f}% ({COST_BPS:.0f}bp) | {cagr_mid:+.1f}% | "
+        f"{mdd((1 + r['p_mid']).cumprod()):.1f}% | {r['e_mid'] * 100:.0f}% |",
+        "",
+        f"노출 차이는 {abs(r['e_top'] - r['e_mid']) * 100:.1f}%p 다. 두 다리가 같은 기계라",
+        "노출이 비슷할 것이라는 전제로 보정 없이 비교했고(설계서 6.4), 크게 벌어지면 그건",
+        "보정 실수가 아니라 **발견이다** — 이벤트 밀도가 다르다는 뜻이고 그 자체가",
+        "\"구성이 다르다\"의 증거다.",
+        "",
+        "## 폭 사다리 — 어디서 멈췄나 (설계서 4절)",
+        "",
+        "| 폭 | 상위 다리 | 중위 다리 | n (상위/중위) | MDE | |",
+        "|---|---|---|---|---|---|",
+    ] + [
+        f"| {x['w'] * 100:.0f}% | `pct >= {1 - x['w']:.2f}` | "
+        f"`{0.5 - x['w'] / 2:.2f} <= pct < {0.5 + x['w'] / 2:.2f}` | "
+        f"{len(x['top'])}/{len(x['mid'])} | {x['mde']:.2f}%p | "
+        + ("**← 판정** " if x is r and not underpowered else "")
+        + ("O" if x["mde"] <= MIDBASE_MDE_LIMIT_PP else "X") + " |"
+        for x in rungs
+    ] + [
+        "",
+        f"게이트 {MIDBASE_MDE_LIMIT_PP:.0f}%p 를 **처음 넘는 폭에서 멈추고 되돌아가지 않는다.** "
+        + (f"세 폭 전부 게이트를 못 넘었다 — 그래서 판정은 \"실패\"가 아니라 **\"미측정\"** 이고,"
+           " 창을 더 못 늘리므로(웨이백 첫 스냅샷 2017-08-28 이 천장) 여기서 닫힌다."
+           if underpowered else
+           f"{r['w'] * 100:.0f}% 에서 처음 넘었고(MDE {r['mde']:.2f}%p), 그 폭으로 판정했다."),
+        "",
+        "> **게이트는 ②의 점추정을 읽기 전에 걸었다.** `mde_pp` 는 구간 반폭만 반환하고",
+        "> 효과의 크기도 부호도 안 준다 — 폭을 고르는 동안 눈가림이 유지된다. 게이트를",
+        f"> 재기 전에 {MIDBASE_MDE_LIMIT_PP:.0f}%p 로 정한 근거는 설계서 3절이다: 기존 10%p 는 짝지은",
+        "> 설계에서 장식이 되고, 이미 본 1.8%p 근처로 잡으면 사전 등록이 아니다.",
+        "",
+        "### 짝짓기가 정밀도를 샀나 — 설계서 3절의 전제를 사후에 잰다",
+        "",
+        f"폭 {r['w'] * 100:.0f}% 에서 상대만 **같은 노출 매수보유**로 바꾸면 MDE 는 "
+        f"{mde_flat:.2f}%p 다. 중위 다리와 짝지었을 때가 {r['mde']:.2f}%p 이므로 짝짓기로 줄어든 "
+        f"반폭은 **{mde_flat - r['mde']:+.2f}%p** 다.",
+        "",
+        ("설계서 3절은 두 다리를 같은 풀에서 뽑으면 상관이 높아 MDE 가 **작게** 나올 것으로 보고"
+         " 게이트를 10%p 에서 3%p 로 조였다. **그 예상은 이 데이터에서 일어나지 않았다** —"
+         " 시장이 양쪽에서 상쇄될 것이라는 전제가 두 바구니의 실제 상관을 과대평가했다."
+         " 게이트가 장식이 아니었다는 것까지는 맞았고, 그 이유는 설계서가 적은 이유가 아니다."
+         if mde_flat <= r["mde"] else
+         "설계서 3절이 본 대로 짝짓기가 반폭을 줄였다. 게이트를 10%p 에 두었다면 이 사다리가"
+         " 첫 줄에서 통과했을 것이고, 그러면 1.8%p 급을 못 재는 설계로 판정을 쓰게 됐다."),
+        "",
+        "## 참고 — 10분위 사다리 (판정 아님)",
+        "",
+        "중위 분위가 정말 중립인지는 **가정**이다(설계서 6.3). 관계가 U 자면 중위가 가장",
+        "낮아 이 검정이 통과하기 쉬워지고, 계단형이면 중위가 이미 상위 칸이라 어려워진다.",
+        "",
+        "| 분위 | n | 60일 초과수익 | t |",
+        "|---|---|---|---|",
+    ] + [
+        f"| {qlo * 100:.0f}~{qhi * 100:.0f}% | {n} | {m * 100:+.2f}% | {t:+.2f} |"
+        for qlo, qhi, n, m, t in ladder
+    ] + [
+        "",
+        f"평균이 가장 큰 칸은 **{best_m[0] * 100:.0f}~{best_m[1] * 100:.0f}%**"
+        f"({best_m[3] * 100:+.2f}%), t 가 가장 큰 칸은 "
+        f"**{best_t[0] * 100:.0f}~{best_t[1] * 100:.0f}%**({best_t[4]:+.2f}) 다."
+        + (" 둘 다 상위 칸이다 — 사다리가 오른쪽으로 오르는 모양이라 중위를 중립으로 본"
+           " 가정이 지지된다." if monotone else
+           f" 상위 칸(평균 {ladder[-1][3] * 100:+.2f}% · t={ladder[-1][4]:+.2f})이 두 값 다"
+           " 최대는 아니다. **SUE 와 수익률의 관계가 단조가 아니라는 뜻이고, 그러면 중위"
+           " 분위를 \"신호가 없는 자리\"로 쓴 전제 자체가 흔들린다**(설계서 6.3)."
+           " 이 줄은 판정이 아니지만, 판정을 어느 방향으로 읽어야 하는지는 이 줄이 정한다 —"
+           " 중위가 중립이 아니면 ①의 상위−중위는 신호의 크기를 **과소**하게 잰다."),
+        "",
+        "## 참고 — 처음 본 2.6년 대 나머지 (판정 아님)",
+        "",
+        "largecap 재측정에서 ②를 넘긴 게 효과가 커져서가 아니라 창이 길어져서였다.",
+        "그 2.6년이 이번 차이를 혼자 만들고 있는지 본다.",
+        "",
+        "| 구간 | n (상위/중위) | ① concat | t | ② 차이 %p | 95% |",
+        "|---|---|---|---|---|---|",
+    ] + [
+        f"| {a.date()} ~ {b.date()} | {nt}/{nm} | {sm * 100:+.2f}% | {st:+.2f} | "
+        f"{spt:+.2f} | [{slo:+.2f}, {shi:+.2f}] |"
+        for a, b, nt, nm, sm, st, spt, slo, shi in subs
+    ] + [
+        "",
+        "## 참고 — 0bp 한 줄 (판정 아님)",
+        "",
+        f"비용을 0 으로 두면 두 곡선의 차이는 {z_pt:+.2f}%p · 95% [{z_lo:+.2f}, {z_hi:+.2f}] 다"
+        + (f" (판정 {COST_BPS:.0f}bp 에서는 {pt:+.2f}%p)." if not underpowered else "."),
+        "",
+        "양쪽 다리가 같은 6bp 를 진입일에 전액 문다. 두께가 비슷하면 비용은 차이에서 거의",
+        "상쇄되므로 비용 스윕 표는 판정에 아무 말도 안 한다 — 상쇄가 실제로 일어나는지",
+        "확인하려고 이 한 줄만 낸다(설계서 6.5).",
+        "",
+        "## 이 판정이 닫는 것",
+        "",
+    ] + ([
+        "②의 하한이 0 을 넘었다. **다음 단계는 실매매가 아니라 \"그 폭이 비용과 자리",
+        "제약을 견디나\"** 다 — 이 급의 효과는 마찰에 통째로 먹힐 수 있다(설계서 11절).",
+    ] if verdict == "통과" else [
+        "②는 게이트를 못 넘었으므로 점추정을 읽지 않는다. **\"차이가 없다\"도 \"있다\"도 아니고",
+        "\"이 설계로는 못 쟀다\"** 가 ②의 결론이다. 남은 손잡이가 없다 — 창은 웨이백 천장에",
+        "닿았고 폭은 30% 까지 다 썼다.",
+        "",
+        f"**①은 게이트와 무관하게 재졌고, 통과선 +2 를 {'넘었다' if pass1 else '못 넘었다'}"
+        f"(t={t_ls:+.2f}, n={len(top)}/{len(mid)}).** 단면에서 상위와 중위를 가르는 순서는"
+        + (" 살아 있다. ②만 못 쟀다." if pass1 else
+           " 이 창·이 유니버스에서 보이지 않는다. 그래서 닫는 문장은 ② 쪽이 \"못 쟀다\"고,"
+           " ① 쪽은 \"못 봤다\"다 — 둘을 합쳐 통과라고 부를 수 있는 자리는 없다."),
+        "",
+        "- **`filed` 진입 노선을 닫는다.** ②를 못 잰 채로 실매매·8-K로 나가면 전부 미검증",
+        "  위에 쌓인다(설계서 0절). 다음 후보는 EDGAR submissions 수급이고, `filed` 는",
+        "  10-Q 제출일이지 실적 발표일이 아니므로 그건 **다른 진입이지 같은 신호의 재시도가**",
+        "  **아니다.**",
+    ] if underpowered else [
+        "- **`filed` 진입 노선을 닫는다.** 상위 분위 · 60일 보유 · 이 유니버스 · 이 창에서",
+        "  SUE 순서는 바구니 구성과 구별되지 않는다.",
+        f"- **8-K 발표일 진입은 미측정으로 남긴다.** `filed` 당일 초과수익이 크다는 건 뉴스가",
+        "  이미 소화된 뒤에 사고 있을 가능성을 뜻한다. 그래서 정확한 문장은 \"신호가 없다\"가",
+        "  아니라 **\"filed 진입으로는 없다\"** 다. 다음 후보는 EDGAR submissions 수급이다.",
+        "- **실매매·자리·현금 제약은 전부 뒤로.** 통과해야 붙일 이유가 생긴다.",
+    ]) + [
+        "",
+        "**F-Score 대형주 노선도 같이 닫는다**(설계서 10절). `2026-08-16-fscore-largecap.md` 는",
+        "미측정이었고(MDE 13.05 > 10 · ① t=−0.74), 검출력을 올릴 유일한 손잡이인 창이 웨이백",
+        "천장에 이미 닿았다. 옛 t=−4.04 가 −0.74 로 사라진 건 창이 아니라 **유니버스** 때문이었고,",
+        "그 값은 신호가 아니라 생존자 편향이었다는 것까지가 이 노선의 마지막 기록이다.",
+        "",
+        "## 이 측정이 안 한 것",
+        "",
+        "- **새 데이터를 한 건도 안 받았다.** 캐시된 패널과 이벤트만 읽는다.",
+        "- **파라미터를 안 바꿨다.** 바꾼 건 ②의 상대 하나, 그리고 게이트가 요구할 때만 폭이다.",
+        "- **위약의 신뢰구간을 이제 냈다.** largecap 리포트는 점추정 두 개를 나란히 놓은",
+        "  것뿐이었고, 이 문서가 그 차이를 처음 검정한다.",
+        "",
+        f"이벤트 {len(ev)}건 · 재현: `python scripts/measure_pead.py largecap midbase` · "
+        "산수 점검 `... selftest`",
+        "",
+    ]
+
+    text = "\n".join(body)
+    print(text)
+    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
+    OUT_MD.write_text(text, encoding="utf-8")
+    print(f"저장: {OUT_MD}")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(selftest() if "selftest" in sys.argv else main())
+    if MIDBASE and not (LARGECAP or "selftest" in sys.argv):
+        raise SystemExit("midbase 는 largecap 과 같이 쓴다: "
+                         "python scripts/measure_pead.py largecap midbase")
+    raise SystemExit(selftest() if "selftest" in sys.argv else
+                     main_midbase() if MIDBASE else main())
