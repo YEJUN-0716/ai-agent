@@ -71,6 +71,7 @@ from modules import quant_pit as qp  # noqa: E402
 from scripts.measure_pead import (  # noqa: E402
     N_BOOT, _block_idx, attach_trades, calendar_curve, excess_cagr_ci,
     rank_percentile,
+    MDE_LIMIT_PP, mde_pp,
 )
 from scripts import measure_portfolio as mp  # noqa: E402  — PANEL 을 갈아끼운다
 from scripts.measure_portfolio import (  # noqa: E402
@@ -124,7 +125,6 @@ SEED = 20260814
 BLOCK = 20             # 캘린더타임 곡선의 날짜 블록 (measure_pead 와 같은 값)
 
 # 검출력 하한 — 설계서 3.2. **결과를 보기 전에 박은 값이다.**
-MDE_LIMIT_PP = 10.0    # 연 %p
 MIN_HELD = 3           # 이만큼 못 채운 날은 현금
 MIN_AVG_POSITIONS = 5.0
 
@@ -428,14 +428,17 @@ def block_t(values: np.ndarray, block: int) -> tuple:
 
 # ---------------------------------------------------------------- 검출력
 
-def mde_pp(flat_ret: np.ndarray) -> float:
-    """최소검출가능효과(연 %p) — **매수보유 줄만으로** 낸다.
+def mde_floor_pp(flat_ret: np.ndarray) -> float:
+    """MDE 의 **하한**(연 %p) — 기준선 줄만으로 낸다. **게이트가 아니다.**
 
-    ②의 통과선은 초과 연수익의 부트스트랩 95% 하한이므로, 검출 가능한 최소 효과는
-    그 추정량의 표준오차 × 1.96 이다. 전략을 보기 전에 낼 수 있게 초과 계열의
-    변동성을 **기준선 자신의 변동성으로 대신** 놓는다. 전략이 기준선보다 얌전할
-    수는 없으므로 이 값은 실제 MDE 의 **하한**이다 — 이것만으로 이미 한계를
-    넘으면 판정할 힘이 없는 게 확실하다는 뜻이고, 그게 이 가드가 필요한 방향이다.
+    초과 계열의 변동성 자리에 기준선 자신의 변동성을 넣은 값이다. 전략과 기준선이
+    완전히 붙어 있을 때만 이 값이 실제 MDE 와 같고, 갈라질수록 실제가 더 크다.
+    그래서 이건 "이것만으로 이미 한계를 넘으면 판정할 힘이 없는 게 확실하다"는
+    방향으로만 읽을 수 있다.
+
+    2026-08-14 F-Score 대형주 측정이 이 값(9.29)으로 게이트를 통과시켰는데 실제
+    반폭은 11.94 였다. 그래서 **게이트는 `measure_pead.mde_pp` 로 옮겼고** 이
+    함수는 리포트의 참고 줄로만 남는다 (설계서 3절).
     """
     idx = _block_idx(len(flat_ret), np.random.default_rng(SEED), BLOCK)
     boot = np.expm1(np.log1p(flat_ret)[idx].mean(axis=1) * 252) * 100
@@ -544,11 +547,17 @@ def selftest() -> int:
     for _, g in sh.groupby(sh["filed"].dt.to_period("M")):
         assert sorted(g["fscore"]) == sorted(ev.loc[g.index, "fscore"]), "달 안 분포가 변했다"
 
-    # 8) MDE 는 길이·변동성이 커질수록 커진다. 방향만 확인한다.
+    # 8) MDE 하한은 길이·변동성이 커질수록 커진다. 방향만 확인한다.
     rng = np.random.default_rng(0)
     quiet = rng.normal(0, 0.005, 1000)
     loud = rng.normal(0, 0.020, 1000)
-    assert mde_pp(loud) > mde_pp(quiet) > 0
+    assert mde_floor_pp(loud) > mde_floor_pp(quiet) > 0
+
+    # 8b) **게이트는 하한이 아니라 실측이다.** 갈라진 두 줄(rho 낮음)의 MDE 가
+    #     기준선 줄만으로 낸 하한보다 커야 한다 — 2026-08-15 롱숏에서 이 부등호를
+    #     반대로 알고 있었다가 게이트가 3.5배 빗나갔다.
+    strat = 0.5 * quiet + np.sqrt(1 - 0.5 ** 2) * rng.normal(0, 0.005, 1000)
+    assert mde_pp(strat, quiet) > mde_floor_pp(quiet)
 
     # 9) **상폐 거래가 안 사라진다** (소형주 설계서 5.2). 보유 중에 값이 끊기는
     #    종목을 넣어, 그 거래가 버려지지 않고 마지막 거래일 종가로 청산되는지.
@@ -631,8 +640,12 @@ def main() -> int:
     port, exposure = calendar_curve(top, close, COST_BPS, MIN_HELD)
     flat_ret = bench_ret * exposure
 
-    # **MDE 를 전략 결과보다 먼저 낸다** (설계서 3.2). 매수보유 줄만으로 나온다.
-    mde = mde_pp(flat_ret)
+    # **MDE 를 점추정보다 먼저 낸다.** 실제 두 줄로 재되 `mde_pp` 가 반폭만
+    # 반환하므로 여기서 효과의 크기도 부호도 알 수 없다 — 판정을 보고 게이트를
+    # 고를 방법이 구조적으로 없다 (2026-08-16 설계서 1절). 아래 `excess_cagr_ci`
+    # 호출은 이 두 줄 **다음에** 온다.
+    mde = mde_pp(port.values, flat_ret)
+    mde_floor = mde_floor_pp(flat_ret)      # 참고 — 기준선 줄만으로 낸 하한
     underpowered = mde > MDE_LIMIT_PP or avg_pos < MIN_AVG_POSITIONS
 
     pt, lo, hi = excess_cagr_ci(port.values, flat_ret)
@@ -755,21 +768,23 @@ def main() -> int:
         f"21일 IC({ic_stats[21][1]:+.4f}) · BM 스크린 없는 F>={SCORE_AT} 바구니 · 위약보다 나쁜 전략 줄.",
         "",
     ] if (pass1 and m_ic < 0) else []) + [
-        "## 검출력 — 전략을 보기 전에 낸 값 (설계서 3.2)",
+        "## 검출력 — 판정을 보기 전에 낸 값 (2026-08-16 설계서 1절)",
         "",
         "| | 값 | 한계 | |",
         "|---|---|---|---|",
-        f"| MDE (연 %p, 하한) | {mde:.2f} | <= {MDE_LIMIT_PP:.0f} | "
+        f"| **MDE (연 %p, 실제 두 줄)** | **{mde:.2f}** | <= {MDE_LIMIT_PP:.0f} | "
         f"{'X' if mde > MDE_LIMIT_PP else 'O'} |",
+        f"| MDE 하한 (기준선 줄만) | {mde_floor:.2f} | 참고 | |",
         f"| 평균 자리 수 (전 구간) | {avg_pos:.2f} | >= {MIN_AVG_POSITIONS:.0f} | "
         f"{'X' if avg_pos < MIN_AVG_POSITIONS else 'O'} |",
         f"| 보유일 평균 자리 수 | {float(n_held[n_held > 0].mean()) if (n_held > 0).any() else float('nan'):.2f}"
         " | 참고 | |",
         "",
-        "MDE 는 **매수보유 줄만으로** 낸다 — 초과 연수익 추정량의 부트스트랩 표준오차 × 1.96 이고,",
-        "초과 계열의 변동성 자리에 기준선 자신의 변동성을 넣었으므로 **실제 MDE 의 하한**이다.",
-        "quant_pit ②는 95% 구간이 20%p 폭이라 결과를 보기 전에 이미 결론이 정해져 있었다.",
-        "이 표를 먼저 내는 건 그 자를 또 쓰지 않기 위해서다."
+        "MDE 는 **실제 두 줄의 초과 연수익 95% 구간 반폭**이다. `mde_pp` 는 반폭만 반환하고",
+        "점추정을 반환하지 않으므로, 이 값을 내는 동안 효과의 크기도 부호도 안 보인다.",
+        "둘째 줄(기준선 줄만으로 낸 하한)은 2026-08-16 이전에 게이트로 쓰던 값이다 — 첫 판에서는",
+        "9.29 를 찍어 게이트를 통과시켰는데 실제 반폭은 11.94 였다. 하한을 게이트로 쓰면",
+        "**힘이 없는 측정이 통과한다**는 게 그때 드러났다 (설계서 3절)."
         if not underpowered else
         "**이 측정은 ②를 판정할 힘이 없다.** 통과도 실패도 아니라 미측정으로 적는다 — "
         "재기 전에 정한 규칙이고, 결과를 보고 만든 변명이 아니다.",
