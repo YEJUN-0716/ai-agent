@@ -226,7 +226,7 @@ def main() -> int:
         "## ③ 위약 — 등급이 값을 한 건가, 그냥 돈을 푼 건가", "",
         f"R1 과 **같은 트리거**(막힌 A후보)에서 취소 대상만 **등급을 안 보고 무작위**"
         f"로 고른 팔 {N_PLACEBO}회.", "",
-        f"| | 초과 연수익 (6bp) |", "|---|---|",
+        "| | 초과 연수익 (6bp) |", "|---|---|",
         f"| R1 (등급 보고 취소) | {r1_pt:+.2f}%p |",
         f"| 위약 {N_PLACEBO}회 평균 | {pl_pts.mean():+.2f}%p |",
         f"| 위약 5~95 백분위 | [{np.percentile(pl_pts, 5):+.2f}, "
@@ -265,8 +265,8 @@ def main() -> int:
         f"매수보유가 {cagr(float(bench.iloc[-1]), years):+.1f}% 다. 대기 취소로 "
         "좁힐 수 있는 거리가 아니다 — 이 측정이 답하려던 건 '지금 도는 러너를 "
         "조금 낫게 만들 수 있나' 하나였고, 그 답이 **'이 자로는 모른다'** 다.", "",
-        f"재현: `python scripts/measure_pending_cancel.py` · 산수 점검 "
-        f"`... selftest` + `python scripts/measure_portfolio.py selftest`", "",
+        "재현: `python scripts/measure_pending_cancel.py` · 산수 점검 "
+        "`... selftest` + `python scripts/measure_portfolio.py selftest`", "",
     ]
     text = "\n".join(body)
     print(text)

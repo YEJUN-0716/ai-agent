@@ -50,7 +50,6 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from modules import trade_plan_backtest as bt  # noqa: E402
