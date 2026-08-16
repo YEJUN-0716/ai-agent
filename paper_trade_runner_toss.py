@@ -73,9 +73,17 @@ TG_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
 UNIVERSE_NAME  = os.environ.get("UNIVERSE", "S&P 500 대형 30")
 _KRW_PER_USD   = float(os.environ.get("KRW_PER_USD",  "1400"))     # 원/달러 환율 fallback
 # 위험 기준 사이징. 이 시스템의 손절은 진입가에서 1.3~3% 밖에 안 떨어져 있어서
-# 위험을 1% 로 잡으면 한 종목이 자본의 40% 가 된다. 0.5% + 15% 상한이면 동시
+# 위험을 1% 로 잡으면 한 종목이 자본의 40% 가 된다. 15% 상한과 함께 동시
 # 5~7종목이 들어간다.
-RISK_PCT_PER_TRADE = float(os.environ.get("RISK_PCT_PER_TRADE", "0.5"))
+#
+# **0.5 → 0.31 (2026-08-16).** 이 값은 **플랜 위험** 1단위를 자본의 몇 % 로
+# 잡을지다(분모가 entry_ref - stop). 그런데 실제 체결은 구간 상단이라 손절까지
+# 실제 위험은 그 중앙 1.63배 · 최대 2.0배다 — 0.5 로 두면 손절 하나가 자본의
+# 0.81% 였고, 10칸이면 명목 5% 가 아니라 실질 8% 였다. 0.31 × 1.63 ≈ 0.5% 다.
+#
+# 균등 축소라 **손익분기 bp 는 안 바뀐다**(비율에서 약분된다). 기대 손익도
+# 같은 비율로 준다 — 이건 노출 다이얼이지 개선이 아니다.
+RISK_PCT_PER_TRADE = float(os.environ.get("RISK_PCT_PER_TRADE", "0.31"))
 MAX_POSITION_PCT   = float(os.environ.get("MAX_POSITION_PCT", "15"))
 # 플랜 계산에 필요한 일봉 길이 — trade_plan.MIN_BARS(60)와 숏 레짐 게이트(70봉)를
 # 모두 덮는다. 달력일 기준이라 휴장일을 감안해 넉넉히 잡는다.
@@ -734,11 +742,17 @@ def rank_plan_candidates(cands: list[dict]) -> list[dict]:
 def plan_position_size(equity_krw: float, entry_ref: float, stop: float, fx: float,
                        risk_pct: float = RISK_PCT_PER_TRADE,
                        max_pos_pct: float = MAX_POSITION_PCT) -> int:
-    """위험 기준 수량. 손절까지 맞으면 자본의 risk_pct% 를 잃도록 잡는다.
+    """위험 기준 수량. **플랜 위험** 1단위가 자본의 risk_pct% 가 되게 잡는다.
 
     금액이 아니라 위험을 고정해야 손절이 촘촘한 종목과 넓은 종목이 장부에
     같은 무게로 들어간다. 그게 R 단위로 성적을 재는 전제다.
     1주도 못 사면 0 (소수점 거래 불가).
+
+    분모는 `entry_ref - stop` 이다. **실제 체결가가 아니다** — 체결가로
+    나누면 손절 바로 위에 갭체결된 건에 수량이 폭발한다(위험 $0.10 → 수량
+    10배). 플랜 위험은 셋업 기하라 갭에 안 흔들린다. 대신 손절까지 실제
+    손실은 이 값의 1.0~2.0배(중앙 1.63)이고, RISK_PCT_PER_TRADE 가 그만큼을
+    감안한 값이다.
     """
     risk_per_share_krw = (entry_ref - stop) * fx
     if risk_per_share_krw <= 0 or entry_ref <= 0:
