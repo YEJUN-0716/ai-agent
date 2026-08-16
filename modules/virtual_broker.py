@@ -193,11 +193,10 @@ def last_close_price(symbol: str) -> float:
 # 나온 값이었다. 실제로 걸 수 있는 지정가로 다시 재면 actionable OOS 순평균은
 # **+0.022R** 이다 (docs/measurements/2026-08-12-entry-rule-daily.md).
 #
-# 2026-08-16 남은 불일치: 아래 `realized_r` 은 **체결가 기준**으로 나누는데
-# 수량은 **플랜 위험**(entry_ref - stop)으로 잡는다
-# (paper_trade_runner_toss.plan_position_size). 구간 상단에 체결되면 실제 주당
-# 위험이 계획보다 넓은데 장부는 손절을 항상 -1.00R 로 적어 손실을 과소 기록한다.
-# 백테스트는 2026-08-16 부터 플랜 위험을 분모로 쓴다 — 아직 안 맞춰 놨다.
+# 2026-08-16 해소: `realized_r` 의 분모도 **플랜 위험**(entry_ref - stop)이다.
+# 러너가 그 값으로 사이징하므로(plan_position_size) 장부의 R 이 실제 손익과
+# 같은 자를 쓴다. 예전엔 체결가로 나눠 손절이 늘 정확히 -1.00R 이었는데,
+# 구간 상단에 체결되면 실제 주당 위험이 계획보다 넓어 손실을 과소 기록했다.
 LIMIT_FILL_WINDOW = 20    # 진입 구간에 이 거래일 안에 안 닿으면 주문 폐기
 PLAN_HOLD_WINDOW  = 40    # 체결 후 이 거래일 안에 손절/목표 안 나면 시가 청산
 
@@ -238,13 +237,21 @@ def scan_plan_exit(bars: list[tuple], stop: float, target: float,
     return None
 
 
-def realized_r(entry_fill: float, stop: float, exit_price: float) -> float:
-    """실현 R = (청산가 − 진입가) ÷ (진입가 − 손절가). 롱 기준.
+def realized_r(entry_fill: float, stop: float, exit_price: float,
+               entry_ref: float | None = None) -> float:
+    """실현 R = (청산가 − 체결가) ÷ **플랜 위험**(entry_ref − 손절가). 롱 기준.
 
     이 값이 이 장부의 진짜 산출물이다. %수익률과 달리 백테스트의 기대값과
-    **같은 단위**라 직접 비교할 수 있다.
+    **같은 단위**라 직접 비교할 수 있다 — 그러려면 분모가 같아야 한다.
+    `trade_plan_backtest.placeable_r` 과 같은 자다.
+
+    분자는 실제 체결가, 분모는 플랜 위험이다. 러너는 플랜 위험으로 수량을
+    잡으므로(plan_position_size) 1R 의 원화 금액을 정하는 건 플랜 위험이다.
+    구간 상단에 체결되면 손절은 -1.00R 보다 **깊다** — 그게 실제 손실이다.
+
+    entry_ref 가 없는 옛 플랜은 체결가로 되돌아간다(2026-08-16 이전 주문).
     """
-    risk = entry_fill - stop
+    risk = (entry_ref if entry_ref else entry_fill) - stop
     if risk <= 0:
         return 0.0
     return (exit_price - entry_fill) / risk
@@ -313,7 +320,7 @@ def _settle_plan_exits(state: dict, fx: float) -> dict:
         state = _fill_sell(state, {"symbol": sym, "qty": qty},
                            exit_hit["price"], exit_hit["date"], fx)
         r = realized_r(float(plan["entry_fill"]), float(plan["stop"]),
-                       exit_hit["price"])
+                       exit_hit["price"], plan.get("entry_ref"))
         state["trades"][-1].update({
             "outcome":    exit_hit["outcome"],
             "r_realized": round(r, 3),

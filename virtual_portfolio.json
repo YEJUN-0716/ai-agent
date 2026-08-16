@@ -11,7 +11,8 @@
         "rr": 2.96,
         "grade": "A",
         "risk_pct": 2.39,
-        "entry_fill": 13.97
+        "entry_fill": 13.97,
+        "entry_ref": 13.8101
       }
     },
     "ORCL": {
@@ -24,7 +25,8 @@
         "rr": 8.99,
         "grade": "A",
         "risk_pct": 3.9,
-        "entry_fill": 151.99
+        "entry_fill": 151.99,
+        "entry_ref": 148.1165
       }
     },
     "MSFT": {
@@ -37,7 +39,8 @@
         "rr": 2.05,
         "grade": "B",
         "risk_pct": 2.16,
-        "entry_fill": 496.355
+        "entry_fill": 496.355,
+        "entry_ref": 491.9665
       }
     }
   },
@@ -56,7 +59,8 @@
         "target": 91.85,
         "rr": 5.58,
         "grade": "A",
-        "risk_pct": 2.56
+        "risk_pct": 2.56,
+        "entry_ref": 80.3674
       },
       "meta": {
         "score": 64.7,
@@ -84,7 +88,8 @@
         "target": 15.4,
         "rr": 2.76,
         "grade": "A",
-        "risk_pct": 4.38
+        "risk_pct": 4.38,
+        "entry_ref": 13.7419
       },
       "meta": {}
     },
@@ -102,7 +107,8 @@
         "target": 436.99,
         "rr": 4.82,
         "grade": "A",
-        "risk_pct": 3.25
+        "risk_pct": 3.25,
+        "entry_ref": 377.8088
       },
       "meta": {
         "score": 67.9,
@@ -130,7 +136,8 @@
         "target": 274.75,
         "rr": 7.82,
         "grade": "A",
-        "risk_pct": 2.52
+        "risk_pct": 2.52,
+        "entry_ref": 229.483
       },
       "meta": {
         "score": 68.5,
