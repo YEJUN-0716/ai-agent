@@ -45,7 +45,7 @@ COST_SWEEP = (0.0, 6.0, 20.0, 40.0)
 
 # paper_trade_runner_toss.py 와 같은 값이라야 이 곡선이 그 러너를 대표한다.
 MAX_POSITIONS = 10
-RISK_PCT_PER_TRADE = 0.5      # 1R = 자본의 %
+RISK_PCT_PER_TRADE = 0.31     # 플랜 위험 1단위 = 자본의 % (0.5 → 0.31, 2026-08-16)
 MAX_POSITION_PCT = 15.0       # 한 종목 명목가 상한 %
 # ponytail: 레짐별 자리 축소(bull 10 / neutral 7 / bear 4)는 안 넣었다. 넣으면
 # 2022 가 나아질 수 있지만 레짐 판정이 또 하나의 미검증 부품이라 여기서는
@@ -55,8 +55,8 @@ MAX_POSITION_PCT = 15.0       # 한 종목 명목가 상한 %
 def risk_fraction(risk_pct: float) -> float:
     """실효 1R = 자본의 몇 분율. 위험 기준 수량과 명목 상한 중 **작은 쪽**이 문다.
 
-    손절이 촘촘하면 위험 0.5% 를 채우려다 한 종목이 자본의 30% 가 되므로 15%
-    상한이 먼저 걸린다 — 그러면 실효 1R 은 0.5% 가 아니라 15% × 손절폭이다.
+    손절이 촘촘하면 위험을 채우려다 한 종목이 자본의 30% 가 되므로 15% 상한이
+    먼저 걸린다 — 그러면 실효 1R 은 RISK_PCT_PER_TRADE 가 아니라 15% × 손절폭이다.
     """
     if not (risk_pct > 0):
         return 0.0
