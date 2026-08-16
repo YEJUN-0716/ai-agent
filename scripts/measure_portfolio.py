@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-TRADES = Path("data/entry_rule_trades-daily.parquet")
+TRADES = Path(os.environ.get("TRADES", "data/entry_rule_trades-daily.parquet"))
 PANEL = Path(os.environ.get("PANEL", "data/price_panel_v1.parquet"))
 OUT_MD = Path("docs/measurements/2026-08-13-portfolio-vs-benchmark.md")
 OUT_MD2 = Path("docs/measurements/2026-08-13-timing-vs-exposure.md")
