@@ -69,16 +69,25 @@ def net_r(row: pd.Series, cost_bps: float) -> float:
     return float(row[f"{RULE}_r"]) - (cost_bps / 1e4) / (row["risk_pct"] / 100.0)
 
 
-def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIONS):
+def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIONS,
+             cancel: str | None = None, seed: int = 0):
     """자리 경합을 넣고 복리로 굴린다.
 
     자리는 **주문을 넣는 순간** 물린다(미체결이면 지정가 폐기일까지). 러너가
     held + pending 을 함께 세기 때문이다 — 자리를 체결 시점부터 세면 실제보다
     많이 잡는 낙관적인 장부가 된다.
+
+    `cancel` 은 그 대기 점유를 풀 수 있게 하는 실험용 손잡이다(기본 None = 현행).
+    `"grade"` 는 A등급 후보가 막혔을 때 대기 중인 B등급을 취소하고, `"random"` 은
+    같은 트리거에서 **등급을 안 보고** 무작위로 고른다 — 후자가 위약이다.
+    취소된 대기는 나중에 체결됐을 손익까지 **몰수한다.** 안 그러면 "취소했는데
+    체결은 그대로"인 유령 장부가 된다.
+    사전 등록: `docs/superpowers/specs/2026-08-16-pending-cancel-design.md`
     """
+    rng = np.random.default_rng(seed)
     equity = 1.0
     open_pos: list[dict] = []        # {"release", "ticker", "pnl", "filled", "risk_frac"}
-    taken = skipped_slot = skipped_dup = skipped_cash = 0
+    taken = skipped_slot = skipped_dup = skipped_cash = canceled = 0
     curve: list[tuple[pd.Timestamp, float]] = []
     exposure: list[tuple[pd.Timestamp, float]] = []
     pos_log: list[dict] = []         # 평가 기준 곡선(mtm_curve)이 쓴다
@@ -97,16 +106,47 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
         if any(p["ticker"] == row["ticker"] for p in open_pos):
             skipped_dup += 1
             continue
-        if len(open_pos) >= max_positions:
-            skipped_slot += 1
-            continue
-
         filled = row[f"{RULE}_outcome"] not in ("nofill", "skip")
         frac = risk_fraction(row["risk_pct"])
         # 명목 비중 = 위험분율 ÷ 손절폭 (상한 15%). 자리 10 × 15% = 150% 라
         # **자리만 세면 못 살 돈까지 산 장부가 된다.** 현금 계좌 기준으로
         # 합계 명목이 자본을 넘지 못하게 막는다 — 넘으면 그 주문은 못 낸다.
         notional = min(MAX_POSITION_PCT / 100.0, frac / (row["risk_pct"] / 100.0))
+
+        def is_blocked() -> bool:
+            return (len(open_pos) >= max_positions
+                    or sum(p["notional"] for p in open_pos) + notional > 1.0)
+
+        # 대기 취소. **A후보가 막혔을 때만** 방아쇠가 당겨지고, 취소해서 실제로
+        # 주문이 들어가는 경우에만 취소한다(풀어도 여전히 막히면 아무것도 안 판다).
+        if cancel and is_blocked() and row["cost_grade"] == "A":
+            pend = [p for p in open_pos
+                    if pd.isna(p["fill_date"]) or p["fill_date"] > day]
+            if cancel == "grade":
+                # 등급은 A < B 라 문자 비교로 "나보다 나쁜 것"이 그대로 나온다.
+                pend = [p for p in pend if p["grade"] > row["cost_grade"]]
+                pend.sort(key=lambda p: p["placed"])          # 오래 걸린 것부터
+            else:
+                pend = [pend[i] for i in rng.permutation(len(pend))]
+            held0 = sum(p["notional"] for p in open_pos)
+            drop, freed = [], 0.0
+            for p in pend:
+                if (len(open_pos) - len(drop) < max_positions
+                        and held0 - freed + notional <= 1.0):
+                    break
+                drop.append(p)
+                freed += p["notional"]
+            if (len(open_pos) - len(drop) < max_positions
+                    and held0 - freed + notional <= 1.0):
+                for p in drop:
+                    open_pos.remove(p)
+                    if p["log"] is not None:
+                        pos_log.remove(p["log"])
+                canceled += len(drop)
+
+        if len(open_pos) >= max_positions:
+            skipped_slot += 1
+            continue
         held = sum(p["notional"] for p in open_pos)
         if held + notional > 1.0:
             skipped_cash += 1
@@ -118,6 +158,9 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
             "release": release, "ticker": row["ticker"],
             "pnl": (net_r(row, cost_bps) * frac * equity) if filled else 0.0,
             "filled": filled, "risk_frac": frac, "notional": notional,
+            # 취소 규칙이 보는 것들. 체결일이 오늘보다 뒤면 **아직 대기**다.
+            "fill_date": row.get("fill_date", pd.NaT) if filled else pd.NaT,
+            "grade": row["cost_grade"], "placed": day, "log": None,
         })
         taken += 1
         if filled:
@@ -126,6 +169,7 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
                 "fill_date": row.get("fill_date", pd.NaT), "release": release,
                 "pnl": open_pos[-1]["pnl"],
             })
+            open_pos[-1]["log"] = pos_log[-1]
         exposure.append((day, sum(p["notional"] for p in open_pos if p["filled"])))
 
     close_until(pd.Timestamp.max)
@@ -133,7 +177,7 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
     return {
         "equity": equity, "curve": eq, "taken": taken,
         "skipped_slot": skipped_slot, "skipped_dup": skipped_dup,
-        "skipped_cash": skipped_cash, "pos_log": pos_log,
+        "skipped_cash": skipped_cash, "pos_log": pos_log, "canceled": canceled,
         "avg_open": float(np.mean([e for _, e in exposure])) if exposure else 0.0,
     }
 
@@ -301,14 +345,18 @@ def yearly(strat: pd.Series, bench: pd.Series, exposure: float) -> list[str]:
 def selftest() -> int:
     """슬롯·복리 산수만 손으로 확인한다. 시장 데이터 없이 돈다."""
     d = pd.Timestamp("2020-01-01")
-    def row(tk, day, out, r, rel):
+    def row(tk, day, out, r, rel, grade="A", fill=None):
         return {"ticker": tk, "entry_date": d + pd.Timedelta(days=day),
                 f"{RULE}_outcome": out, f"{RULE}_r": r, "risk_pct": 5.0,
                 "exit_date": d + pd.Timedelta(days=rel),
-                "expire_date": d + pd.Timedelta(days=rel)}
+                "expire_date": d + pd.Timedelta(days=rel), "cost_grade": grade,
+                "fill_date": pd.NaT if fill is None else d + pd.Timedelta(days=fill)}
 
-    # 손절폭 5% → 15% 상한이 0.75% 로 위험 0.5% 보다 크다 → 위험 기준이 문다.
-    assert abs(risk_fraction(5.0) - 0.005) < 1e-12
+    # **다이얼에 딸려가게 둔다.** 0.005 로 박아 뒀더니 위험 다이얼을 0.5 → 0.31
+    # 로 내린 커밋(00e2757)이 이 점검을 조용히 깨뜨렸고 아무도 안 돌렸다.
+    R = RISK_PCT_PER_TRADE / 100.0
+    # 손절폭 5% → 15% 상한이 0.75% 로 위험 다이얼보다 크다 → 위험 기준이 문다.
+    assert abs(risk_fraction(5.0) - R) < 1e-12
     # 손절폭 1% → 15% × 1% = 0.15% 로 상한이 먼저 문다.
     assert abs(risk_fraction(1.0) - 0.0015) < 1e-12
 
@@ -316,19 +364,19 @@ def selftest() -> int:
     df = pd.DataFrame([row("A", 0, "win", 2.0, 10), row("B", 1, "win", 2.0, 10)])
     r1 = simulate(df, 0.0, max_positions=1)
     assert r1["taken"] == 1 and r1["skipped_slot"] == 1, r1
-    assert abs(r1["equity"] - (1 + 2.0 * 0.005)) < 1e-12, r1["equity"]
+    assert abs(r1["equity"] - (1 + 2.0 * R)) < 1e-12, r1["equity"]
 
     # 자리가 2개면 둘 다 잡고, 두 번째는 첫 번째가 아직 안 닫혔으므로
     # **같은 자본**으로 사이징한다 (복리는 청산 뒤부터).
     r2 = simulate(df, 0.0, max_positions=2)
     assert r2["taken"] == 2, r2
-    assert abs(r2["equity"] - (1 + 2 * 2.0 * 0.005)) < 1e-12, r2["equity"]
+    assert abs(r2["equity"] - (1 + 2 * 2.0 * R)) < 1e-12, r2["equity"]
 
     # 첫 트레이드가 닫힌 뒤 들어온 두 번째는 불어난 자본으로 사이징한다.
     df2 = pd.DataFrame([row("A", 0, "win", 2.0, 10), row("B", 20, "win", 2.0, 30)])
     r3 = simulate(df2, 0.0, max_positions=1)
-    e1 = 1 + 2.0 * 0.005
-    assert abs(r3["equity"] - (e1 + 2.0 * 0.005 * e1)) < 1e-12, r3["equity"]
+    e1 = 1 + 2.0 * R
+    assert abs(r3["equity"] - (e1 + 2.0 * R * e1)) < 1e-12, r3["equity"]
 
     # 미체결은 손익 0 이지만 폐기일까지 **자리를 문다.**
     df3 = pd.DataFrame([row("A", 0, "nofill", 0.0, 10), row("B", 1, "win", 2.0, 10)])
@@ -339,6 +387,35 @@ def selftest() -> int:
     df4 = pd.DataFrame([row("A", 0, "win", 2.0, 10), row("A", 1, "win", 2.0, 10)])
     r5 = simulate(df4, 0.0, max_positions=10)
     assert r5["taken"] == 1 and r5["skipped_dup"] == 1, r5
+
+    # ── 대기 취소 (cancel=) ───────────────────────────────────────────
+    # 자리 1개. B 가 대기 중일 때 A 후보가 오면 취소하고 갈아탄다.
+    df5 = pd.DataFrame([row("B1", 0, "nofill", 0.0, 10, grade="B"),
+                        row("A1", 1, "win", 2.0, 10, grade="A", fill=1)])
+    base5 = simulate(df5, 0.0, max_positions=1)
+    assert base5["taken"] == 1 and base5["equity"] == 1.0, base5   # 현행: 못 산다
+    c5 = simulate(df5, 0.0, max_positions=1, cancel="grade")
+    assert c5["taken"] == 2 and c5["canceled"] == 1, c5
+    assert abs(c5["equity"] - (1 + 2.0 * R)) < 1e-12, c5["equity"]
+
+    # 취소된 대기가 **나중에 체결돼 이겼을** 손익은 몰수한다.
+    df6 = pd.DataFrame([row("B1", 0, "win", 3.0, 10, grade="B", fill=5),
+                        row("A1", 1, "win", 2.0, 10, grade="A", fill=1)])
+    c6 = simulate(df6, 0.0, max_positions=1, cancel="grade")
+    assert c6["canceled"] == 1, c6
+    assert abs(c6["equity"] - (1 + 2.0 * R)) < 1e-12, c6["equity"]  # 3.0R 은 없다
+    assert [p["ticker"] for p in c6["pos_log"]] == ["A1"], c6["pos_log"]
+
+    # **이미 체결된** 자리는 못 뺏는다 — 대기가 아니라 보유다.
+    df7 = pd.DataFrame([row("B1", 0, "win", 3.0, 10, grade="B", fill=0),
+                        row("A1", 1, "win", 2.0, 10, grade="A", fill=1)])
+    c7 = simulate(df7, 0.0, max_positions=1, cancel="grade")
+    assert c7["canceled"] == 0 and c7["taken"] == 1, c7
+
+    # B 후보는 아무것도 못 취소한다 (자기보다 나쁜 등급이 없다).
+    df8 = pd.DataFrame([row("B1", 0, "nofill", 0.0, 10, grade="B"),
+                        row("B2", 1, "win", 2.0, 10, grade="B", fill=1)])
+    assert simulate(df8, 0.0, max_positions=1, cancel="grade")["canceled"] == 0
 
     # ── 평가 기준 곡선 ────────────────────────────────────────────────
     days = pd.bdate_range("2020-01-01", periods=6)
@@ -355,7 +432,7 @@ def selftest() -> int:
     # 실현 곡선이었다면 낙폭 0 이었을 구간을 평가 곡선은 잡아낸다.
     assert mdd(m) < -4.9, mdd(m)
 
-    print("selftest 통과 (12건)")
+    print("selftest 통과 (20건)")
     return 0
 
 
