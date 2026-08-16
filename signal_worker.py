@@ -9,7 +9,7 @@ generate_system_signals()를 그대로 호출해 매수/매도 후보를 알려�
 import json
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 
 import app as core
 from modules import (analyst_log, analyst_scorecard, analyst_team,
@@ -219,6 +219,14 @@ def main():
 
     # ── 매수 시그널 → signal_log.json 저장 ──────────────────────────
     save_signal_log(actions)
+
+    # ── 오늘의 액션 전체 → latest_signals.json (대시보드 [오늘] 화면) ──
+    # 실패해도 워커 본 작업(통보·기록)을 막지 않는다.
+    try:
+        save_latest_signals(actions, rebal, universe_raw, capital)
+        print(f"latest_signals.json: 액션 {len(actions)}건 기록.")
+    except OSError as e:
+        print(f"[경고] latest_signals.json 기록 실패: {e}", file=sys.stderr)
 
 
 ANALYST_PANEL_DAYS = 400        # 12M 모멘텀 + 기술지표 워밍업에 필요한 달력일
@@ -687,6 +695,31 @@ def save_signal_log(actions):
         print(f"signal_log.json: {added}건 신규 기록 (누적 {len(signals)}건)")
     else:
         print("signal_log.json: 당일 신규 시그널 없음 (중복 스킵).")
+
+
+LATEST_SIGNALS_FILE = "latest_signals.json"
+
+
+def save_latest_signals(actions, rebal, universe, capital, path=None):
+    """배치가 만든 액션 목록을 통째로 남긴다 — 대시보드 [오늘] 화면이 읽는 유일한 원본.
+
+    signal_log.json 은 *매수* 시그널만 성적 추적용으로 쌓는다. 홈 화면은 매도·축소까지
+    포함한 오늘의 지시가 필요한데, 화면에서 generate_system_signals 를 다시 부르면
+    유니버스 전체 팩터 스캔이 걸린다. 그래서 워커가 결과를 그대로 적고 화면은 읽기만 한다.
+
+    actions 원소는 signal_engine._make_action 이 반환한 dict 그대로다 — 변환하지 않는다.
+    """
+    path = path or os.path.join(os.path.dirname(__file__), LATEST_SIGNALS_FILE)
+    payload = {
+        'generated_at': datetime.now().astimezone().isoformat(timespec='seconds'),
+        'universe': universe,
+        'capital': capital,
+        'rebal': rebal,
+        'actions': actions,
+    }
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return payload
 
 
 if __name__ == "__main__":

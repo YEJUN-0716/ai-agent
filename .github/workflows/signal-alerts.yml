@@ -85,11 +85,13 @@ jobs:
           git config user.name "GitHub Actions"
           # analyst_log 는 애널리스트 성적표의 유일한 재료다. 여기서 커밋하지
           # 않으면 매 실행마다 버려져 성적이 영원히 쌓이지 않는다.
-          git add signal_log.json data/analyst_log
+          # latest_signals.json 은 대시보드 [오늘] 화면이 읽는 오늘의 액션 목록이다.
+          # 여기서 커밋하지 않으면 러너 디스크에만 남고 화면은 영원히 빈 상태가 된다.
+          git add signal_log.json latest_signals.json data/analyst_log
           if ! git diff --staged --quiet; then
             git commit -m "chore: signal log update $(date -u +%Y-%m-%d)"
             git pull --rebase origin main
             git push
           else
-            echo "signal_log.json · analyst_log 변경 없음 — 커밋 생략"
+            echo "signal_log.json · latest_signals.json · analyst_log 변경 없음 — 커밋 생략"
           fi
