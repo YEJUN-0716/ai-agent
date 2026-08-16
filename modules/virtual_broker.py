@@ -186,8 +186,18 @@ def last_close_price(symbol: str) -> float:
 
 
 # ── 트레이드 플랜 주문 ─────────────────────────────────────────────────
-# 백테스트(modules/trade_plan_backtest._simulate_outcome)가 채점한 규칙 그대로다.
-# 숫자가 갈라지면 장부 성적을 백테스트의 +0.66R 과 같은 단위로 비교할 수 없다.
+# 백테스트(modules/trade_plan_backtest)가 채점한 규칙 그대로다.
+# 숫자가 갈라지면 장부 성적을 백테스트와 같은 단위로 비교할 수 없다.
+#
+# 2026-08-12 정정: 그 백테스트의 +0.66R 은 걸 수 없는 가격(구간 중간값)에서
+# 나온 값이었다. 실제로 걸 수 있는 지정가로 다시 재면 actionable OOS 순평균은
+# **+0.022R** 이다 (docs/measurements/2026-08-12-entry-rule-daily.md).
+#
+# 2026-08-16 남은 불일치: 아래 `realized_r` 은 **체결가 기준**으로 나누는데
+# 수량은 **플랜 위험**(entry_ref - stop)으로 잡는다
+# (paper_trade_runner_toss.plan_position_size). 구간 상단에 체결되면 실제 주당
+# 위험이 계획보다 넓은데 장부는 손절을 항상 -1.00R 로 적어 손실을 과소 기록한다.
+# 백테스트는 2026-08-16 부터 플랜 위험을 분모로 쓴다 — 아직 안 맞춰 놨다.
 LIMIT_FILL_WINDOW = 20    # 진입 구간에 이 거래일 안에 안 닿으면 주문 폐기
 PLAN_HOLD_WINDOW  = 40    # 체결 후 이 거래일 안에 손절/목표 안 나면 시가 청산
 
@@ -244,7 +254,7 @@ def place_limit_entry(symbol: str, qty: int, limit_price: float, plan: dict,
                       market: str = "US", meta: dict | None = None) -> dict:
     """진입 구간 지정가 매수를 예약한다. LIMIT_FILL_WINDOW 안에 안 닿으면 폐기.
 
-    시가 시장가로 사면 손절폭과 R:R 이 계획과 달라져, 백테스트가 잰 +0.66R 이
+    시가 시장가로 사면 손절폭과 R:R 이 계획과 달라져, 백테스트가 잰 값이
     이 장부에 적용되지 않는다. 그래서 백테스트가 채점한 방식 그대로 기다린다.
 
     예약 현금은 `qty × limit_price` 로 잡는다. 체결가는 min(시가, 지정가) 라

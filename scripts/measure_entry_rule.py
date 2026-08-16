@@ -45,7 +45,7 @@ import pandas as pd  # noqa: E402
 
 from modules.intraday_session import session_ids  # noqa: E402
 from modules.trade_plan import MIN_BARS, build_trade_plan  # noqa: E402
-from modules.trade_plan_backtest import _simulate_outcome  # noqa: E402
+from modules.trade_plan_backtest import _simulate_outcome, placeable_r  # noqa: E402
 from modules.stat_validation import permutation_test_trades  # noqa: E402
 
 # MODE=daily 로 **일봉**에도 같은 칼을 댄다. 15분봉에서 죽은 그 가정
@@ -192,37 +192,6 @@ def _sim_single_line(rule: str, plan: dict, args: dict, far: float) -> dict:
     return {**res, "risk_pct": risk_pct, "line": line}
 
 
-def _gap_adjust(res: dict, plan: dict, limit: float, opens, plan_risk: float,
-                *, self_basis: bool = False) -> dict:
-    """지정가 아래로 갭이 났으면 **그날 시가**에 채워진다 — 그 체결가로 R 재계산.
-
-    승패는 손절·목표가 정하므로 안 바뀐다. 바뀌는 것은 얼마에 샀느냐뿐이라
-    R 만 다시 낸다 (timeout 은 원 백테스트가 0 으로 세므로 그대로 0).
-    """
-    j = res["fill_idx"]
-    if j is None or res["outcome"] in ("nofill", "timeout", "skip"):
-        return {"outcome": res["outcome"], "r": res["r"] if j is None else 0.0,
-                "risk_pct": res.get("risk_pct", float("nan"))}
-    long = plan["direction"] == "long"
-    fill = min(opens[j], limit) if long else max(opens[j], limit)
-    if self_basis:
-        # 갭으로 더 좋게 샀으면 위험폭도 그만큼 좁아진다 — 비용이 몇 R 인지가
-        # 같이 바뀌므로 risk_pct 도 체결가 기준으로 다시 낸다.
-        plan_risk = (fill - plan["stop"]) if long else (plan["stop"] - fill)
-        if not (plan_risk > 0):
-            return {"outcome": "skip", "r": 0.0, "risk_pct": float("nan")}
-    if res["outcome"] == "loss":
-        exit_px = plan["stop"]
-    elif res["outcome"] == "win":
-        exit_px = plan["targets"][0]
-    else:                                    # eod — 세션 마지막 봉 시가
-        exit_px = opens[res["exit_idx"]]
-    r = (exit_px - fill) if long else (fill - exit_px)
-    return {"outcome": res["outcome"], "r": r / plan_risk,
-            "risk_pct": (plan_risk / fill * 100.0) if self_basis else
-                        res.get("risk_pct", float("nan"))}
-
-
 def _run_ticker(args):
     tk, df = args
     highs = df["High"].to_numpy(dtype=float)
@@ -254,7 +223,7 @@ def _run_ticker(args):
         far = plan["entry"]["low"] if long else plan["entry"]["high"]
         lines = {"ref": ref, "aggressive": aggressive, "far": far}
         for gap_rule, base in _GAP_OF.items():
-            out[gap_rule] = _gap_adjust(
+            out[gap_rule] = placeable_r(
                 out[base], plan, lines[_LIMIT_OF[base]], all_opens, risk,
                 self_basis=base in _SELF_BASIS)
         rows.append({

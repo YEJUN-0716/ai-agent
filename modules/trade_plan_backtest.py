@@ -7,8 +7,15 @@
     각 시점 유효 플랜 → 진입 구간에 가격이 닿았나(체결) → 닿았다면 손절과
     목표 중 무엇을 먼저 쳤나 → 방향별 체결률·승률·평균 R·기대값(R).
 
-R 은 위험 1단위 기준 손익. 목표를 먼저 치면 +R:R, 손절을 먼저 치면 -1.0,
-둘 다 같은 봉이면 **손절 우선(보수적)**, 홀드 기간 내 미결이면 timeout(0).
+R 은 위험 1단위 기준 손익. 둘 다 같은 봉이면 **손절 우선(보수적)**, 홀드
+기간 내 미결이면 timeout(0).
+
+**산 값은 구간 중간값이 아니라 걸 수 있는 지정가다.** 러너는 구간 상단에
+지정가를 걸고(`paper_trade_runner_toss.py:667`) 갭이 나면 그날 시가에
+채워진다 — `placeable_r` 이 그 값으로 R 을 다시 낸다. 2026-08-12 측정에서
+중간값 가정이 일봉 OOS +0.489R 중 +0.467R 을 만들고 있었다
+(`docs/measurements/2026-08-12-entry-rule-daily.md`). 그래서 손절이 -1.0 이
+아니다 — 플랜보다 비싸게 샀으면 그만큼 더 잃는다.
 
 `_simulate_outcome` 는 명시적 플랜 좌표만 받는 순수 함수라 결정적으로
 테스트한다. `backtest_trade_plans` 는 매 봉 build_trade_plan 을 재계산하므로
@@ -96,6 +103,49 @@ def _simulate_outcome(
     return {"outcome": "timeout", "r": 0.0, "fill_idx": fill_idx, "exit_idx": None}
 
 
+def placeable_r(res: dict, plan: dict, limit: float, opens: np.ndarray,
+                plan_risk: float, *, self_basis: bool = False) -> dict:
+    """지정가에 **실제로 채워지는 값**으로 R 을 다시 낸다.
+
+    체결 조건(롱=구간 상단 터치)은 그대로다 — 바뀌는 것은 산 값뿐이다.
+    지정가 아래로 갭이 나면 지정가가 아니라 그날 시가에 채워진다
+    (`virtual_broker.scan_limit_fill` 이 이미 min(시가, 지정가) 를 쓴다).
+    승패는 손절·목표가 정하므로 안 바뀐다 — R 만 다시 낸다.
+
+    분모는 기본이 **플랜 위험**(|entry_ref − stop|) 이다: 러너가 그 값으로
+    사이징한다(`paper_trade_runner_toss.plan_position_size`). self_basis 는
+    라인 하나에 걸고 그 라인 기준으로 사이징하는 경우(D·E)에만 쓴다.
+    """
+    j = res["fill_idx"]
+    if j is None:                            # 미체결 — 산 적이 없다
+        return {**res, "fill_price": float("nan"),
+                "risk_pct": res.get("risk_pct", float("nan"))}
+    long = plan["direction"] == "long"
+    fill = min(opens[j], limit) if long else max(opens[j], limit)
+    if res["outcome"] in ("timeout", "skip"):
+        # 미결은 원 백테스트가 0 으로 센다. 산 값은 남긴다 — 체결됐으니
+        # 거래비용은 실제로 나갔고, 비용 환산에 그 값이 필요하다.
+        return {**res, "r": 0.0, "fill_price": float(fill),
+                "risk_pct": res.get("risk_pct", float("nan"))}
+    if self_basis:
+        # 갭으로 더 좋게 샀으면 위험폭도 그만큼 좁아진다 — 비용이 몇 R 인지가
+        # 같이 바뀌므로 risk_pct 도 체결가 기준으로 다시 낸다.
+        plan_risk = (fill - plan["stop"]) if long else (plan["stop"] - fill)
+        if not (plan_risk > 0):
+            return {**res, "outcome": "skip", "r": 0.0,
+                    "fill_price": float(fill), "risk_pct": float("nan")}
+    if res["outcome"] == "loss":
+        exit_px = plan["stop"]
+    elif res["outcome"] == "win":
+        exit_px = plan["targets"][0]
+    else:                                    # eod — 세션 마지막 봉 시가
+        exit_px = opens[res["exit_idx"]]
+    r = (exit_px - fill) if long else (fill - exit_px)
+    return {**res, "r": float(r / plan_risk), "fill_price": float(fill),
+            "risk_pct": (plan_risk / fill * 100.0) if self_basis else
+                        res.get("risk_pct", float("nan"))}
+
+
 def _stats(trades: list[dict]) -> dict:
     """트레이드 목록 → 체결률·승률·평균R·기대값 집계."""
     filled = [t for t in trades if t["outcome"] in ("win", "loss", "timeout", "eod")]
@@ -139,7 +189,8 @@ def backtest_trade_plans(
 
     highs = df["High"].to_numpy(dtype=float)
     lows = df["Low"].to_numpy(dtype=float)
-    opens = df["Open"].to_numpy(dtype=float) if sessions is not None else None
+    # 갭 체결가에 항상 필요하다 — 단타(EOD 청산)만 쓰던 값이 아니다.
+    opens = df["Open"].to_numpy(dtype=float)
     n = len(df)
     trades: list[dict] = []
 
@@ -156,6 +207,13 @@ def backtest_trade_plans(
             fill_window=fill_window, hold_window=hold_window,
             sessions=sessions, opens=opens, entry_ref=plan["entry"]["ref"],
         )
+        # 백테스트는 구간 상단만 닿아도 체결로 치면서 산 값은 구간 중간으로
+        # 적었다 — 시장에 없던 가격이다. 러너가 실제로 거는 지정가(구간 상단,
+        # 갭이면 시가)로 R 을 다시 낸다.
+        long = plan["direction"] == "long"
+        limit = plan["entry"]["high"] if long else plan["entry"]["low"]
+        res = placeable_r(res, plan, limit, opens,
+                          abs(plan["entry"]["ref"] - plan["stop"]))
         # 가격 좌표도 함께 남긴다. R 은 위험 1단위 기준이라 그 자체로는
         # 거래비용을 못 잰다 — 같은 +1R 이어도 손절이 1% 떨어져 있으면
         # 수수료가 5% 떨어진 경우의 다섯 배를 먹는다. 비용을 R 로 바꾸려면
