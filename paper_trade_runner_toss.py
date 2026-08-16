@@ -388,21 +388,35 @@ def _get_sector(ticker: str) -> str:
 
 # ── 포지션 reconciliation ───────────────────────────────────────────────
 def reconcile_positions(peaks: dict, actual_positions: list,
-                         alert_fn) -> dict:
+                         legacy_positions: list, alert_fn) -> dict:
     """
     peak_prices.json(시스템 기록) vs 실제 포지션 불일치 감지 및 자동 수정.
-    - 시스템O/계좌X: 외부 매도 → peak 항목 삭제
+    - 시스템O/계좌X: 외부 매도 → peak 항목 삭제 + 알림
     - 시스템X/계좌O: 외부 매수 → 현재가로 peak 초기화
+    - 플랜 포지션이 peaks 에 있으면 조용히 뺀다 (아래 참조)
+
+    **peaks 는 트레일링 스톱 전용이고, 트레일링은 플랜 없는 기존 보유분에만
+    붙는다**(2-2 단계와 같은 기준). 그래서 대사 대상도 legacy 뿐이다.
+    플랜 포지션까지 넣으면 이렇게 돈다: 오늘 orphan 으로 판정돼 peak 가
+    생기고 → 손절/목표로 청산되면(settle_pending 경로라 sell_done 에 안 들어와
+    peak 가 안 지워진다) → 다음 날 ghost 로 잡혀 **"외부 매도 의심"** 알림이
+    뜬다. 가상 장부에는 외부 매도라는 게 존재할 수 없으므로 전부 거짓 경보였다
+    (2026-08-14 ALLY·KHC·VZ 3건).
     """
     actual_syms   = {p["symbol"] for p in actual_positions}
+    legacy_syms   = {p["symbol"] for p in legacy_positions}
     peak_syms     = set(peaks.keys())
     ghost         = peak_syms - actual_syms   # 시스템엔 있는데 계좌에 없음
-    orphan        = actual_syms - peak_syms   # 계좌엔 있는데 시스템에 없음
+    stale         = (peak_syms & actual_syms) - legacy_syms  # 플랜 포지션
+    orphan        = legacy_syms - peak_syms   # 계좌엔 있는데 시스템에 없음
+
+    for sym in stale:
+        peaks.pop(sym, None)
 
     if not ghost and not orphan:
         return peaks
 
-    pos_map = {p["symbol"]: p for p in actual_positions}
+    pos_map = {p["symbol"]: p for p in legacy_positions}
 
     if ghost:
         msgs = ["⚠️ *포지션 불일치* (외부 매도 의심)"]
@@ -866,9 +880,13 @@ def main():
     print(f"현재 보유 {len(held)}개: {list(held.keys())}")
 
     # 2-1. peak_prices 로드 & 포지션 reconciliation
+    #
+    # legacy 판정을 대사보다 **먼저** 한다 — peaks 는 트레일링 전용이라
+    # 대사 대상도 legacy 뿐이다 (reconcile_positions 주석 참조).
+    legacy_positions = [p for p in positions if not (p.get("_raw") or {}).get("plan")]
     peaks = load_peak_prices()
     if positions:
-        peaks = reconcile_positions(peaks, positions, send_tg)
+        peaks = reconcile_positions(peaks, positions, legacy_positions, send_tg)
 
     # 2-2. 트레일링 스톱 체크 — **플랜 없이 산 기존 보유분만**.
     #
@@ -876,7 +894,6 @@ def main():
     # 겹치면 백테스트에 없던 규칙이 섞여 R 이 거짓이 된다. 반대로 KHC·GM 등 예전
     # 팩터 매수분은 라인 없이 산 것이라 사후에 라인을 붙일 수 없다. 그래서 각자
     # 자기 규칙으로 마무리한다.
-    legacy_positions = [p for p in positions if not (p.get("_raw") or {}).get("plan")]
     sell_results, sell_done = [], set()
     if legacy_positions and TRAIL_STOP_PCT > 0:
         print(f"\n트레일링 스톱 점검 ({TRAIL_STOP_PCT:.0f}%, 기존 팩터 보유 "
