@@ -79,6 +79,33 @@ def test_sim_timeout():
     assert r["r"] == 0.0
 
 
+# ── 걸 수 있는 체결가 ──────────────────────────────────────────────
+#
+# 유령 체결: 구간 **상단** 터치를 체결로 치면서 산 값은 구간 **중간**
+# (entry_ref)으로 적는 것. 시장에 없던 가격이다. 2026-08-12 측정에서 일봉
+# OOS 이익의 70% 가 여기서 나왔다(`docs/measurements/2026-08-12-entry-rule-daily.md`).
+
+def test_placeable_fill_is_the_limit_not_the_zone_mid():
+    plan = {"direction": "long", "stop": 93.0, "targets": [102.0],
+            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}}
+    opens = _arr(100, 99, 98)                 # 갭 없음 → 지정가 97 에 채워진다
+    res = {"outcome": "loss", "r": -1.0, "fill_idx": 1, "exit_idx": 2}
+    got = bt.placeable_r(res, plan, 97.0, opens, plan_risk=3.0)
+    assert got["fill_price"] == 97.0
+    # 플랜보다 1 비싸게 샀으므로 손절은 -1.0 이 아니라 -4/3 이다
+    assert abs(got["r"] - (93.0 - 97.0) / 3.0) < 1e-9
+
+
+def test_placeable_fill_uses_open_on_gap_down():
+    plan = {"direction": "long", "stop": 93.0, "targets": [102.0],
+            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}}
+    opens = _arr(100, 94, 98)                 # 지정가 아래로 갭 → 시가에 채워진다
+    got = bt.placeable_r({"outcome": "win", "r": 2.0, "fill_idx": 1, "exit_idx": 2},
+                         plan, 97.0, opens, plan_risk=3.0)
+    assert got["fill_price"] == 94.0
+    assert abs(got["r"] - (102.0 - 94.0) / 3.0) < 1e-9
+
+
 # ── 집계 ───────────────────────────────────────────────────────────
 def test_stats_win_rate_and_expectancy():
     trades = [
@@ -148,3 +175,18 @@ def test_trades_carry_price_coordinates():
             assert t["stop_price"] < t["entry_ref"] < t["target_price"]
         else:
             assert t["target_price"] < t["entry_ref"] < t["stop_price"]
+
+
+def test_backtest_scores_on_the_placeable_fill():
+    """`backtest_trade_plans` 가 실제로 체결가로 채점하는가 (유령 재발 방지)."""
+    trades = bt.backtest_trade_plans(_oscillating(), fill_window=10,
+                                     hold_window=15)["trades"]
+    losses = [t for t in trades if t["outcome"] == "loss"]
+    assert losses, "손절 트레이드가 없으면 이 테스트가 무의미하다"
+    for t in losses:
+        risk = abs(t["entry_ref"] - t["stop_price"])
+        want = ((t["stop_price"] - t["fill_price"]) if t["direction"] == "long"
+                else (t["fill_price"] - t["stop_price"])) / risk
+        assert abs(t["r"] - want) < 1e-9
+    # 구간 중간값으로 채점하면 손절이 전부 정확히 -1.0 이다
+    assert any(abs(t["r"] + 1.0) > 1e-9 for t in losses)

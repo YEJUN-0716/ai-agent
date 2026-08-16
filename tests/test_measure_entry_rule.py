@@ -73,7 +73,7 @@ def test_갭으로_더_좋게_사면_위험폭이_좁아진다():
     ctx = _ctx(bars)
     base = m._sim("D_하단지정가", plan, ctx)
     assert base["fill_idx"] == 1
-    gap = m._gap_adjust(base, plan, 100.0, ctx["all_opens"],
+    gap = m.placeable_r(base, plan, 100.0, ctx["all_opens"],
                         plan_risk=3.0, self_basis=True)
     assert gap["outcome"] == base["outcome"]
     # 위험폭이 1.0 → 0.5 로 반토막 = 같은 6bp 가 두 배 R 을 먹는다.
