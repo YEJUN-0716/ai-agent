@@ -106,6 +106,44 @@ def test_placeable_fill_uses_open_on_gap_down():
     assert abs(got["r"] - (102.0 - 94.0) / 3.0) < 1e-9
 
 
+# ── 걸 수 있는 청산가 ──────────────────────────────────────────────
+#
+# 진입에 적용한 규칙이 청산에도 걸려야 한다. 손절가·목표가를 그대로 적으면
+# 갭을 지나간 날 **시장에 없던 가격**으로 파는 것이다. 2026-08-16 측정에서
+# actionable 롱의 1.17% 가 손절 아래에서 체결되고도 평균 +1.36R 로 기록됐다 —
+# `loss` 라벨을 붙여 놓고 이익을 적고 있었다.
+
+def test_gap_through_the_stop_exits_at_the_open_not_the_stop():
+    plan = {"direction": "long", "stop": 93.0, "targets": [102.0],
+            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}}
+    opens = _arr(100, 99, 90)                 # 손절 아래로 갭한 날 청산
+    got = bt.placeable_r({"outcome": "loss", "r": -1.0, "fill_idx": 1, "exit_idx": 2},
+                         plan, 97.0, opens, plan_risk=3.0)
+    assert got["exit_price"] == 90.0          # 93 에 팔 수 있었던 적이 없다
+    assert abs(got["r"] - (90.0 - 97.0) / 3.0) < 1e-9
+
+
+def test_fill_below_the_stop_is_not_a_profit():
+    """진입 갭이 손절보다 아래면 사자마자 손절 밖이다. 같은 봉에서 나간다."""
+    plan = {"direction": "long", "stop": 93.0, "targets": [102.0],
+            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}}
+    opens = _arr(100, 90, 90)                 # 지정가 97 아래, 손절 93 아래로 갭
+    got = bt.placeable_r({"outcome": "loss", "r": -1.0, "fill_idx": 1, "exit_idx": 1},
+                         plan, 97.0, opens, plan_risk=3.0)
+    assert got["fill_price"] == 90.0 and got["exit_price"] == 90.0
+    assert got["r"] == 0.0                    # 예전엔 (93−90)/3 = **+1.0R** 이었다
+
+
+def test_gap_through_the_target_exits_at_the_open_not_the_target():
+    plan = {"direction": "long", "stop": 93.0, "targets": [102.0],
+            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}}
+    opens = _arr(100, 99, 108)                # 목표 위로 갭 → 지정가 매도가 시가에
+    got = bt.placeable_r({"outcome": "win", "r": 2.0, "fill_idx": 1, "exit_idx": 2},
+                         plan, 97.0, opens, plan_risk=3.0)
+    assert got["exit_price"] == 108.0
+    assert abs(got["r"] - (108.0 - 97.0) / 3.0) < 1e-9
+
+
 # ── 집계 ───────────────────────────────────────────────────────────
 def test_stats_win_rate_and_expectancy():
     trades = [
@@ -185,8 +223,12 @@ def test_backtest_scores_on_the_placeable_fill():
     assert losses, "손절 트레이드가 없으면 이 테스트가 무의미하다"
     for t in losses:
         risk = abs(t["entry_ref"] - t["stop_price"])
-        want = ((t["stop_price"] - t["fill_price"]) if t["direction"] == "long"
-                else (t["fill_price"] - t["stop_price"])) / risk
+        long = t["direction"] == "long"
+        want = ((t["exit_price"] - t["fill_price"]) if long
+                else (t["fill_price"] - t["exit_price"])) / risk
         assert abs(t["r"] - want) < 1e-9
+        # 손절 청산가는 손절가보다 좋을 수 없다 — 갭을 지나가면 더 나쁘다
+        assert t["exit_price"] <= t["stop_price"] if long \
+            else t["exit_price"] >= t["stop_price"]
     # 구간 중간값으로 채점하면 손절이 전부 정확히 -1.0 이다
     assert any(abs(t["r"] + 1.0) > 1e-9 for t in losses)

@@ -8,9 +8,11 @@
 (백테스트 쪽 규칙은 modules/trade_plan_backtest._simulate_outcome)
 """
 
+import numpy as np
 import pytest
 
 import paper_trade_runner_toss as runner
+from modules import trade_plan_backtest as bt
 from modules import virtual_broker as vb
 
 
@@ -80,6 +82,39 @@ def test_realized_r_divides_by_plan_risk_not_by_the_fill():
     assert vb.realized_r(98.0, 95.0, 95.0, entry_ref=100.0) == pytest.approx(-0.6)
     # entry_ref 가 없는 옛 플랜은 체결가로 되돌아간다(하위호환).
     assert vb.realized_r(98.0, 95.0, 95.0) == pytest.approx(-1.0)
+
+
+def test_ledger_and_backtest_price_the_same_gap_identically():
+    """두 자가 갈라지는 걸 잡는 유일한 테스트.
+
+    2026-08-16 에 실제로 갈라져 있었다 — 장부는 갭을 지나간 손절을 시가로
+    적었는데 백테스트는 손절가로 적어, 손절 아래에서 체결된 건에 **+1.36R**
+    을 기록했다. 새 규칙을 한쪽에만 넣으면 여기서 죽는다.
+    """
+    plan = {"direction": "long", "stop": 93.0, "targets": [102.0],
+            "entry": {"low": 95.0, "high": 97.0, "ref": 96.0}}
+    limit, plan_risk = 97.0, 3.0
+
+    for label, (o, h, low, c) in {
+        "손절 아래로 갭": (90.0, 91.0, 89.0, 90.0),
+        "손절을 장중에 이탈": (96.0, 96.5, 92.0, 92.5),
+        "목표 위로 갭": (108.0, 109.0, 107.0, 108.5),
+    }.items():
+        entry_bar = (96.0, 97.5, 95.0, 96.5)      # 지정가 97 에 체결되는 봉
+        ledger_fill = vb.scan_limit_fill([("d0", *entry_bar)], limit)
+        exit_hit = vb.scan_plan_exit([("d0", *entry_bar), ("d1", o, h, low, c)],
+                                     plan["stop"], plan["targets"][0])
+        ledger_r = vb.realized_r(ledger_fill["price"], plan["stop"],
+                                 exit_hit["price"], entry_ref=plan["entry"]["ref"])
+
+        opens = np.array([100.0, entry_bar[0], o])
+        got = bt.placeable_r({"outcome": exit_hit["outcome"], "r": 0.0,
+                              "fill_idx": 1, "exit_idx": 2},
+                             plan, limit, opens, plan_risk)
+
+        assert got["fill_price"] == ledger_fill["price"], label
+        assert got["exit_price"] == exit_hit["price"], label
+        assert got["r"] == pytest.approx(ledger_r), label
 
 
 # ── 사이징 ─────────────────────────────────────────────────────────────

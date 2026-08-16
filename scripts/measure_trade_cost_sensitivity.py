@@ -86,8 +86,9 @@ def _run_ticker(args):
             "entry_ref": t["entry_ref"], "stop_price": t["stop_price"],
             "target_price": t["target_price"],
             # 비용은 **실제로 낸 값**에 붙는다. 지정가(구간 상단)에 채워지므로
-            # entry_ref 가 아니다 — 2026-08-16 정정.
-            "fill_price": t["fill_price"],
+            # entry_ref 가 아니다 — 2026-08-16 정정. 청산도 같다: 갭을 지나간
+            # 날은 손절가·목표가가 아니라 그날 시가에 나간다.
+            "fill_price": t["fill_price"], "exit_price": t["exit_price"],
         })
     return rows
 
@@ -120,10 +121,11 @@ def add_cost_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["risk_per_share"] = risk
     df["risk_pct"] = risk / df["entry_ref"] * 100.0
 
-    exit_price = np.where(df["outcome"] == "win", df["target_price"],
-                          np.where(df["outcome"] == "loss", df["stop_price"],
-                                   df["fill_price"]))
-    df["exit_price"] = exit_price
+    if "exit_price" not in df:
+        raise SystemExit(
+            "저장된 트레이드에 exit_price 가 없습니다 — 손절가·목표가로 되돌아가면\n"
+            "갭을 지나간 날의 시장에 없던 가격으로 비용을 잽니다.\n"
+            "--reuse 를 빼고 다시 돌리세요 (2026-08-16 이후 판이 필요합니다).")
     # 진입가 + 청산가에 각각 편도 비용이 붙는다. 1bp 당 R 로 환산해 둔다.
     # 분자는 **실제 체결가**(지정가 = 구간 상단, 갭이면 시가), 분모는 플랜
     # 위험이다 — 러너가 사이징하는 값이 플랜 위험이라 R 의 단위가 그것이다.
@@ -234,9 +236,13 @@ def main() -> None:
           f"{raw['entry_date'].max().date()}\n"
           f"- 비용(R) = (체결가 + 청산가) × 편도비용 / |entry_ref − 손절가|\n"
           f"- 청산가: win=목표, loss=손절, timeout=체결가\n"
-          f"- **2026-08-16 정정.** 체결가는 러너가 거는 지정가(구간 상단, "
+          f"- **2026-08-16 정정 ①.** 체결가는 러너가 거는 지정가(구간 상단, "
           f"갭이면 그날 시가)다 — 예전 판은 여기에 구간 중간값을 넣어 "
           f"손익분기를 편도 45.8bp 로 냈다. 걸 수 없는 가격이었다\n"
+          f"- **2026-08-16 정정 ②.** 청산가도 같은 규칙이다. 손절은 아래로 "
+          f"갭하면 그날 시가에 나간다 — 롱 손절의 **13.5%** 가 손절가보다 "
+          f"나쁘게 청산된다. 손절가를 그대로 적던 판은 전체 손익분기를 "
+          f"11.7bp 로 냈다\n"
           f"- 표의 숫자는 **그 비용에서의 평균 순 R** (체결 트레이드 기준)\n\n"
           f"```\n{report}\n```\n\n"
           f"**전체 손익분기: 편도 {be:.1f}bp (왕복 {be * 2:.1f}bp)**\n\n"
