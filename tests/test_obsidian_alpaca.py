@@ -80,3 +80,28 @@ def _restore_module(monkeypatch):
     monkeypatch.undo()
     import obsidian_bridge
     importlib.reload(obsidian_bridge)
+
+
+# ── 판정 ───────────────────────────────────────────────────────────────
+# 목록 노트가 리포트를 열지 않고 결과를 보여주는 근거. 여기가 틀리면
+# 사장님이 실패한 측정을 통과로 읽는다 — 실제로 한 번 그렇게 났다.
+def test_verdict_reads_only_the_heading(monkeypatch):
+    """판정표 머리글 '통과선' 이 실패를 통과로 뒤집으면 안 된다."""
+    b = _bridge(monkeypatch)
+    report = (
+        "# F-Score 롱숏\n\n"
+        "## 판정: **실패** (①X AND ②X)\n\n"
+        "| | 무엇 | 통과선 | 실측 |\n"
+        "|---|---|---|---|\n"
+        "| ① | 상위 분위 초과수익 | t ≥ +2 | t=-0.4 |\n"
+    )
+    assert b._verdict(report) == "❌ 실패"
+
+
+def test_verdict_labels(monkeypatch):
+    b = _bridge(monkeypatch)
+    assert b._verdict("## 판정: **통과** (①O AND ②O)\n") == "✅ 통과"
+    assert b._verdict("## 판정: **검출력 부족 — 미측정**\n") == "⚪ 미측정"
+    # 서술로 적은 초기 리포트는 한 낱말로 줄이지 않는다.
+    assert b._verdict("## 판정\n\n**두 항목 모두 구분 불가.** 통과 근거 없음.\n") == "📄 서술형"
+    assert b._verdict("# 비용 민감도\n\n표만 있는 리포트.\n") == "—"

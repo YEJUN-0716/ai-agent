@@ -19,14 +19,26 @@
 ## 볼트 구조
 ```
 ObsidianVault/
-├── Home.md                     # 시작 노트(링크 모음)
-├── Agent Memory/               # ← 에이전트 메모리 사본 (push 출력)
-└── Stock Analyzer/
-    ├── Signals.md              # ← 최근 매수 신호 표 (push 출력)
-    ├── Scorecard.md            # ← 성적표 표본 현황 (push 출력)
-    ├── Alpaca.md               # ← 실제 체결·잔고 (push 출력, 네트워크)
-    └── Measurements/           # ← 측정 리포트 (push 출력)
+├── Home.md                     # ← 현황판 (push 가 매번 다시 그림)
+├── Agent Memory/
+│   ├── MEMORY.md               # ← 목차, 규칙/측정/진행 세 묶음 (push 출력)
+│   └── *.md                    # ← 에이전트 메모리 사본
+├── Stock Analyzer/
+│   ├── Signals.md              # ← 최근 매수 신호 표 (push 출력)
+│   ├── Scorecard.md            # ← 성적표 표본 현황 (push 출력)
+│   ├── Alpaca.md               # ← 실제 체결·잔고 (push 출력, 네트워크)
+│   ├── Measurements.md         # ← 날짜·주제·판정 목록 (push 출력)
+│   └── Measurements/           # ← 측정 리포트 원본
+└── YouTube/
+    ├── YouTube.md              # ← 편별 목차 (push 출력)
+    └── EP0N 대본/녹음용.md      # ← content/ep*/ 사본
 ```
+
+**목록 노트가 요점이다.** 리포트 33개·메모리 40개를 파일명만 보고는 못 고른다.
+`Measurements.md` 는 각 리포트의 `## 판정:` **제목 줄만** 읽어 통과/실패/미측정을
+표로 뽑는다. 절 본문까지 훑으면 판정표 머리글 "통과선" 이 '통과'로 읽혀 **실패한
+측정이 통과로 뒤집힌다** — 실제로 한 번 그렇게 났다(2026-08-17). 본문에 서술로
+적은 초기 리포트는 한 낱말로 못 줄이니 `📄 서술형` 으로만 표시하고 요약하지 않는다.
 
 **Alpaca 체결 기록은 장부를 따로 만들지 않는다.** 진짜 기록은 브로커에 있고,
 push 할 때마다 계좌·포지션·최근 체결 100건을 받아 다시 그린다. 옆에서 받아 적으면
@@ -47,9 +59,10 @@ python tools/obsidian_bridge.py init
 ```
 python tools/obsidian_bridge.py push
 ```
-메모리 `*.md`, `stock-analyzer/docs/measurements/*.md`, `signal_log.json`(→ Signals.md 표)를
-볼트로 복사/렌더한다. **덮어쓰기 방식** — `Agent Memory/`, `Stock Analyzer/` 안 노트는
-직접 고쳐도 다음 push 때 덮어써진다(각 노트 상단에 표식 있음).
+메모리 `*.md`, `stock-analyzer/docs/measurements/*.md`, `signal_log.json`(→ Signals.md 표),
+`content/ep*/script.md`·`narration.md`(→ YouTube/)를 볼트로 복사/렌더하고 목록 노트와
+Home 을 다시 그린다. **덮어쓰기 방식** — `Agent Memory/`, `Stock Analyzer/`, `YouTube/`
+안 노트와 `Home.md` 는 직접 고쳐도 다음 push 때 덮어써진다(각 노트 상단에 표식 있음).
 
 ### 3) 무인 갱신 (매시간)
 작업 스케줄러 `ObsidianSync` 가 `tools/obsidian_sync.cmd` → `sync` 를 매시간 부른다.
