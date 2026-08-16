@@ -48,6 +48,8 @@ from modules import signal_engine as _signal_engine
 from modules import factor_scoring as _scoring
 # 시장 판별·시장별 벤치마크의 소유자 (국면 지수, 섹터 ETF)
 from modules import market_scope as _scope
+# 새 화면(레짐 스트립·[오늘])이 쓰는 HTML 조각 생성기 — 기존 패널은 이관하지 않는다
+from modules import ui
 
 
 def _dart_fallback_batch(tickers):
@@ -136,19 +138,20 @@ st.markdown("""<style>
 /* ═══════════════════════════════════════════
    DESIGN TOKENS
 ═══════════════════════════════════════════ */
-/* 다크 트레이딩 터미널 (TradingView 계열) — 기본값. 변수명은 그대로 두고
-   값만 다크로 바꿔 앱 전체가 한 번에 리스킨된다. */
+/* 슬레이트 다크 터미널 — 변수명은 그대로 두고 값만 바꿔 앱 전체가 한 번에 리스킨된다.
+   본문색을 #d1d4dc → #E8EDF5 로 올린 게 핵심이다(회색 배경 위 회색 글씨가 "싸구려"의 절반).
+   초록·빨강은 방향(수익/손실·매수/매도) 전용 — 상태에는 쓰지 않는다. */
 :root {
-  --bg:        #131722;
-  --surface:   #1b1f2a;
-  --surface2:  #232838;
-  --border:    #2a2e39;
-  --border2:   #363b47;
+  --bg:        #0B0F19;
+  --surface:   #131A28;
+  --surface2:  #1C2436;
+  --border:    #273044;
+  --border2:   #36415C;
 
-  --text-1:    #d1d4dc;
-  --text-2:    #b2b5be;
-  --text-3:    #868993;
-  --text-4:    #5d616b;
+  --text-1:    #E8EDF5;
+  --text-2:    #B9C2D4;
+  --text-3:    #8B94A7;
+  --text-4:    #6B7387;
 
   --green:     #26a69a;
   --green-bg:  rgba(38,166,154,.14);
@@ -156,12 +159,15 @@ st.markdown("""<style>
   --red:       #ef5350;
   --red-bg:    rgba(239,83,80,.14);
   --red-bd:    rgba(239,83,80,.55);
-  --amber:     #ff9800;
-  --amber-bg:  rgba(255,152,0,.14);
-  --amber-bd:  rgba(255,152,0,.55);
-  --blue:      #2962ff;
-  --blue-bg:   rgba(41,98,255,.16);
-  --blue-bd:   rgba(41,98,255,.6);
+  --amber:     #F59E0B;
+  --amber-bg:  rgba(245,158,11,.14);
+  --amber-bd:  rgba(245,158,11,.55);
+  --blue:      #3B82F6;
+  --blue-bg:   rgba(59,130,246,.16);
+  --blue-bd:   rgba(59,130,246,.6);
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-6: 24px; --space-8: 32px;
 
   --radius-sm: 3px;
   --radius:    4px;
@@ -181,6 +187,8 @@ html, body, [class*="css"] {
   line-height: 1.6;
   color: var(--text-1);
   background: var(--bg);
+  /* 자릿수가 흔들리는 게 아마추어 티의 절반이다 — 앱 전체 숫자 폭을 고정한다. */
+  font-variant-numeric: tabular-nums;
 }
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] { background: var(--bg) !important; }
 .block-container {
@@ -436,8 +444,8 @@ code { font-family: 'JetBrains Mono', monospace !important; font-size: 12px !imp
 [data-testid="stSidebar"]       { display: none !important; }
 [data-testid="collapsedControl"] { display: none !important; }
 
-/* ── 모바일 ── */
-@media (max-width: 768px) {
+/* ── 반응형 — 브레이크포인트는 900px 하나. PC 위주, 폰은 확인용. ── */
+@media (max-width: 900px) {
   .block-container { padding: 3.25rem 1rem 2rem !important; }
   h1 { font-size: 1.35rem !important; }
   h2 { font-size: 1.05rem !important; }
@@ -445,11 +453,30 @@ code { font-family: 'JetBrains Mono', monospace !important; font-size: 12px !imp
   [data-testid="metric-container"] { padding: 10px 12px !important; }
   [data-testid="metric-container"] [data-testid="stMetricValue"] { font-size: 18px !important; }
 
+  /* st.columns 는 좁은 화면에서 자동으로 안 접힌다 — 세로 적층을 강제한다. */
+  [data-testid="stHorizontalBlock"] { flex-direction: column !important; }
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    width: 100% !important; flex: 1 1 100% !important; min-width: 0 !important;
+  }
+  /* 고정 높이 컨테이너는 폰에서 화면 안에 화면을 만든다 — 풀어 준다. */
+  [data-testid="stVerticalBlockBorderWrapper"] > div { max-height: none !important; }
+
+  .qt-grid { grid-template-columns: 1fr !important; }
+  .mboard-row { grid-template-columns: 1fr 1fr !important; }
+  /* 레짐 스트립의 좁은 화면 규칙은 inject_console_css() 쪽에 있다 —
+     그 <style>이 이 블록보다 나중에 주입돼 같은 특이도면 뒤엣것이 이긴다. */
+  /* 표는 페이지가 아니라 표가 스크롤한다 */
+  .stDataFrame, [data-testid="stTable"] { overflow-x: auto !important; }
+
   /* 서브탭(퀀트 10개 등)이 화면 너비를 넘길 때 스와이프 가능함을 암시하는 우측 페이드 */
   .stTabs .stTabs [role="tablist"] {
     mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
 /* ── 스크롤바 ── */
@@ -460,10 +487,10 @@ code { font-family: 'JetBrains Mono', monospace !important; font-size: 12px !imp
 </style>""", unsafe_allow_html=True)
 
 # 차트 색은 상단 :root 터미널 팔레트와 같은 값을 쓴다 — 라이트 테마 분기 없음.
-TV_BG = TV_PAPER = '#131722'
-TV_GRID = '#2a2e39'
-TV_BORDER = '#363c4e'
-TV_TEXT = '#d1d4dc'
+TV_BG = TV_PAPER = '#0B0F19'
+TV_GRID = '#273044'
+TV_BORDER = '#36415C'
+TV_TEXT = '#E8EDF5'
 
 TV_UP = '#26a69a'
 TV_DOWN = '#ef5350'
@@ -4337,9 +4364,11 @@ class ModuleGroup(NamedTuple):
     group_panel_fn: Optional[Callable] = None
 
 
-_MODULE_STATUS_COLOR = {'정상': '#26a69a', '주의': '#f0b90b', '경고': '#ef5350', '대기': '#5d6673',
-                        # 트레이드 플랜 모듈 전용 상태 — 방향을 색으로 바로 읽게 한다
-                        '롱 셋업': '#26a69a', '숏 셋업': '#ef5350', '셋업 없음': '#5d6673'}
+# 상태색. 초록·빨강은 방향 전용이므로 '정상'에는 색을 쓰지 않는다(회색) —
+# 초록을 봤을 때 "수익"인지 "정상"인지 헷갈리지 않게 하는 게 이 규칙의 목적이다.
+_MODULE_STATUS_COLOR = {'정상': '#8B94A7', '주의': '#F59E0B', '경고': '#ef5350', '대기': '#6B7387',
+                        # 트레이드 플랜 모듈 전용 상태 — 방향이므로 초록·빨강을 쓴다
+                        '롱 셋업': '#26a69a', '숏 셋업': '#ef5350', '셋업 없음': '#6B7387'}
 
 
 def inject_console_css():
@@ -4434,10 +4463,18 @@ div[class*="st-key-cmd_bar"] input::placeholder { color: #4a525f !important; }
 .tape .val { font-size: 12.5px; font-weight: 700; }
 .tape .chg { font-size: 11px; font-weight: 600; }
 .tape .spacer { flex: 1 1 auto; border-right: none; }
+/* 폰에서는 줄바꿈 대신 가로 스크롤 — 스트립이 접히면 화면 절반을 먹는다 */
+@media (max-width: 900px) {
+    .tape { flex-wrap: nowrap; overflow-x: auto; }
+    /* nowrap 을 셀 안까지 걸지 않으면 'S&P 500'이 두 줄로 접혀 스트립이 두 배가 된다 */
+    .tape .cell { padding: 8px 11px; flex-shrink: 0; white-space: nowrap; }
+}
 
 /* ── 마켓 보드(초기 화면 주요 지수) ── */
+/* auto-fill 이다 — auto-fit 이면 카드가 하나뿐인 권역(지수 4개가 스트립으로 빠진 뒤의
+   '미국'·'금리')에서 그 하나가 화면 전체 폭으로 늘어난다. */
 .mboard-row {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
     gap: 8px; margin-bottom: 8px;
 }
 .mboard-label {
@@ -4463,6 +4500,51 @@ div[class*="st-key-cmd_bar"] input::placeholder { color: #4a525f !important; }
     font-size: 10.5px; font-weight: 600;
 }
 .mcard svg { flex-shrink: 0; opacity: .95; }
+
+/* ── 최상위 내비 (st.segmented_control) ── */
+div[class*="st-key-nav_top"] [data-baseweb="button-group"] { gap: 2px; flex-wrap: nowrap; overflow-x: auto; }
+div[class*="st-key-nav_top"] button {
+    font-size: 15px !important; font-weight: 600 !important;
+    padding: 8px 18px !important; white-space: nowrap !important;
+}
+
+/* ── [오늘] 액션 카드 ── */
+.act-card {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px; margin-bottom: 8px;
+}
+.act-card .tk {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 20px; font-weight: 700; color: var(--text-1); letter-spacing: .5px;
+}
+.act-card .act { font-size: 13px; font-weight: 600; letter-spacing: .4px; }
+.act-card .num {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 15px; font-weight: 600; color: var(--text-2);
+}
+.act-card .why { flex-basis: 100%; font-size: 13px; color: var(--text-3); margin-top: 2px; }
+.act-card .sp { flex: 1 1 auto; }
+
+/* [플랜 보기]는 카드에 딸린 작은 액션이다 — 본 카드보다 조용해야 한다 */
+div[class*="st-key-planbtn_"] button {
+    font-size: 13px !important; min-height: 0 !important; padding: 1px 8px !important;
+    margin: -6px 0 12px 2px !important;
+    color: var(--text-3) !important;
+    border-color: transparent !important; background: transparent !important;
+}
+div[class*="st-key-planbtn_"] button:hover { color: var(--blue) !important; }
+
+/* ── 모듈 상태 점 그리드 ── */
+div[class*="st-key-stdot_"] button {
+    font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+    font-size: 13px !important; line-height: 1.55 !important;
+    min-height: 62px !important; padding: 8px 12px !important;
+    color: var(--text-2) !important; white-space: pre-line !important;
+    text-align: left !important;
+}
+div[class*="st-key-stdot_"] button p { font-size: 13px !important; line-height: 1.55 !important; }
+div[class*="st-key-stdot_"] button:hover { filter: brightness(1.3); }
 
 /* ── 스캔 진행 스트립(분석 실행 중) ── */
 @keyframes scan-sweep { 0% { left: -34%; } 100% { left: 104%; } }
@@ -4614,28 +4696,47 @@ def _sparkline_svg(vals, color, w=74, h=22):
             f"stroke-linejoin='round' stroke-linecap='round'/></svg>")
 
 
+# 레짐 스트립에 상시 노출하는 시세 — 여기 뜬 심볼은 마켓 보드에서 뺀다(중복 제거).
+_STRIP_SYMBOLS = [("^GSPC", "S&P 500", 2), ("^IXIC", "NASDAQ", 2),
+                  ("^RUT", "RUSSELL 2K", 2), ("^VIX", "VIX", 2)]
+
+
 def render_market_tape():
-    """상단 상태 스트립 — 시장 레짐 + 갱신 시각 + 운영 모드(시세는 마켓 보드가 담당)."""
+    """최상단 레짐 스트립 — 지수 4개 + 시장 레짐. 화면이 바뀌어도 항상 한 줄로 노출된다.
+
+    시세는 마켓 보드와 같은 `_market_board_data()`(15분 캐시)에서 뽑는다 — 스트립 때문에
+    네트워크 호출이 늘어나면 안 된다."""
     regime = _get_market_regime()
-    r_color = {'bull': '#26a69a', 'bear': '#ef5350',
-               'mixed': '#f0b90b', 'unknown': '#5d6673'}.get(regime, '#5d6673')
-    r_label = {'bull': 'BULL · SPY·QQQ 200일선 위', 'bear': 'BEAR · SPY·QQQ 200일선 아래',
-               'mixed': 'MIXED · 엇갈림', 'unknown': 'N/A'}.get(regime, 'N/A')
-    st.markdown(
-        "<div class='tape'>"
-        f"<div class='cell'><span class='sym'>REGIME</span>"
-        f"<span class='val' style='color:{r_color}'>{r_label}</span></div>"
-        f"<div class='cell'><span class='sym'>QUOTES</span>"
-        f"<span class='val' style='color:#787b86'>{datetime.now().strftime('%H:%M')} 기준 · 15분 캐시</span></div>"
-        "<div class='cell spacer'></div>"
-        "<div class='cell'><span class='sym'>MODE</span>"
-        "<span class='val' style='color:#787b86'>SIGNAL ONLY · 자동주문 없음</span></div>"
-        "</div>", unsafe_allow_html=True)
+    r_color = {'bull': 'var(--green)', 'bear': 'var(--red)',
+               'mixed': 'var(--amber)', 'unknown': 'var(--text-4)'}.get(regime, 'var(--text-4)')
+    r_label = {'bull': '강세 · SPY·QQQ 200일선 위', 'bear': '약세 · SPY·QQQ 200일선 아래',
+               'mixed': '혼조 · 엇갈림', 'unknown': '판정 불가'}.get(regime, '판정 불가')
+
+    quotes = _market_board_data()
+    cells = []
+    for sym, label, dp in _STRIP_SYMBOLS:
+        q = quotes.get(sym)
+        if not q:
+            continue
+        color = 'var(--green)' if q['chg'] >= 0 else 'var(--red)'
+        arrow = '▲' if q['chg'] >= 0 else '▼'
+        cells.append(f"<div class='cell'><span class='sym'>{label}</span>"
+                     f"<span class='val' style='color:var(--text-1)'>{q['last']:,.{dp}f}</span>"
+                     f"<span class='chg' style='color:{color}'>{arrow} {q['chg']:+.2f}%</span></div>")
+    cells.append("<div class='cell spacer'></div>")
+    cells.append(f"<div class='cell'><span class='sym'>레짐</span>"
+                 f"<span class='val' style='color:{r_color}'>{r_label}</span></div>")
+    cells.append(f"<div class='cell'><span class='sym'>시세</span>"
+                 f"<span class='val' style='color:var(--text-3)'>"
+                 f"{datetime.now().strftime('%H:%M')} · 15분 캐시</span></div>")
+    st.markdown(f"<div class='tape'>{''.join(cells)}</div>", unsafe_allow_html=True)
 
 
 def render_market_board():
-    """초기 화면 시황판 — 국내·미국 지수, 변동성·금리, 원자재·크립토를 한눈에."""
-    quotes = _market_board_data()
+    """시황판 — 국내 지수·환율, 미국(다우), 금리, 원자재·크립토.
+    지수 4개(S&P·나스닥·러셀·VIX)는 상단 레짐 스트립이 상시 표시하므로 여기서 뺀다."""
+    strip_syms = {s for s, _, _ in _STRIP_SYMBOLS}
+    quotes = {k: v for k, v in _market_board_data().items() if k not in strip_syms}
     if not quotes:
         st.caption("시세를 불러오지 못했습니다 — 네트워크를 확인하세요.")
         return
@@ -4660,41 +4761,6 @@ def render_market_board():
     st.markdown(''.join(html), unsafe_allow_html=True)
 
 
-def render_desk_status():
-    """데스크 종합 상태 바 — 페이지 하단 상시 표시. 운영·시스템 모듈 상태를 집계한다."""
-    status_fns = [
-        execution_mode_status, signal_pipeline_status, risk_guardrail_status, equity_log_status,
-        factor_ranking_status, system_signal_status, sector_rotation_status,
-        ml_signal_status, factor_backtest_status, stock_backtest_status, advanced_research_status,
-    ]
-    statuses = [fn()['status'] for fn in status_fns]
-    warn_n, caution_n = statuses.count('경고'), statuses.count('주의')
-    ok_n, wait_n = statuses.count('정상'), statuses.count('대기')
-    if warn_n:
-        color, headline = '#ef5350', f"ALERT · 경고 {warn_n}건 — 확인 필요"
-    elif caution_n:
-        color, headline = '#f0b90b', f"CAUTION · 주의 {caution_n}건"
-    else:
-        color, headline = '#26a69a', "NOMINAL · 전체 정상 운영 중"
-
-    analyst_line = ''
-    snap = st.session_state.get('analyst_snapshot')
-    if snap:
-        m = snap['manager']
-        analyst_line = (f"<div style='margin-top:6px'>LAST SCAN · {snap['ticker']} "
-                        f"<b style='color:{score_color(m['total_score'])}'>{m['total_score']:.1f} · {m['consensus']}</b></div>")
-
-    st.markdown(f"""
-<div style="background:{color}0d;border:1px solid {color}40;border-left:3px solid {color};
-            border-radius:4px;padding:14px 18px">
-  <div style="font-size:10.5px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:1.2px">DESK STATUS · 종합 상태</div>
-  <div style="font-size:1.15rem;font-weight:800;color:{color};margin:5px 0;
-              font-family:'JetBrains Mono',ui-monospace,monospace">{headline}</div>
-  <div style="font-size:11.5px;color:var(--text-3);font-family:'JetBrains Mono',ui-monospace,monospace">
-    OK {ok_n} · WARN {caution_n} · ALERT {warn_n} · IDLE {wait_n} (운영·시스템 모듈 {len(statuses)}개){analyst_line}</div>
-</div>""", unsafe_allow_html=True)
-
-
 def render_report_card(rep):
     """선택된 모듈의 보고서 카드를 표시."""
     n = _normalize_report(rep)
@@ -4712,105 +4778,358 @@ def render_report_card(rep):
 </div>""", unsafe_allow_html=True)
 
 
+# ─────────────────────────────────────────────
+# 최상위 내비 + [오늘] 화면 — 2026-08-17 대시보드 리빌딩
+# 설계: docs/superpowers/specs/2026-08-17-dashboard-rebuild-design.md
+# ─────────────────────────────────────────────
+
+NAV_SCREENS = ['오늘', '종목분석', '발굴·시그널', '검증', '운영']
+
+# 화면 ↔ 모듈 그룹. 그룹 4개(analyst/siggen/bt/ops)를 그대로 화면으로 승격한다.
+NAV_GROUP = {'종목분석': 'analyst', '발굴·시그널': 'siggen', '검증': 'bt', '운영': 'ops'}
+GROUP_NAV = {v: k for k, v in NAV_GROUP.items()}
+
+LATEST_SIGNALS_FILE = "latest_signals.json"
+
+
+def render_nav():
+    """최상위 내비 — 선택한 화면 이름을 반환한다.
+
+    st.tabs 를 쓰지 않는 이유: 분석이 끝나면 `_analysis_done_flip` 이 st.rerun() 을
+    한 번 더 부르는데, 그때 st.tabs 는 선택이 첫 탭으로 돌아간다(분석할 때마다 화면이
+    [오늘]로 튄다). segmented_control 은 선택이 session_state 에 남고, 상태 점 클릭으로
+    화면을 옮기는 것도 session_state['nav'] 대입 한 줄이면 된다.
+
+    본문보다 **먼저** 그려야 한다 — Streamlit 은 위젯을 코드 순서대로 평가하므로
+    나중에 그리면 방금 누른 화면이 한 박자 늦게 열린다.
+
+    본문에서 화면을 옮기고 싶으면 'nav' 가 아니라 'nav_goto' 에 적는다. 위젯이 만들어진
+    뒤에 그 위젯의 키를 건드리면 Streamlit 이 예외를 던지므로, 위젯 생성 **전**인
+    여기서 받아 옮긴다."""
+    goto = st.session_state.pop('nav_goto', None)
+    if goto in NAV_SCREENS:
+        st.session_state['nav'] = goto
+    elif st.session_state.get('nav') not in NAV_SCREENS:
+        st.session_state['nav'] = NAV_SCREENS[0]
+    with st.container(key="nav_top"):
+        picked = st.segmented_control("화면", NAV_SCREENS, key="nav",
+                                      label_visibility="collapsed")
+    # 같은 항목을 다시 누르면 선택이 해제된다 — 그때는 직전 화면을 유지하지 않고 홈으로.
+    return picked or NAV_SCREENS[0]
+
+
 def _group_modules(group: ModuleGroup):
     return group.modules() if callable(group.modules) else group.modules
 
 
-def render_report_rail(groups: List[ModuleGroup]):
-    """우측 레일 — 전 모듈의 보고서를 접지 않고 글로 쭉 적는다. 보고서 dict를 반환.
+def render_status_grid(groups: List[ModuleGroup]):
+    """모듈 상태 점 그리드 — 전 모듈을 카드 대신 한 줄짜리 상태로 압축한다.
 
-    칩만 늘어놓던 구조에서는 11개 모듈 중 하나를 눌러야 그 하나의 근거를 읽을 수
-    있었다. 여기서는 상태와 근거를 전부 펼쳐 두고, 실행할 화면이 있는 모듈만
-    작은 버튼으로 왼쪽 메인에 연다.
-
-    반환값을 메인 쪽이 다시 쓴다 — report_fn 중에는 파일을 읽거나 계산을 하는
-    것이 있어 한 rerun 안에서 두 번 부를 이유가 없다.
-
-    스타일은 inject_console_css()에 의존한다 — main()이 매 rerun 먼저 주입한다."""
-    chip_css = []
-    reports  = {}
-    st.markdown(
-        "<div style='display:flex;align-items:baseline;gap:8px;margin:0 0 8px 0'>"
-        "<span style=\"font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;"
-        "font-family:'JetBrains Mono',ui-monospace,monospace\">REPORTS</span>"
-        "<span style='font-size:10px;color:var(--text-4)'>전 모듈 보고서 · 상시 표시</span></div>",
-        unsafe_allow_html=True)
-
+    보고서 전문을 항상 펼쳐 두던 우측 레일을 대체한다. 누르면 그 모듈이 사는 화면으로
+    이동한다. 색만으로 상태를 말하지 않는다 — 점 옆에 항상 텍스트 라벨을 붙인다."""
+    css, cols, i = [], st.columns(4), 0
     for group in groups:
-        modules = _group_modules(group)
-        with st.container(key=f"modgrp_{group.key}"):
-            st.markdown(
-                f"<div style='display:flex;align-items:baseline;gap:7px;margin-bottom:8px'>"
-                f"<span style='font-size:13px'>{group.icon}</span>"
-                f"<span style='font-size:10.5px;font-weight:800;color:var(--text-3);"
-                f"letter-spacing:1.1px;text-transform:uppercase'>{group.name}</span>"
-                f"<span style='font-size:10px;color:var(--text-4);margin-left:auto;"
-                f"font-family:JetBrains Mono,monospace'>{len(modules or [])}</span></div>",
-                unsafe_allow_html=True)
-            if not modules:
-                st.caption("대기 — 종목을 분석하면 모듈이 활성화됩니다.")
-                continue
-            # 위젯 키는 순번으로 만든다 — 모듈 키(예: '차트+파동+모멘텀')를 그대로 쓰면
-            # st-key-* 클래스에 '+'·한글이 섞여 CSS 셀렉터가 깨진다.
-            for idx, mod in enumerate(modules):
-                rep = mod.report_fn()
-                reports[(group.key, mod.key)] = rep
-                color, alert = _module_accent(rep)
-                n = _normalize_report(rep)
-                sel = st.session_state.get('module_view') == (group.key, mod.key)
-                # 경고 모듈은 좌측 바가 점멸한다. 애니메이션이 box-shadow 를 쓰므로
-                # 그 경우엔 고정 테두리를 얹지 않는다 — 얹으면 점멸이 죽는다.
-                _accent = ('animation:mod-alert 1.4s ease-in-out infinite;' if alert
-                           else f'border-left:3px solid {color};')
-                st.markdown(f"""
-<div style="background:{color}{'1a' if sel else '0d'};
-            border:1px solid {color}{'66' if sel else '2e'};{_accent}
-            border-radius:4px;padding:9px 11px;margin:0 0 7px 0">
-  <div style="display:flex;align-items:baseline;gap:7px;margin-bottom:4px">
-    <span style="font-size:12px;font-weight:700;color:var(--text-2)">{n['icon']} {n['name']}</span>
-    <span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:3px;margin-left:auto;
-                 background:{color}22;color:{color};letter-spacing:.5px;
-                 font-family:'JetBrains Mono',ui-monospace,monospace">{n['headline']}</span>
-  </div>
-  <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:15px;line-height:1.65">
-    {_reasons_to_html(n['reasons'])}</ul>
-</div>""", unsafe_allow_html=True)
-                if mod.panel_fn is None:
-                    continue
-                open_key = f"modopen_{group.key}_{idx}"
-                if sel:
-                    chip_css.append(f'.st-key-{open_key} button {{color:{color} !important}}')
-                if st.button("▸ 화면 열림" if sel else "▸ 화면 열기",
-                             key=open_key, use_container_width=True):
-                    st.session_state['module_view'] = (group.key, mod.key)
-
-    if chip_css:
-        st.markdown(f"<style>{''.join(chip_css)}</style>", unsafe_allow_html=True)
-    return reports
+        modules = _group_modules(group) or []
+        if not modules:
+            continue
+        for idx, mod in enumerate(modules):
+            n = _normalize_report(mod.report_fn())
+            head = (n['reasons'][0] if n['reasons'] else '')
+            if len(head) > 46:
+                head = head[:45] + '…'
+            btn_key = f"stdot_{group.key}_{idx}"
+            # 좌측 상태 바는 box-shadow 로 그린다 — Streamlit 이 버튼의
+            # background/border 를 !important 로 잠가서 그 두 속성으로는 못 칠한다.
+            css.append(f".st-key-{btn_key} button "
+                       f"{{box-shadow: inset 3px 0 0 0 {n['color']} !important}}")
+            with cols[i % 4]:
+                if st.button(f"{n['name']} · {n['headline']}\n{head}",
+                             key=btn_key, use_container_width=True):
+                    st.session_state['nav_goto'] = GROUP_NAV.get(group.key, NAV_SCREENS[0])
+                    st.session_state[f"modsel_{group.key}"] = mod.name
+                    st.rerun()
+            i += 1
+    if css:
+        st.markdown(f"<style>{''.join(css)}</style>", unsafe_allow_html=True)
 
 
-def render_module_detail(groups: List[ModuleGroup], reports: dict):
-    """레일에서 연 모듈의 업무 화면 — 메인 칼럼에 그린다. 연 게 없으면 아무것도 안 그린다.
-
-    반드시 render_report_rail() **뒤에** 불러야 한다. Streamlit은 st.button()을
-    순차 평가하므로, 먼저 그리면 방금 누른 모듈이 직전 선택값으로 표시된다."""
-    sel = st.session_state.get('module_view')
-    sel_group = next((g for g in groups if sel and g.key == sel[0]), None)
-    sel_mod = next((m for m in (_group_modules(sel_group) or []) if m.key == sel[1]),
-                   None) if sel_group else None
-    if sel_mod is None:
+def render_group_screen(group: ModuleGroup):
+    """그룹 화면 — 모듈 선택 + 그 모듈의 보고서·업무 패널.
+    패널 내부는 손대지 않는다. 우측 레일에서 이 화면으로 자리만 옮겼다."""
+    modules = _group_modules(group) or []
+    if not modules:
+        st.info("대기 — 커맨드 바에서 종목을 분석하면 모듈이 활성화됩니다.")
         return
-    with st.container(border=True, key="module_detail"):
+    names = [m.name for m in modules]
+    key = f"modsel_{group.key}"
+    if st.session_state.get(key) not in names:
+        st.session_state[key] = names[0]
+    picked = st.segmented_control("모듈", names, key=key,
+                                  label_visibility="collapsed") or names[0]
+    mod = next(m for m in modules if m.name == picked)
+    if group.group_panel_fn is not None:
+        group.group_panel_fn()
+    render_report_card(mod.report_fn())
+    if mod.panel_fn is not None:
+        st.markdown("")
+        mod.panel_fn()
+
+
+# ── [오늘] ① 오늘의 액션 ─────────────────────────────────────────
+_QUIET_ACTIONS = ('관망', '대기')          # 기본 접힘 — 오늘 할 일이 아니다
+_TODAY_VISIBLE = 6                          # 기본 노출 장수
+
+
+def _load_latest_signals():
+    """워커가 남긴 오늘의 액션. 없거나 깨졌으면 None — 화면은 빈 상태를 그린다."""
+    data = _read_json_beside_app(LATEST_SIGNALS_FILE)
+    return data if isinstance(data, dict) and data.get('actions') is not None else None
+
+
+def _last_us_session_date(today=None):
+    """마지막 미국장 개장일 — 주말만 본다.
+    ponytail: 휴장일 캘린더는 안 본다(배너가 하루 일찍 뜰 뿐). 필요해지면 pandas_market_calendars."""
+    d = today or datetime.now().date()
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _signals_freshness(generated_at, now=None):
+    """배치 시각 → {경과 문구, 오래됨?, 너무 오래됨?}. 파싱 실패하면 None.
+
+    어제 액션을 오늘 것처럼 보여주면 위험하다 — 카드 위에 항상 이 판정을 붙인다."""
+    now = now or datetime.now().astimezone()
+    try:
+        ts = datetime.fromisoformat(str(generated_at))
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=now.tzinfo)
+    secs = max((now - ts).total_seconds(), 0)
+    if secs < 3600:
+        when = f"{int(secs // 60)}분 전"
+    elif secs < 86400:
+        when = f"{int(secs // 3600)}시간 전"
+    else:
+        when = f"{int(secs // 86400)}일 전"
+    return {'when': when,
+            'age_days': int(secs // 86400),
+            'stale': ts.date() < _last_us_session_date(now.date()),
+            'too_old': secs > 7 * 86400}
+
+
+def _action_tone(action):
+    """액션 색 — 매수 초록 / 매도·축소 빨강 / 조건부·대기 앰버 / 관망 회색(방향 전용 규칙)."""
+    if '매도' in action or '축소' in action:
+        return 'var(--red)'
+    if '조건부' in action or '대기' in action:
+        return 'var(--amber)'
+    if '매수' in action:
+        return 'var(--green)'
+    return 'var(--text-3)'
+
+
+def _action_label(action):
+    """'🟢 매수' → '매수'. 이모지는 색 점이 대신한다."""
+    parts = str(action).split(' ', 1)
+    return parts[1] if len(parts) > 1 else parts[0]
+
+
+def _sort_actions(actions):
+    """(오늘 할 일, 조용한 것). HIGH → NORMAL 순, 같은 등급에서는 파는 결정을 위로 —
+    파는 결정이 사는 결정보다 시간에 민감하다."""
+    rank = {'HIGH': 0, 'NORMAL': 1, 'LOW': 2}
+
+    def key(a):
+        act = str(a.get('action', ''))
+        return (rank.get(a.get('priority'), 3),
+                0 if ('매도' in act or '축소' in act) else 1,
+                str(a.get('ticker', '')))
+
+    live = [a for a in actions if not any(q in str(a.get('action', '')) for q in _QUIET_ACTIONS)]
+    quiet = [a for a in actions if any(q in str(a.get('action', '')) for q in _QUIET_ACTIONS)]
+    return sorted(live, key=key), sorted(quiet, key=key)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _today_trade_plan(ticker):
+    """[플랜 보기]를 누른 종목 하나만 계산한다.
+    카드 6장을 미리 계산하면 홈 로딩이 시세 다운로드 6번을 기다린다."""
+    try:
+        from modules.trade_plan import MIN_BARS, build_trade_plan
+    except ImportError:
+        return None
+    end = datetime.now()
+    df = download_stock(ticker, start=end - timedelta(days=400), end=end)
+    if df is None or len(df) < MIN_BARS:
+        return None
+    return build_trade_plan(df)
+
+
+def _render_action_card(a, idx):
+    """액션 카드 1장 + [플랜 보기] 토글."""
+    act = str(a.get('action', ''))
+    tone = _action_tone(act)
+    mom = str(a.get('mom', ''))
+    mom_color = 'var(--red)' if mom.startswith('-') else 'var(--green)'
+    st.markdown(
+        f"<div class='act-card'>"
+        f"<span class='tk'>{a.get('ticker', '')}</span>"
+        f"<span class='act' style='color:{tone}'>"
+        f"<span style='display:inline-block;width:7px;height:7px;border-radius:50%;"
+        f"background:{tone};margin-right:6px'></span>{_action_label(act)}</span>"
+        f"<span class='num'>{a.get('price', '')}</span>"
+        f"<span class='num' style='color:var(--text-3)'>비중 {a.get('weight', '-')} · "
+        f"{a.get('alloc', '')} · {a.get('qty', '')}</span>"
+        f"<span class='sp'></span>"
+        f"<span class='num' style='color:{mom_color}'>3M {mom}</span>"
+        f"<span class='why'>{a.get('reason', '')}</span>"
+        f"</div>", unsafe_allow_html=True)
+
+    ticker = a.get('ticker', '')
+    open_key = f"plan_open_{ticker}"
+    is_open = st.session_state.get(open_key, False)
+    if st.button("플랜 접기" if is_open else "플랜 보기",
+                 key=f"planbtn_{idx}_{ticker}"):
+        st.session_state[open_key] = not is_open
+        st.rerun()
+    if not is_open:
+        return
+
+    with st.spinner(f"{ticker} 플랜 계산 중…"):
+        plan = _today_trade_plan(ticker)
+    if plan is None:
+        st.caption("시세를 받지 못해 플랜을 그리지 못했습니다.")
+        return
+    if plan['direction'] not in ('long', 'short'):
+        st.caption(f"방향성 셋업 없음 — {plan.get('reason_invalid') or 'ICT 구조 신호 부족'}")
+        return
+    _p = lambda v: _fmt_price(v, ticker.endswith(('.KS', '.KQ')))   # noqa: E731
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("진입 구간", f"{_p(plan['entry']['low'])} ~ {_p(plan['entry']['high'])}")
+    c2.metric("손절", _p(plan['stop']))
+    if plan['targets']:
+        c3.metric("목표1", _p(plan['targets'][0]),
+                  f"R:R {plan['rr'][0]:.1f}" if plan['rr'] and plan['rr'][0] else None)
+    c4.metric("실행등급", plan['cost_grade'], f"손절 {plan['risk_pct']:.1f}%")
+    if not plan['valid']:
+        st.caption(f"유효 셋업 아님 — {plan['reason_invalid']}")
+
+
+def render_today_actions():
+    """[오늘] ① — 이 화면의 유일한 주인공. latest_signals.json 을 읽기만 한다."""
+    data = _load_latest_signals()
+    if not data:
+        st.markdown(ui.card(
+            "<div style='font-size:15px;color:var(--text-2)'>아직 오늘 배치가 안 돌았습니다.</div>"
+            "<div style='font-size:13px;color:var(--text-4);margin-top:4px'>"
+            "시그널 워커가 한 번 돌면 오늘의 매수·매도 목록이 여기 뜹니다.</div>"),
+            unsafe_allow_html=True)
+        if st.button("발굴·시그널에서 직접 돌리기", key="today_goto_siggen"):
+            st.session_state['nav_goto'] = '발굴·시그널'
+            st.rerun()
+        return
+
+    fresh = _signals_freshness(data.get('generated_at'))
+    rebal = data.get('rebal') or {}
+    head = f"{data.get('universe', '')} · 자본 {data.get('capital', 0):,.0f}"
+    if fresh:
+        head = f"{fresh['when']} 배치 · " + head
+    if rebal:
+        head += (f" · 매수 {rebal.get('buy_count', 0)} · 매도·축소 {rebal.get('sell_count', 0)}"
+                 f" · 관망 {rebal.get('hold_count', 0)} · 리밸런싱 {rebal.get('next_rebal', '-')}")
+    # 요약은 한 줄로 끝낸다 — 타일 4장을 얹으면 폰에서 정작 액션 카드가 화면 밖으로 밀린다.
+    st.markdown(f"<div style='font-size:13px;color:var(--text-3);margin-bottom:12px'>{head}</div>",
+                unsafe_allow_html=True)
+
+    if fresh and fresh['stale']:
         st.markdown(
-            f"<div style='font-size:10.5px;font-weight:700;color:var(--text-4);letter-spacing:1px;"
-            f"margin-bottom:4px;font-family:JetBrains Mono,monospace'>"
-            f"{sel_group.icon} {sel_group.name} / {sel_mod.name}</div>", unsafe_allow_html=True)
-        if sel_group.group_panel_fn is not None:
-            sel_group.group_panel_fn()
-        render_report_card(reports.get((sel_group.key, sel_mod.key)) or sel_mod.report_fn())
-        if sel_mod.panel_fn is not None:
-            st.markdown("")
-            sel_mod.panel_fn()
+            f"<div style='background:var(--amber-bg);border:1px solid var(--amber-bd);"
+            f"border-radius:6px;padding:12px 16px;margin-bottom:12px;font-size:15px;"
+            f"color:var(--text-1)'>{fresh['when']} 배치입니다 — 현재가와 다를 수 있습니다."
+            f"</div>", unsafe_allow_html=True)
+    if fresh and fresh['too_old']:
+        st.caption("7일이 넘은 배치라 액션 카드를 접었습니다. 시그널을 다시 돌리십시오.")
+        return
+
+    live, quiet = _sort_actions(data['actions'])
+    if not live and not quiet:
+        st.caption("배치는 돌았지만 오늘 낼 액션이 없습니다.")
+        return
+
+    expanded = st.session_state.get('today_expanded', False)
+    shown = live if expanded else live[:_TODAY_VISIBLE]
+    for i, a in enumerate(shown):
+        _render_action_card(a, i)
+
+    hidden = len(live) - len(shown) + len(quiet)
+    if hidden > 0 and not expanded:
+        if st.button(f"더 보기 (관망·대기 포함 {hidden}건)", key="today_more"):
+            st.session_state['today_expanded'] = True
+            st.rerun()
+    elif expanded:
+        for i, a in enumerate(quiet):
+            _render_action_card(a, 1000 + i)
+        if st.button("접기", key="today_less"):
+            st.session_state['today_expanded'] = False
+            st.rerun()
+
+
+# ── [오늘] ② 내 계좌 한 줄 ───────────────────────────────────────
+
+def render_account_line():
+    """계좌 숫자 4개만. 상세는 [운영] 화면의 계좌 현황 모듈에 있다.
+
+    시세는 받지 않는다 — 홈이 종목마다 네트워크를 기다리면 안 된다.
+    러너가 남긴 equity_log.json 과 장부 파일만 읽는다."""
+    records = _equity_log_records()
+    ledger = _read_json_beside_app("virtual_portfolio.json") or {}
+    if not records and not ledger:
+        st.caption("아직 매매 기록이 없습니다 — 가상 브로커가 한 건도 체결하지 않았습니다.")
+        return
+
+    equity = records[-1].get('equity') if records else None
+    prev = records[-2].get('equity') if len(records) >= 2 else None
+    cash = float(ledger.get('cash_krw', 0) or 0)
+    n_pos = len(ledger.get('positions', {}) or {})
+
+    delta_html, delta_color = None, None
+    if equity is not None and prev:
+        diff = equity - prev
+        delta_color = 'var(--green)' if diff >= 0 else 'var(--red)'
+        delta_html = f"{diff:+,.0f}원 ({diff / prev * 100:+.2f}%)"
+
+    cash_pct = f"{cash / equity * 100:.0f}%" if equity else "-"
+    st.markdown(ui.grid([
+        ui.kpi("평가액", f"{equity:,.0f}원" if equity is not None else "기록 없음"),
+        ui.kpi("오늘 P&L",
+               f"<span style='color:{delta_color}'>{delta_html}</span>" if delta_html
+               else "기록 2일치 필요"),
+        ui.kpi("보유 종목", f"{n_pos}종목"),
+        ui.kpi("현금 비중", cash_pct, f"{cash:,.0f}원"),
+    ], min_px=200), unsafe_allow_html=True)
+    if records:
+        st.caption(f"자산 기록 {len(records)}일치 · 최근 {records[-1].get('date')} "
+                   f"(러너가 남긴 값 — 실시간 시세 아님)")
+
+
+def render_today(groups: List[ModuleGroup]):
+    """[오늘] 화면 — 액션 / 계좌 / 시장 / 모듈 상태."""
+    st.markdown(ui.section("오늘의 액션", "배치가 만든 매수·매도 지시 · 파는 결정이 위"),
+                unsafe_allow_html=True)
+    render_today_actions()
+
+    st.markdown(ui.section("내 계좌", "상세는 [운영] 화면"), unsafe_allow_html=True)
+    render_account_line()
+
+    st.markdown(ui.section("시장", "국내·미국 지수 · 금리 · 원자재 (전일 대비, 최근 1개월)"),
+                unsafe_allow_html=True)
+    render_market_board()
+
+    st.markdown(ui.section("모듈 상태", "누르면 그 모듈 화면으로 이동합니다"),
+                unsafe_allow_html=True)
+    render_status_grid(groups)
 
 
 def render_verdict_cards(snap, *, with_trader=True):
@@ -5178,17 +5497,11 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
-    # ── 상단 상태 스트립 + 커맨드 바 + 시황판 ──────────────────
+    # ── 레짐 스트립(항상 노출) + 최상위 내비 ──────────────────
+    # 내비는 본문보다 먼저 그린다 — Streamlit 은 위젯을 코드 순서대로 평가하므로
+    # 나중에 그리면 방금 누른 화면이 한 박자 늦게 열린다.
     render_market_tape()
-    render_command_bar()
-
-    st.markdown("""
-<div style="display:flex;align-items:baseline;gap:10px;margin:16px 0 2px 0">
-  <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
-               font-family:'JetBrains Mono',ui-monospace,monospace">MARKET OVERVIEW</span>
-  <span style="font-size:10.5px;color:var(--text-4)">주요 지수 · 변동성 · 금리 · 원자재 (전일 대비, 최근 1개월 추이)</span>
-</div>""", unsafe_allow_html=True)
-    render_market_board()
+    _nav = render_nav()
 
     # ── 애널리스트 그룹 공용 패널: 단일 종목 분석 ──────
     def render_stock_analysis_panel():
@@ -7926,36 +8239,29 @@ def main():
         ]),
     ]
 
-    # ── 메인(총괄 판정 + 연 모듈의 업무 화면) | 우측 레일(전 모듈 보고서) ──
-    st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
-    _main_col, _rail_col = st.columns([2.5, 1], gap="large")
+    # ── 화면 분기 ────────────────────────────────────────────
+    # 한 페이지에 전부 펼치던 구조를 화면 5개로 나눈다. 패널 내부는 그대로 두고
+    # 자리만 옮긴다 — 사라지는 기능은 없다.
+    if _nav == '오늘':
+        render_today(_groups)
 
-    # 레일을 먼저 채운다. Streamlit은 st.button()을 만나는 순서대로 평가하므로
-    # 메인을 먼저 그리면 방금 누른 모듈이 한 박자 늦게 열린다. (칼럼의 화면상
-    # 위치는 st.columns()가 이미 정해 뒀으므로 채우는 순서와 무관하다.)
-    with _rail_col:
-        # 레일에 높이를 준다(자체 스크롤). 안 주면 보고서 11개 길이만큼 칼럼이 늘어나
-        # 왼쪽에 화면 두 개 분량의 빈 공간이 생기고, 아래 워크스페이스가 그만큼 밀린다.
-        with st.container(height=740, border=False):
-            _reports = render_report_rail(_groups)
-    with _main_col:
-        render_verdict_hero()
-        render_module_detail(_groups, _reports)
+    elif _nav == '종목분석':
+        render_command_bar()
+        st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+        render_verdict_hero()      # 자체 헤더('VERDICT · 총괄 판정')를 갖고 있다
+        st.markdown(ui.section("분석 워크스페이스", "커맨드 바에서 실행한 종목 분석 결과"),
+                    unsafe_allow_html=True)
+        with st.container(border=True, key="analysis_workspace"):
+            render_stock_analysis_panel()
+        st.markdown(ui.section("애널리스트 · 트레이드 플랜", "모듈별 보고서와 플랜 차트"),
+                    unsafe_allow_html=True)
+        render_group_screen(_groups[0])
 
-    # ── 분석 워크스페이스 (커맨드 바에서 실행한 분석의 결과 화면) ──
-    # 차트·표가 넓어야 읽히므로 칼럼 밖 전체 폭에 둔다.
-    st.markdown("""
-<div style="display:flex;align-items:baseline;gap:10px;margin:20px 0 8px 0">
-  <span style="font-size:11px;font-weight:800;color:var(--text-2);letter-spacing:1.6px;
-               font-family:'JetBrains Mono',ui-monospace,monospace">ANALYSIS WORKSPACE</span>
-  <span style="font-size:10.5px;color:var(--text-4)">상단 커맨드 바에서 실행한 종목 분석 결과 · 우측 보고서에도 반영됩니다</span>
-</div>""", unsafe_allow_html=True)
-    with st.container(border=True, key="analysis_workspace"):
-        render_stock_analysis_panel()
-
-    # ── 데스크 종합 상태 ──────────────
-    st.markdown("---")
-    render_desk_status()
+    else:
+        _group = next(g for g in _groups if g.key == NAV_GROUP[_nav])
+        st.markdown(ui.section(_group.name, f"모듈 {len(_group_modules(_group) or [])}개"),
+                    unsafe_allow_html=True)
+        render_group_screen(_group)
 
     # 분석이 방금 끝났으면 한 번 더 rerun — 이번 rerun의 총괄 판정·보고서 레일은
     # 분석 *이전* 스냅샷으로 이미 그려졌으므로, 새 결과가 저장된 상태에서 다시 그린다.
