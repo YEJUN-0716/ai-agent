@@ -70,13 +70,16 @@ def test_position_times_out_at_the_open_after_the_hold_window():
     assert vb.scan_plan_exit(quiet[:-1], stop=90.0, target=115.0) is None
 
 
-def test_realized_r_is_measured_against_the_actual_fill():
-    # 손절이면 −1R 근방, 목표면 계획 R:R 근방. 갭 체결은 그 차이만큼 어긋난다.
-    assert vb.realized_r(100.0, 95.0, 95.0) == pytest.approx(-1.0)
-    assert vb.realized_r(100.0, 95.0, 110.0) == pytest.approx(2.0)
-    # 갭하락 체결(98)은 손절까지 거리가 짧아져 같은 손절가라도 R 이 달라진다.
+def test_realized_r_divides_by_plan_risk_not_by_the_fill():
+    # 분모는 러너가 사이징한 값(entry_ref − stop)이다. 백테스트와 같은 자.
+    # 구간 상단(101)에 채워지면 실제 주당 위험이 계획(5)보다 넓으므로
+    # 손절은 −1.00R 이 아니라 **−1.2R** 이다. 이게 실제로 잃는 돈이다.
+    assert vb.realized_r(101.0, 95.0, 95.0, entry_ref=100.0) == pytest.approx(-1.2)
+    assert vb.realized_r(101.0, 95.0, 110.0, entry_ref=100.0) == pytest.approx(1.8)
+    # 갭하락으로 더 싸게(98) 샀으면 같은 손절가라도 덜 잃는다.
+    assert vb.realized_r(98.0, 95.0, 95.0, entry_ref=100.0) == pytest.approx(-0.6)
+    # entry_ref 가 없는 옛 플랜은 체결가로 되돌아간다(하위호환).
     assert vb.realized_r(98.0, 95.0, 95.0) == pytest.approx(-1.0)
-    assert vb.realized_r(98.0, 95.0, 110.0) == pytest.approx(4.0)
 
 
 # ── 사이징 ─────────────────────────────────────────────────────────────
@@ -142,9 +145,9 @@ def test_limit_order_reserves_cash_and_settles_into_a_plan_position(broker, monk
 def test_stop_out_records_the_r_the_scorecard_needs(broker, monkeypatch):
     state = broker.load_state()
     state["positions"]["AAA"] = {
-        "qty": 10, "avg_price_usd": 100.0, "entry_date": "2026-09-01",
-        "plan": {"entry_fill": 100.0, "stop": 95.0, "target": 115.0,
-                 "rr": 3.0, "grade": "A"},
+        "qty": 10, "avg_price_usd": 101.0, "entry_date": "2026-09-01",
+        "plan": {"entry_ref": 100.0, "entry_fill": 101.0, "stop": 95.0,
+                 "target": 115.0, "rr": 3.0, "grade": "A"},
     }
     broker.save_state(state)
     monkeypatch.setattr(broker, "daily_bars",
@@ -153,7 +156,9 @@ def test_stop_out_records_the_r_the_scorecard_needs(broker, monkeypatch):
     state = broker.settle_pending(broker.load_state(), 1000.0)
     exit_trade = state["trades"][-1]
     assert exit_trade["outcome"] == "loss"
-    assert exit_trade["r_realized"] == pytest.approx(-1.0)
+    # 구간 상단 체결(101)이라 손절은 −1.00R 이 아니다. 장부가 −1.00 을 적으면
+    # 손실을 과소 기록하는 것이고, 백테스트와 다른 자로 재게 된다.
+    assert exit_trade["r_realized"] == pytest.approx(-1.2)
     assert "AAA" not in state["positions"]
 
 

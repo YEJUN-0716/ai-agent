@@ -203,6 +203,19 @@ def main() -> None:
     for lab, sub in bands:
         body.append(_curve(lab, sub))
 
+    # 제안 규칙 — "숏 제외 + 손절 ≥ X%". 문턱을 하나만 적으면 그 자리가 왜
+    # 거기인지 알 수 없으므로 사다리로 낸다. 지금 프로덕션은 롱 + 등급 A/B
+    # (= 손절 > 1.75%) 다 — 새 문턱은 그것보다 나은지로 판단할 것.
+    body.append("")
+    body.append("  ── 제안 규칙: 숏 제외 + 손절 ≥ X% (프로덕션 현재 = 1.75%) ──")
+    long_only = df[df["direction"] == "long"]
+    for thr in (0.0, 1.5, 1.75, 2.0, 2.34, 3.0):
+        body.append(_curve(f"롱 손절≥{thr:.2f}%", long_only[long_only["risk_pct"] >= thr]))
+    picked = long_only[long_only["risk_pct"] >= 2.0]
+    body.append(f"    └ 2.00% 구간별: "
+                f"OOS {breakeven_bp(picked[picked['entry_date'] < IS_START]):.1f}bp · "
+                f"IS {breakeven_bp(picked[picked['entry_date'] >= IS_START]):.1f}bp")
+
     body.append("")
     body.append("  ── 확신도별 ──")
     for conf in ("high", "medium", "low"):

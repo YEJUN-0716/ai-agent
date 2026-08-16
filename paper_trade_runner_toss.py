@@ -1007,7 +1007,10 @@ def main():
                     sym, qty, cand["limit"],
                     plan={"stop": cand["stop"], "target": cand["target"],
                           "rr": cand["rr"], "grade": cand["grade"],
-                          "risk_pct": cand["risk_pct"]},
+                          "risk_pct": cand["risk_pct"],
+                          # 사이징 분모 = 장부 R 분모. 이게 없으면 장부가
+                          # 체결가로 나눠 손절을 늘 -1.00R 로 과소 기록한다.
+                          "entry_ref": cand["entry_ref"]},
                     market=market_of_symbol(sym),
                     meta=order_meta(analyst_scores, analyst_asof, cand["ticker"]),
                 )
