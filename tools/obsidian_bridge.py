@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 HOME = Path.home()
+PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 VAULT = Path(os.environ.get(
     "OBSIDIAN_VAULT", HOME / "OneDrive" / "Desktop" / "ObsidianVault"))
@@ -42,6 +43,7 @@ MEMORY_DIR = Path(os.environ.get(
 # 볼트 안 폴더 이름 (사람이 옵시디언에서 볼 이름)
 MEMORY_SUB = "Agent Memory"
 STOCK_SUB = "Stock Analyzer"
+TUBE_SUB = "YouTube"
 
 # push 가 관리하는(덮어쓰는) 노트 상단에 붙이는 표식.
 MANAGED_TAG = "> [!info] 에이전트가 자동 생성/갱신하는 노트입니다. 직접 고쳐도 다음 push 때 덮어써집니다."
@@ -75,7 +77,26 @@ def cmd_init() -> int:
 
 
 # ── push: 우리 → 옵시디언 ────────────────────────────────────────────
+def _memory_group(slug: str, line: str) -> str:
+    """메모리 한 줄이 어느 묶음에 들어가나.
+
+    원본 MEMORY.md 는 41줄이 한 덩어리라 훑기 어렵다. 프론트매터의 `type`
+    (feedback/project)과 한 줄 요약의 낱말로 세 묶음으로 가른다.
+
+    ponytail: 낱말 매칭 휴리스틱. 빗나가도 노트는 '진행 중'에 남고 사라지지
+    않는다. 묶음이 더 필요해지면 메모리 프론트매터에 태그를 넣는 쪽이 맞다.
+    """
+    fm = (MEMORY_DIR / f"{slug}.md")
+    text = fm.read_text(encoding="utf-8", errors="replace")[:400] if fm.exists() else ""
+    if "type: feedback" in text:
+        return "규칙"
+    if any(w in line for w in ("판정", "측정", "실측", "반증")):
+        return "측정"
+    return "진행"
+
+
 def _push_memory() -> int:
+    """메모리를 복사하고, 목차(MEMORY.md)를 묶음별로 다시 그린다."""
     dest = VAULT / MEMORY_SUB
     dest.mkdir(parents=True, exist_ok=True)
     if not MEMORY_DIR.exists():
@@ -85,26 +106,98 @@ def _push_memory() -> int:
     for md in MEMORY_DIR.glob("*.md"):
         shutil.copyfile(md, dest / md.name)
         n += 1
-    print(f"메모리 {n}개 → {dest}")
+
+    index = MEMORY_DIR / "MEMORY.md"
+    if index.exists():
+        import re
+        groups: dict[str, list[str]] = {"규칙": [], "측정": [], "진행": []}
+        for line in index.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = re.match(r"- \[(.+?)\]\((.+?)\.md\)(.*)", line.strip())
+            if not m:
+                continue
+            title, slug, tail = m.groups()
+            groups[_memory_group(slug, line)].append(
+                f"- [[{slug}\\|{title}]]{tail}")
+
+        lines = [f"# 🧠 에이전트 메모리 — {sum(len(v) for v in groups.values())}건", "",
+                 MANAGED_TAG, "", f"갱신: {datetime.now():%Y-%m-%d %H:%M}", ""]
+        for key, heading in (("규칙", "## 🧭 일하는 규칙"),
+                             ("측정", "## 📐 측정으로 밝혀진 것"),
+                             ("진행", "## 🚧 진행 중인 일 · 밟은 함정")):
+            if groups[key]:
+                lines += [heading, ""] + groups[key] + [""]
+        _write(dest / "MEMORY.md", "\n".join(lines) + "\n")
+
+    print(f"메모리 {n}개 + 목차 → {dest}")
     return n
 
 
-def _push_measurements() -> int:
+VERDICTS = (("통과", "✅ 통과"), ("실패", "❌ 실패"),
+            ("미측정", "⚪ 미측정"), ("부족", "⚪ 미측정"))
+
+
+def _verdict(text: str) -> str:
+    """리포트에서 판정을 뽑는다 — 파일을 열지 않고도 결과가 보이게.
+
+    **`## 판정:` 제목 줄만 본다.** 절 본문까지 훑으면 판정표의 머리글
+    "통과선" 이 '통과' 로 읽혀 실패한 측정이 통과로 뒤집힌다 — 실제로
+    한 번 그렇게 났다. 본문에 서술로 적은 초기 리포트는 한 낱말로
+    줄일 수 없으니 요약하지 않고 '서술형' 이라고만 표시한다.
+    """
+    import re
+    for line in text.splitlines():
+        if not line.startswith("## 판정"):
+            continue
+        for token in re.findall(r"\*\*(.+?)\*\*", line):
+            for word, label in VERDICTS:
+                if word in token:
+                    return label
+        return "📄 서술형"
+    return "—"
+
+
+def _title(text: str) -> str:
+    """첫 `# 제목` 에서 대시 앞부분만 — 표에 들어갈 짧은 이름."""
+    for line in text.splitlines():
+        if line.startswith("# "):
+            name = line[2:].split(" — ")[0].replace("**", "").strip()
+            return name
+    return ""
+
+
+def _push_measurements() -> list[tuple[str, str, str]]:
+    """리포트를 복사하고, 날짜·주제·판정 표를 목록 노트로 만든다.
+
+    반환: Home 이 쓸 (날짜, 제목, 판정) 목록 — 최신순.
+    """
     src = STOCK_DIR / "docs" / "measurements"
     dest = VAULT / STOCK_SUB / "Measurements"
     dest.mkdir(parents=True, exist_ok=True)
     if not src.exists():
         print(f"[건너뜀] 측정 폴더 없음: {src}")
-        return 0
-    n = 0
-    for md in src.glob("*.md"):
+        return []
+
+    rows: list[tuple[str, str, str]] = []
+    for md in sorted(src.glob("*.md"), reverse=True):
         shutil.copyfile(md, dest / md.name)
-        n += 1
-    print(f"측정 리포트 {n}개 → {dest}")
-    return n
+        text = md.read_text(encoding="utf-8", errors="replace")
+        rows.append((md.stem, _title(text) or md.stem, _verdict(text)))
+
+    lines = [f"# 📐 측정 리포트 — {len(rows)}건", "", MANAGED_TAG, "",
+             f"갱신: {datetime.now():%Y-%m-%d %H:%M}", "",
+             "판정은 각 리포트의 `## 판정` 을 그대로 옮긴 것이다. "
+             "**하나만 통과하면 실패다** — ①단면과 ②포트폴리오가 함께 통과해야 통과다.", "",
+             "| 날짜 | 무엇을 쟀나 | 판정 |", "|---|---|---|"]
+    for stem, title, verdict in rows:
+        date = stem[:10] if stem[:4].isdigit() else ""
+        lines.append(f"| {date} | [[Measurements/{stem}\\|{title}]] | {verdict} |")
+
+    _write(VAULT / STOCK_SUB / "Measurements.md", "\n".join(lines) + "\n")
+    print(f"측정 리포트 {len(rows)}개 + 목록 → {dest.parent}")
+    return rows
 
 
-def _push_signals() -> int:
+def _push_signals(home: list[str] | None = None) -> int:
     log = STOCK_DIR / "signal_log.json"
     dest = VAULT / STOCK_SUB / "Signals.md"
     if not log.exists():
@@ -129,6 +222,9 @@ def _push_signals() -> int:
         lines.append(f"| {s.get('entry_date','')} | {s.get('symbol','')} "
                      f"| {s.get('action','')} | {s.get('entry_price','')} | {ret_s} |")
     _write(dest, "\n".join(lines) + "\n")
+    if home is not None and recent:
+        home.append(f"최근 신호 **{len(recent)}건** — 마지막 {recent[0].get('entry_date','')} "
+                    f"{recent[0].get('symbol','')}")
     print(f"신호 {len(recent)}건 → {dest}")
     return len(recent)
 
@@ -254,7 +350,7 @@ def _kst(iso: str) -> str:
         return iso[:16]
 
 
-def _push_alpaca() -> int:
+def _push_alpaca(home: list[str] | None = None) -> int:
     """Alpaca 계좌의 **체결 기록**을 노트로 남긴다.
 
     장부를 따로 만들지 않는다 — 진짜 기록은 브로커에 있다. 우리가 옆에서
@@ -316,17 +412,98 @@ def _push_alpaca() -> int:
         lines.append("| — | 아직 체결이 없습니다 | | | | | |")
 
     _write(dest, "\n".join(lines) + "\n")
+    if home is not None:
+        home.append(f"계좌 **${float(account['equity']):,.0f}** · 보유 {len(positions)}종목 "
+                    f"· 체결 {len(orders)}건 ({mode})")
     print(f"Alpaca 체결 {len(orders)}건 · 보유 {len(positions)}종목 → {dest}")
     return len(orders)
 
 
+def _push_content() -> int:
+    """유튜브 대본을 볼트로 — 편당 대본 1장 + 녹음용 1장, 그리고 목차.
+
+    제작 파일(차트 스크립트·렌더러)은 안 옮긴다. 볼트는 읽는 곳이다.
+    """
+    src = PROJECT_DIR / "content"
+    dest = VAULT / TUBE_SUB
+    if not src.exists():
+        print(f"[건너뜀] 콘텐츠 폴더 없음: {src}")
+        return 0
+    dest.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for ep in sorted(d for d in src.iterdir() if d.is_dir()):
+        script = ep / "script.md"
+        if not script.exists():
+            continue
+        name = ep.name.split("-")[0].upper()          # ep03-pead → EP03
+        text = script.read_text(encoding="utf-8", errors="replace")
+        # 대본 제목은 `# EP05 — 부제` 라 대시 뒤가 실제 제목이다.
+        title = next((l[2:] for l in text.splitlines() if l.startswith("# ")), name)
+        title = title.split(" — ", 1)[-1].strip()
+        shutil.copyfile(script, dest / f"{name} 대본.md")
+        narration = ep / "narration.md"
+        if narration.exists():
+            shutil.copyfile(narration, dest / f"{name} 녹음용.md")
+        made = any((ep / f).exists() for f in ("RECORDING.md", "PRODUCTION.md"))
+        rows.append((name, title, "🎬 제작함" if made else "📝 대본만",
+                     narration.exists()))
+
+    lines = [f"# 📺 유튜브 — {len(rows)}편", "", MANAGED_TAG, "",
+             f"갱신: {datetime.now():%Y-%m-%d %H:%M}", "",
+             "| 편 | 제목 | 대본 | 녹음용 | 상태 |", "|---|---|---|---|---|"]
+    for name, title, state, has_narr in rows:
+        narr = f"[[{name} 녹음용\\|녹음용]]" if has_narr else "—"
+        lines.append(f"| {name} | {title} | [[{name} 대본\\|대본]] | {narr} | {state} |")
+
+    _write(dest / "YouTube.md", "\n".join(lines) + "\n")
+    print(f"유튜브 대본 {len(rows)}편 + 목차 → {dest}")
+    return len(rows)
+
+
+def _push_home(measurements: list[tuple[str, str, str]], extra: list[str]) -> None:
+    """Home 을 매번 다시 그린다 — 열자마자 상황이 보이게.
+
+    링크 모음이 아니라 현황판이다. 숫자는 다른 push 가 이미 만든 것만
+    옮긴다 — 여기서 다시 계산하면 두 노트가 언젠가 갈라진다.
+    """
+    lines = [f"# 🏠 Home", "", MANAGED_TAG, "",
+             f"갱신: {datetime.now():%Y-%m-%d %H:%M}", ""]
+    if extra:
+        lines += ["## 지금", ""] + [f"- {s}" for s in extra] + [""]
+
+    if measurements:
+        counts = {}
+        for _, _, v in measurements:
+            counts[v] = counts.get(v, 0) + 1
+        tally = " · ".join(f"{v} {n}" for v, n in sorted(counts.items()))
+        lines += ["## 최근 판정", "", f"{tally} (전체 {len(measurements)}건)", "",
+                  "| 날짜 | 무엇을 쟀나 | 판정 |", "|---|---|---|"]
+        for stem, title, verdict in measurements[:5]:
+            lines.append(f"| {stem[:10]} | [[{STOCK_SUB}/Measurements/{stem}\\|{title}]] "
+                         f"| {verdict} |")
+        lines += ["", f"→ 전체 목록: [[{STOCK_SUB}/Measurements|측정 리포트]]", ""]
+
+    lines += ["## 바로가기", "",
+              f"- [[{STOCK_SUB}/Signals|📈 매수 신호]] — 최근 신호와 성과",
+              f"- [[{STOCK_SUB}/Scorecard|🎓 애널리스트 성적표]] — 판정까지 얼마나 왔나",
+              f"- [[{STOCK_SUB}/Alpaca|💵 Alpaca 체결]] — 실제 매수·매도와 잔고",
+              f"- [[{STOCK_SUB}/Measurements|📐 측정 리포트]] — 무엇을 재서 무엇이 나왔나",
+              f"- [[{MEMORY_SUB}/MEMORY|🧠 에이전트 메모리]] — 규칙·측정·진행 중",
+              f"- [[{TUBE_SUB}/YouTube|📺 유튜브 대본]]", ""]
+    _write(VAULT / "Home.md", "\n".join(lines) + "\n")
+
+
 def cmd_push() -> int:
     VAULT.mkdir(parents=True, exist_ok=True)
+    home: list[str] = []
     _push_memory()
-    _push_measurements()
-    _push_signals()
+    measurements = _push_measurements()
+    _push_signals(home)
     _push_scorecard()
-    _push_alpaca()
+    _push_alpaca(home)
+    _push_content()
+    _push_home(measurements, home)
     print("push 완료.")
     return 0
 
