@@ -17,6 +17,12 @@ R 은 위험 1단위 기준 손익. 둘 다 같은 봉이면 **손절 우선(보
 (`docs/measurements/2026-08-12-entry-rule-daily.md`). 그래서 손절이 -1.0 이
 아니다 — 플랜보다 비싸게 샀으면 그만큼 더 잃는다.
 
+**판 값도 같은 규칙이다 (2026-08-16).** 손절가·목표가를 그대로 적으면 갭을
+지나간 날 시장에 없던 가격에 파는 것이다. 손절은 아래로 갭하면 그날 시가
+(더 나쁘다), 목표는 위로 갭하면 그날 시가(더 좋다) — `virtual_broker.
+scan_plan_exit` 이 이미 쓰던 자다. 이걸 안 걸었을 때 손절 아래에서 체결된
+건들이 `loss` 라벨로 **+1.36R** 을 적고 있었다.
+
 `_simulate_outcome` 는 명시적 플랜 좌표만 받는 순수 함수라 결정적으로
 테스트한다. `backtest_trade_plans` 는 매 봉 build_trade_plan 을 재계산하므로
 느리다(오프라인 측정 전용 — ic_weight_updater 와 같은 성격). 네트워크 無.
@@ -126,6 +132,7 @@ def placeable_r(res: dict, plan: dict, limit: float, opens: np.ndarray,
         # 미결은 원 백테스트가 0 으로 센다. 산 값은 남긴다 — 체결됐으니
         # 거래비용은 실제로 나갔고, 비용 환산에 그 값이 필요하다.
         return {**res, "r": 0.0, "fill_price": float(fill),
+                "exit_price": float(fill),
                 "risk_pct": res.get("risk_pct", float("nan"))}
     if self_basis:
         # 갭으로 더 좋게 샀으면 위험폭도 그만큼 좁아진다 — 비용이 몇 R 인지가
@@ -134,14 +141,22 @@ def placeable_r(res: dict, plan: dict, limit: float, opens: np.ndarray,
         if not (plan_risk > 0):
             return {**res, "outcome": "skip", "r": 0.0,
                     "fill_price": float(fill), "risk_pct": float("nan")}
+    # 청산가도 **걸 수 있는 값**이어야 한다 — 진입에 적용한 규칙 그대로다.
+    # 손절가·목표가를 그대로 적으면 갭을 지나간 날 시장에 없던 가격이 된다.
+    # `virtual_broker.scan_plan_exit` 이 이미 쓰는 규칙과 같은 자다.
+    #   손절: 아래로 갭하면 손절가에 못 판다 → 그날 시가 (더 나쁘다)
+    #   목표: 위로 갭하면 지정가 매도가 시가에 채워진다 → 그날 시가 (더 좋다)
+    ex_open = opens[res["exit_idx"]]
     if res["outcome"] == "loss":
-        exit_px = plan["stop"]
+        exit_px = min(ex_open, plan["stop"]) if long else max(ex_open, plan["stop"])
     elif res["outcome"] == "win":
-        exit_px = plan["targets"][0]
+        exit_px = max(ex_open, plan["targets"][0]) if long else \
+            min(ex_open, plan["targets"][0])
     else:                                    # eod — 세션 마지막 봉 시가
-        exit_px = opens[res["exit_idx"]]
+        exit_px = ex_open
     r = (exit_px - fill) if long else (fill - exit_px)
     return {**res, "r": float(r / plan_risk), "fill_price": float(fill),
+            "exit_price": float(exit_px),
             "risk_pct": (plan_risk / fill * 100.0) if self_basis else
                         res.get("risk_pct", float("nan"))}
 

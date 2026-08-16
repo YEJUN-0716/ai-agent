@@ -319,7 +319,7 @@ def test_forced_direction_rejects_unknown_value():
 # 확신도는 결과와 연결된 것이 측정되지 않았다 (롱 기준 high/medium/low 의
 # 기대값 95% 구간이 겹친다, 2026-08-10). 실행 가치를 가르는 건 손절 거리다 —
 # 총 기대값은 4분위가 거의 같은데 손익분기 비용이 갈린다 — 롱 기준
-# 13.2bp(D) ~ 36.2bp(A). (2026-08-16 재측정. 29.6~88.8bp 판은 유령 체결가.)
+# 11.1bp(D) ~ 35.0bp(A). (2026-08-16 재측정. 29.6~88.8bp 판은 유령 체결가.)
 
 def test_cost_grade_follows_stop_distance():
     cost_grade = tp.cost_grade
