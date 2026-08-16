@@ -105,3 +105,95 @@ def test_verdict_labels(monkeypatch):
     # 서술로 적은 초기 리포트는 한 낱말로 줄이지 않는다.
     assert b._verdict("## 판정\n\n**두 항목 모두 구분 불가.** 통과 근거 없음.\n") == "📄 서술형"
     assert b._verdict("# 비용 민감도\n\n표만 있는 리포트.\n") == "—"
+
+
+# ── 메모리 목차 ─────────────────────────────────────────────────────────
+# 분류를 한 줄 요약의 낱말로 추측하던 판이 실제로 틀렸다 — 이미 닫힌 노선이
+# '진행 중'에, 채널 출시가 '측정'에 들어갔다. 이제 파일이 분류를 들고 있다.
+def _memory_note(dirpath, slug, title, topic, status, body=""):
+    (dirpath / f"{slug}.md").write_text(
+        f"---\nname: {slug}\ndescription: \"{title}\"\nmetadata:\n"
+        f"  node_type: memory\n  type: project\n  topic: {topic}\n"
+        f"  status: {status}\n---\n\n{body}\n", encoding="utf-8")
+
+
+def test_memory_index_groups_by_frontmatter_not_words(monkeypatch, tmp_path):
+    """요약에 '실측'이 있어도 topic 이 운영이면 운영으로 간다."""
+    mem, vault = tmp_path / "mem", tmp_path / "vault"
+    mem.mkdir(); vault.mkdir()
+    _memory_note(mem, "ecc-trial", "ecc 플러그인 끔", "운영", "끝남")
+    _memory_note(mem, "pead-prereg", "PEAD 사전 등록", "전략", "닫힘",
+                 "앞선 판단은 [[ecc-trial]] 참고.")
+    (mem / "MEMORY.md").write_text(
+        "- [ecc 플러그인 끔](ecc-trial.md) — 적재량 -45% 실측\n"
+        "- [PEAD 사전 등록](pead-prereg.md) — 측정 완료, 판정 실패\n",
+        encoding="utf-8")
+
+    monkeypatch.setenv("MEMORY_DIR", str(mem))
+    monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+    b = _bridge(monkeypatch)
+    assert b._push_memory() == 2
+
+    index = (vault / "Agent Memory" / "MEMORY.md").read_text(encoding="utf-8")
+    운영 = index.split("시스템 운영")[1].split("##")[0]
+    assert "ecc 플러그인 끔" in 운영 and "PEAD" not in 운영
+    assert "❌ 닫힘" in index and "✅ 끝남" in index
+
+
+def test_memory_notes_get_korean_names_and_links_follow(monkeypatch, tmp_path):
+    """파일명을 한글로 바꾸면 본문의 [[슬러그]] 링크도 같이 바뀌어야 한다."""
+    mem, vault = tmp_path / "mem", tmp_path / "vault"
+    mem.mkdir(); vault.mkdir()
+    _memory_note(mem, "ecc-trial", "ecc 플러그인 끔", "운영", "끝남")
+    _memory_note(mem, "pead-prereg", "PEAD 사전 등록", "전략", "닫힘",
+                 "앞선 판단은 [[ecc-trial]] 참고.")
+    (mem / "MEMORY.md").write_text(
+        "- [ecc 플러그인 끔](ecc-trial.md) — x\n"
+        "- [PEAD 사전 등록](pead-prereg.md) — y\n", encoding="utf-8")
+
+    monkeypatch.setenv("MEMORY_DIR", str(mem))
+    monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+    b = _bridge(monkeypatch)
+    b._push_memory()
+
+    dest = vault / "Agent Memory"
+    assert (dest / "PEAD 사전 등록.md").exists()
+    assert not (dest / "pead-prereg.md").exists()      # 옛 이름은 남지 않는다
+    assert "[[ecc 플러그인 끔]]" in (dest / "PEAD 사전 등록.md").read_text(
+        encoding="utf-8")
+
+
+def test_memory_without_topic_is_surfaced_not_guessed(monkeypatch, tmp_path):
+    """태그가 없으면 어딘가에 끼워넣지 말고 '미분류'로 드러낸다."""
+    mem, vault = tmp_path / "mem", tmp_path / "vault"
+    mem.mkdir(); vault.mkdir()
+    (mem / "untagged.md").write_text(
+        "---\nname: untagged\nmetadata:\n  type: project\n---\n\n본문\n",
+        encoding="utf-8")
+    (mem / "MEMORY.md").write_text("- [태그 없는 메모](untagged.md) — z\n",
+                                   encoding="utf-8")
+
+    monkeypatch.setenv("MEMORY_DIR", str(mem))
+    monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+    b = _bridge(monkeypatch)
+    b._push_memory()
+    assert "미분류" in (vault / "Agent Memory" / "MEMORY.md").read_text(
+        encoding="utf-8")
+
+
+def test_pipe_in_summary_does_not_split_the_table(monkeypatch, tmp_path):
+    """'|t|≤0.6' 같은 요약이 표 칸을 쪼개면 안 된다."""
+    mem, vault = tmp_path / "mem", tmp_path / "vault"
+    mem.mkdir(); vault.mkdir()
+    _memory_note(mem, "verdict", "총괄 판정", "전략", "돌아감")
+    (mem / "MEMORY.md").write_text(
+        "- [총괄 판정](verdict.md) — 이미 반증됐다(|t|≤0.6)\n", encoding="utf-8")
+
+    monkeypatch.setenv("MEMORY_DIR", str(mem))
+    monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+    b = _bridge(monkeypatch)
+    b._push_memory()
+    row = [l for l in (vault / "Agent Memory" / "MEMORY.md").read_text(
+        encoding="utf-8").splitlines() if "총괄 판정" in l][0]
+    assert r"\|t\|" in row
+    assert row.count("|") - row.count(r"\|") == 4   # 칸 3개 = 칸 구분 파이프 4개

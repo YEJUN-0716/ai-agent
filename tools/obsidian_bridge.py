@@ -77,59 +77,110 @@ def cmd_init() -> int:
 
 
 # ── push: 우리 → 옵시디언 ────────────────────────────────────────────
-def _memory_group(slug: str, line: str) -> str:
-    """메모리 한 줄이 어느 묶음에 들어가나.
+# 목차의 묶음 순서와 이름. 메모리 프론트매터의 metadata.topic 과 짝이다.
+MEMORY_TOPICS = (("전략", "## 📈 주식 전략 · 측정"),
+                 ("운영", "## 🤖 시스템 운영"),
+                 ("콘텐츠", "## 🎬 콘텐츠"),
+                 ("규칙", "## 🧭 일하는 규칙"))
+MEMORY_STATUS = {"돌아감": "⚙️ 돌아감", "끝남": "✅ 끝남",
+                 "닫힘": "❌ 닫힘", "규칙": "—"}
+# 상태 정렬: 살아 있는 것부터.
+STATUS_ORDER = {"돌아감": 0, "끝남": 1, "닫힘": 2, "규칙": 3}
 
-    원본 MEMORY.md 는 41줄이 한 덩어리라 훑기 어렵다. 프론트매터의 `type`
-    (feedback/project)과 한 줄 요약의 낱말로 세 묶음으로 가른다.
 
-    ponytail: 낱말 매칭 휴리스틱. 빗나가도 노트는 '진행 중'에 남고 사라지지
-    않는다. 묶음이 더 필요해지면 메모리 프론트매터에 태그를 넣는 쪽이 맞다.
+def _memory_meta(slug: str) -> tuple[str, str]:
+    """메모리 프론트매터의 topic/status.
+
+    **한 줄 요약의 낱말로 추측하지 않는다.** 그렇게 짰더니 이미 닫힌 노선이
+    '진행 중'에, 채널 출시가 '측정'에 들어갔다(2026-08-17). 분류는 메모리
+    파일이 직접 들고 있어야 한다 — 태그가 없으면 미분류로 드러내고 끝낸다.
     """
-    fm = (MEMORY_DIR / f"{slug}.md")
-    text = fm.read_text(encoding="utf-8", errors="replace")[:400] if fm.exists() else ""
-    if "type: feedback" in text:
-        return "규칙"
-    if any(w in line for w in ("판정", "측정", "실측", "반증")):
-        return "측정"
-    return "진행"
+    import re
+    path = MEMORY_DIR / f"{slug}.md"
+    if not path.exists():
+        return ("미분류", "규칙")
+    head = path.read_text(encoding="utf-8", errors="replace")[:600]
+    topic = re.search(r"^ *topic: *(\S+)", head, re.M)
+    status = re.search(r"^ *status: *(\S+)", head, re.M)
+    return (topic.group(1) if topic else "미분류",
+            status.group(1) if status else "규칙")
+
+
+_BAD_CHARS = str.maketrans({c: "-" for c in '\\/:*?"<>|'})
+
+
+def _note_name(title: str) -> str:
+    """볼트에 쓸 파일 이름 — 슬러그 대신 한글 제목.
+
+    옵시디언 왼쪽 파일 목록에 `fscore-longshort-prereg` 가 40개 뜨면 못 읽는다.
+    원본(.claude 메모리)은 슬러그를 유지한다 — 코드와 다른 메모리가 그 이름으로
+    서로를 부른다. 볼트는 사본이라 이름을 바꿔도 되지만, 그러면 본문의
+    `[[슬러그]]` 링크도 같이 바꿔야 끊기지 않는다(현재 144개).
+    """
+    return title.translate(_BAD_CHARS).strip()[:80] or "무제"
 
 
 def _push_memory() -> int:
-    """메모리를 복사하고, 목차(MEMORY.md)를 묶음별로 다시 그린다."""
+    """메모리를 한글 이름으로 복사하고, 주제→상태 목차를 다시 그린다."""
     dest = VAULT / MEMORY_SUB
     dest.mkdir(parents=True, exist_ok=True)
     if not MEMORY_DIR.exists():
         print(f"[건너뜀] 메모리 폴더 없음: {MEMORY_DIR}")
         return 0
-    n = 0
-    for md in MEMORY_DIR.glob("*.md"):
-        shutil.copyfile(md, dest / md.name)
-        n += 1
 
+    import re
     index = MEMORY_DIR / "MEMORY.md"
+    entries = []          # (slug, 제목, 한 줄 요약, topic, status)
     if index.exists():
-        import re
-        groups: dict[str, list[str]] = {"규칙": [], "측정": [], "진행": []}
         for line in index.read_text(encoding="utf-8", errors="replace").splitlines():
             m = re.match(r"- \[(.+?)\]\((.+?)\.md\)(.*)", line.strip())
-            if not m:
-                continue
-            title, slug, tail = m.groups()
-            groups[_memory_group(slug, line)].append(
-                f"- [[{slug}\\|{title}]]{tail}")
+            if m:
+                title, slug, tail = m.groups()
+                entries.append((slug, title, tail.lstrip(" —·"), *_memory_meta(slug)))
 
-        lines = [f"# 🧠 에이전트 메모리 — {sum(len(v) for v in groups.values())}건", "",
-                 MANAGED_TAG, "", f"갱신: {datetime.now():%Y-%m-%d %H:%M}", ""]
-        for key, heading in (("규칙", "## 🧭 일하는 규칙"),
-                             ("측정", "## 📐 측정으로 밝혀진 것"),
-                             ("진행", "## 🚧 진행 중인 일 · 밟은 함정")):
-            if groups[key]:
-                lines += [heading, ""] + groups[key] + [""]
-        _write(dest / "MEMORY.md", "\n".join(lines) + "\n")
+    names = {slug: _note_name(title) for slug, title, *_ in entries}
 
-    print(f"메모리 {n}개 + 목차 → {dest}")
-    return n
+    # 이름이 바뀌므로 옛 사본을 먼저 치운다 — 이 폴더는 전부 push 가 만든다.
+    for old in dest.glob("*.md"):
+        old.unlink()
+
+    for md in MEMORY_DIR.glob("*.md"):
+        if md.stem == "MEMORY":
+            continue
+        body = md.read_text(encoding="utf-8", errors="replace")
+        # 메모리끼리 거는 [[슬러그]] 링크를 새 이름으로. 못 찾으면 그대로 둔다.
+        body = re.sub(r"\[\[([a-z0-9-]+)\]\]",
+                      lambda m: f"[[{names.get(m.group(1), m.group(1))}]]", body)
+        _write(dest / f"{names.get(md.stem, md.stem)}.md", body)
+
+    lines = [f"# 🧠 에이전트 메모리 — {len(entries)}건", "", MANAGED_TAG, "",
+             f"갱신: {datetime.now():%Y-%m-%d %H:%M}", "",
+             "분류는 각 메모리 파일의 `topic`·`status` 를 그대로 읽는다 — "
+             "요약 낱말로 추측하지 않는다.", ""]
+    for topic, heading in MEMORY_TOPICS:
+        rows = [e for e in entries if e[3] == topic]
+        if not rows:
+            continue
+        rows.sort(key=lambda e: (STATUS_ORDER.get(e[4], 9), e[1]))
+        lines += [f"{heading} ({len(rows)})", "",
+                  "| 상태 | 메모 | 무엇 |", "|---|---|---|"]
+        for slug, title, tail, _, status in rows:
+            # 파일 이름이 제목 그대로면 별칭을 붙이지 않는다 — 같은 말 두 번.
+            link = (f"[[{names[slug]}]]" if names[slug] == title
+                    else f"[[{names[slug]}\\|{title}]]")
+            # 요약에 |t| 같은 파이프가 있으면 표 칸이 쪼개진다.
+            lines.append(f"| {MEMORY_STATUS.get(status, status)} "
+                         f"| {link} | {tail.replace('|', '\\|')} |")
+        lines.append("")
+
+    unfiled = [e for e in entries if e[3] == "미분류"]
+    if unfiled:
+        lines += ["## ⚠️ 미분류 — 파일에 `topic:` 이 없다", ""]
+        lines += [f"- [[{names[e[0]]}\\|{e[1]}]]" for e in unfiled] + [""]
+
+    _write(dest / "MEMORY.md", "\n".join(lines) + "\n")
+    print(f"메모리 {len(entries)}개 + 목차 → {dest}")
+    return len(entries)
 
 
 VERDICTS = (("통과", "✅ 통과"), ("실패", "❌ 실패"),
