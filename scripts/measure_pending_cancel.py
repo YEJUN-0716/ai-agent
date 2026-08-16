@@ -34,10 +34,15 @@ from scripts.measure_portfolio import (  # noqa: E402
 # 통과선의 의미가 측정마다 달라진다.
 from scripts.measure_pead import excess_cagr_ci, mde_pp  # noqa: E402
 
-OUT_MD = Path("docs/measurements/2026-08-16-pending-cancel.md")
-
-BASE_WINDOW = 15        # 측정 하네스가 실제로 쓴 창 (measure_entry_rule.py:60)
+# 기준선 창. parquet 이 그 창으로 잘려 저장돼 있으므로 이 값은 **읽는 parquet 과
+# 짝**이라야 한다 — 20 을 재려면 `FILL_WINDOW=20` 으로 measure_entry_rule.py 를
+# 돌린 뒤 `TRADES=...-daily-w20.parquet BASE_WINDOW=20` 으로 이 스크립트를 부른다.
+BASE_WINDOW = int(os.environ.get("BASE_WINDOW", "15"))
 RUNNER_WINDOW = 20      # 러너가 실제로 도는 창 (modules/virtual_broker.py:200)
+SHORT_WINDOWS = tuple(w for w in (5, 10, 15) if w < BASE_WINDOW)
+
+OUT_MD = Path("docs/measurements/2026-08-16-pending-cancel"
+              f"{'' if BASE_WINDOW == 15 else f'-w{BASE_WINDOW}'}.md")
 N_PLACEBO = 100
 JUDGE_COST = 6.0
 MDE_GATE = 4.0          # %p. 넘으면 판정은 "실패"가 아니라 "미측정"
@@ -120,22 +125,22 @@ def main() -> int:
     cal = close.index
 
     base = run_arm(act, close)
-    arms: list[tuple[str, dict, int]] = [("기준선 (창 15, 취소 없음)", base, 0)]
+    arms: list[tuple[str, dict, int]] = [
+        (f"기준선 (창 {BASE_WINDOW}, 취소 없음)", base, 0)]
 
     r1 = run_arm(act, close, cancel="grade")
     arms.append(("**R1** A후보가 대기 B를 취소", r1, 0))
 
     lost = {}
-    for w in (5, 10):
+    for w in SHORT_WINDOWS:
         sw, lost[w] = shorten_window(act, w, cal)
         arms.append((f"{'**R2** ' if w == 5 else ''}창 {w}거래일",
                      run_arm(sw, close), lost[w]))
 
-    # 러너의 20거래일 창은 **이 parquet 으로 못 잰다.** 만료가 15거래일에서 잘린
-    # 채로 저장돼 있어 16~20 일째 체결이 애초에 기록에 없다 — 창을 늘려 봐야
-    # 기준선과 같은 줄이 나온다(그 사실을 selftest 가 못 박는다). 재려면
-    # FILL_WINDOW=20 으로 measure_entry_rule.py 를 다시 돌려야 한다.
-    sw20, lost20 = shorten_window(act, RUNNER_WINDOW, cal)
+    # 러너의 20거래일 창은 **15로 잘린 parquet 으로는 못 잰다.** 만료가 15거래일
+    # 에서 잘린 채 저장돼 있어 16~20 일째 체결이 애초에 기록에 없다 — 창을 늘려
+    # 봐야 기준선과 같은 줄이 나온다(그 사실을 selftest 가 못 박는다).
+    sw20, _ = shorten_window(act, RUNNER_WINDOW, cal)
     same20 = int((sw20[f"{RULE}_outcome"] == act[f"{RULE}_outcome"]).sum())
 
     # 위약: 같은 트리거, 등급 안 보고 무작위 취소. 판정 비용 한 구간만 돈다.
@@ -152,10 +157,15 @@ def main() -> int:
         f"판정 {JUDGE_COST:.0f}bp · 전부 **평가 기준(mtm) 곡선**.",
         "사전 등록: `docs/superpowers/specs/2026-08-16-pending-cancel-design.md`",
         "",
-        "> **메모의 '20거래일'은 틀렸다.** 측정 하네스는 15거래일"
-        "(`scripts/measure_entry_rule.py:60`), 러너는 20거래일"
-        "(`modules/virtual_broker.py:200`) 로 돈다. 5.9년 성적은 15에서 나온 값이라 "
-        "**기준선을 15로 잡았고, 20은 이 데이터로 못 잰다**(아래 상자).",
+        ("> **메모의 '20거래일'은 틀렸다.** 측정 하네스는 15거래일"
+         "(`scripts/measure_entry_rule.py:60`), 러너는 20거래일"
+         "(`modules/virtual_broker.py:200`) 로 돈다. 5.9년 성적은 15에서 나온 값이라 "
+         "**기준선을 15로 잡았고, 20은 이 데이터로 못 잰다**(아래 상자)."
+         if BASE_WINDOW < RUNNER_WINDOW else
+         f"> **기준선이 러너와 같은 창({BASE_WINDOW}거래일)이다.** "
+         f"`FILL_WINDOW={BASE_WINDOW}` 로 `measure_entry_rule.py` 를 다시 돌려 만든 "
+         f"`{TRADES.name}` 을 읽는다 — 이 줄이 러너(`modules/virtual_broker.py:200`)가 "
+         "실제로 도는 설정이다. 창을 줄인 팔은 전부 이 줄과의 차이다."),
         "",
         "## 팔별 성적",
         "",
@@ -175,12 +185,17 @@ def main() -> int:
         f"{cagr(float(bench.iloc[-1]), years):+.2f}% | {mdd(bench):.1f}% |", "",
         "`취소/몰수` 는 R1 은 취소한 대기 건수, R2 는 **창이 줄어 못 걸린 체결** "
         "건수다. 둘 다 그 트레이드의 손익을 통째로 몰수한 뒤의 숫자다.", "",
-        "> **러너가 실제로 도는 20거래일 창은 이 표에 없다 — 이 데이터로 못 잰다.** "
-        f"parquet 의 만료가 15거래일에서 잘린 채 저장돼 있어 16~20일째 체결이 "
-        f"애초에 기록에 없다(창을 20으로 늘려도 {same20:,}/{len(act):,}건이 "
-        f"글자 그대로 같은 줄이다). **러너는 백테스트가 한 번도 안 재 본 설정으로 "
-        "돌고 있다** — 재려면 `FILL_WINDOW=20` 으로 "
-        "`scripts/measure_entry_rule.py` 를 다시 돌려야 한다.", "",
+        ("> **러너가 실제로 도는 20거래일 창은 이 표에 없다 — 이 데이터로 못 잰다.** "
+         f"parquet 의 만료가 15거래일에서 잘린 채 저장돼 있어 16~20일째 체결이 "
+         f"애초에 기록에 없다(창을 20으로 늘려도 {same20:,}/{len(act):,}건이 "
+         f"글자 그대로 같은 줄이다). **러너는 백테스트가 한 번도 안 재 본 설정으로 "
+         "돌고 있다** — 재려면 `FILL_WINDOW=20` 으로 "
+         "`scripts/measure_entry_rule.py` 를 다시 돌려야 한다."
+         if BASE_WINDOW < RUNNER_WINDOW else
+         f"> 창을 {RUNNER_WINDOW} 이상으로 **늘리는** 건 여전히 불가능하다 — "
+         f"만료가 {BASE_WINDOW}거래일에서 잘려 저장되므로 늘려 봐야 "
+         f"{same20:,}/{len(act):,}건이 같은 줄이다. 창을 더 늘려 보려면 "
+         "`FILL_WINDOW` 를 더 키워 다시 돌리는 수밖에 없다."), "",
         "## 판정", "",
         "| 규칙 | ① 초과 연수익 95% 구간 | MDE | ② 비용 4구간 | ③ 위약 p | 판정 |",
         "|---|---|---|---|---|---|",
@@ -250,16 +265,32 @@ def main() -> int:
         "**창 길이를 바꾼 줄이 단조롭지 않다.** 같은 손잡이 하나를 돌렸는데 "
         + " → ".join(
             f"{w}일 {cagr(float(mtm_curve(a[JUDGE_COST]['pos_log'], close).iloc[-1]), years):+.1f}%"
-            for w, a in ((5, arms[2][1]), (10, arms[3][1]), (15, base)))
+            for w, a in (list(zip(SHORT_WINDOWS, (a for _, a, _ in arms[2:])))
+                         + [(BASE_WINDOW, base)]))
         + " 로 오르내린다. 파라미터 하나에 결과가 이만큼 튀면 잰 것은 규칙이 아니라 "
         "**마찰**이다 — `2026-08-13-timing-vs-exposure.md` 에서 일봉/월말 판정이 "
         "갈렸던 것과 같은 신호다.", "",
         "다음에 이걸 다시 열려면 순서는 이렇다.", "",
-        "1. `FILL_WINDOW=20` 으로 `measure_entry_rule.py` 를 다시 돌려 **러너가 "
-        "실제로 도는 설정**의 기준선을 먼저 만든다. 지금은 그 줄이 없다.",
-        "2. 검출력부터 본다. MDE 를 2%p 밑으로 못 내리면 이 질문은 5.9년 한 경로로는 "
-        "답이 안 나오고, 그때는 창을 늘리거나 질문을 바꿔야 한다.",
-        "3. 그 다음에야 규칙을 건다.", "",
+        ("1. `FILL_WINDOW=20` 으로 `measure_entry_rule.py` 를 다시 돌려 **러너가 "
+         "실제로 도는 설정**의 기준선을 먼저 만든다. 지금은 그 줄이 없다."
+         if BASE_WINDOW < RUNNER_WINDOW else
+         f"1. ~~러너 설정의 기준선을 만든다~~ — **했다.** 이 문서가 창 {BASE_WINDOW} "
+         "기준선이다."),
+        # MDE 는 표본 길이의 제곱근에 반비례한다 — 2%p 로 내리는 데 필요한 연수를
+        # 실측 MDE 에서 바로 낸다. "못 내린다"를 **얼마나** 못 내리는지로 적는다.
+        (f"2. ~~검출력부터 본다~~ — **봤고, 안 내려간다.** MDE 가 "
+         f"{min(v[4] for v in verdicts.values()):.1f}~"
+         f"{max(v[4] for v in verdicts.values()):.1f}%p 로 창 15 기준선(6.1~7.0%p)과 "
+         f"사실상 같다. 기준선을 러너에 맞춰도 자는 안 예리해졌다. MDE 는 표본 "
+         f"길이의 √에 반비례하므로 {EFFECT_WORTH:.0f}%p 로 내리려면 "
+         f"{(min(v[4] for v in verdicts.values()) / EFFECT_WORTH) ** 2:.0f}배 = "
+         f"약 {years * (min(v[4] for v in verdicts.values()) / EFFECT_WORTH) ** 2:.0f}년 "
+         f"이 필요하다 — **한 경로로는 못 넘는 벽이다.**"
+         if BASE_WINDOW >= RUNNER_WINDOW else
+         "2. 검출력부터 본다. MDE 를 2%p 밑으로 못 내리면 이 질문은 5.9년 한 경로로는 "
+         "답이 안 나오고, 그때는 창을 늘리거나 질문을 바꿔야 한다."),
+        "3. ~~그 다음에야 규칙을 건다~~ — **못 간다.** 2가 막혔다."
+        if BASE_WINDOW >= RUNNER_WINDOW else "3. 그 다음에야 규칙을 건다.", "",
         "**어느 쪽이든 매수보유는 여전히 안 보인다.** 기준선이 "
         f"{cagr(float(mtm_curve(base[JUDGE_COST]['pos_log'], close).iloc[-1]), years):+.1f}%, "
         f"매수보유가 {cagr(float(bench.iloc[-1]), years):+.1f}% 다. 대기 취소로 "

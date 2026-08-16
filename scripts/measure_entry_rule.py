@@ -57,9 +57,19 @@ DAILY = MODE == "daily"
 if DAILY:
     # scripts/measure_trade_plan_oos.py 와 같은 값이라야 그 +0.58R 을 대표한다.
     PANEL = Path(os.environ.get("PANEL", "data/price_panel_v1.parquet"))
-    FILL_WINDOW, HOLD_WINDOW, MIN_LEN = 15, 30, 120
+    # 창은 **줄일 수만 있고 늘릴 수 없다** — parquet 의 expire_date 가 여기서 잘려
+    # 저장되므로, 러너의 20거래일(`modules/virtual_broker.py:200`)을 재려면 이 값을
+    # 20 으로 놓고 다시 돌리는 수밖에 없다. 기본값 15 는 5.9년 성적이 나온 그 값
+    # 이라 안 건드린다 — 다른 값이면 산출물 이름이 갈라져 그 줄을 안 덮는다.
+    # 러너는 창이 **둘** 다 다르다: LIMIT_FILL_WINDOW 20 / PLAN_HOLD_WINDOW 40.
+    # 체결 창만 맞추면 이음매가 반만 닫힌다.
+    FILL_WINDOW = int(os.environ.get("FILL_WINDOW", "15"))
+    HOLD_WINDOW = int(os.environ.get("HOLD_WINDOW", "30"))
+    MIN_LEN = 120
     COST_BPS = 40.0          # 왕복. 편도 20bp = 한국 증권사 미국주식 실제 자리
-    SUFFIX = "-daily"
+    SUFFIX = ("-daily" if (FILL_WINDOW, HOLD_WINDOW) == (15, 30) else
+              f"-daily-w{FILL_WINDOW}"
+              + ("" if HOLD_WINDOW == 30 else f"h{HOLD_WINDOW}"))
 else:
     PANEL = Path(os.environ.get("PANEL", "data/intraday_panel_15m.parquet"))
     FILL_WINDOW, HOLD_WINDOW, MIN_LEN = 8, 26, MIN_BARS   # 3a·러너와 같은 값
