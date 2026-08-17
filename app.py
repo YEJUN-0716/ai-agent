@@ -4166,20 +4166,33 @@ def equity_log_status():
         return build_ops_report('계좌 현황', '📊', '정상',
             ['가상 장부·자산 기록 없음 — 아직 매매가 한 건도 일어나지 않음'])
 
-    reasons = []
+    reasons, status = [], '정상'
     if ledger:
         last_eq = records[-1].get('equity') if records else None
         head = (f"보유 {len(ledger.get('positions', {}))}종목 · "
                 f"현금 {ledger.get('cash_krw', 0):,.0f}원")
         reasons.append(f"총자산 {last_eq:,.0f}원 · " + head if last_eq is not None else head)
         if ledger.get('pending'):
-            reasons.append(f"대기 주문 {len(ledger['pending'])}건 — 다음 거래일 시가 체결 예정")
+            reserved = sum(float(o.get('notional_krw', 0) or 0)
+                           for o in ledger['pending'] if o.get('side') == 'buy')
+            reasons.append(f"대기 주문 {len(ledger['pending'])}건 · "
+                           f"매수대기 {reserved:,.0f}원이 현금에 묶여 있음")
+        # 장부 자기 점검 — 예약·체결·만료 규칙을 스스로 되짚는다(시세 조회 없음).
+        try:
+            from modules.virtual_broker import check_state
+            problems = check_state(ledger)
+        except Exception as e:
+            problems = [f"점검 실행 실패: {e}"]
+        if problems:
+            status = '경고'
+            reasons.append(f"⚠️ 장부 점검 이상 {len(problems)}건")
+            reasons += problems[:3]
 
     if records:
         reasons.append(f"자산 기록 {len(records)}일치 · 최근 {records[-1].get('date')}")
     else:
         reasons.append('자산 기록 없음 — 러너가 아직 한 번도 완주하지 않음')
-    return build_ops_report('계좌 현황', '📊', '정상', reasons)
+    return build_ops_report('계좌 현황', '📊', status, reasons)
 
 
 @st.cache_data(ttl=300, show_spinner=False)

@@ -156,9 +156,18 @@ def main():
     # 대기 주문은 장부를 직접 읽는다 — get_account()는 브로커 API 모양을 흉내내는
     # dict 라 예약분 항목이 없다(Alpaca 계정에도 그런 필드는 없다).
     try:
-        lines += pending_buy_block(broker.load_state())
+        state = broker.load_state()
+        lines += pending_buy_block(state)
+        # 장부 자기 점검. 이상이 없으면 아무 줄도 안 붙인다 — 매일 뜨는 "정상"은
+        # 아무도 안 읽게 되고, 그러면 진짜 경보도 같이 안 읽힌다.
+        problems = broker.check_state(state)
+        if problems:
+            lines.append(f"\n⚠️ *장부 점검 이상 {len(problems)}건*")
+            lines += [f"  · {p}" for p in problems[:5]]
+            if len(problems) > 5:
+                lines.append(f"  · 외 {len(problems) - 5}건 — `python -m modules.virtual_broker selftest`")
     except Exception as e:
-        print(f"[경고] 대기 주문 조회 실패 — 매수대기 표시 생략: {e}")
+        print(f"[경고] 장부 조회 실패 — 대기·점검 표시 생략: {e}")
 
     if positions:
         lines.append(f"\n*보유 포지션 {len(positions)}개*")

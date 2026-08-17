@@ -798,7 +798,7 @@ def main():
     # 0-1. 지난 실행분 정산 — 보유 포지션 청산 판정 → 지정가 진입 체결 → 만료 폐기.
     #      판정은 러너가 도는 순간의 종가가 아니라 일봉 되짚기로 한다.
     from modules.virtual_broker import (
-        load_state, place_limit_entry, save_state, set_fx, settle_pending,
+        check_state, load_state, place_limit_entry, save_state, set_fx, settle_pending,
     )
     set_fx(_KRW_PER_USD)
     _vstate_before = load_state()
@@ -811,6 +811,18 @@ def main():
     _n_logged = record_virtual_fills(new_trades)
     if _n_logged:
         print(f"  [가상] 체결 {_n_logged}건을 성적표에 기록했습니다.")
+
+    # 정산 직후가 장부가 가장 많이 움직인 순간이다 — 여기서 한 번 되짚는다.
+    # 실행을 막지는 않는다: 새 주문은 place_limit_entry 가 가용 현금으로 이미
+    # 막고 있고, 여기서 러너를 세우면 거짓 경보 한 번에 하루를 통째로 날린다.
+    # 대신 로그와 일별 리포트(daily_report_toss.py) 양쪽에 남긴다.
+    _ledger_problems = check_state(_vstate)
+    if _ledger_problems:
+        print(f"  ⚠️ [장부 점검] 이상 {len(_ledger_problems)}건 — 확인 필요")
+        for _p in _ledger_problems:
+            print(f"     - {_p}")
+    else:
+        print("  [장부 점검] 이상 없음")
 
     # 0. 시장 레짐 감지
     print("시장 레짐 감지 중...")
