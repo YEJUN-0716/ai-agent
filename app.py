@@ -5093,6 +5093,10 @@ def render_account_line():
     prev = records[-2].get('equity') if len(records) >= 2 else None
     cash = float(ledger.get('cash_krw', 0) or 0)
     n_pos = len(ledger.get('positions', {}) or {})
+    # 대기 매수 주문이 붙잡고 있는 현금. 이걸 안 빼면 "현금 59%"가 실제로는
+    # 쓸 수 있는 돈이 아니다 — 장부의 현금은 체결 전까지 줄지 않는다.
+    reserved = sum(float(o.get('notional_krw', 0) or 0)
+                   for o in (ledger.get('pending') or []) if o.get('side') == 'buy')
 
     delta_html, delta_color = None, None
     if equity is not None and prev:
@@ -5100,14 +5104,18 @@ def render_account_line():
         delta_color = 'var(--green)' if diff >= 0 else 'var(--red)'
         delta_html = f"{diff:+,.0f}원 ({diff / prev * 100:+.2f}%)"
 
-    cash_pct = f"{cash / equity * 100:.0f}%" if equity else "-"
+    free = cash - reserved
+    cash_pct = f"{free / equity * 100:.0f}%" if equity else "-"
+    cash_sub = f"{free:,.0f}원"
+    if reserved:
+        cash_sub += f" · 매수대기 {reserved:,.0f}원 묶임"
     st.markdown(ui.grid([
         ui.kpi("평가액", f"{equity:,.0f}원" if equity is not None else "기록 없음"),
         ui.kpi("오늘 P&L",
                f"<span style='color:{delta_color}'>{delta_html}</span>" if delta_html
                else "기록 2일치 필요"),
         ui.kpi("보유 종목", f"{n_pos}종목"),
-        ui.kpi("현금 비중", cash_pct, f"{cash:,.0f}원"),
+        ui.kpi("쓸 수 있는 현금", cash_pct, cash_sub),
     ], min_px=200), unsafe_allow_html=True)
     if records:
         st.caption(f"자산 기록 {len(records)}일치 · 최근 {records[-1].get('date')} "

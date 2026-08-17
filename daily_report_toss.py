@@ -90,6 +90,30 @@ def calc_perf(records: list) -> dict:
     }
 
 
+def pending_buy_block(state: dict) -> list:
+    """대기 중인 매수 주문 — 이미 현금을 붙잡고 있지만 아직 주식도 아닌 돈.
+
+    매수여력(`available_krw`)은 이 금액을 이미 뺀 값이라, 대기분을 따로 적지 않으면
+    "총자산은 그대로인데 매수여력만 줄어든" 것처럼 보인다. 실제로 예약이 현금을
+    넘어선 적이 있어(2026-07-31) 이 숫자는 보고서에 드러나 있어야 한다.
+    """
+    buys = [o for o in state.get("pending", []) if o.get("side") == "buy"]
+    if not buys:
+        return []
+
+    total = sum(float(o.get("notional_krw", 0.0)) for o in buys)
+    lines = [f"\n*매수대기 {len(buys)}건* `{total:,.0f}원` (매수여력에서 이미 빠진 금액)"]
+    for o in sorted(buys, key=lambda x: -float(x.get("notional_krw", 0.0))):
+        qty   = o.get("qty")
+        limit = o.get("limit_price")
+        detail = f"{qty}주" if qty else "시가"
+        if limit:
+            detail += f" @ ${float(limit):,.2f}"
+        lines.append(f"  `{o.get('symbol', '?')}` {detail}  "
+                     f"{float(o.get('notional_krw', 0.0)):,.0f}원")
+    return lines
+
+
 def main():
     today    = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     mode_tag = "[가상장부]"
@@ -128,6 +152,13 @@ def main():
         lines.append(f"{emoji} 당일 *{perf['today_ret']:+.2f}%*")
     elif perf:
         lines.append("⚠️ 오늘 페이퍼트레이드 미실행 — 당일 수익률 없음")
+
+    # 대기 주문은 장부를 직접 읽는다 — get_account()는 브로커 API 모양을 흉내내는
+    # dict 라 예약분 항목이 없다(Alpaca 계정에도 그런 필드는 없다).
+    try:
+        lines += pending_buy_block(broker.load_state())
+    except Exception as e:
+        print(f"[경고] 대기 주문 조회 실패 — 매수대기 표시 생략: {e}")
 
     if positions:
         lines.append(f"\n*보유 포지션 {len(positions)}개*")
