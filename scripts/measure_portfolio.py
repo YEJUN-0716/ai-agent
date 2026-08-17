@@ -34,10 +34,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-TRADES = Path("data/entry_rule_trades-daily.parquet")
+DEFAULT_TRADES = "data/entry_rule_trades-daily.parquet"
+TRADES = Path(os.environ.get("TRADES", DEFAULT_TRADES))
 PANEL = Path(os.environ.get("PANEL", "data/price_panel_v1.parquet"))
-OUT_MD = Path("docs/measurements/2026-08-13-portfolio-vs-benchmark.md")
-OUT_MD2 = Path("docs/measurements/2026-08-13-timing-vs-exposure.md")
+# 기본 산출물은 **봉인된 15거래일** 측정이다. 러너 설정(체결 20일·홀드 40봉,
+# virtual_broker.py:200)으로 다시 뽑은 거래 파일로 돌릴 땐 꼬리를 붙여 따로
+# 저장한다 — 안 그러면 다른 손잡이의 곡선이 그 리포트를 조용히 덮는다.
+SUFFIX = ("" if TRADES.name == Path(DEFAULT_TRADES).name
+          else TRADES.stem.replace(Path(DEFAULT_TRADES).stem, ""))
+OUT_MD = Path(f"docs/measurements/2026-08-13-portfolio-vs-benchmark{SUFFIX}.md")
+OUT_MD2 = Path(f"docs/measurements/2026-08-13-timing-vs-exposure{SUFFIX}.md")
 
 RULE = "C_갭반영"          # 프로덕션이 실제로 거는 라인
 IS_START = pd.Timestamp("2024-12-20")
@@ -180,6 +186,12 @@ def simulate(df: pd.DataFrame, cost_bps: float, max_positions: int = MAX_POSITIO
         "skipped_cash": skipped_cash, "pos_log": pos_log, "canceled": canceled,
         "avg_open": float(np.mean([e for _, e in exposure])) if exposure else 0.0,
     }
+
+
+def repro() -> str:
+    """이 실행을 그대로 재현하는 한 줄. 손잡이를 env 로 뺐으면 그것까지 적는다."""
+    env = "" if TRADES.name == Path(DEFAULT_TRADES).name else f"TRADES={TRADES.as_posix()} "
+    return f"{env}python scripts/measure_portfolio.py"
 
 
 def cagr(equity: float, years: float) -> float:
@@ -336,10 +348,32 @@ def yearly(strat: pd.Series, bench: pd.Series, exposure: float) -> list[str]:
     """
     lines = [f"| 연도 | 전략 (6bp) | 매수보유 | 매수보유 × {exposure * 100:.0f}% 노출 |",
              "|---|---|---|---|"]
+    # **판정은 세지 말고 계산한다.** 이 문단의 연도와 숫자를 손으로 적어 뒀더니
+    # 손잡이를 바꾼 실행에서 표와 산문이 서로 다른 말을 했다.
+    counted, beat_raw, beat_flat = [], [], []
     for y in sorted({*strat.index.year} | {*bench.index.year}):
         s, b = _year_return(strat, y), _year_return(bench, y)
         lines.append(f"| {y} | {s:+.1f}% | {b:+.1f}% | {b * exposure:+.1f}% |")
-    return lines + [""]
+        if np.isnan(s) or np.isnan(b):
+            continue
+        counted.append(y)
+        if s > b:
+            beat_raw.append(y)
+        if s > b * exposure:
+            beat_flat.append(y)
+
+    def _yrs(ys: list[int]) -> str:
+        return "하나도 없다" if not ys else "·".join(str(y) for y in ys)
+
+    return lines + [
+        "",
+        f"**원본 매수보유를 이긴 해: {_yrs(beat_raw)}** "
+        f"({len(beat_raw)}/{len(counted)}년). 노출을 맞춘 마지막 열을 이긴 해: "
+        f"{_yrs(beat_flat)} ({len(beat_flat)}/{len(counted)}년). "
+        "노출을 맞춰도 지는 해가 대부분이면, 하락장 방어는 알파가 아니라 "
+        "**안 산 것**이라는 쪽에 무게가 실린다.",
+        "",
+    ]
 
 
 def selftest() -> int:
@@ -470,7 +504,7 @@ def main() -> int:
         "넣고 복리로 굴린 뒤, 같은 패널 동일가중 매수보유와 나란히 둔다.", "",
         f"기간 {start.date()} ~ {end.date()} ({years:.1f}년) · 279종목 · "
         f"자리 {MAX_POSITIONS} · 1R = 자본 {RISK_PCT_PER_TRADE}% · "
-        f"종목 상한 {MAX_POSITION_PCT}%", "",
+        f"종목 상한 {MAX_POSITION_PCT}% · 거래 파일 `{TRADES.name}`", "",
         "| 왕복 비용 | 잡은 트레이드 | 자리 없어 버림 | 최종 자본 | 연 수익률 | MDD |",
         "|---|---|---|---|---|---|",
     ]
@@ -496,15 +530,10 @@ def main() -> int:
         "\"안 산 것이 값을 했나\" 는 `2026-08-13-timing-vs-exposure.md` 에 있다.", "",
         "## 해마다", "",
         *yearly(dict(rows)[6.0]["curve"], bench, dict(rows)[6.0]["avg_open"]),
-        "**원본 매수보유를 이긴 해는 하나도 없다.** 노출을 맞춘 마지막 열과 "
-        "비교하면 2022(−0.7 vs −3.9)와 2024(+14.2 vs +7.7) 두 해가 앞선다 — "
-        "7년 중 2년이고 둘 다 시장이 나쁘거나 옆으로 간 해다. **나머지 5년은 "
-        "노출을 맞춰도 진다.** 하락장 방어는 알파가 아니라 **안 산 것**이라는 "
-        "쪽에 무게가 실린다.", "",
         "**비용을 0 으로 놓아도 못 이긴다.** 위 표 0bp 줄이 그 답이다 — "
         "수수료를 아무리 깎아도 넘을 수 있는 거리가 아니다.", "",
-        f"재현: `python {Path(__file__).as_posix().split('/')[-2]}/"
-        f"{Path(__file__).name}` · 산수 점검 `... selftest`", "",
+        f"재현: `{repro()}` · 산수 점검 `python scripts/measure_portfolio.py selftest`",
+        "",
     ]
     text = "\n".join(body)
     print(text)
@@ -537,7 +566,7 @@ def timing_report(r6: dict, bench: pd.Series, start, end, years: float) -> list[
     return [
         "# \"안 산 것\" 이 값을 했나 — 평가 기준 낙폭과 노출을 맞춘 비교 (2026-08-13)",
         "",
-        "앞선 측정(`2026-08-13-portfolio-vs-benchmark.md`)에서 전략이 매수보유에 "
+        f"앞선 측정(`{OUT_MD.name}`)에서 전략이 매수보유에 "
         "졌다. 남은 반론이 하나 있었다 — **위험한 구간에서 안 산 것 자체가 값이 "
         "아니냐.** 그 반론이 성립하려면 두 가지가 필요하다. (1) 낙폭을 같은 "
         "기준으로 비교할 수 있어야 하고, (2) **같은 평균 노출을 상시 유지한 상대**"
@@ -586,7 +615,8 @@ def timing_report(r6: dict, bench: pd.Series, start, end, years: float) -> list[
         "**주의: 표본이 한 번의 하락장(2022)뿐이다.** 추세 필터의 값은 큰 하락이 "
         "몇 번 오는지에 달려 있는데 5.9년에 한 번은 판정하기에 얇다. 여기서 "
         "이겼더라도 그것만으로 켤 근거는 안 됐을 것이다.", "",
-        "재현: `python scripts/measure_portfolio.py` · 산수 점검 `... selftest`", "",
+        f"재현: `{repro()}` · 산수 점검 "
+        "`python scripts/measure_portfolio.py selftest`", "",
     ]
 
 
