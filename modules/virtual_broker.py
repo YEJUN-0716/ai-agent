@@ -624,3 +624,150 @@ def wait_for_fill(order_id: str, client_id: str = "", client_secret: str = "",
                   account_seq: str = "", timeout: int = 0) -> dict:
     """가상 주문은 다음 거래일 시가에 체결되므로 즉시 체결을 기다리지 않는다."""
     return {"ok": True, "status": "pending_next_open", "virtual": True}
+
+
+# ── 장부 자기 점검 ─────────────────────────────────────────────────────
+# 이 장부의 예약·체결·만료 규칙은 우리가 직접 만든 것이다. 진짜 브로커라면
+# 거래소가 거절해 줄 실수(현금 초과 예약, 없는 주식 매도, 만료 안 된 주문 방치)를
+# 아무도 안 막아 준다. 그래서 규칙 바로 옆에 그 규칙을 되짚는 점검을 둔다.
+#
+# 실제로 난 사고: 2026-07-31 예약 합계 1,852만원 대 현금 1,000만원.
+
+# 체결 금액은 원 단위로 반올림해 trades 에 적히고 현금은 반올림 없이 깎인다.
+# 거래 1건당 최대 0.5원이 어긋나므로 그만큼은 오차로 허용한다.
+def _rounding_tolerance(n_trades: int) -> float:
+    return 1.0 + n_trades
+
+
+def check_state(state: dict, today: date | None = None) -> list[str]:
+    """장부가 스스로 앞뒤가 맞는지 본다. 위반 문구 목록을 반환(빈 목록이면 정상).
+
+    시세를 조회하지 않는다 — 네트워크 없이 파일만 보고 판정한다. 그래서 러너·보고서·
+    화면 어디서 불러도 비용이 같다.
+    """
+    today = today or market_date()
+    out = []
+
+    cash = float(state.get("cash_krw", 0.0))
+    trades = state.get("trades", []) or []
+    pending = state.get("pending", []) or []
+    positions = state.get("positions", {}) or {}
+    tol = _rounding_tolerance(len(trades))
+
+    # ── 1. 현금과 예약 ────────────────────────────────────────────
+    if cash < 0:
+        out.append(f"현금이 음수다: {cash:,.0f}원")
+
+    reserved = reserved_krw(state)
+    if reserved > cash + tol:
+        out.append(f"대기 매수 예약({reserved:,.0f}원)이 현금({cash:,.0f}원)을 넘는다 "
+                   f"— 같은 돈으로 두 번 주문했다")
+
+    # ── 2. 현금 보존: 초기자본 + 입금 − 매수 + 매도 ──────────────
+    buys = sum(float(t.get("amount_krw", 0.0)) for t in trades if t.get("side") == "buy")
+    sells = sum(float(t.get("amount_krw", 0.0)) for t in trades if t.get("side") == "sell")
+    deposited = float((state.get("index_meta") or {}).get("deposited_krw", 0.0))
+    expected = INITIAL_CAPITAL_KRW + deposited - buys + sells
+    if abs(cash - expected) > tol:
+        out.append(f"현금이 거래 이력과 안 맞는다: 장부 {cash:,.0f}원 vs "
+                   f"이력 계산 {expected:,.0f}원 (차이 {cash - expected:+,.0f}원)")
+
+    # ── 3. 실현손익 = 매도 손익 합 ───────────────────────────────
+    realized = float(state.get("realized_pnl_krw", 0.0))
+    sold_pnl = sum(float(t.get("pnl_krw", 0.0)) for t in trades if t.get("side") == "sell")
+    if abs(realized - sold_pnl) > tol:
+        out.append(f"실현손익이 매도 이력과 안 맞는다: 장부 {realized:,.0f}원 vs "
+                   f"이력 합 {sold_pnl:,.0f}원")
+
+    # ── 4. 보유 수량 = 매수 − 매도 (종목별) ──────────────────────
+    # 체결 경로가 둘이라(_fill_buy 는 평단 합산, _settle_limit_entry 는 통째 대입)
+    # 이미 들고 있는 종목이 지정가로 또 체결되면 주식이 조용히 사라질 수 있다.
+    net = {}
+    for t in trades:
+        side, qty = t.get("side"), int(t.get("qty", 0) or 0)
+        if side == "buy":
+            net[t["symbol"]] = net.get(t["symbol"], 0) + qty
+        elif side == "sell":
+            net[t["symbol"]] = net.get(t["symbol"], 0) - qty
+    for sym in set(net) | set(positions):
+        held = int((positions.get(sym) or {}).get("qty", 0) or 0)
+        if net.get(sym, 0) != held:
+            out.append(f"{sym} 보유 수량이 거래 이력과 안 맞는다: "
+                       f"장부 {held}주 vs 이력 {net.get(sym, 0)}주")
+
+    # ── 5. 포지션 형식 ───────────────────────────────────────────
+    for sym, pos in positions.items():
+        if int(pos.get("qty", 0) or 0) < 1:
+            out.append(f"{sym} 보유 수량이 1주 미만이다: {pos.get('qty')}")
+        if float(pos.get("avg_price_usd", 0) or 0) <= 0:
+            out.append(f"{sym} 평단가가 0 이하다: {pos.get('avg_price_usd')}")
+
+    # ── 6. 대기 주문 형식·정합성 ─────────────────────────────────
+    buy_syms = {}
+    for i, o in enumerate(pending):
+        tag = f"대기 {i + 1}번({o.get('symbol') or '종목불명'})"
+        side = o.get("side")
+        if side not in ("buy", "sell"):
+            out.append(f"{tag} side 가 buy/sell 이 아니다: {side!r}")
+            continue
+        if not o.get("symbol"):
+            out.append(f"{tag} 종목이 비었다")
+        try:
+            placed = datetime.strptime(o["placed_date"], "%Y-%m-%d").date()
+        except (KeyError, TypeError, ValueError):
+            out.append(f"{tag} placed_date 를 읽을 수 없다: {o.get('placed_date')!r}")
+            continue
+
+        if side == "buy":
+            if float(o.get("notional_krw", 0) or 0) <= 0:
+                out.append(f"{tag} 매수 예약 금액이 0 이하다 — 현금이 안 묶인다")
+            buy_syms.setdefault(o.get("symbol"), []).append(i + 1)
+            if o.get("kind") == "limit_entry":
+                if int(o.get("qty", 0) or 0) < 1:
+                    out.append(f"{tag} 지정가 주문인데 수량이 1주 미만이다")
+                if float(o.get("limit_price", 0) or 0) <= 0:
+                    out.append(f"{tag} 지정가가 0 이하다")
+        else:
+            pos_qty = int((positions.get(o.get("symbol")) or {}).get("qty", 0) or 0)
+            if int(o.get("qty", 0) or 0) > pos_qty:
+                out.append(f"{tag} 보유({pos_qty}주)보다 많이 팔려 한다: {o.get('qty')}주")
+
+        # 만료: 체결 창을 거래일로 세지만 여기서는 달력일로 넉넉히 잡는다.
+        # ponytail: 거래일 계산이 필요해지면 daily_bars 를 쓰면 되지만, 이 점검의
+        # 목적은 "정산이 아예 안 돌고 있다"를 잡는 것이라 여유를 크게 둔다.
+        stale_days = LIMIT_FILL_WINDOW * 2 if o.get("kind") == "limit_entry" else 14
+        age = (today - placed).days
+        if age > stale_days:
+            out.append(f"{tag} {age}일째 대기 중 — 만료·체결됐어야 한다 "
+                       f"(정산이 안 돌고 있는지 확인)")
+
+    for sym, idxs in buy_syms.items():
+        if len(idxs) > 1:
+            out.append(f"{sym} 매수 대기가 {len(idxs)}건이다 — 같은 종목을 이중 예약했다")
+
+    return out
+
+
+def _selftest_cli() -> int:
+    """`python -m modules.virtual_broker selftest` — 장부 점검 결과를 찍고
+    위반이 있으면 종료코드 1."""
+    state = load_state()
+    problems = check_state(state)
+    print(f"장부 점검 — {STATE_FILE}")
+    print(f"  현금 {state['cash_krw']:,.0f}원 · 보유 {len(state['positions'])}종목 · "
+          f"대기 {len(state['pending'])}건 · 거래 {len(state['trades'])}건")
+    if not problems:
+        print("  이상 없음")
+        return 0
+    print(f"  ⚠️ 이상 {len(problems)}건")
+    for p in problems:
+        print(f"   - {p}")
+    return 1
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        sys.exit(_selftest_cli())
+    print("사용법: python -m modules.virtual_broker selftest")
+    sys.exit(2)
