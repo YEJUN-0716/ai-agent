@@ -177,6 +177,33 @@ def test_limit_order_reserves_cash_and_settles_into_a_plan_position(broker, monk
     assert state["cash_krw"] == pytest.approx(10_000_000 - 10 * 99 * 1000)
 
 
+def test_every_order_leaves_a_record_carrying_its_limit_and_placed_date(broker, monkeypatch):
+    """체결이든 폐기든 주문 하나에 기록 하나. 지정가·예약일이 그 기록에 남는다.
+
+    체결되면 대기 주문이 지워지므로, 옮겨 두지 않으면 예약가 대비 체결가와
+    대기 일수를 나중에 되살릴 방법이 없다. 현금 부족 폐기는 그마저도 흔적 없이
+    사라져 체결률의 분모를 갉아먹었다.
+    """
+    plan = {"stop": 95.0, "target": 115.0, "rr": 3.0, "grade": "A"}
+    broker.place_limit_entry("FILL", qty=10, limit_price=100.0, plan=plan)
+    broker.place_limit_entry("POOR", qty=10, limit_price=100.0, plan=plan)
+    monkeypatch.setattr(broker, "daily_bars",
+                        lambda sym, since, until=None: bars((99, 101, 97, 100)))
+
+    state = broker.load_state()
+    state["cash_krw"] = 10 * 99 * 1000        # FILL 한 건만 살 수 있는 현금
+    state = broker.settle_pending(state, 1000.0)
+
+    got = {t["symbol"]: t for t in state["trades"]}
+    assert got["FILL"]["side"] == "buy"
+    assert got["POOR"]["outcome"] == "cash_short"
+    for t in got.values():
+        assert t["limit_price"] == 100.0
+        assert t["placed_date"] == vb.market_date().isoformat()
+    # 폐기도 셋업이다 — 체결률 분모에서 빠지면 안 된다.
+    assert runner.plan_trade_summary(state["trades"])["n_setups"] == 2
+
+
 def test_stop_out_records_the_r_the_scorecard_needs(broker, monkeypatch):
     state = broker.load_state()
     state["positions"]["AAA"] = {
