@@ -1,5 +1,5 @@
 {
-  "cash_krw": 6065063.204813504,
+  "cash_krw": 7427120.615511745,
   "positions": {
     "F": {
       "qty": 78,
@@ -27,20 +27,6 @@
         "risk_pct": 3.9,
         "entry_fill": 151.99,
         "entry_ref": 148.1165
-      }
-    },
-    "MSFT": {
-      "qty": 2,
-      "avg_price_usd": 496.3550109863281,
-      "entry_date": "2026-08-14",
-      "plan": {
-        "stop": 481.34,
-        "target": 513.73,
-        "rr": 2.05,
-        "grade": "B",
-        "risk_pct": 2.16,
-        "entry_fill": 496.355,
-        "entry_ref": 491.9665
       }
     }
   },
@@ -150,9 +136,47 @@
         },
         "analyst_asof": "2026-08-12"
       }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "CSCO",
+      "qty": 7,
+      "limit_price": 111.24,
+      "notional_krw": 1101723.1733935545,
+      "placed_date": "2026-08-17",
+      "market": "US",
+      "plan": {
+        "stop": 106.35,
+        "target": 121.61,
+        "rr": 4.02,
+        "grade": "A",
+        "risk_pct": 2.78,
+        "entry_ref": 109.38
+      },
+      "meta": {}
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "SYK",
+      "qty": 2,
+      "limit_price": 334.46,
+      "notional_krw": 946428.1414013671,
+      "placed_date": "2026-08-17",
+      "market": "US",
+      "plan": {
+        "stop": 314.86,
+        "target": 352.49,
+        "rr": 2.37,
+        "grade": "A",
+        "risk_pct": 3.43,
+        "entry_ref": 326.04
+      },
+      "meta": {}
     }
   ],
-  "realized_pnl_krw": 348347.54105815943,
+  "realized_pnl_krw": 305859.26460981974,
   "trades": [
     {
       "date": "2026-07-31",
@@ -427,6 +451,20 @@
       "target": 513.73,
       "rr": 2.05,
       "risk_pct": 2.16,
+      "plan": true
+    },
+    {
+      "date": "2026-08-17",
+      "symbol": "MSFT",
+      "side": "sell",
+      "qty": 2,
+      "price_usd": 481.34,
+      "amount_krw": 1362057.0,
+      "pnl_krw": -42488.0,
+      "return_pct": -3.03,
+      "outcome": "loss",
+      "r_realized": -1.413,
+      "grade": "B",
       "plan": true
     }
   ],
