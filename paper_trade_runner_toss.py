@@ -561,6 +561,11 @@ def signal_log_summary(signal_log: list) -> dict:
     }
 
 
+# 체결 없이 끝난 주문. 청산이 아니라 **셋업의 분모**로 세야 체결률이 안 부푼다.
+# nofill=진입구간 미도달(백테스트와 같은 사유), cash_short=우리 현금이 모자람.
+DISCARD_OUTCOMES = ("nofill", "cash_short")
+
+
 def plan_trade_summary(trades: list) -> dict:
     """플랜 트레이드 성적 — **R 단위**로. 백테스트와 같은 자로 재기 위한 것.
 
@@ -571,7 +576,7 @@ def plan_trade_summary(trades: list) -> dict:
     (백테스트에서 셋업의 36% 가 진입구간 미도달로 사라졌다).
     """
     plans    = [t for t in trades if t.get("plan")]
-    nofill   = [t for t in plans if t.get("outcome") == "nofill"]
+    nofill   = [t for t in plans if t.get("outcome") in DISCARD_OUTCOMES]
     filled   = [t for t in plans if t.get("side") == "buy"]
     resolved = [t for t in plans if t.get("outcome") in ("win", "loss", "timeout")]
     wins     = [t for t in resolved if t.get("outcome") == "win"]
@@ -1099,8 +1104,8 @@ def main():
                     if r.get("ok") and "트레일링" in r.get("reason", "")]
     _filled  = [t for t in new_trades if t.get("plan") and t.get("side") == "buy"]
     _exited  = [t for t in new_trades if t.get("r_realized") is not None
-                and t.get("outcome") != "nofill"]
-    _nofill  = [t for t in new_trades if t.get("outcome") == "nofill"]
+                and t.get("outcome") not in DISCARD_OUTCOMES]
+    _nofill  = [t for t in new_trades if t.get("outcome") in DISCARD_OUTCOMES]
 
     lines = [
         f"*페이퍼 트레이딩* `{run_ts}` {mode_tag}",

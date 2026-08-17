@@ -349,6 +349,8 @@ def _settle_limit_entry(state: dict, order: dict, fx: float) -> tuple[dict, bool
             "date": bars[-1][0] if bars else placed.isoformat(),
             "symbol": sym, "side": "nofill", "qty": order["qty"],
             "outcome": "nofill", "r_realized": 0.0,
+            "limit_price": order["limit_price"],
+            "placed_date": order["placed_date"],
             "grade": (order.get("plan") or {}).get("grade"), "plan": True,
         })
         print(f"  [가상] 미체결 폐기 {sym} — {LIMIT_FILL_WINDOW}거래일 안에 "
@@ -358,7 +360,16 @@ def _settle_limit_entry(state: dict, order: dict, fx: float) -> tuple[dict, bool
     price_usd, fill_date = res["price"], res["date"]
     cost_krw = order["qty"] * price_usd * fx
     if cost_krw > state["cash_krw"]:
-        print(f"  [가상] {sym} 매수 불가 — 현금 부족")
+        # 이것도 폐기다. 안 남기면 주문이 흔적 없이 사라져 체결률의 분모가 준다 —
+        # 자기 현금 때문에 못 산 걸 "안 걸린 셋업"과 섞으면 안 되므로 사유를 나눈다.
+        state["trades"].append({
+            "date": fill_date, "symbol": sym, "side": "nofill",
+            "qty": order["qty"], "outcome": "cash_short", "r_realized": 0.0,
+            "limit_price": order["limit_price"],
+            "placed_date": order["placed_date"],
+            "grade": (order.get("plan") or {}).get("grade"), "plan": True,
+        })
+        print(f"  [가상] {sym} 매수 불가 — 현금 부족 (필요 {cost_krw:,.0f}원)")
         return state, False
 
     plan = dict(order.get("plan") or {})
@@ -374,6 +385,10 @@ def _settle_limit_entry(state: dict, order: dict, fx: float) -> tuple[dict, bool
         "date": fill_date, "symbol": sym, "side": "buy",
         "qty": order["qty"], "price_usd": round(price_usd, 4),
         "amount_krw": round(cost_krw, 0),
+        # 체결되면 대기 주문은 지워진다. 지정가와 예약일을 여기 옮겨 두지 않으면
+        # "얼마에 걸어 얼마에 받았나"와 "며칠 기다렸나"를 나중에 되살릴 수 없다.
+        "limit_price": order["limit_price"],
+        "placed_date": order["placed_date"],
         "meta": dict(order.get("meta") or {}),
         "grade": plan.get("grade"), "stop": plan.get("stop"),
         "target": plan.get("target"), "rr": plan.get("rr"),
