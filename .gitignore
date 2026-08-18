@@ -11,9 +11,6 @@ token.json
 data/
 *.parquet
 
-# 트레이딩 플로어 분석 리포트 — 이 PC의 실행 기록이지 코드가 아니다
-reports/
-
 # Python
 __pycache__/
 *.py[cod]
