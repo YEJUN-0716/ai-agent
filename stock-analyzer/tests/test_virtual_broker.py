@@ -145,3 +145,31 @@ def test_old_portfolio_file_opens_and_keeps_index_meta(broker, tmp_path):
     state["index_meta"]["last_deposit_month"] = "2026-09"
     broker.save_state(state)
     assert broker.load_state()["index_meta"]["last_deposit_month"] == "2026-09"
+
+
+def test_deposit_is_not_return():
+    """증자한 날 자산 점프가 수익률로 잡히면 안 된다.
+
+    2026-08-18 에 9천만원을 넣었더니 다음 실행이 "수익률 +901.7% / 알파
+    +898.1%" 를 텔레그램으로 보냈다. 1천만 → 1억은 성과가 아니라 입금이다.
+    """
+    records = [
+        {"date": "2026-08-17", "equity": 10_000_000.0},                        # 입금 전
+        {"date": "2026-08-18", "equity": 100_500_000.0, "deposited": 90_000_000.0},
+        {"date": "2026-08-19", "equity": 101_505_000.0, "deposited": 90_000_000.0},
+    ]
+    rets = vb.equity_returns(records)
+    assert rets[0] == pytest.approx(0.05)   # 입금 9천만 빼면 1천만 → 1,050만
+    assert rets[1] == pytest.approx(0.01)
+
+    curve = vb.indexed_equity(records)
+    assert curve[0] == pytest.approx(10_000_000)
+    assert curve[-1] == pytest.approx(10_000_000 * 1.05 * 1.01)
+    # 총수익률이 +900% 가 아니라 +6.05% 로 나와야 한다.
+    assert (curve[-1] / curve[0] - 1) * 100 == pytest.approx(6.05)
+
+
+def test_equity_returns_without_deposit_field():
+    """`deposited` 가 없는 옛 기록은 입금 0 으로 본다 — 값이 그대로 나온다."""
+    records = [{"equity": 100.0}, {"equity": 110.0}]
+    assert vb.equity_returns(records)[0] == pytest.approx(0.1)

@@ -64,8 +64,11 @@ def load_equity_log() -> list:
 def calc_perf(records: list) -> dict:
     if len(records) < 2:
         return {}
-    equities  = [r["equity"] for r in records]
-    port_rets = [(equities[i] / equities[i - 1] - 1) for i in range(1, len(equities))]
+    # 입금을 뺀 곡선으로 잰다 — 원본 equity 로 재면 증자가 수익이 된다
+    # (modules.virtual_broker.indexed_equity 머리말).
+    from modules.virtual_broker import equity_returns, indexed_equity
+    equities  = indexed_equity(records)
+    port_rets = equity_returns(records)
     mean_r    = float(np.mean(port_rets))
     std_r     = float(np.std(port_rets, ddof=1))
     sharpe    = (mean_r / (std_r + 1e-9)) * np.sqrt(252) if std_r > 0 else 0.0
