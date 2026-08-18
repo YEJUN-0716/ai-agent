@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -40,8 +40,9 @@ class ConfigError(RuntimeError):
 
 @dataclass(frozen=True)
 class Settings:
-    anthropic_api_key: str
-    telegram_bot_token: str
+    # 비밀값은 repr에서 뺀다 — 로그·traceback에 settings가 실려도 키가 안 샌다.
+    anthropic_api_key: str = field(repr=False)
+    telegram_bot_token: str = field(repr=False)
     telegram_allowed_chat_ids: frozenset[int]
     stock_analyzer_path: Path
     assistant_data_dir: Path
@@ -53,7 +54,7 @@ class Settings:
     study_inbox: Path
     obsidian_vault: Path
     # 디스코드는 선택이다. 토큰이 비어 있으면 그 창구를 열지 않는다.
-    discord_bot_token: str = ""
+    discord_bot_token: str = field(default="", repr=False)
     discord_allowed_user_ids: frozenset[int] = frozenset()
 
     def allowed_ids(self, channel: str) -> frozenset[int]:

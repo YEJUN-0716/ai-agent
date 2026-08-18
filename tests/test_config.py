@@ -216,3 +216,19 @@ def test_study_inbox_is_created_if_missing(tmp_path, monkeypatch):
 
     # Assert
     assert settings.study_inbox.is_dir()
+
+
+def test_secrets_are_not_in_repr(tmp_path, monkeypatch):
+    """로그나 traceback에 settings가 실려도 키가 새면 안 된다."""
+    # Arrange
+    for key, value in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord-secret")
+    monkeypatch.setenv("DISCORD_ALLOWED_USER_IDS", "333")
+
+    # Act
+    text = repr(load_settings())
+
+    # Assert
+    for secret in ("sk-test-key", "123:abc", "discord-secret"):
+        assert secret not in text
