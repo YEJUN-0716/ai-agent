@@ -132,9 +132,11 @@ UNIVERSE_PRESETS = {
         "GD","ITW","ED","WMT","MCD",
     ],
     # $100 이하 종목 다수 — 100달러 투입금으로 매수 가능성 높음
+    # DFS 제거(2026-08-18): 2025년 캐피털원 합병으로 상장폐지 — 시세가 영영 안 온다.
+    # 프리셋 키는 CI 워크플로가 문자열로 참조하므로 이름의 숫자는 그대로 둔다.
     "미국 금융주 15": [
         "BAC","WFC","C","USB","KEY","RF","FITB","HBAN","CFG","AXP",
-        "COF","DFS","ALLY","SYF","MS",
+        "COF","ALLY","SYF","MS",
     ],
     "미국 가치배당주 20": [
         "KO","T","VZ","PFE","BMY","GILD","MRNA","F","GM","INTC",
@@ -151,7 +153,7 @@ UNIVERSE_PRESETS = {
     # $100 이하 S&P500 중소형 위주 — 100달러 투입금 최적화
     "미국 중소형 30": [
         "BAC","WFC","C","USB","KEY","RF","FITB","HBAN","CFG","AXP",
-        "COF","DFS","ALLY","SYF","T","VZ","F","GM","INTC","CSCO",
+        "COF","ALLY","SYF","T","VZ","F","GM","INTC","CSCO",
         "HPQ","HPE","CVS","MO","KHC","DAL","LUV","AAL","OKE","WMB",
     ],
 

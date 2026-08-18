@@ -97,3 +97,21 @@ def test_cash_short_when_ledger_cannot_pay(monkeypatch):
     got = {o["ticker"]: o["outcome"] for o in orders}
     assert got == {"LATE": "cash_short", "FAST": "filled"}, orders
     assert skips["cash"] == 0      # 주문 시점엔 둘 다 여력이 있었다
+
+
+def test_same_day_orders_eat_buying_power(monkeypatch):
+    """그날 낸 주문만큼 매수여력이 줄어든다 — 러너와 같은 규칙.
+
+    안 깎으면 하루에 현금의 몇 배어치를 주문해 놓고 그걸 러너의 행동이라
+    부르게 된다. 실제 설정(위험 0.155%·한 자리 15%)에서는 한 주문이 자본의
+    7% 라 현금이 먼저 막힐 일이 없어 표가 안 변한다 — 그래서 규칙은
+    테스트로만 지킬 수 있다.
+    """
+    monkeypatch.setattr(m, "RISK_PCT", 10.0)          # 한 자리 상한이 먼저 걸리게
+    monkeypatch.setattr(m, "MAX_POSITION_PCT", 60.0)  # 한 주문 = 자본의 54%
+    plans, bars, closes, sectors, regime = _fixture(["A", "B"], limit=90.0)
+    orders, skips = m.replay(plans, bars, closes, sectors, regime, "runner")
+
+    assert len(orders) == 1, orders          # 둘째는 낼 현금이 없다
+    assert skips["cash"] == 1, skips
+    assert skips["slot"] == 0 and skips["sector"] == 0, skips
