@@ -1,0 +1,27 @@
+# Secrets
+.env
+credentials.json
+token.json
+
+# Scratch space (keep the folder, ignore its contents)
+.tmp/*
+!.tmp/.gitkeep
+
+# Generated data caches (예: analyze 실행 시 stock-analyzer 가격 패널 캐시가 생김)
+data/
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+graphify-out/

@@ -1,0 +1,8 @@
+python-dotenv
+anthropic
+python-telegram-bot
+discord.py
+fastapi
+uvicorn
+pytest
+pytest-cov
