@@ -39,15 +39,15 @@ on:
       max_sector_positions:
         description: "동일 섹터 최대 보유 종목 수"
         required: false
-        default: "3"
+        default: "5"
       neutral_max_positions:
         description: "neutral 레짐 최대 포지션 수"
         required: false
-        default: "7"
+        default: "13"
       bear_max_positions:
         description: "bear 레짐 최대 포지션 수"
         required: false
-        default: "4"
+        default: "7"
 
 concurrency:
   group: paper-trade-us
@@ -94,9 +94,28 @@ jobs:
           # 0.5 → 0.31 (2026-08-16): 이 값의 분모는 **플랜 위험**인데 실제
           # 체결은 구간 상단이라 손절까지 실제 위험이 중앙 1.63배다. 0.5 는
           # 손절 하나에 자본 0.81%(10칸이면 실질 8%)를 걸고 있었다.
-          RISK_PCT_PER_TRADE:    "0.31"
+          #
+          # 0.31 → 0.155 (2026-08-18): **수익을 팔아 표본을 산다.** 이 값이
+          # 주문 크기를 정한다 — `위험% ÷ 손절폭` 이라 0.31 에서는 주문 하나가
+          # 자본의 8.6~11.6%(장부 실측)였고, 그래서 8~9건만 걸면 현금이 바닥나
+          # MAX_POSITIONS 10 은 **닿은 적이 없다**. 2026-08-18 장부 상태가
+          # 보유 2 + 대기 6 에 가용현금 25만원(주문 1건이 120만원)이었다.
+          # 자리를 올려도, 종목을 늘려도 안 늘어난다. 막던 건 현금이었다.
+          #
+          # 반으로 내리면 주문이 자본의 ~5.8% 가 되어 동시 17~18건이 걸린다.
+          # 파는 것: 포트폴리오 수익률이 그만큼 준다(위험 반 = 수익 반).
+          # 사는 것: R 기반 측정치(트레이드 기하·폐기율·체결충실도)의 표본 속도.
+          # R 은 정규화된 단위라 이 변경 전후 트레이드를 함께 풀 수 있다.
+          # **자본 곡선은 못 잇는다** — 2026-08-18 이전 24건과 이후는 위험이
+          # 다른 포트폴리오다. 수익률을 이 날짜 너머로 비교하지 말 것.
+          #
+          # ⚠️ 표본 2배 ≠ 검출력 2배. 지정가 매수는 시장이 빠지는 날 한꺼번에
+          # 체결되고 한꺼번에 폐기돼 결과가 서로 물려 있다(power-with-correlation).
+          RISK_PCT_PER_TRADE:    "0.155"
           MAX_POSITION_PCT:      "15"
-          MAX_POSITIONS:         "10"
+          # 18 = 100% ÷ 5.8%. 위와 같이 현금 천장에 맞춰 잡은 값이라,
+          # RISK_PCT_PER_TRADE 를 바꾸면 이 값도 같이 바꿔야 한다.
+          MAX_POSITIONS:         "18"
           # 트레일링은 **기존 팩터 보유분 마무리용**이다. 플랜 포지션은 손절/
           # 목표 라인으로 청산되므로 트레일링이 안 붙는다 (규칙을 섞으면 R 이
           # 거짓이 된다).
@@ -105,9 +124,12 @@ jobs:
           # 10종목을 채우려면 섹터 한도도 함께 풀어야 한다. 2로 두면 후보가
           # 금융주에 몰려 있어 5~6종목에서 멈춘다. 3이면 한 섹터가 30%를
           # 넘지 않으면서 10종목이 찬다.
-          MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '3' }}
-          NEUTRAL_MAX_POSITIONS: ${{ github.event.inputs.neutral_max_positions || '7' }}
-          BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '4' }}
+          # 3 → 5 (2026-08-18): 주문이 5.8% 로 작아졌으므로 5건이라야 위와 같은
+          # **섹터 노출 30% 천장**이 유지된다. 3으로 두면 노출이 아니라 건수를
+          # 조이게 되고, 유니버스 고유 티커가 61개뿐이라 18칸이 안 찬다.
+          MAX_SECTOR_POSITIONS:  ${{ github.event.inputs.max_sector_positions || '5' }}
+          NEUTRAL_MAX_POSITIONS: ${{ github.event.inputs.neutral_max_positions || '13' }}
+          BEAR_MAX_POSITIONS:    ${{ github.event.inputs.bear_max_positions || '7' }}
           # 가상 브로커에서는 DRY_RUN=false 여야 장부에 체결이 기록된다.
           # true 로 두면 예약조차 남지 않아 데이터가 쌓이지 않는다.
           # 러너에 실주문 경로 자체가 없으므로 DRY_RUN=false 라도 주문은 안 나간다.
