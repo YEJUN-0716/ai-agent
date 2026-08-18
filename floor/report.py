@@ -3,7 +3,8 @@
 저장한 리포트는 보관용이 아니라 다음 판단의 입력이다. 같은 종목을 다시 돌리면
 지난 판정과 그 이후 가격 흐름을 회고해 판단에 반영한다 — 그래서 읽기도 여기 있다.
 
-파일 이름: reports/2026-08-04-SKHYNIX-1528.md
+파일 이름: reports/2026-08-04-SKHYNIX-152830.md (초까지 — 같은 분에 두 번
+돌려도 앞 리포트를 덮지 않는다. HHMM 만 있는 옛 파일도 계속 읽는다.)
 머리말 6줄만 기계가 읽고, 나머지는 사람이 읽는 마크다운이다.
 """
 
@@ -24,7 +25,7 @@ REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
 
 _HEADER_KEYS = ("symbol", "mode", "action", "confidence", "price", "at")
 # 파일 이름을 URL·경로에 그대로 쓰므로, 만든 규칙에서 벗어난 이름은 아예 안 읽는다.
-_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[A-Z0-9.\-]+-\d{4}\.md$")
+_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[A-Z0-9.\-]+-\d{4}(\d{2})?\.md$")
 
 
 class ReportError(RuntimeError):
@@ -49,7 +50,7 @@ def now_kst() -> datetime:
 
 
 def report_name(symbol_key: str, now: datetime) -> str:
-    return f"{now:%Y-%m-%d}-{symbol_key}-{now:%H%M}.md"
+    return f"{now:%Y-%m-%d}-{symbol_key}-{now:%H%M%S}.md"
 
 
 def _header(

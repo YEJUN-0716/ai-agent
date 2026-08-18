@@ -92,6 +92,9 @@ class ChatChannel:
 
         stripped = text.strip()
         head, _, argument = stripped.partition(" ")
+        # 그룹방에선 텔레그램이 "/승인@봇이름 3" 으로 보낸다. 봇 이름을 떼지
+        # 않으면 명령으로 안 잡혀 승인이 그냥 질문으로 흘러간다.
+        head = head.split("@", 1)[0]
         argument = argument.strip()
 
         if head in HELP_COMMANDS:

@@ -92,6 +92,22 @@ def test_approve_command_executes_pending_trade(settings):
     assert list_pending_requests(settings) == []
 
 
+def test_group_command_with_bot_username_still_approves(settings):
+    # Arrange — 그룹방에서 텔레그램은 "/승인@봇이름 3" 으로 보낸다
+    executor = FakeExecutor()
+    channel = ChatChannel(settings, FakeBrain(), trade_executor=executor)
+    proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+
+    # Act
+    reply = channel.handle_text(
+        chat_id=111, text=f"/승인@my_trading_bot {proposal['request_id']}"
+    )
+
+    # Assert
+    assert executor.calls == [("buy", "AAPL", 1_000_000.0)]
+    assert "예약했습니다" in reply
+
+
 def test_approve_command_from_stranger_does_nothing(settings):
     # Arrange — 남이 승인 번호를 알아내도 실행되면 안 된다
     executor = FakeExecutor()
