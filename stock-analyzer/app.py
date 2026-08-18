@@ -4246,7 +4246,10 @@ def virtual_ledger_snapshot():
         'stock_value':  stock_value,
         'equity':       cash + stock_value,
         'realized':     float(state["realized_pnl_krw"]),
-        'initial':      float(vb.INITIAL_CAPITAL_KRW),
+        # 넣은 돈 전부 = 초기자본 + 입금. 입금을 빼먹으면 증자 9천만원이
+        # 그대로 수익률이 된다(1천만 → 1억 = +900%).
+        'initial':      float(vb.INITIAL_CAPITAL_KRW)
+                        + float((state.get("index_meta") or {}).get("deposited_krw", 0.0)),
         'positions':    rows,
         'pending':      state["pending"],
         'price_failed': [r['종목'] for r in rows if r['현재가($)'] is None],
@@ -5113,9 +5116,13 @@ def render_account_line():
 
     delta_html, delta_color = None, None
     if equity is not None and prev:
-        diff = equity - prev
+        # 입금한 날은 그 돈이 P&L 로 잡히면 안 된다 — 증자 9천만원이 "+900%"
+        # 로 찍힌 적이 있다(modules.virtual_broker.indexed_equity 머리말).
+        from modules.virtual_broker import equity_returns
+        ret  = equity_returns(records[-2:])[0]
+        diff = prev * ret
         delta_color = 'var(--green)' if diff >= 0 else 'var(--red)'
-        delta_html = f"{diff:+,.0f}원 ({diff / prev * 100:+.2f}%)"
+        delta_html = f"{diff:+,.0f}원 ({ret * 100:+.2f}%)"
 
     free = cash - reserved
     cash_pct = f"{free / equity * 100:.0f}%" if equity else "-"
@@ -8153,18 +8160,22 @@ def main():
                 st.caption(f"기록 {len(_eq_records)}일치 — 2일 이상 쌓이면 그려집니다. "
                            "러너가 평일 하루 한 번 한 점씩 남깁니다.")
             else:
+                from modules.virtual_broker import indexed_equity
                 _eq_df  = pd.DataFrame(_eq_records)
+                # 입금을 뺀 곡선을 그린다. 원본 equity 를 그리면 증자한 날 계단이
+                # 생겨 SPY 를 압도하는 것처럼 보인다(실제로는 그냥 넣은 돈이다).
+                _eq_df['curve'] = indexed_equity(_eq_records)
                 _fig_eq = go.Figure()
                 _fig_eq.add_trace(go.Scatter(
-                    x=_eq_df['date'], y=_eq_df['equity'],
-                    name='가상 장부', line=dict(color='#2962ff', width=2.5)))
+                    x=_eq_df['date'], y=_eq_df['curve'],
+                    name='가상 장부 (입금 제외)', line=dict(color='#2962ff', width=2.5)))
                 _spy = (pd.to_numeric(_eq_df['spy_price'], errors='coerce')
                         if 'spy_price' in _eq_df else None)
                 if _spy is not None and _spy.notna().all() and float(_spy.iloc[0]) > 0:
                     # SPY를 같은 출발 자산으로 맞춰야 "시장보다 나은가"를 눈으로 읽을 수 있다.
                     _fig_eq.add_trace(go.Scatter(
                         x=_eq_df['date'],
-                        y=_spy / float(_spy.iloc[0]) * float(_eq_df['equity'].iloc[0]),
+                        y=_spy / float(_spy.iloc[0]) * float(_eq_df['curve'].iloc[0]),
                         name='SPY (벤치마크)', line=dict(color='#888', width=1.5, dash='dash')))
                 _fig_eq.update_layout(height=280, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                                       font=dict(color=TV_TEXT),

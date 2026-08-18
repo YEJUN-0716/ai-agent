@@ -773,6 +773,45 @@ def check_state(state: dict, today: date | None = None) -> list[str]:
     return out
 
 
+# ── 자본곡선 (외부 입금 제거) ─────────────────────────────────────────
+# equity_log.json 의 `equity` 는 "지금 계좌에 있는 돈"이라 입금하면 그냥 올라간다.
+# 그걸 수익률로 나누면 입금이 수익이 된다 — 2026-08-18 증자 9천만원이 다음 날
+# "수익률 +901.7% / 알파 +898.1%" 로 텔레그램에 나갔다(자산 1억 = 초기 1천만
+# + 입금 9천만). 기록마다 그 시점의 **누적** 입금을 함께 적고, 두 기록의 차를
+# 그 사이 들어온 돈으로 보고 빼면 수익률만 남는다(시간가중수익률).
+
+def equity_returns(records: list) -> list[float]:
+    """equity_log 기록 → 구간별 수익률. 외부 입금은 빼고 센다.
+
+    반환 길이는 len(records) - 1 이다(기록 사이의 구간 수).
+    `deposited` 가 없는 옛 기록은 0 으로 본다 — 입금 전 기록이라 맞는 값이다.
+    """
+    rets = []
+    for prev, cur in zip(records, records[1:]):
+        before = float(prev.get("equity") or 0.0)
+        if before <= 0:
+            rets.append(0.0)
+            continue
+        flow = float(cur.get("deposited") or 0.0) - float(prev.get("deposited") or 0.0)
+        rets.append((float(cur.get("equity") or 0.0) - flow) / before - 1.0)
+    return rets
+
+
+def indexed_equity(records: list) -> list[float]:
+    """입금이 한 번도 없었다면 그려졌을 자본곡선.
+
+    첫 기록의 자산에서 출발해 구간 수익률을 이어 곱한다. 총수익률·낙폭·
+    벤치마크 비교는 전부 이 곡선으로 재야 한다(원본 `equity` 로 재면 입금이
+    성과가 된다).
+    """
+    if not records:
+        return []
+    curve = [float(records[0].get("equity") or 0.0)]
+    for r in equity_returns(records):
+        curve.append(curve[-1] * (1.0 + r))
+    return curve
+
+
 def _selftest_cli() -> int:
     """`python -m modules.virtual_broker selftest` — 장부 점검 결과를 찍고
     위반이 있으면 종료코드 1."""

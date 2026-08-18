@@ -57,6 +57,7 @@ from modules.virtual_broker import (
     place_market_sell  as _pm_market_sell,
     get_account        as _pt_get_account,
     get_positions      as _pt_get_positions,
+    equity_returns, indexed_equity,
 )
 
 try:
@@ -309,8 +310,12 @@ def save_equity_log(records: list) -> None:
 
 
 def append_equity_log(records: list, equity: float, spy_price: float | None,
-                       positions: list) -> list:
-    """오늘 날짜 항목이 없으면 추가, 이미 있으면 업데이트."""
+                       positions: list, deposited: float = 0.0) -> list:
+    """오늘 날짜 항목이 없으면 추가, 이미 있으면 업데이트.
+
+    `deposited` 는 그 시점까지의 **누적** 외부 입금이다. 이게 없으면 증자한 날
+    자산 점프가 통째로 수익률이 된다(modules.virtual_broker.equity_returns).
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     unrealized = sum(float(p.get("unrealized_pl", 0) or 0) for p in positions)
     entry = {
@@ -319,6 +324,7 @@ def append_equity_log(records: list, equity: float, spy_price: float | None,
         "spy_price":      round(spy_price, 2) if spy_price else None,
         "unrealized_pnl": round(unrealized, 2),
         "n_positions":    len(positions),
+        "deposited":      round(deposited, 2),
     }
     if records and records[-1]["date"] == today:
         records[-1] = entry
@@ -331,11 +337,12 @@ def calc_performance_metrics(records: list) -> dict:
     """샤프 비율, 최대 드로다운, 총 수익률, SPY 대비 알파 계산."""
     if len(records) < 5:
         return {}
-    equities   = [r["equity"]    for r in records]
+    # 원본 equity 가 아니라 입금을 뺀 곡선으로 잰다 — 이유는 indexed_equity 참고.
+    equities   = indexed_equity(records)
     spy_prices = [r.get("spy_price") for r in records]
 
     # 일별 수익률
-    port_rets = [(equities[i] / equities[i-1] - 1) for i in range(1, len(equities))]
+    port_rets = equity_returns(records)
     mean_r, std_r = float(np.mean(port_rets)), float(np.std(port_rets, ddof=1))
     sharpe = (mean_r / (std_r + 1e-9)) * np.sqrt(252) if std_r > 0 else 0.0
 
@@ -1095,7 +1102,9 @@ def main():
     sl_summary = signal_log_summary(sig_log)
 
     # 자산 로그 업데이트
-    equity_log = append_equity_log(equity_log, equity_now, spy_price, positions)
+    equity_log = append_equity_log(
+        equity_log, equity_now, spy_price, positions,
+        deposited=float((load_state().get("index_meta") or {}).get("deposited_krw", 0.0)))
     save_equity_log(equity_log)
     perf = calc_performance_metrics(equity_log)
 
