@@ -611,7 +611,9 @@ def _stock_snapshot(symbol: Symbol, now: datetime) -> Snapshot:
     # 알 수 없다. 구조 판정에 진행 중인 봉이 섞이면 안 되므로 바이낸스와 똑같이
     # 마지막 봉을 뗀다. 화면용 closes 는 아래에서 실시간가를 따로 붙인다.
     gate_bars = tuple(bars[:-1])
-    closes = [round(bar[3], 2) for bar in bars] + [price]
+    # 실시간가는 마지막 봉과 같은 날이다. 덧붙이면 오늘이 두 번 들어가
+    # 전일 대비가 '오늘 종가 대비'로 바뀐다 (장 마감 후엔 항상 0.00%).
+    closes = [round(bar[3], 2) for bar in bars[:-1]] + [price]
     day_vol = _range_pct(bars[-1][1], bars[-1][2], bars[-1][3])
     news = _headlines(_NEWS_QUERIES.get(symbol.key, symbol.key))
 

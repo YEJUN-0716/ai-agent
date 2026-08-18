@@ -217,9 +217,39 @@ def test_머리말이_깨진_파일은_목록에서_건너뛴다(tmp_path):
 
 def test_리포트_이름은_날짜_종목_시각_형식이다():
     assert (
-        report.report_name("SKHYNIX", datetime(2026, 8, 4, 15, 28))
-        == "2026-08-04-SKHYNIX-1528.md"
+        report.report_name("SKHYNIX", datetime(2026, 8, 4, 15, 28, 30))
+        == "2026-08-04-SKHYNIX-152830.md"
     )
+
+
+def _report_text(at: str, body: str) -> str:
+    return f"""---
+symbol: SKHYNIX
+mode: algo
+action: BUY
+confidence: 70
+price: 100.0
+at: {at}
+---
+{body}
+"""
+
+
+def test_같은_분에_두_번_돌려도_앞_리포트가_안_지워진다(tmp_path):
+    """이름이 분 단위면 1분 안의 두 번째 판이 첫 판을 덮어써 회고에서 사라졌다."""
+    for second, body in ((10, "첫 판"), (40, "둘째 판")):
+        now = datetime(2026, 8, 4, 15, 28, second)
+        name = report.report_name("SKHYNIX", now)
+        report.save(tmp_path, name, _report_text(now.isoformat(), body))
+
+    assert len(report.listing(tmp_path)) == 2
+
+
+def test_HHMM_만_있는_옛_리포트도_계속_읽는다(tmp_path):
+    (tmp_path / "2026-08-04-SKHYNIX-1528.md").write_text(
+        _report_text("2026-08-04T15:28:00", "옛 파일"), encoding="utf-8"
+    )
+    assert len(report.listing(tmp_path)) == 1
 
 
 # ── 서버 ──────────────────────────────────────────────────
@@ -499,6 +529,20 @@ def test_한국종목은_원화_차트와_해외_무기한을_같이_들고_온�
     assert snap.krw_vol_pct == pytest.approx(3.05, abs=0.05)
     assert snap.perp_vol_pct == pytest.approx(1.20, abs=0.05)
     assert snap.fx_krw and snap.fx_krw > 1000
+
+
+def test_마감_후에도_전일_대비가_0으로_죽지_않는다(monkeypatch):
+    """실시간가는 마지막 봉과 같은 날이다. 덧붙이면 오늘을 오늘과 비교하게 된다.
+
+    야후 meta.regularMarketPrice 는 마감 후 그날 종가와 똑같이 내려온다 — 그래서
+    전 종목 등락률이 항상 0.00% 로 보였다.
+    """
+    _fake_market(monkeypatch)
+    snap = market.live_snapshot(market.resolve_symbol("하이닉스"))
+    assert snap.change_pct != 0.0
+    assert snap.change_pct == pytest.approx(
+        round((snap.closes[-1] / snap.closes[-2] - 1) * 100, 2), abs=0.01
+    )
 
 
 def test_전광판은_거래소별_실측이고_탭비트만_추정이다(monkeypatch):
