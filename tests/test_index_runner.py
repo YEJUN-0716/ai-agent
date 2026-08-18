@@ -159,6 +159,48 @@ def test_orders_never_exceed_cash(runner):
     assert state["cash_krw"] > 0        # 이월 현금은 남아 있다
 
 
+def test_gap_up_does_not_drop_a_planned_buy(runner, monkeypatch):
+    """계획 종가보다 시가가 1.5% 높아도 계획한 자산이 다 체결돼야 한다.
+
+    갭에 걸린 주문은 브로커가 통째로 거절하고(부분 체결 금지), 적립은 이미
+    완료로 찍혀 그 달 안에는 재시도되지 않는다. 그 자산만 조용히 빠지는데
+    벤치마크 ITOT 는 정상 매수된 걸로 계산돼 비교가 우리 쪽에 불리해진다.
+
+    적립금을 1,000만원으로 올려 둔 건 취향이 아니다 — 정수주 잔돈이 여유로
+    남기 때문에, 적립금이 주가보다 훨씬 커져 잔돈 비율이 작아지는 구간에서만
+    이 결함이 드러난다. 기본값 100만원으로는 12% 여유가 생겨 안 터진다.
+    """
+    monkeypatch.setattr(ir, "MONTHLY_KRW", 10_000_000.0)
+    monkeypatch.setattr(vb, "next_open_price",
+                        lambda sym, after: (PRICES[sym] * 1.015, "2026-08-04"))
+
+    planned = runner.run(now=date(2026, 8, 3))["orders"]
+    runner.run(now=date(2026, 8, 4))                    # 체결
+
+    bought = vb.load_state()["positions"]
+    assert {o["ticker"] for o in planned} <= set(bought)
+    assert vb.load_state()["cash_krw"] >= 0
+
+
+def test_ledger_passes_its_own_check_after_deposit_fee_and_dividend(runner, monkeypatch):
+    """적립·수수료·배당이 다 지나간 장부가 자기 점검을 조용히 통과해야 한다.
+
+    검산식이 읽을 값을 러너가 안 적으면(배당 누적액) 점검이 거짓말을 한다.
+    """
+    paid = date(2026, 8, 5)
+    monkeypatch.setattr(
+        ir, "_dividends_since",
+        lambda sym, since: (1.0, paid.isoformat()) if since < paid else (0.0, None))
+
+    runner.run(now=date(2026, 8, 3))     # 적립 + 주문 (수수료가 여기서 빠진다)
+    runner.run(now=date(2026, 8, 6))     # 체결 + 첫 배당
+
+    state = vb.load_state()
+    assert state["index_meta"]["fees_krw"] > 0
+    assert state["index_meta"]["dividends_krw"] > 0
+    assert vb.check_state(state, today=date(2026, 8, 6)) == []
+
+
 def test_dry_run_report_admits_it_is_pre_settlement(runner, monkeypatch, capsys):
     """드라이런 보고서는 체결 전 값이라고 스스로 밝힌다.
 

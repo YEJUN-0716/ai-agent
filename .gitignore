@@ -70,3 +70,6 @@ data/intraday_panel_15m.parquet
 # 15분봉 백테스트 트레이드 (측정 재분석용, 재생성 가능)
 data/intraday_trades_*.parquet
 data/smallcap/prices_adj/
+
+# 스크래치 — 버려도 되는 중간 산출물
+.tmp/

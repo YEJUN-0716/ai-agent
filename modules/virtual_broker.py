@@ -684,8 +684,15 @@ def check_state(state: dict, today: date | None = None) -> list[str]:
     # `index_meta` 는 이름과 달리 **두 장부가 다 쓴다.** 인덱스 러너의 월 적립도,
     # 스윙 장부의 증자도 여기 쌓인다(2026-08-18 표본 확보용 9천만원). 파일이 서로
     # 달라 섞이지 않는다 — index_runner 는 index_portfolio.json 밖에 못 건드린다.
-    deposited = float((state.get("index_meta") or {}).get("deposited_krw", 0.0))
-    expected = INITIAL_CAPITAL_KRW + deposited - buys + sells
+    meta = state.get("index_meta") or {}
+    deposited = float(meta.get("deposited_krw", 0.0))
+    # 인덱스 장부는 매수·매도 말고도 현금이 움직인다 — 환전·거래 수수료(빠짐)와
+    # 배당(들어옴). 둘 다 trades 에 안 남으므로 여기서 같이 세지 않으면 첫
+    # 수수료·첫 배당에 "장부가 깨졌다"는 거짓 경보가 뜬다. 거짓 경보가 한 번
+    # 나오면 진짜 경보도 못 믿게 된다.
+    fees = float(meta.get("fees_krw", 0.0))
+    dividends = float(meta.get("dividends_krw", 0.0))
+    expected = INITIAL_CAPITAL_KRW + deposited + dividends - fees - buys + sells
     if abs(cash - expected) > tol:
         out.append(f"현금이 거래 이력과 안 맞는다: 장부 {cash:,.0f}원 vs "
                    f"이력 계산 {expected:,.0f}원 (차이 {cash - expected:+,.0f}원)")

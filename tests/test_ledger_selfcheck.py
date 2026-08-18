@@ -114,3 +114,14 @@ def test_index_ledger_deposits_are_not_a_violation(healthy):
     healthy["cash_krw"] += 3_000_000
     healthy["index_meta"] = {"deposited_krw": 3_000_000.0}
     assert vb.check_state(healthy, today=TODAY) == []
+
+
+def test_index_fees_and_dividends_are_not_a_violation(healthy):
+    """인덱스 장부는 매수·매도 밖으로도 현금이 움직인다 — 수수료와 배당.
+
+    둘 다 trades 에 안 남으므로 검산식이 세 주지 않으면 첫 수수료·첫 배당에
+    "장부가 깨졌다"는 거짓 경보가 뜬다. 진짜 경보를 못 믿게 되는 자리다.
+    """
+    healthy["cash_krw"] += 300_000 - 50_000
+    healthy["index_meta"] = {"dividends_krw": 300_000.0, "fees_krw": 50_000.0}
+    assert vb.check_state(healthy, today=TODAY) == []

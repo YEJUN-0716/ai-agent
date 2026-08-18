@@ -39,6 +39,21 @@ MONTHLY_KRW     = float(os.environ.get("INDEX_MONTHLY_KRW", "1000000"))
 FX_SPREAD_BP    = float(os.environ.get("INDEX_FX_SPREAD_BP", "10"))
 FEE_BP          = float(os.environ.get("INDEX_FEE_BP", "25"))
 DIV_WITHHOLDING = float(os.environ.get("INDEX_DIV_WITHHOLDING", "0.15"))
+# 계획은 전날 종가로 세우고 체결은 다음 거래일 시가다. 그 사이 갭상승이 나면
+# 계획 수량의 실제 비용이 현금을 넘고, 브로커는 그 주문을 통째로 거절한다
+# (부분 체결은 실제로 걸 수 없는 체결이라 일부러 금지했다 — virtual_broker).
+# 그러면 그 달 그 자산만 조용히 빠지는데 적립은 이미 완료로 찍혀 재시도되지
+# 않고, 벤치마크 ITOT 는 정상 매수된 걸로 계산돼 비교가 우리 쪽에 불리해진다.
+# 계획 단계에서 이만큼 남겨 두면 그 여유로 갭을 흡수한다. 남은 현금은 다음 달
+# 계획에 이월되므로 놀리는 게 아니라 미루는 것이다.
+#
+# 3% 의 근거 (2021-01~2026-08, 1,411 거래일 시가/전일종가 실측):
+#   ITOT p99 +1.62% 최대 +3.64% · AGG p99 +0.74% 최대 +1.51%
+#   GLDM p99 +2.16% 최대 +5.95%
+# 정수주 잔돈이 이미 여유로 남으므로 실효 방어폭은 이보다 넓다. 다만 GLDM 급
+# 6% 갭이 잔돈이 적은 달과 겹치면 여전히 거절될 수 있다 — 없앤 게 아니라 줄였다.
+# 적립금이 클수록 잔돈 비율이 작아져 이 버퍼가 하는 일이 커진다.
+GAP_BUFFER_BP   = float(os.environ.get("INDEX_GAP_BUFFER_BP", "300"))
 DRY_RUN         = os.environ.get("DRY_RUN", "true").strip().lower() != "false"
 
 # 미실현 양도세(보고용). 실현하지 않으므로 장부 현금에는 손대지 않는다.
@@ -90,6 +105,9 @@ def _apply_dividends(state: dict, fx: float, prices: dict) -> float:
         cash_usd = per_share * pos["qty"] * (1 - DIV_WITHHOLDING)
         total_usd += cash_usd
         state["cash_krw"] += cash_usd * fx
+        # 장부 자기 점검의 현금 검산이 이 값을 읽는다. 안 적으면 배당이
+        # 들어온 만큼 "이력과 안 맞는다"고 거짓 경보가 뜬다.
+        meta["dividends_krw"] = meta.get("dividends_krw", 0.0) + cash_usd * fx
         seen[sym] = last_day
         bench = meta.get("bench_itot_shares", 0.0)
         if sym == "ITOT" and bench and prices.get(sym):
@@ -110,7 +128,8 @@ def _deposit(state: dict, prices: dict, fx: float, month: str) -> list[dict]:
     fx_cost_krw = MONTHLY_KRW * FX_SPREAD_BP / 1e4
     state["cash_krw"] += MONTHLY_KRW - fx_cost_krw
 
-    order_cash_usd = state["cash_krw"] / fx * (1 - FEE_BP / 1e4)
+    order_cash_usd = (state["cash_krw"] / fx
+                      * (1 - FEE_BP / 1e4) * (1 - GAP_BUFFER_BP / 1e4))
     holdings = {s: p["qty"] for s, p in state["positions"].items()}
     orders = plan_orders(holdings, prices, order_cash_usd)
 
