@@ -33,6 +33,9 @@ jobs:
     # 브로커 API 를 한 번도 부르지 않으므로 클라우드 러너로 충분하다
     # (토스 IP 화이트리스트 이슈와 무관).
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stock-analyzer
     timeout-minutes: 20
 
     steps:

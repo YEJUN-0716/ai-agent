@@ -30,6 +30,9 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stock-analyzer
     # 15분봉 스텝이 붙으면서 다운로드가 두 벌이 됐다. 500종목 분봉은 일봉보다
     # 훨씬 무겁다 — 여기서 잘리면 그날 기록이 통째로 빈다.
     #

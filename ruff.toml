@@ -1,0 +1,9 @@
+# 루트(비서) 쪽 린트 규칙. stock-analyzer/pyproject.toml 의 것과 같은 잣대다 —
+# 합치기 전 ai-agent 저장소엔 린트가 없어서, 기본 규칙을 그대로 켜면 예전 코드가
+# 무더기로 걸린다. stock-analyzer/ 안의 파일은 자기 pyproject.toml 을 따른다.
+target-version = "py312"
+line-length = 120
+exclude = ["stock-analyzer", "graphify-out", "docs"]
+
+[lint]
+select = ["F", "E9"]

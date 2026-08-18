@@ -8,8 +8,8 @@ token.json
 !.tmp/.gitkeep
 
 # Generated data caches (예: analyze 실행 시 stock-analyzer 가격 패널 캐시가 생김)
-data/
-*.parquet
+/data/
+/*.parquet
 
 # Python
 __pycache__/

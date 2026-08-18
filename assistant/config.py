@@ -163,7 +163,12 @@ def load_settings() -> Settings:
         "DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USER_IDS"
     )
 
-    stock_path = Path(_require("STOCK_ANALYZER_PATH")).expanduser()
+    # 2026-08-19 두 저장소를 합치면서 stock-analyzer 는 이 저장소의 하위
+    # 폴더가 됐다. 그래서 기본값이 있고, 환경변수는 덮어쓰기용으로 남는다.
+    stock_path = Path(
+        os.environ.get("STOCK_ANALYZER_PATH", "").strip()
+        or Path(__file__).resolve().parent.parent / "stock-analyzer"
+    ).expanduser()
     if not stock_path.is_dir():
         raise ConfigError(
             f"STOCK_ANALYZER_PATH가 가리키는 폴더가 없습니다: {stock_path}"

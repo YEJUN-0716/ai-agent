@@ -129,6 +129,9 @@ Your job is the same. When a tool fails, don't just patch it — make the system
 
 ```
 workflows/          # Workflows. Plain-language instructions for each task.
+stock-analyzer/     # The trading/quant system. Merged in 2026-08-19 (was its own repo).
+                    #   Its own CLAUDE.md, tests, and .env live inside. GitHub Actions
+                    #   run from the repo root with working-directory: stock-analyzer.
 tools/              # Tools. Python scripts that execute actions.
 .tmp/               # Scratch space. Temporary data, intermediate files. Disposable.
 .env                # Secrets. API keys and credentials. ONLY place for sensitive data.

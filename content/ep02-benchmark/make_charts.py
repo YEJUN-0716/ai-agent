@@ -27,7 +27,7 @@ os.chdir(REPO)                      # measure_portfolio 의 경로가 전부 상
 sys.path.insert(0, str(REPO))
 from scripts.measure_portfolio import (  # noqa: E402
     COST_SWEEP, MAX_POSITIONS, MAX_POSITION_PCT, RISK_PCT_PER_TRADE, TRADES,
-    _year_return, bench_curve, cagr, mdd, simulate,
+    _year_return, bench_curve, cagr, simulate,
 )
 
 COST_MAIN = 6.0                     # 대본이 쓰는 기준선
@@ -197,7 +197,7 @@ def chart_slots(act, runs, notes):
     ax.scatter(0.55 + rng.random(n_dots) * 0.4, 0.28 + rng.random(n_dots) * 0.42,
                s=26, color=STRAT, alpha=0.55)
     ax.text(0.55, 0.78, f"신호 {len(act):,}건", color=STRAT, fontsize=52, weight="bold")
-    ax.text(0.55, 0.20, f"조건을 통과한 셋업 (점은 축약)", color=MUTED, fontsize=28)
+    ax.text(0.55, 0.20, "조건을 통과한 셋업 (점은 축약)", color=MUTED, fontsize=28)
 
     ax.text(0.06, 0.06, "평균 R 은 한 판이 어땠는지를 말한다.  내 계좌가 얼마가 됐는지는 말하지 않는다",
             color=FG, fontsize=34, weight="bold")

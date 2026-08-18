@@ -357,8 +357,8 @@ def _push_scorecard() -> int:
         "> 날짜가 차는 것과 판정이 나는 것은 다르다 — |t| ≥ 2 가 함께 걸려 있어, "
         "알파가 없으면 표본이 아무리 쌓여도 '아직 불가'로 남는다.",
         "",
-        f"실제 IC·t 값은 앱 화면(🎓 AI 애널리스트 성적표)과 텔레그램 채널에 있다. "
-        f"이 노트는 표본 상태만 옮긴다.",
+        "실제 IC·t 값은 앱 화면(🎓 AI 애널리스트 성적표)과 텔레그램 채널에 있다. "
+        "이 노트는 표본 상태만 옮긴다.",
     ]
     _write(dest, "\n".join(lines) + "\n")
     print(f"성적표 표본 {len(days)}일 → {dest}")
@@ -434,7 +434,7 @@ def _push_alpaca(home: list[str] | None = None) -> int:
         return 0
 
     mode = "페이퍼(모의)" if at.is_paper() else "⚠️ 실계좌"
-    lines = [f"# 💵 Alpaca 체결 기록", "", MANAGED_TAG, "",
+    lines = ["# 💵 Alpaca 체결 기록", "", MANAGED_TAG, "",
              f"갱신: {datetime.now():%Y-%m-%d %H:%M} · {mode} · 금액 단위 **USD**", "",
              "## 계좌", "",
              f"- 평가액: **${account['equity']:,.2f}**",
@@ -518,7 +518,7 @@ def _push_home(measurements: list[tuple[str, str, str]], extra: list[str]) -> No
     링크 모음이 아니라 현황판이다. 숫자는 다른 push 가 이미 만든 것만
     옮긴다 — 여기서 다시 계산하면 두 노트가 언젠가 갈라진다.
     """
-    lines = [f"# 🏠 Home", "", MANAGED_TAG, "",
+    lines = ["# 🏠 Home", "", MANAGED_TAG, "",
              f"갱신: {datetime.now():%Y-%m-%d %H:%M}", ""]
     if extra:
         lines += ["## 지금", ""] + [f"- {s}" for s in extra] + [""]
