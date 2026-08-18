@@ -267,6 +267,54 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "AAL-2026-08-18",
+      "symbol": "AAL",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-18",
+      "entry_price": 14.17,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "AVGO-2026-08-18",
+      "symbol": "AVGO",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-18",
+      "entry_price": 384.315,
+      "score": 67.9,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "CSCO-2026-08-18",
+      "symbol": "CSCO",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-18",
+      "entry_price": 111.24,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "SYK-2026-08-18",
+      "symbol": "SYK",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-18",
+      "entry_price": 334.46,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }

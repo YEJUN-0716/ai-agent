@@ -1,5 +1,5 @@
 {
-  "cash_krw": 97427120.61551175,
+  "cash_krw": 93096401.36988771,
   "positions": {
     "F": {
       "qty": 78,
@@ -27,6 +27,62 @@
         "risk_pct": 3.9,
         "entry_fill": 151.99,
         "entry_ref": 148.1165
+      }
+    },
+    "AAL": {
+      "qty": 60,
+      "avg_price_usd": 14.17,
+      "entry_date": "2026-08-18",
+      "plan": {
+        "stop": 13.14,
+        "target": 15.4,
+        "rr": 2.76,
+        "grade": "A",
+        "risk_pct": 4.38,
+        "entry_ref": 13.7419,
+        "entry_fill": 14.17
+      }
+    },
+    "AVGO": {
+      "qty": 2,
+      "avg_price_usd": 384.31500244140625,
+      "entry_date": "2026-08-18",
+      "plan": {
+        "stop": 365.53,
+        "target": 436.99,
+        "rr": 4.82,
+        "grade": "A",
+        "risk_pct": 3.25,
+        "entry_ref": 377.8088,
+        "entry_fill": 384.315
+      }
+    },
+    "CSCO": {
+      "qty": 7,
+      "avg_price_usd": 111.24,
+      "entry_date": "2026-08-18",
+      "plan": {
+        "stop": 106.35,
+        "target": 121.61,
+        "rr": 4.02,
+        "grade": "A",
+        "risk_pct": 2.78,
+        "entry_ref": 109.38,
+        "entry_fill": 111.24
+      }
+    },
+    "SYK": {
+      "qty": 2,
+      "avg_price_usd": 334.46,
+      "entry_date": "2026-08-18",
+      "plan": {
+        "stop": 314.86,
+        "target": 352.49,
+        "rr": 2.37,
+        "grade": "A",
+        "risk_pct": 3.43,
+        "entry_ref": 326.04,
+        "entry_fill": 334.46
       }
     }
   },
@@ -63,54 +119,6 @@
     {
       "side": "buy",
       "kind": "limit_entry",
-      "symbol": "AAL",
-      "qty": 60,
-      "limit_price": 14.17,
-      "notional_krw": 1205736.6816650392,
-      "placed_date": "2026-08-13",
-      "market": "US",
-      "plan": {
-        "stop": 13.14,
-        "target": 15.4,
-        "rr": 2.76,
-        "grade": "A",
-        "risk_pct": 4.38,
-        "entry_ref": 13.7419
-      },
-      "meta": {}
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "AVGO",
-      "qty": 2,
-      "limit_price": 386.12,
-      "notional_krw": 1095175.3646777344,
-      "placed_date": "2026-08-13",
-      "market": "US",
-      "plan": {
-        "stop": 365.53,
-        "target": 436.99,
-        "rr": 4.82,
-        "grade": "A",
-        "risk_pct": 3.25,
-        "entry_ref": 377.8088
-      },
-      "meta": {
-        "score": 67.9,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 67.4,
-          "ict": 76.3,
-          "quant": 67.4,
-          "verdict": 67.9
-        },
-        "analyst_asof": "2026-08-12"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
       "symbol": "AMZN",
       "qty": 4,
       "limit_price": 232.82,
@@ -140,40 +148,118 @@
     {
       "side": "buy",
       "kind": "limit_entry",
-      "symbol": "CSCO",
+      "symbol": "META",
       "qty": 7,
-      "limit_price": 111.24,
-      "notional_krw": 1101723.1733935545,
-      "placed_date": "2026-08-17",
+      "limit_price": 578.25,
+      "notional_krw": 5716637.522644043,
+      "placed_date": "2026-08-18",
       "market": "US",
       "plan": {
-        "stop": 106.35,
-        "target": 121.61,
-        "rr": 4.02,
+        "stop": 552.73,
+        "target": 605.81,
+        "rr": 2.41,
         "grade": "A",
-        "risk_pct": 2.78,
-        "entry_ref": 109.38
+        "risk_pct": 2.74,
+        "entry_ref": 568.29
       },
-      "meta": {}
+      "meta": {
+        "score": 41.2,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 32.6,
+          "ict": 31.5,
+          "quant": 59.7,
+          "verdict": 41.2
+        },
+        "analyst_asof": "2026-08-17"
+      }
     },
     {
       "side": "buy",
       "kind": "limit_entry",
-      "symbol": "SYK",
-      "qty": 2,
-      "limit_price": 334.46,
-      "notional_krw": 946428.1414013671,
-      "placed_date": "2026-08-17",
+      "symbol": "HPQ",
+      "qty": 119,
+      "limit_price": 29.08,
+      "notional_krw": 4887292.564970703,
+      "placed_date": "2026-08-18",
       "market": "US",
       "plan": {
-        "stop": 314.86,
-        "target": 352.49,
-        "rr": 2.37,
+        "stop": 27.63,
+        "target": 32.19,
+        "rr": 3.99,
         "grade": "A",
-        "risk_pct": 3.43,
-        "entry_ref": 326.04
+        "risk_pct": 3.2,
+        "entry_ref": 28.55
       },
-      "meta": {}
+      "meta": {
+        "score": 72.1,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 76.1,
+          "ict": 99.8,
+          "quant": 60.3,
+          "verdict": 72.1
+        },
+        "analyst_asof": "2026-08-17"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "CRM",
+      "qty": 20,
+      "limit_price": 182.51,
+      "notional_krw": 5155177.638232422,
+      "placed_date": "2026-08-18",
+      "market": "US",
+      "plan": {
+        "stop": 173.87,
+        "target": 210.8,
+        "rr": 5.92,
+        "grade": "A",
+        "risk_pct": 2.98,
+        "entry_ref": 179.2
+      },
+      "meta": {
+        "score": 62.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 57.2,
+          "ict": 91.1,
+          "quant": 67.7,
+          "verdict": 62.0
+        },
+        "analyst_asof": "2026-08-17"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "GOOGL",
+      "qty": 18,
+      "limit_price": 336.51,
+      "notional_krw": 8554555.609760743,
+      "placed_date": "2026-08-18",
+      "market": "US",
+      "plan": {
+        "stop": 327.55,
+        "target": 373.16,
+        "rr": 6.77,
+        "grade": "B",
+        "risk_pct": 1.76,
+        "entry_ref": 333.43
+      },
+      "meta": {
+        "score": 57.1,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 51.2,
+          "ict": 72.6,
+          "quant": 66.8,
+          "verdict": 57.1
+        },
+        "analyst_asof": "2026-08-17"
+      }
     }
   ],
   "realized_pnl_krw": 305859.26460981974,
@@ -465,6 +551,84 @@
       "outcome": "loss",
       "r_realized": -1.413,
       "grade": "B",
+      "plan": true
+    },
+    {
+      "date": "2026-08-18",
+      "symbol": "AAL",
+      "side": "buy",
+      "qty": 60,
+      "price_usd": 14.17,
+      "amount_krw": 1200738.0,
+      "limit_price": 14.17,
+      "placed_date": "2026-08-13",
+      "meta": {},
+      "grade": "A",
+      "stop": 13.14,
+      "target": 15.4,
+      "rr": 2.76,
+      "risk_pct": 4.38,
+      "plan": true
+    },
+    {
+      "date": "2026-08-18",
+      "symbol": "AVGO",
+      "side": "buy",
+      "qty": 2,
+      "price_usd": 384.315,
+      "amount_krw": 1085536.0,
+      "limit_price": 386.12,
+      "placed_date": "2026-08-13",
+      "meta": {
+        "score": 67.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 67.4,
+          "ict": 76.3,
+          "quant": 67.4,
+          "verdict": 67.9
+        },
+        "analyst_asof": "2026-08-12"
+      },
+      "grade": "A",
+      "stop": 365.53,
+      "target": 436.99,
+      "rr": 4.82,
+      "risk_pct": 3.25,
+      "plan": true
+    },
+    {
+      "date": "2026-08-18",
+      "symbol": "CSCO",
+      "side": "buy",
+      "qty": 7,
+      "price_usd": 111.24,
+      "amount_krw": 1099730.0,
+      "limit_price": 111.24,
+      "placed_date": "2026-08-17",
+      "meta": {},
+      "grade": "A",
+      "stop": 106.35,
+      "target": 121.61,
+      "rr": 4.02,
+      "risk_pct": 2.78,
+      "plan": true
+    },
+    {
+      "date": "2026-08-18",
+      "symbol": "SYK",
+      "side": "buy",
+      "qty": 2,
+      "price_usd": 334.46,
+      "amount_krw": 944716.0,
+      "limit_price": 334.46,
+      "placed_date": "2026-08-17",
+      "meta": {},
+      "grade": "A",
+      "stop": 314.86,
+      "target": 352.49,
+      "rr": 2.37,
+      "risk_pct": 3.43,
       "plan": true
     }
   ],
