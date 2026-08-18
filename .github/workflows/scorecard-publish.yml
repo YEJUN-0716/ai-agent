@@ -17,6 +17,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stock-analyzer
     timeout-minutes: 20
 
     steps:

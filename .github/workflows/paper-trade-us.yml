@@ -66,6 +66,9 @@ jobs:
     #
     # ⚠️ 실주문 브로커를 붙이는 일이 생기면 IP 제약을 먼저 확인할 것.
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stock-analyzer
     timeout-minutes: 30
 
     steps:
@@ -154,7 +157,7 @@ jobs:
           # 중단된 rebase가 남아 있으면 이후 pull이 전부 막힌다. 실제로
           # 2026-07-13 rebase 찌꺼기가 방치돼 7월 내내 결과가 안 올라갔다.
           # HEAD는 건드리지 않고 상태만 정리한다(--quit).
-          if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+          if [ -d "$(git rev-parse --git-dir)/rebase-merge" ] || [ -d "$(git rev-parse --git-dir)/rebase-apply" ]; then
             echo "WARNING: stale rebase state found - clearing it"
             git rebase --quit
           fi

@@ -17,6 +17,9 @@ jobs:
     # (토스를 읽던 시절엔 IP 화이트리스트 403 때문에 자택 러너가 필요했다.
     #  자택 러너는 PC가 꺼져 있으면 아침 브리핑이 아침에 오지 않는다.)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stock-analyzer
     timeout-minutes: 5
 
     steps:

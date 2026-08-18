@@ -1,75 +1,27 @@
+# Secrets
+.env
+credentials.json
+token.json
+
+# Scratch space (keep the folder, ignore its contents)
+.tmp/*
+!.tmp/.gitkeep
+
+# Generated data caches (예: analyze 실행 시 stock-analyzer 가격 패널 캐시가 생김)
+/data/
+/*.parquet
+
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-.env
-
-# DART 캐시 (매일 자동 생성, 커밋 불필요)
-dart_fund_cache.json
-dart_corp_map.json
-
-# 기타 런타임 생성 파일
-*.log
-
-# 개인 관심종목 (로컬 전용, 사용자마다 다름 — GH Actions 관리 대상 아님)
-watchlist.json
-
-# 가격 패널 캐시 (GitHub Actions cache로 공유, 커밋 대상 아님)
-#
-# data/ 를 통째로 무시하면 그 아래 analyst_log 를 되살릴 수 없다 — git 은
-# 제외된 *디렉터리* 안의 파일을 다시 포함하지 못한다. 그래서 내용물만
-# 무시하고(data/*) 예외를 낸다. analyst_log 는 성적표의 유일한 재료라
-# 워크플로가 커밋해 돌려놔야 한다 (signal_log.json·ic_weights.json 과 같은 부류).
-data/*
-!data/analyst_log/
-# 과거 봉으로 재구성한 백필분. 만드는 데 수십 분이 걸리고 성적표 판정의
-# 표본 대부분을 차지하므로, 러너마다 다시 만들게 두면 판정이 실행할 때마다
-# 달라진다 (scripts/backfill_analyst_log.py).
-!data/analyst_log_backfill/
-# 발행 이력도 마찬가지다 — 이 디렉터리가 러너를 못 넘기면 last_published_n
-# 이 매번 None 을 돌려주고, 중복 발행 차단이 무력화돼 같은 판정이 매일
-# 다시 발행된다 (워크플로가 커밋해 돌려놔야 하는 이유는 analyst_log 와 같다).
-!data/publish_log/
-# 15분봉 성적표의 재료. 점수(scalp_log)뿐 아니라 선행수익률(scalp_returns)도
-# 남겨야 한다 — 15분봉은 60일이 지나면 사라져 다시 계산할 방법이 없다.
-!data/scalp_log/
-!data/scalp_returns/
-# 워크포워드 측정 결과도 앱이 읽는 유일한 재료다 — 측정에 수 분 걸리므로
-# 결과를 저장소에 남겨 어디서 열어도 같은 판정을 보게 한다.
-!data/walkforward_result.json
-# 페이퍼 체결 슬리피지 실측(3a.5). 장중 호가·체결은 지나가면 다시 못 만든다 —
-# scalp_returns 와 같은 부류다. 여러 날 덧붙여 표본을 쌓는다.
-!data/paper_slippage.jsonl
-# 소형주 유니버스 — 생존자 편향 없는 패널의 유일한 재료다.
-# 스냅샷은 웨이백에 있는 남의 물건이라 다시 못 받을 수 있다(이번 실행에서도
-# 70개 중 1개를 못 받았다). 재료(snapshots)와 그걸 편 상장 구간표
-# (listing_spans), 그리고 결과 패널을 남긴다 — 러너마다 다시 만들게 두면
-# 이 유니버스로 잰 측정이 실행할 때마다 달라진다.
-!data/smallcap/
-data/smallcap/prices/
-!data/smallcap_universe.parquet
-!data/smallcap_universe_report.json
-# 대형주 유니버스 — 같은 캐시(market_caps)의 상위 1,000위 슬라이스. 파생물이지만
-# 판정의 근거라 남긴다. 패널(largecap_panel)과 일봉 샤드는 Alpaca 에서 다시 받는다.
-!data/largecap_universe.parquet
-!data/largecap_universe_report.json
-data/largecap/
-data/largecap_panel.parquet
-data/largecap_panel_report.json
-data/largecap_events*.
-data/largecap_pead_events*.
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
 
-# 로컬 검증 실행이 만드는 빈 PIT DB — 실제 데이터는 워크플로가 생성·커밋한다
-pit_fundamentals.db
-krx_listing_cache.json
-
-# 15분봉 패널 캐시 (한 번 받으면 되는 측정용, 수십 MB)
-data/intraday_panel_15m.parquet
-
-# 15분봉 백테스트 트레이드 (측정 재분석용, 재생성 가능)
-data/intraday_trades_*.parquet
-data/smallcap/prices_adj/
-
-# 스크래치 — 버려도 되는 중간 산출물
-.tmp/
+# OS
+.DS_Store
+Thumbs.db
+graphify-out/

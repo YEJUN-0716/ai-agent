@@ -24,7 +24,8 @@ import signal_worker as worker
 
 KRX_TICKER_PATTERN = re.compile(r"^\d{6}\.(KS|KQ)$")
 KOREAN_PRESET = "한국 대형 15"
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "signal-alerts.yml"
+# 2026-08-19 ai-agent 와 합치면서 .github 는 한 단계 위(저장소 루트)로 갔다.
+WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "signal-alerts.yml"
 
 
 # ── 1. 프리셋 형식 ──────────────────────────────────────────────────
