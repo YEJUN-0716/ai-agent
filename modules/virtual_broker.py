@@ -681,6 +681,9 @@ def check_state(state: dict, today: date | None = None) -> list[str]:
     # ── 2. 현금 보존: 초기자본 + 입금 − 매수 + 매도 ──────────────
     buys = sum(float(t.get("amount_krw", 0.0)) for t in trades if t.get("side") == "buy")
     sells = sum(float(t.get("amount_krw", 0.0)) for t in trades if t.get("side") == "sell")
+    # `index_meta` 는 이름과 달리 **두 장부가 다 쓴다.** 인덱스 러너의 월 적립도,
+    # 스윙 장부의 증자도 여기 쌓인다(2026-08-18 표본 확보용 9천만원). 파일이 서로
+    # 달라 섞이지 않는다 — index_runner 는 index_portfolio.json 밖에 못 건드린다.
     deposited = float((state.get("index_meta") or {}).get("deposited_krw", 0.0))
     expected = INITIAL_CAPITAL_KRW + deposited - buys + sells
     if abs(cash - expected) > tol:

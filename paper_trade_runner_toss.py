@@ -27,9 +27,9 @@ GitHub Actions cron으로 매일 장마감 후 자동 실행.
   TELEGRAM_TOKEN        텔레그램 봇 토큰              (선택)
   TELEGRAM_CHAT_ID      텔레그램 채팅 ID              (선택)
   UNIVERSE              유니버스 이름                  (기본: 'S&P 500 대형 30')
-  RISK_PCT_PER_TRADE    한 트레이드의 1R = 자본의 몇 % (기본: 0.5)
+  RISK_PCT_PER_TRADE    한 트레이드의 1R = 자본의 몇 % (기본: 0.155)
   MAX_POSITION_PCT      한 종목 최대 비중 %            (기본: 15)
-  MAX_POSITIONS         최대 동시 포지션 수 (bull 기준) (기본: 10)
+  MAX_POSITIONS         최대 동시 포지션 수 (bull 기준) (기본: 18)
   NEUTRAL_MAX_POSITIONS neutral 레짐 최대 포지션 수    (기본: MAX_POSITIONS*0.7)
   BEAR_MAX_POSITIONS    bear 레짐 최대 포지션 수       (기본: MAX_POSITIONS*0.4)
   DRY_RUN               true면 주문 전송 안 함          (기본: false)
@@ -83,12 +83,12 @@ _KRW_PER_USD   = float(os.environ.get("KRW_PER_USD",  "1400"))     # 원/달러 
 #
 # 균등 축소라 **손익분기 bp 는 안 바뀐다**(비율에서 약분된다). 기대 손익도
 # 같은 비율로 준다 — 이건 노출 다이얼이지 개선이 아니다.
-RISK_PCT_PER_TRADE = float(os.environ.get("RISK_PCT_PER_TRADE", "0.31"))
+RISK_PCT_PER_TRADE = float(os.environ.get("RISK_PCT_PER_TRADE", "0.155"))
 MAX_POSITION_PCT   = float(os.environ.get("MAX_POSITION_PCT", "15"))
 # 플랜 계산에 필요한 일봉 길이 — trade_plan.MIN_BARS(60)와 숏 레짐 게이트(70봉)를
 # 모두 덮는다. 달력일 기준이라 휴장일을 감안해 넉넉히 잡는다.
 PLAN_LOOKBACK_DAYS = 400
-MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "10"))
+MAX_POSITIONS  = int(os.environ.get("MAX_POSITIONS", "18"))
 # 레짐별 최대 포지션 수 → bear에서 노출을 줄여 하락 충격 완충
 _REGIME_MAX_POS: dict[str, int] = {
     "bull":    MAX_POSITIONS,
