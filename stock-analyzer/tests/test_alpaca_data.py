@@ -221,3 +221,31 @@ def test_stream_reconnects_after_drop(keys, monkeypatch):
     assert len(conns) == 2
     assert conns[1].sent[1]["action"] == "subscribe"
     assert conns[0].closed, "끊긴 연결은 닫는다"
+
+
+def test_an_empty_frame_is_a_drop_not_a_pause(keys, monkeypatch):
+    """상대가 끊으면 recv() 는 빈 프레임을 계속 준다.
+
+    그걸 건너뛰기만 하면 제너레이터가 CPU 를 태우며 영원히 돌고 재접속이 한 번도
+    안 걸린다. 끊김으로 올려야 stream_bars 가 다시 붙는다.
+    """
+    class DeadWS(FakeWS):
+        def recv(self):
+            return ""
+
+    monkeypatch.setattr(ad.time, "sleep", lambda s: None)
+    with pytest.raises(ConnectionError):
+        next(ad.stream_bars(["AAPL"], reconnect=False, _ws_factory=lambda u: DeadWS([])))
+
+    # reconnect=True 면 조용히 도는 대신 실제로 다시 붙는다.
+    tries = []
+
+    def factory(url):
+        tries.append(url)
+        if len(tries) == 1:
+            return DeadWS([])
+        return FakeWS([[{"T": "b", "S": "AAPL", "t": "2026-08-07T13:30:00Z",
+                         "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]])
+
+    assert next(ad.stream_bars(["AAPL"], _ws_factory=factory))["symbol"] == "AAPL"
+    assert len(tries) == 2
