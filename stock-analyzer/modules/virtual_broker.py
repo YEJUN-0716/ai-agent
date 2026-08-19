@@ -55,6 +55,8 @@ def market_date(now: datetime | None = None) -> date:
     날짜로 찍으면 신호가 나온 장 날짜와 일치하고, 바로 다음 시가에 체결된다.
     """
     ts = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    # tz 없는 datetime 은 tz_convert 가 못 받는다. 러너는 UTC 로 도므로 UTC 로 읽는다.
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
     return ts.tz_convert("America/New_York").date()
 
 
@@ -160,13 +162,21 @@ def daily_bars(symbol: str, since: date, until: date | None = None) -> list[tupl
 
 
 def next_open_price(symbol: str, after: date) -> tuple[float, str] | None:
-    """`after` 다음 거래일의 시가와 그 날짜를 반환. 아직 열리지 않았으면 None."""
+    """`after` 다음 거래일의 시가와 그 날짜를 반환. 아직 열리지 않았으면 None.
+
+    시가가 없는(NaN) 행은 건너뛴다. 장이 열리기 전에는 오늘 행이 값 없이 먼저
+    생기는데, 그대로 집으면 NaN 이 체결가가 된다. NaN 은 어떤 비교도 False 라
+    `cost > cash` 현금 검사를 그냥 통과해 현금·평단에 NaN 이 영구히 박힌다 —
+    last_close_price 가 같은 이유로 dropna 를 쓴다.
+    """
     df = _fetch_ohlc(symbol, after + timedelta(days=1),
                      after + timedelta(days=_PRICE_LOOKAHEAD_DAYS))
     if df.empty or "Open" not in df:
         return None
-    row = df.iloc[0]
-    return float(row["Open"]), df.index[0].date().isoformat()
+    opens = df["Open"].dropna()
+    if opens.empty:
+        return None
+    return float(opens.iloc[0]), opens.index[0].date().isoformat()
 
 
 def last_close_price(symbol: str) -> float:
@@ -317,8 +327,14 @@ def _settle_plan_exits(state: dict, fx: float) -> dict:
             continue
 
         qty = pos["qty"]
+        before = len(state["trades"])
         state = _fill_sell(state, {"symbol": sym, "qty": qty},
                            exit_hit["price"], exit_hit["date"], fx)
+        if len(state["trades"]) == before:
+            # _fill_sell 이 아무것도 안 팔았다. 그대로 두면 trades[-1] 이
+            # 무관한 이전 거래라 거기에 청산 결과가 찍힌다.
+            print(f"  [가상] 플랜 청산 실패 {sym} — 보유가 없어 체결되지 않음")
+            continue
         r = realized_r(float(plan["entry_fill"]), float(plan["stop"]),
                        exit_hit["price"], plan.get("entry_ref"))
         state["trades"][-1].update({
@@ -374,12 +390,7 @@ def _settle_limit_entry(state: dict, order: dict, fx: float) -> tuple[dict, bool
 
     plan = dict(order.get("plan") or {})
     plan["entry_fill"] = round(price_usd, 4)
-    state["positions"][sym] = {
-        "qty":           order["qty"],
-        "avg_price_usd": price_usd,
-        "entry_date":    fill_date,
-        "plan":          plan,
-    }
+    _add_position(state, sym, order["qty"], price_usd, fill_date, plan)
     state["cash_krw"] -= cost_krw
     state["trades"].append({
         "date": fill_date, "symbol": sym, "side": "buy",
@@ -432,6 +443,33 @@ def settle_pending(state: dict, fx_krw_per_usd: float) -> dict:
     return state
 
 
+def _add_position(state: dict, sym: str, qty: int, price_usd: float,
+                  fill_date: str, plan: dict | None = None) -> None:
+    """보유에 수량을 **더한다**. 체결 경로가 어느 쪽이든 여기로 들어온다.
+
+    예전엔 _fill_buy 만 평단을 합산하고 _settle_limit_entry 는 포지션을 통째로
+    대입했다. 이미 들고 있는 종목이 지정가로 또 체결되면 기존 주식이 조용히
+    사라지는데 그 현금은 이미 빠져 있다 — check_state 4번 검사는 터진 **뒤에**
+    잡을 뿐이라 막지는 못한다. 합산을 한 곳에 모아 경로가 갈라질 수 없게 한다.
+
+    plan 은 기존 것을 이긴 적이 없다. 이미 손절·목표가 걸린 포지션에 새 플랜을
+    덮으면 들고 있는 주식의 손절선이 소리 없이 바뀐다.
+    """
+    prev = state["positions"].get(sym)
+    if prev:
+        total_qty = prev["qty"] + qty
+        avg = (prev["avg_price_usd"] * prev["qty"] + price_usd * qty) / total_qty
+        merged = {**prev, "qty": total_qty, "avg_price_usd": avg}
+        if plan and not prev.get("plan"):
+            merged["plan"] = plan
+        state["positions"][sym] = merged
+        return
+    pos = {"qty": qty, "avg_price_usd": price_usd, "entry_date": fill_date}
+    if plan:
+        pos["plan"] = plan
+    state["positions"][sym] = pos
+
+
 def _fill_buy(state: dict, order: dict, price_usd: float,
               fill_date: str, fx: float) -> dict:
     """주문금액 안에서 살 수 있는 최대 정수 수량으로 체결. 토스는 소수점 매매 불가.
@@ -455,17 +493,7 @@ def _fill_buy(state: dict, order: dict, price_usd: float,
         return state
 
     sym = order["symbol"]
-    prev = state["positions"].get(sym)
-    if prev:
-        total_qty = prev["qty"] + qty
-        avg = (prev["avg_price_usd"] * prev["qty"] + price_usd * qty) / total_qty
-        state["positions"][sym] = {**prev, "qty": total_qty, "avg_price_usd": avg}
-    else:
-        state["positions"][sym] = {
-            "qty":           qty,
-            "avg_price_usd": price_usd,
-            "entry_date":    fill_date,
-        }
+    _add_position(state, sym, qty, price_usd, fill_date)
 
     state["cash_krw"] -= cost_krw
     state["trades"].append({

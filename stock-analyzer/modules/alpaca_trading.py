@@ -23,6 +23,7 @@ REST v2 (https://docs.alpaca.markets). 키 인증(헤더 2줄) — 토스처럼 
 """
 import os
 import time
+import uuid
 
 import requests
 
@@ -149,12 +150,42 @@ def get_positions(client_id: str = "", client_secret: str = "",
     } for p in resp.json()]
 
 
+def _find_by_client_order_id(client_order_id: str, headers: dict) -> dict | None:
+    """그 id 로 이미 들어간 주문. 없거나 조회에 실패하면 None."""
+    try:
+        r = requests.get(f"{base_url()}/v2/orders:by_client_order_id",
+                         headers=headers, params={"client_order_id": client_order_id},
+                         timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
 # ── 주문 ───────────────────────────────────────────────────────────────
 def _submit(body: dict, api_key: str, secret_key: str) -> dict:
+    """주문 하나를 보낸다. **재시도해도 두 번 체결되지 않는다.**
+
+    _request_with_retry 는 429·5xx·네트워크 오류에 같은 POST 를 다시 보낸다.
+    응답만 유실되고 서버는 주문을 받은 경우, 재시도가 진짜 주문을 하나 더
+    만든다 — 돈이 두 배로 나간다. 그래서 호출마다 client_order_id 를 한 번
+    만들어 붙인다. Alpaca 는 같은 id 를 두 번 받으면 거절하므로, 재시도는
+    중복 체결 대신 거절을 받는다.
+
+    거절받은 뒤에는 그 id 로 조회해 **이미 들어간 주문**을 돌려준다. 안 그러면
+    실제로 체결된 주문을 러너가 실패로 기록해 장부가 실제와 갈라진다.
+    """
+    body = {**body, "client_order_id": body.get("client_order_id") or uuid.uuid4().hex}
+    hdrs = _headers(api_key, secret_key)
     resp = _request_with_retry("POST", f"{base_url()}/v2/orders",
-                               headers=_headers(api_key, secret_key),
-                               json=body, timeout=15)
+                               headers=hdrs, json=body, timeout=15)
     if resp.status_code >= 400:
+        existing = _find_by_client_order_id(body["client_order_id"], hdrs)
+        if existing is not None:
+            print(f"  [alpaca] 재시도가 중복으로 거절됨 — 먼저 들어간 주문을 씁니다 "
+                  f"({existing.get('id')})")
+            data = existing
+            return {"id": str(data.get("id", "")), "status": str(data.get("status", "")),
+                    "_raw": data}
         # 거절 사유가 본문에 있다. raise_for_status 만 부르면 그게 사라져서
         # "왜 안 샀나"를 로그만 보고는 알 수 없다.
         raise requests.HTTPError(
