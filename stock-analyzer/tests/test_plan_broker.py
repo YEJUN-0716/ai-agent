@@ -321,3 +321,33 @@ def test_a_failed_plan_exit_does_not_stamp_the_previous_trade(broker, monkeypatc
 
     state = broker._settle_plan_exits(state, 1000.0)
     assert "outcome" not in state["trades"][-1]
+
+
+def test_selling_keeps_the_currency_gain_that_the_purchase_locked_in(broker, monkeypatch):
+    """원가는 산 날의 환율로 굳는다. 오늘 환율로 다시 환산하면 환손익이 사라진다.
+
+    달러로 사서 원화로 성과를 재는 장부다. 주가가 제자리여도 달러가 오르면 판
+    돈은 늘어나는데, 예전엔 원가도 같은 환율로 부풀려 손익이 늘 정확히 0 이
+    나왔다 — 두 불변식이 같은 식을 쓰는 탓에 check_state 도 통과했다.
+    """
+    monkeypatch.setattr(broker, "_FX", 1000.0)
+    state = broker.load_state()
+    broker._add_position(state, "AAA", 10, price_usd=100.0,
+                         fill_date="2026-09-01", fx=1000.0)
+    assert state["positions"]["AAA"]["avg_price_krw"] == 100_000.0
+
+    # 주가는 그대로($100), 환율만 1000 → 1200.
+    state = broker._fill_sell(state, {"symbol": "AAA", "qty": 10},
+                              price_usd=100.0, fill_date="2026-09-10", fx=1200.0)
+    assert state["realized_pnl_krw"] == pytest.approx(10 * 100 * (1200 - 1000))
+    assert state["trades"][-1]["pnl_krw"] == pytest.approx(200_000)
+
+
+def test_a_position_bought_before_the_krw_basis_existed_still_sells(broker):
+    """avg_price_krw 가 없는 옛 포지션은 옛 방식(오늘 환율 환산)으로 판다."""
+    state = broker.load_state()
+    state["positions"]["OLD"] = {"qty": 10, "avg_price_usd": 100.0,
+                                 "entry_date": "2026-07-01"}
+    state = broker._fill_sell(state, {"symbol": "OLD", "qty": 10},
+                              price_usd=110.0, fill_date="2026-09-10", fx=1200.0)
+    assert state["realized_pnl_krw"] == pytest.approx(10 * 10 * 1200)

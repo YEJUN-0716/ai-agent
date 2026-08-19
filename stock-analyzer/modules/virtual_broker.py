@@ -94,7 +94,7 @@ def krw_per_usd() -> float:
 def _empty_state() -> dict:
     return {
         "cash_krw":         INITIAL_CAPITAL_KRW,
-        "positions":        {},   # symbol -> {qty, avg_price_usd, entry_date}
+        "positions":        {},   # symbol -> {qty, avg_price_usd, avg_price_krw, entry_date}
         "pending":          [],   # 다음 거래일 시가로 체결될 주문
         "realized_pnl_krw": 0.0,
         "trades":           [],   # 체결 이력
@@ -390,7 +390,7 @@ def _settle_limit_entry(state: dict, order: dict, fx: float) -> tuple[dict, bool
 
     plan = dict(order.get("plan") or {})
     plan["entry_fill"] = round(price_usd, 4)
-    _add_position(state, sym, order["qty"], price_usd, fill_date, plan)
+    _add_position(state, sym, order["qty"], price_usd, fill_date, fx, plan)
     state["cash_krw"] -= cost_krw
     state["trades"].append({
         "date": fill_date, "symbol": sym, "side": "buy",
@@ -443,8 +443,22 @@ def settle_pending(state: dict, fx_krw_per_usd: float) -> dict:
     return state
 
 
+def cost_basis_krw(pos: dict, fx: float) -> float:
+    """1주당 원화 원가. **산 날의 환율**로 굳은 값이다.
+
+    장부는 원화로 성과를 재는데 사는 건 달러다. 원가를 avg_price_usd × 오늘
+    환율로 잡으면 환율이 움직인 만큼이 손익에서 통째로 사라진다 — 달러가
+    오르면 실제로는 번 돈인데 장부는 0 으로 적는다.
+
+    avg_price_krw 가 없는 건 이 필드가 생기기 전(2026-08-19)에 산 포지션이다.
+    그때 원가를 되살릴 방법이 없으므로 옛 방식대로 환산한다.
+    """
+    per_share = pos.get("avg_price_krw")
+    return float(per_share) if per_share else float(pos["avg_price_usd"]) * fx
+
+
 def _add_position(state: dict, sym: str, qty: int, price_usd: float,
-                  fill_date: str, plan: dict | None = None) -> None:
+                  fill_date: str, fx: float, plan: dict | None = None) -> None:
     """보유에 수량을 **더한다**. 체결 경로가 어느 쪽이든 여기로 들어온다.
 
     예전엔 _fill_buy 만 평단을 합산하고 _settle_limit_entry 는 포지션을 통째로
@@ -452,19 +466,26 @@ def _add_position(state: dict, sym: str, qty: int, price_usd: float,
     사라지는데 그 현금은 이미 빠져 있다 — check_state 4번 검사는 터진 **뒤에**
     잡을 뿐이라 막지는 못한다. 합산을 한 곳에 모아 경로가 갈라질 수 없게 한다.
 
+    달러 평단과 **원화 평단을 같이** 들고 간다. 원화 쪽이 체결 시점 환율로
+    굳은 원가라 매도할 때 환손익이 손익에 남는다(cost_basis_krw).
+
     plan 은 기존 것을 이긴 적이 없다. 이미 손절·목표가 걸린 포지션에 새 플랜을
     덮으면 들고 있는 주식의 손절선이 소리 없이 바뀐다.
     """
+    price_krw = price_usd * fx
     prev = state["positions"].get(sym)
     if prev:
         total_qty = prev["qty"] + qty
         avg = (prev["avg_price_usd"] * prev["qty"] + price_usd * qty) / total_qty
-        merged = {**prev, "qty": total_qty, "avg_price_usd": avg}
+        avg_krw = (cost_basis_krw(prev, fx) * prev["qty"] + price_krw * qty) / total_qty
+        merged = {**prev, "qty": total_qty, "avg_price_usd": avg,
+                  "avg_price_krw": avg_krw}
         if plan and not prev.get("plan"):
             merged["plan"] = plan
         state["positions"][sym] = merged
         return
-    pos = {"qty": qty, "avg_price_usd": price_usd, "entry_date": fill_date}
+    pos = {"qty": qty, "avg_price_usd": price_usd, "avg_price_krw": price_krw,
+           "entry_date": fill_date}
     if plan:
         pos["plan"] = plan
     state["positions"][sym] = pos
@@ -493,7 +514,7 @@ def _fill_buy(state: dict, order: dict, price_usd: float,
         return state
 
     sym = order["symbol"]
-    _add_position(state, sym, qty, price_usd, fill_date)
+    _add_position(state, sym, qty, price_usd, fill_date, fx)
 
     state["cash_krw"] -= cost_krw
     state["trades"].append({
@@ -519,7 +540,9 @@ def _fill_sell(state: dict, order: dict, price_usd: float,
         return state
 
     proceeds_krw = qty * price_usd * fx
-    cost_krw     = qty * pos["avg_price_usd"] * fx
+    # 원가는 **산 날의 환율**로 굳은 값이다. 오늘 환율로 다시 환산하면 환손익이
+    # 손익에서 통째로 빠진다 — 달러 오른 만큼 번 돈이 장부에 안 남는다.
+    cost_krw     = qty * cost_basis_krw(pos, fx)
     pnl_krw      = proceeds_krw - cost_krw
 
     state["cash_krw"] += proceeds_krw

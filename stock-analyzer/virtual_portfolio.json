@@ -13,7 +13,8 @@
         "risk_pct": 2.39,
         "entry_fill": 13.97,
         "entry_ref": 13.8101
-      }
+      },
+      "avg_price_krw": 19788.2308
     },
     "ORCL": {
       "qty": 6,
@@ -27,7 +28,8 @@
         "risk_pct": 3.9,
         "entry_fill": 151.99,
         "entry_ref": 148.1165
-      }
+      },
+      "avg_price_krw": 215290.8333
     },
     "AAL": {
       "qty": 60,
@@ -41,7 +43,8 @@
         "risk_pct": 4.38,
         "entry_ref": 13.7419,
         "entry_fill": 14.17
-      }
+      },
+      "avg_price_krw": 20012.3
     },
     "AVGO": {
       "qty": 2,
@@ -55,7 +58,8 @@
         "risk_pct": 3.25,
         "entry_ref": 377.8088,
         "entry_fill": 384.315
-      }
+      },
+      "avg_price_krw": 542768.0
     },
     "CSCO": {
       "qty": 7,
@@ -69,7 +73,8 @@
         "risk_pct": 2.78,
         "entry_ref": 109.38,
         "entry_fill": 111.24
-      }
+      },
+      "avg_price_krw": 157104.2857
     },
     "SYK": {
       "qty": 2,
@@ -83,7 +88,8 @@
         "risk_pct": 3.43,
         "entry_ref": 326.04,
         "entry_fill": 334.46
-      }
+      },
+      "avg_price_krw": 472358.0
     }
   },
   "pending": [
