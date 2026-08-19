@@ -12,8 +12,7 @@ REST v2 (https://docs.alpaca.markets). 키 인증(헤더 2줄) — 토스처럼 
 
 ⚠️ 금액 단위는 **항상 USD** 다
 -----------------------------
-토스는 시장에 따라 원/달러가 갈렸고(`market="KRX"` 면 원), 가상 브로커는 받은
-달러를 원으로 환산해 장부에 적었다. Alpaca 는 미국 주식 전용이라 환산이 없다 —
+가상 브로커는 받은 달러를 원으로 환산해 장부에 적었다. Alpaca 는 미국 주식 전용이라 환산이 없다 —
 `notional` 도 `equity` 도 `buying_power` 도 전부 달러다.
 
 이 경계에서 이미 두 번 사고가 났다(2026-07-30: 623달러가 623원으로 기록돼 매수
@@ -200,7 +199,7 @@ def _submit(body: dict, api_key: str, secret_key: str) -> dict:
 
 def place_notional_buy(symbol: str, notional: float,
                        client_id: str = "", client_secret: str = "",
-                       account_seq: str = "", market: str = "US",
+                       account_seq: str = "",
                        dry_run: bool = False,
                        meta: dict | None = None) -> dict:
     """금액(**달러**) 기반 시장가 매수.
@@ -215,8 +214,8 @@ def place_notional_buy(symbol: str, notional: float,
     성적표에 적으므로 주문에 실어 나를 필요가 없다. 다음 거래일에 체결되는 가상
     브로커만 그게 필요하다 — 러너가 브로커별로 갈라지지 않게 인자만 맞춰 둔다.
     """
-    if market == "KRX":
-        raise ValueError("Alpaca 는 미국 주식 전용입니다 — KRX 주문은 받지 않습니다.")
+    if symbol.endswith((".KS", ".KQ")):
+        raise ValueError(f"Alpaca 는 미국 주식 전용입니다 — {symbol} 주문은 받지 않습니다.")
     if notional <= 0:
         raise ValueError(f"{symbol} 주문 금액이 0 이하입니다: {notional}")
 
@@ -236,7 +235,7 @@ def place_notional_buy(symbol: str, notional: float,
 
 def place_limit_buy(symbol: str, qty: int, limit_price: float,
                     client_id: str = "", client_secret: str = "",
-                    account_seq: str = "", market: str = "US",
+                    account_seq: str = "",
                     dry_run: bool = False,
                     extended_hours: bool = False, tif: str = "gtc") -> dict:
     """진입 구간 **지정가** 매수 (기본 GTC — 취소할 때까지 살아 있다).
@@ -275,7 +274,7 @@ def place_limit_buy(symbol: str, qty: int, limit_price: float,
 
 def place_market_sell(symbol: str, qty,
                       client_id: str = "", client_secret: str = "",
-                      account_seq: str = "", market: str = "US",
+                      account_seq: str = "",
                       dry_run: bool = False) -> dict:
     """시장가 매도. qty 는 소수점도 받는다 (notional 매수분 전량 청산용)."""
     qty_f = float(str(qty))
@@ -297,7 +296,7 @@ def place_market_sell(symbol: str, qty,
 
 def place_stop_sell(symbol: str, qty: int, stop_price: float,
                     client_id: str = "", client_secret: str = "",
-                    account_seq: str = "", market: str = "US",
+                    account_seq: str = "",
                     dry_run: bool = False) -> dict:
     """손절 **스톱** 매도. 가격이 stop_price 를 건드리면 시장가로 전환된다.
 

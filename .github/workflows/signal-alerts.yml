@@ -72,9 +72,6 @@ jobs:
           PYTHONUTF8:       "1"
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # KRX 유니버스용. yfinance 가 KRX ROE·이익률을 안 주므로 이게 없으면
-          # 퀄리티 팩터가 조용히 죽는다 (가격은 받아지니 실패 카운트는 0).
-          DART_API_KEY:     ${{ secrets.DART_API_KEY }}
           UNIVERSE:         ${{ github.event.inputs.universe || 'S&P 500 대형 30' }}
           TOP_N:            ${{ github.event.inputs.top_n || '5' }}
           CAPITAL:          ${{ github.event.inputs.capital || '100000' }}

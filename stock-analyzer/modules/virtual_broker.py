@@ -268,7 +268,7 @@ def realized_r(entry_fill: float, stop: float, exit_price: float,
 
 
 def place_limit_entry(symbol: str, qty: int, limit_price: float, plan: dict,
-                      market: str = "US", meta: dict | None = None) -> dict:
+                      meta: dict | None = None) -> dict:
     """진입 구간 지정가 매수를 예약한다. LIMIT_FILL_WINDOW 안에 안 닿으면 폐기.
 
     시가 시장가로 사면 손절폭과 R:R 이 계획과 달라져, 백테스트가 잰 값이
@@ -281,7 +281,7 @@ def place_limit_entry(symbol: str, qty: int, limit_price: float, plan: dict,
     if qty < 1:
         raise ValueError(f"{symbol} 수량이 1주 미만입니다 (소수점 거래 불가).")
 
-    notional_krw = qty * float(limit_price) * (_FX if market != "KRX" else 1.0)
+    notional_krw = qty * float(limit_price) * _FX
     state = load_state()
     available = available_krw(state)
     if notional_krw > available:
@@ -297,7 +297,6 @@ def place_limit_entry(symbol: str, qty: int, limit_price: float, plan: dict,
         "limit_price":  float(limit_price),
         "notional_krw": notional_krw,
         "placed_date":  market_date().isoformat(),
-        "market":       market,
         "plan":         dict(plan),
         "meta":         dict(meta or {}),
     })
@@ -604,7 +603,7 @@ def get_positions(client_id: str = "", client_secret: str = "",
 
 def place_notional_buy(symbol: str, notional_amount: float,
                        client_id: str = "", client_secret: str = "",
-                       account_seq: str = "", market: str = "US",
+                       account_seq: str = "",
                        dry_run: bool = False,
                        meta: dict | None = None,
                        qty: int | None = None) -> dict:
@@ -616,9 +615,8 @@ def place_notional_buy(symbol: str, notional_amount: float,
     실어 두고 체결 기록으로 그대로 옮긴다. 성적표의 점수 구간별 분석이 이 값을
     쓴다. toss_trading 도 같은 인자를 받아 무시하므로 러너 코드는 갈라지지 않는다.
 
-    notional_amount 의 단위는 시장을 따른다 — KRX는 원, 그 외는 달러.
-    러너와 toss_trading 이 그렇게 넘기기 때문이다. 장부는 원화로만
-    기록하므로 여기서 환산한다.
+    notional_amount 의 단위는 **달러**다. 장부는 원화로만 기록하므로
+    여기서 환산한다.
 
     환산을 빼먹으면 달러 금액이 원화로 둔갑해 주문이 환율 배수만큼
     작아지고, _fill_buy 에서 1주 값보다 작아 영원히 체결되지 않는다.
@@ -632,7 +630,7 @@ def place_notional_buy(symbol: str, notional_amount: float,
     안 주면 예전대로 주문금액이 허용하는 최대 정수주다.
     """
     amount = float(notional_amount)
-    notional_krw = amount if market == "KRX" else amount * _FX
+    notional_krw = amount * _FX
 
     state = load_state()
 
@@ -656,7 +654,6 @@ def place_notional_buy(symbol: str, notional_amount: float,
         "symbol":       symbol,
         "notional_krw": notional_krw,
         "placed_date":  market_date().isoformat(),
-        "market":       market,
         "meta":         dict(meta or {}),
     }
     if qty is not None:
@@ -670,7 +667,7 @@ def place_notional_buy(symbol: str, notional_amount: float,
 
 def place_market_sell(symbol: str, qty: float,
                       client_id: str = "", client_secret: str = "",
-                      account_seq: str = "", market: str = "US",
+                      account_seq: str = "",
                       dry_run: bool = False) -> dict:
     state = load_state()
     state["pending"].append({
@@ -678,7 +675,6 @@ def place_market_sell(symbol: str, qty: float,
         "symbol":      symbol,
         "qty":         int(qty),
         "placed_date": market_date().isoformat(),
-        "market":      market,
     })
     save_state(state)
     print(f"  [가상] 매도 예약 {symbol} {int(qty)}주 — 다음 거래일 시가 체결")

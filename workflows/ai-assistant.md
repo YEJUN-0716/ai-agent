@@ -177,8 +177,7 @@ API를 쓰지 않는다.
 
 1. `stock-analyzer`의 함수를 고치면 **비서 쪽 호출부도 같이 연다.** 반대도 같다.
 2. 금액을 다루면 **단위를 먼저 확인한다.** `notional_amount`처럼 단위가 이름에
-   없는 인자가 이 시스템의 상습 지뢰다. `place_notional_buy`는 KRX면 원,
-   그 밖이면 달러를 받는다. 원화를 넘길 땐 `krw_per_usd()`로 나눈다.
+   없는 인자가 이 시스템의 상습 지뢰다. `place_notional_buy`는 달러를 받는다. 원화를 넘길 땐 `krw_per_usd()`로 나눈다.
 3. `tests/test_broker_seam.py`가 진짜 `virtual_broker`를 부르는 **유일한** 파일이다.
    계약이 바뀌면 여기부터 고친다.
 4. 고친 뒤 **코드를 일부러 되돌려 테스트가 실제로 잡는지 확인한다.**

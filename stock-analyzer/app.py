@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from typing import Callable, List, NamedTuple, Optional, Union
 import requests
@@ -13,12 +12,6 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ── 퀀트 모듈 ──────────────────────────────────────────────────
-
-try:
-    from modules.dart_fundamentals import fetch_krx_fundamentals as _fetch_dart_fundamentals
-    _DART_AVAILABLE = True
-except Exception:
-    _DART_AVAILABLE = False
 
 from modules import analyst_team as _analyst_team
 
@@ -46,24 +39,8 @@ except Exception:
 from modules import signal_engine as _signal_engine
 # 팩터 점수의 순수 계산부. 여기(app.py)에는 조회 루프만 남긴다.
 from modules import factor_scoring as _scoring
-# 시장 판별·시장별 벤치마크의 소유자 (국면 지수, 섹터 ETF)
-from modules import market_scope as _scope
 # 새 화면(레짐 스트립·[오늘])이 쓰는 HTML 조각 생성기 — 기존 패널은 이관하지 않는다
 from modules import ui
-
-
-def _dart_fallback_batch(tickers):
-    """KRX(.KS/.KQ) 종목만 골라 DART 재무를 일괄 조회 (yfinance가 KRX 재무를 못 주는 문제 보완).
-    DART_API_KEY 미설정·모듈 미탑재 시 빈 dict — 호출부는 전부 yfinance로 폴백된다."""
-    if not _DART_AVAILABLE:
-        return {}
-    krx = [tk for tk in tickers if tk.endswith(('.KS', '.KQ'))]
-    if not krx:
-        return {}
-    try:
-        return _fetch_dart_fundamentals(krx)
-    except Exception:
-        return {}
 
 try:
     from modules.stat_validation import (
@@ -630,30 +607,29 @@ def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
 
 @st.cache_data(ttl=900, show_spinner=False)
 def download_stock(ticker, start, end, interval='1d'):
-    """한국 주식: FinanceDataReader 우선, yfinance 폴백.
-    그 외: yfinance 사용."""
-    is_krx = ticker.endswith('.KS') or ticker.endswith('.KQ')
-
-    if is_krx and interval == '1d':
-        try:
-            import FinanceDataReader as fdr
-            code = ticker.split('.')[0]
-            df = fdr.DataReader(code, start, end)
-            if df is not None and not df.empty and len(df) >= 5:
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-                df.index.name = 'Date'
-                return df
-        except Exception:
-            pass
-
+    """yfinance 로 시세를 받는다."""
     df = yf.download(ticker, start=start, end=end, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
     return df
 
 
-# 섹터 ETF 맵의 소유자는 market_scope (미국·한국 양쪽). UI 호환용 별칭.
-SECTOR_ETF = _scope.SECTOR_ETF[_scope.US]
+# 섹터 상대강도 비교용 ETF. yfinance 가 돌려주는 영문 섹터명이 키다.
+# 전부 실제 조회로 확인했다 — 추측으로 넣으면 yfinance 가 조용히 빈 프레임을
+# 주고, UI 는 "데이터 없음" 이 아니라 그냥 빈 화면을 보여준다.
+SECTOR_ETF = {
+    'Technology':             'XLK',
+    'Consumer Cyclical':      'XLY',
+    'Financial Services':     'XLF',
+    'Healthcare':             'XLV',
+    'Consumer Defensive':     'XLP',
+    'Communication Services': 'XLC',
+    'Industrials':            'XLI',
+    'Basic Materials':        'XLB',
+    'Energy':                 'XLE',
+    'Real Estate':            'XLRE',
+    'Utilities':              'XLU',
+}
 
 SECTOR_AVG_PER = {
     'Technology': 28, 'Consumer Cyclical': 22, 'Financial Services': 13,
@@ -1282,16 +1258,6 @@ def fundamental_score(ticker, df=None):
         roe = info.get('returnOnEquity')
         roa = info.get('returnOnAssets')
         pm  = info.get('profitMargins')
-        # DART 폴백 (KRX 종목은 yfinance에 ROE/순이익률이 비어있는 경우가 많음)
-        if ticker.endswith(('.KS', '.KQ')) and (roe is None or pm is None):
-            _dd = _dart_fallback_batch([ticker]).get(ticker, {})
-            if roe is None and _dd.get('net_income') and _dd.get('equity'):
-                try:
-                    roe = _dd['net_income'] / _dd['equity']
-                except ZeroDivisionError:
-                    pass
-            if pm is None and _dd.get('margin') is not None:
-                pm = _dd['margin'] / 100  # DART는 영업이익률 — 순이익률 미제공이라 근사치로만 사용
         # 0.0도 의미 있는 값 — if pm: 쓰면 0% 기업이 중립 처리됨
         pm_s = _score_profit_margin(pm) if pm is not None else 50
         det['수익성'] = _score_roe(roe)*0.4 + _score_roa(roa)*0.3 + pm_s*0.3
@@ -1375,13 +1341,8 @@ def regime_of(closes):
 
 
 def get_market_regime(benchmark=None):
-    """벤치마크 지수 vs MA200 기반 시장 국면 감지 (bull/bear/neutral).
-
-    benchmark 를 안 주면 SPY — 미국 유니버스용 기존 동작이다. 한국 유니버스는
-    ^KS11(KOSPI)을 넘겨야 한다. 안 그러면 미국 시장이 강세라는 이유로 한국
-    종목의 팩터 가중치가 정해진다.
-    """
-    benchmark = benchmark or _scope.REGIME_BENCHMARK[_scope.US]
+    """벤치마크 지수 vs MA200 기반 시장 국면 감지 (bull/bear/neutral)."""
+    benchmark = benchmark or 'SPY'
     try:
         end = datetime.now(); start = end - timedelta(days=310)
         spy = yf.download(benchmark, start=start, end=end, progress=False)
@@ -1896,14 +1857,9 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
 
 
 def calc_sector_relative(ticker, sector, df):
-    """종목 vs 섹터 ETF vs 시장지수 상대 강도 분석.
-
-    지수와 섹터 ETF 는 종목이 속한 시장 것을 쓴다 — 한국 종목을 SPY·XLK 와
-    비교하던 것이 원래 동작이었다. spy_* 키 이름은 호출부 호환을 위해
-    유지하되, 실제 기준은 반환 dict 의 'benchmark' 가 알려준다.
-    """
-    etf = _scope.sector_etf_for_ticker(sector, ticker)
-    market_index = _scope.REGIME_BENCHMARK[_scope.market_of_ticker(ticker)]
+    """종목 vs 섹터 ETF vs 시장지수 상대 강도 분석."""
+    etf = SECTOR_ETF.get(sector, '')
+    market_index = 'SPY'
     end = datetime.now()
     start = end - timedelta(days=200)
     tickers_to_dl = [market_index] + ([etf] if etf else [])
@@ -2803,7 +2759,6 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
     failed = []
-    _dart_data = _dart_fallback_batch(tickers)
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
@@ -2821,7 +2776,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
 
             row = {'ticker': tk}
             row.update(_scoring.price_factors(df))
-            row.update(_scoring.fundamental_factors(tk, info, _dart_data.get(tk)))
+            row.update(_scoring.fundamental_factors(tk, info))
             if extra_factors:
                 row.update(_fetch_extra_factors(tk, info))
                 try:
@@ -2841,7 +2796,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
         results,
         factor_weights=factor_weights,
         ic_weights=_load_ic_factor_weights_4f(
-            benchmark=_scope.regime_benchmark(tickers)),
+            benchmark='SPY'),
     )
     if failed:
         rdf.attrs['failed'] = failed
@@ -2883,9 +2838,6 @@ UNIVERSE_PRESETS = {
                  'MRVL','ON','NXPI','TXN','KLAC'],
     '배당 귀족 15': ['JNJ','PG','KO','PEP','MMM','EMR','ABT','ADP','AFL','SHW',
                     'GD','ITW','ED','WMT','MCD'],
-    '한국 대형 15': ['005930.KS','000660.KS','035420.KS','005380.KS','051910.KS',
-                    '006400.KS','035720.KS','003670.KS','105560.KS','055550.KS',
-                    '000270.KS','068270.KS','028260.KS','034730.KS','012330.KS'],
 
     # ── S&P 500 전체 (시가총액 상위 기준) ────────────────────────────────────
     'S&P 500 전체 (500종목)': [
@@ -3033,7 +2985,6 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
     end = datetime.now(); start = end - timedelta(days=520)
     results = []
     failed = []
-    _dart_data = _dart_fallback_batch(tickers)
     for i, tk in enumerate(tickers):
         if prog_text: prog_text.text(f"팩터 분석: {tk} ({i+1}/{len(tickers)})")
         if prog_bar: prog_bar.progress((i+1)/len(tickers))
@@ -3051,8 +3002,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
             row = {'ticker': tk, 'sector': info.get('sector', _scoring.UNKNOWN_SECTOR)}
             # 이쪽 경로는 원점수를 반올림하지 않는다 (round_raw=None).
             row.update(_scoring.price_factors(df, round_raw=None))
-            row.update(_scoring.fundamental_factors(tk, info, _dart_data.get(tk),
-                                                    round_raw=None))
+            row.update(_scoring.fundamental_factors(tk, info, round_raw=None))
             results.append(row)
             if i < len(tickers) - 1:
                 time.sleep(0.3)
@@ -3063,7 +3013,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
         results,
         factor_weights=factor_weights,
         ic_weights=_load_ic_factor_weights_4f(
-            benchmark=_scope.regime_benchmark(tickers)),
+            benchmark='SPY'),
     )
     # signal_worker.py 가 텔레그램 알림에 실패 종목 수를 찍는다. 이 키가 없으면
     # 조용히 0으로 보고돼, 유니버스 절반이 죽어도 알림은 정상으로 보인다.
@@ -3236,147 +3186,6 @@ def backtest_factor_strategy(tickers, top_n=5, years=3, rebal_months=1,
         'pit_note': pit_note,   # None이면 제한사항 없음(또는 pit_safe=False)
     }
     return metrics, eq_df, trade_log
-
-
-# ─────────────────────────────────────────────
-# MAIN APP
-# ─────────────────────────────────────────────
-
-def _draw_chart_legacy(df, ticker, is_krw):
-    p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
-    m20  = p.rolling(20).mean(); m60 = p.rolling(60).mean(); m120 = p.rolling(120).mean()
-    bb_u, bb_mid, bb_l = calc_bb(p)
-    macd_l, sig_l, hist = calc_macd(p)
-    rsi_s = calc_rsi(p)
-    sk_s, sd_s = calc_stochastic(h, l, p)
-
-    vol_c = [TV_UP if float(p.iloc[i]) >= float(df['Open'].iloc[i]) else TV_DOWN for i in range(len(df))]
-    vol_a = [0.7 if float(p.iloc[i]) >= float(df['Open'].iloc[i]) else 0.5 for i in range(len(df))]
-    fp = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
-    cp = float(p.iloc[-1])
-
-    fig = make_subplots(rows=5, cols=1, shared_xaxes=True,
-                        row_heights=[0.45, 0.10, 0.15, 0.15, 0.15], vertical_spacing=0.015,
-                        subplot_titles=None)
-
-    # ── 1) 캔들 + MA + BB ───────────────────────
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=h, low=l, close=p,
-        name='', increasing=dict(line=dict(color=TV_UP,width=1), fillcolor=TV_UP),
-        decreasing=dict(line=dict(color=TV_DOWN,width=1), fillcolor=TV_DOWN),
-        showlegend=False), row=1, col=1)
-
-    fig.add_trace(go.Scatter(x=df.index, y=bb_u, name='BB', showlegend=False,
-        line=dict(color='rgba(149,117,205,0.5)', width=0.8), legendgroup='bb'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=bb_l, showlegend=False,
-        line=dict(color='rgba(149,117,205,0.5)', width=0.8),
-        fill='tonexty', fillcolor='rgba(149,117,205,0.05)', legendgroup='bb'), row=1, col=1)
-
-    for ma_s, c, nm in [(m20,'#f5c518','MA20'),(m60,'#2962ff','MA60'),(m120,'#ff6d00','MA120')]:
-        last = float(ma_s.iloc[-1]) if not np.isnan(float(ma_s.iloc[-1])) else None
-        fig.add_trace(go.Scatter(x=df.index, y=ma_s, name=nm, showlegend=False,
-                                 line=dict(color=c, width=1.2)), row=1, col=1)
-        if last:
-            fig.add_annotation(x=df.index[-1], y=last, text=f" {nm} {fp(last)}",
-                showarrow=False, xanchor='left', font=dict(color=c, size=9),
-                xref='x', yref='y')
-
-    fig.add_annotation(x=df.index[-1], y=cp,
-        text=f"  {fp(cp)}", showarrow=False, xanchor='left',
-        font=dict(color='#FFD700', size=11, family='monospace'),
-        bgcolor='#ffffff', bordercolor='#FFD700', borderwidth=1, borderpad=2,
-        xref='x', yref='y')
-    fig.add_hline(y=cp, line_dash='dot', line_color='#FFD700', line_width=0.8, row=1, col=1)
-
-    fig.add_annotation(text=ticker, x=0.5, y=0.5, xref='paper', yref='y',
-        showarrow=False, font=dict(color='rgba(0,0,0,0.04)', size=72),
-        xanchor='center', yanchor='middle')
-
-    o_l, h_l, l_l, c_l = float(df['Open'].iloc[-1]), float(h.iloc[-1]), float(l.iloc[-1]), cp
-    chg_d = c_l - float(p.iloc[-2]) if len(p) >= 2 else 0
-    chg_p = chg_d / float(p.iloc[-2]) * 100 if len(p) >= 2 else 0
-    chg_c = TV_UP if chg_d >= 0 else TV_DOWN
-    fig.add_annotation(
-        text=(f"<b>O</b> {fp(o_l)}  <b>H</b> {fp(h_l)}  <b>L</b> {fp(l_l)}  "
-              f"<b>C</b> {fp(c_l)}  <span style='color:{chg_c}'>{chg_d:+.2f} ({chg_p:+.2f}%)</span>"),
-        x=0.003, y=1.0, xref='paper', yref='y domain',
-        showarrow=False, font=dict(color=TV_TEXT, size=11, family='monospace'),
-        xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.9)')
-
-    # ── 2) 거래량 ────────────────────────────────
-    fig.add_trace(go.Bar(x=df.index, y=v, name='', showlegend=False,
-        marker_color=vol_c, marker_opacity=vol_a), row=2, col=1)
-    vol_ma = v.rolling(20).mean()
-    fig.add_trace(go.Scatter(x=df.index, y=vol_ma, name='', showlegend=False,
-        line=dict(color='#ff9800', width=0.8, dash='dot')), row=2, col=1)
-
-    # ── 3) MACD ──────────────────────────────────
-    h_colors = [TV_UP if float(hist.iloc[i]) >= 0 else TV_DOWN for i in range(len(hist))]
-    fig.add_trace(go.Bar(x=df.index, y=hist, name='', showlegend=False,
-        marker_color=h_colors, opacity=0.6), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=macd_l, name='', showlegend=False,
-        line=dict(color='#2962ff', width=1.3)), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=sig_l, name='', showlegend=False,
-        line=dict(color='#ff6d00', width=1.3)), row=3, col=1)
-    fig.add_hline(y=0, line_color=TV_BORDER, line_width=0.8, row=3, col=1)
-    macd_v = float(macd_l.iloc[-1]); sig_v = float(sig_l.iloc[-1])
-    fig.add_annotation(x=df.index[-1], y=macd_v, text=f" MACD {macd_v:.2f}",
-        showarrow=False, xanchor='left', font=dict(color='#2962ff', size=9), xref='x3', yref='y3')
-    fig.add_annotation(x=df.index[-1], y=sig_v, text=f" SIG {sig_v:.2f}",
-        showarrow=False, xanchor='left', font=dict(color='#ff6d00', size=9), xref='x3', yref='y3')
-
-    # ── 4) RSI ───────────────────────────────────
-    fig.add_hrect(y0=30, y1=70, fillcolor='rgba(0,0,0,0.03)', line_width=0, row=4, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=rsi_s, name='', showlegend=False,
-        line=dict(color='#ce93d8', width=1.4)), row=4, col=1)
-    fig.add_hline(y=70, line_color=TV_DOWN, line_width=0.7, line_dash='dash', row=4, col=1)
-    fig.add_hline(y=30, line_color=TV_UP, line_width=0.7, line_dash='dash', row=4, col=1)
-    fig.add_hline(y=50, line_color=TV_BORDER, line_width=0.5, row=4, col=1)
-    rsi_v = float(rsi_s.iloc[-1])
-    rsi_c = TV_DOWN if rsi_v > 70 else (TV_UP if rsi_v < 30 else TV_TEXT)
-    fig.add_annotation(x=df.index[-1], y=rsi_v, text=f" RSI {rsi_v:.1f}",
-        showarrow=False, xanchor='left', font=dict(color=rsi_c, size=10, family='monospace'),
-        xref='x4', yref='y4')
-
-    # ── 5) 스토캐스틱 ────────────────────────────
-    fig.add_hrect(y0=20, y1=80, fillcolor='rgba(0,0,0,0.03)', line_width=0, row=5, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=sk_s, name='', showlegend=False,
-        line=dict(color='#42a5f5', width=1.3)), row=5, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=sd_s, name='', showlegend=False,
-        line=dict(color='#ef5350', width=1.0, dash='dot')), row=5, col=1)
-    fig.add_hline(y=80, line_color=TV_DOWN, line_width=0.7, line_dash='dash', row=5, col=1)
-    fig.add_hline(y=20, line_color=TV_UP, line_width=0.7, line_dash='dash', row=5, col=1)
-    sk_v = float(sk_s.iloc[-1]); sd_v = float(sd_s.iloc[-1])
-    fig.add_annotation(x=df.index[-1], y=sk_v, text=f" %K {sk_v:.0f}",
-        showarrow=False, xanchor='left', font=dict(color='#42a5f5', size=9), xref='x5', yref='y5')
-    fig.add_annotation(x=df.index[-1], y=sd_v, text=f" %D {sd_v:.0f}",
-        showarrow=False, xanchor='left', font=dict(color='#ef5350', size=9), xref='x5', yref='y5')
-
-    # ── 패널 라벨 ────────────────────────────────
-    for rn, lbl in [(1,''),(2,'Vol'),(3,'MACD'),(4,'RSI'),(5,'Stoch')]:
-        if lbl:
-            fig.add_annotation(text=lbl, xref='paper', yref=f'y{rn}',
-                x=0.003, y=1, showarrow=False,
-                font=dict(color='rgba(178,181,190,0.6)', size=10), xanchor='left', yanchor='top')
-
-    # ── 레이아웃 ─────────────────────────────────
-    ax = dict(gridcolor=TV_GRID, gridwidth=1, zerolinecolor=TV_BORDER,
-              tickfont=dict(color=TV_TEXT, size=9), showline=True, linecolor=TV_BORDER, side='right')
-    fig.update_layout(
-        height=900, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
-        font=dict(color=TV_TEXT, family='Inter,sans-serif', size=11),
-        xaxis_rangeslider_visible=False, hovermode='x unified',
-        hoverlabel=dict(bgcolor='#ffffff', font_color=TV_TEXT, bordercolor=TV_BORDER, font_size=11),
-        legend=dict(visible=False),
-        margin=dict(l=0, r=80, t=10, b=0),
-    )
-    for i in range(1, 6):
-        fig.update_xaxes(row=i, col=1, gridcolor=TV_GRID, showgrid=True,
-                         tickfont=dict(color=TV_TEXT, size=9), showline=True, linecolor=TV_BORDER,
-                         showticklabels=(i == 5))
-        fig.update_yaxes(row=i, col=1, **ax)
-    fig.update_yaxes(row=4, col=1, range=[0, 100])
-    fig.update_yaxes(row=5, col=1, range=[0, 100])
-    return fig
 
 
 # ─────────────────────────────────────────────
@@ -4608,17 +4417,10 @@ def render_command_bar():
 """, unsafe_allow_html=True)
         c_mkt, c_tkr, c_btn1, c_btn2 = st.columns([2, 3, 1, 1])
         with c_mkt:
-            market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "한국 (KRX)", "ETF/인덱스"],
+            market = st.selectbox("시장", ["미국 (NYSE/NASDAQ)", "ETF/인덱스"],
                                   label_visibility="collapsed")
         with c_tkr:
-            if market == "한국 (KRX)":
-                ca, cb = st.columns([2, 1])
-                ticker_raw = ca.text_input("종목코드", placeholder="005930",
-                                           label_visibility="collapsed")
-                sfx = ".KS" if "KS" in cb.radio("거래소", [".KS", ".KQ"], horizontal=True,
-                                                label_visibility="collapsed") else ".KQ"
-                ticker = (ticker_raw.strip() + sfx).upper() if ticker_raw else ""
-            elif market == "미국 (NYSE/NASDAQ)":
+            if market == "미국 (NYSE/NASDAQ)":
                 ticker = st.text_input("티커", placeholder="AAPL  /  NVDA  /  TSLA",
                                        label_visibility="collapsed").strip().upper()
             else:
@@ -4675,7 +4477,7 @@ def render_scan_strip(placeholder, label="ANALYZING · 전 모듈 스캔 중"):
 
 # 초기 화면 마켓 보드 — 증권사 시황판처럼 권역별로 묶는다. (심볼, 표시명, 소수점)
 _MARKET_BOARD = [
-    ("국내", [("^KS11", "KOSPI", 2), ("^KQ11", "KOSDAQ", 2), ("KRW=X", "USD/KRW", 2)]),
+    ("환율", [("KRW=X", "USD/KRW", 2)]),
     ("미국", [("^GSPC", "S&P 500", 2), ("^IXIC", "NASDAQ", 2),
               ("^DJI", "DOW", 2), ("^RUT", "RUSSELL 2K", 2)]),
     ("리스크 · 금리", [("^VIX", "VIX", 2), ("^TNX", "US 10Y", 3)]),
@@ -4758,7 +4560,7 @@ def render_market_tape():
 
 
 def render_market_board():
-    """시황판 — 국내 지수·환율, 미국(다우), 금리, 원자재·크립토.
+    """시황판 — 환율, 미국 지수, 금리, 원자재·크립토.
     지수 4개(S&P·나스닥·러셀·VIX)는 상단 레짐 스트립이 상시 표시하므로 여기서 뺀다."""
     strip_syms = {s for s, _, _ in _STRIP_SYMBOLS}
     quotes = {k: v for k, v in _market_board_data().items() if k not in strip_syms}
@@ -5030,7 +4832,7 @@ def _render_action_card(a, idx):
     if plan['direction'] not in ('long', 'short'):
         st.caption(f"방향성 셋업 없음 — {plan.get('reason_invalid') or 'ICT 구조 신호 부족'}")
         return
-    _p = lambda v: _fmt_price(v, ticker.endswith(('.KS', '.KQ')))   # noqa: E731
+    _p = lambda v: _fmt_price(v)   # noqa: E731
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("진입 구간", f"{_p(plan['entry']['low'])} ~ {_p(plan['entry']['high'])}")
     c2.metric("손절", _p(plan['stop']))
@@ -5160,7 +4962,7 @@ def render_today(groups: List[ModuleGroup]):
     st.markdown(ui.section("내 계좌", "상세는 [운영] 화면"), unsafe_allow_html=True)
     render_account_line()
 
-    st.markdown(ui.section("시장", "국내·미국 지수 · 금리 · 원자재 (전일 대비, 최근 1개월)"),
+    st.markdown(ui.section("시장", "미국 지수 · 환율 · 금리 · 원자재 (전일 대비, 최근 1개월)"),
                 unsafe_allow_html=True)
     render_market_board()
 
@@ -5179,7 +4981,7 @@ def render_verdict_cards(snap, *, with_trader=True):
     있어야 한다 — 같은 라인이 위아래로 두 번 뜨면 어느 쪽이 실행 대상인지 흐려진다.
     """
     mgr, trader = snap['manager'], snap['trader']
-    p = lambda v: _fmt_price(v, snap.get('is_krw', False))   # noqa: E731
+    p = lambda v: _fmt_price(v)   # noqa: E731
 
     mc = score_color(mgr['total_score'])
     dissent_html = f"<br>⚠️ {mgr['dissent']}" if mgr['dissent'] else ''
@@ -5295,10 +5097,7 @@ def render_verdict_cards(snap, *, with_trader=True):
   <div style="font-size:11px;color:var(--text-4);margin-top:6px">{basis}</div>
   {pos_html}
 </div>""", unsafe_allow_html=True)
-    _short_kr = (" · 국내 주식은 개인 공매도가 제한적이라 숏 라인은 청산·관망 기준으로만 보십시오."
-                 if is_short and snap.get('is_krw') else "")
-    st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다."
-               + _short_kr)
+    st.caption("⚠️ 규칙 기반 자동 산출 — 투자 참고용이며 매매 판단의 책임은 본인에게 있습니다.")
 
 
 def render_verdict_hero():
@@ -5350,8 +5149,8 @@ def _render_timeframe_header(tag, note, color):
         unsafe_allow_html=True)
 
 
-def _fmt_price(v, is_krw):
-    return f"₩{v:,.0f}" if is_krw else f"${v:,.2f}"
+def _fmt_price(v):
+    return f"${v:,.2f}"
 
 
 def trade_plan_report():
@@ -5367,7 +5166,7 @@ def trade_plan_report():
     except Exception as e:
         return build_ops_report('트레이드 플랜', '🎯', '경고', [f'플랜 계산 실패: {e}'])
 
-    tk, is_krw = snap['ticker'], snap['is_krw']
+    tk = snap['ticker']
     if plan['direction'] not in ('long', 'short'):
         return build_ops_report('트레이드 플랜', '🎯', '셋업 없음',
                                 [f"{tk} — {plan.get('reason_invalid') or '방향성 신호 없음'}"])
@@ -5376,7 +5175,7 @@ def trade_plan_report():
                                 [f"{tk} — {'롱' if plan['direction']=='long' else '숏'} 편향이나 "
                                  f"유효 셋업 아님: {plan['reason_invalid']}"])
 
-    p = lambda v: _fmt_price(v, is_krw)   # noqa: E731 — 이 함수 안에서만 쓰는 표기 헬퍼
+    p = lambda v: _fmt_price(v)   # noqa: E731 — 이 함수 안에서만 쓰는 표기 헬퍼
     rr1 = f"R:R {plan['rr'][0]:.1f}" if plan['rr'] and plan['rr'][0] else "R:R -"
     return build_ops_report(
         '트레이드 플랜', '🎯',
@@ -5665,7 +5464,6 @@ def main():
                         _name = _info.get('longName') or _info.get('shortName') or ticker
                     except: _info, _name = {}, ticker
 
-                    _is_krw = ticker.endswith('.KS') or ticker.endswith('.KQ')
                     _reg_price  = _info.get('regularMarketPrice') or _info.get('currentPrice')
                     _cp  = float(_reg_price) if _reg_price else float(_df['Close'].iloc[-1])
                     _pp  = float(_info.get('regularMarketPreviousClose') or (_df['Close'].iloc[-2] if len(_df) >= 2 else _cp))
@@ -5717,7 +5515,7 @@ def main():
                         'regime': _regime, 'regime_diff': _regime_diff,
                         't_score_adj': _t_score_adj, 'total_adj': _total_adj,
                         'info': _info, 'name': _name,
-                        'is_krw': _is_krw, 'cp': _cp, 'pp': _pp,
+                        'cp': _cp, 'pp': _pp,
                         'live_price': _live_price, 'live_label': _live_label,
                         'pre_price': _pre_price, 'pre_chg': _pre_chg,
                         'post_price': _post_price, 'post_chg': _post_chg,
@@ -5730,7 +5528,7 @@ def main():
 
         if 'tab1' not in st.session_state:
             st.info("티커를 입력하고 **분석 시작** 버튼을 눌러주세요.\n\n"
-                    "예) `AAPL` `NVDA` `TSLA` | 한국: `005930` (삼성전자) | ETF: `SPY` `QQQ`")
+                    "예) `AAPL` `NVDA` `TSLA` | ETF: `SPY` `QQQ`")
         else:
             _a = st.session_state['tab1']
             ticker    = _a['ticker']; df = _a['df']; end_dt = _a['end_dt']
@@ -5746,7 +5544,7 @@ def main():
             regime    = _a['regime']
             total_adj = _a['total_adj']
             info      = _a['info']; name = _a['name']
-            is_krw    = _a['is_krw']; cp = _a['cp']; pp = _a['pp']
+            cp = _a['cp']; pp = _a['pp']
             live_price = _a.get('live_price', cp)
             live_label = _a.get('live_label', '현재가')
             pre_price = _a.get('pre_price'); pre_chg = _a.get('pre_chg')
@@ -5754,7 +5552,7 @@ def main():
             earn_str  = _a['earn_str']
             w_tech    = _a['w_tech']; w_fund = _a['w_fund']; w_macro = _a['w_macro']
 
-            fmt_p  = lambda x: f"₩{x:,.0f}" if is_krw else f"${x:.2f}"
+            fmt_p  = lambda x: f"${x:.2f}"
 
             regime_icon  = {'bull':'🐂 강세장','bear':'🐻 약세장','neutral':'➡️ 중립장'}.get(regime, '➡️ 중립장')
 
@@ -5769,18 +5567,17 @@ def main():
 
             # 프리/애프터 마켓 문자열
             _ext_html = ''
-            if not is_krw:
-                _ep = []
-                if pre_price and pre_price > 0:
-                    _pv = pre_chg * 100 if pre_chg and abs(pre_chg) < 1 else (pre_chg or 0)
-                    _ep.append(f"<span style='color:var(--text-4)'>프리마켓</span> <b>{fmt_p(pre_price)}</b> "
-                               f"<span style='color:{'#10b981' if _pv>=0 else '#ef4444'}'>{_pv:+.2f}%</span>")
-                if post_price and post_price > 0:
-                    _pov = post_chg * 100 if post_chg and abs(post_chg) < 1 else (post_chg or 0)
-                    _ep.append(f"<span style='color:var(--text-4)'>애프터</span> <b>{fmt_p(post_price)}</b> "
-                               f"<span style='color:{'#10b981' if _pov>=0 else '#ef4444'}'>{_pov:+.2f}%</span>")
-                if _ep:
-                    _ext_html = f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>{'&nbsp;&nbsp;·&nbsp;&nbsp;'.join(_ep)}</div>"
+            _ep = []
+            if pre_price and pre_price > 0:
+                _pv = pre_chg * 100 if pre_chg and abs(pre_chg) < 1 else (pre_chg or 0)
+                _ep.append(f"<span style='color:var(--text-4)'>프리마켓</span> <b>{fmt_p(pre_price)}</b> "
+                           f"<span style='color:{'#10b981' if _pv>=0 else '#ef4444'}'>{_pv:+.2f}%</span>")
+            if post_price and post_price > 0:
+                _pov = post_chg * 100 if post_chg and abs(post_chg) < 1 else (post_chg or 0)
+                _ep.append(f"<span style='color:var(--text-4)'>애프터</span> <b>{fmt_p(post_price)}</b> "
+                           f"<span style='color:{'#10b981' if _pov>=0 else '#ef4444'}'>{_pov:+.2f}%</span>")
+            if _ep:
+                _ext_html = f"<div style='font-size:12px;color:var(--text-3);margin-top:6px'>{'&nbsp;&nbsp;·&nbsp;&nbsp;'.join(_ep)}</div>"
 
             _earn_html = (f"<div style='font-size:12px;color:#f59e0b;margin-top:4px'>📅 {earn_str}</div>"
                           if earn_str else '')
@@ -5938,7 +5735,7 @@ def main():
                     _scalp, _scalp_err = None, str(_e)
                 st.session_state['analyst_snapshot'] = {
                     'ticker': ticker, 'reports': _team_reports, 'manager': _mgr,
-                    'trader': _trader, 'is_krw': is_krw,
+                    'trader': _trader,
                     'scalp': _scalp, 'scalp_error': _scalp_err,
                 }
                 # 매매추천가(진입·목표·손절)는 메인 최상단 총괄 자리에만 둔다.
@@ -5970,12 +5767,11 @@ def main():
                 # ── 차트 1개 + 뷰 전환 ──────────────────────────
                 # 미니 차트 4개를 늘어놓고 각각 "확대" 버튼을 두던 구조를 버리고,
                 # 큰 차트 하나를 뷰(TV/구조/지지저항/채널)로 갈아끼운다.
-                _tv_sym = f"KRX:{ticker.split('.')[0]}" if is_krw else ticker
 
                 def _tv_widget_url(height: int = 400) -> str:
                     return (
                         f"https://www.tradingview.com/widgetembed/"
-                        f"?symbol={_tv_sym}&interval=D&theme=dark&style=1"
+                        f"?symbol={ticker}&interval=D&theme=dark&style=1"
                         f"&timezone=Asia%2FSeoul&locale=kr"
                         f"&studies=STD%3BMASimple%2CSTD%3BRSI%2CSTD%3BMACD"
                         f"&hide_side_toolbar=0&allow_symbol_change=0"
@@ -6353,7 +6149,7 @@ def main():
                     st.info(mtf_msg)
                 # ── 섹터 상대 강도 ─────────────────────────
                 sector_name = info.get('sector', '') if info else ''
-                if sector_name and not is_krw:
+                if sector_name:
                     with st.expander(f"📊 섹터 상대 강도 — {sector_name} ({SECTOR_ETF.get(sector_name, 'ETF 없음')})"):
                         with st.spinner("섹터 데이터 로딩 중..."):
                             sr = calc_sector_relative(ticker, sector_name, df)
@@ -7209,7 +7005,7 @@ def main():
             with st.expander("⚙️ 비용 설정 (수수료 · 슬리피지)"):
                 cc1, cc2 = st.columns(2)
                 bt_commission = cc1.slider("수수료율 (편도, %)", 0.0, 0.5, 0.05, 0.01,
-                                            help="증권사 매매 수수료. 미국 주식 ~0.05%, 한국 주식 ~0.015%") / 100
+                                            help="증권사 매매 수수료. 미국 주식 ~0.05%") / 100
                 bt_slippage   = cc2.slider("슬리피지율 (편도, %)", 0.0, 0.5, 0.03, 0.01,
                                             help="호가 스프레드 + 체결 지연. 유동성 낮을수록 증가") / 100
                 total_cost = (bt_commission + bt_slippage) * 2 * 100
@@ -7580,7 +7376,7 @@ def main():
             with st.expander("⚙️ 포트폴리오 설정", expanded=True):
                 pbt_str = st.text_input("종목 목록 (쉼표 구분, 최대 5개)",
                                          "AAPL,MSFT,NVDA,GOOGL,META",
-                                         help="미국: AAPL / 한국: 005930.KS")
+                                         help="예: AAPL, MSFT")
                 pbt_tickers = [t.strip().upper() for t in pbt_str.split(',') if t.strip()][:5]
 
                 pbt_wt_mode = st.radio("비중 방식", ["균등 배분", "직접 입력"], horizontal=True)
@@ -8107,7 +7903,7 @@ def main():
             with st.expander("⚖️ 포지션 대사 (의도 vs 실제)", expanded=False):
                 st.caption("앱이 생각하는 보유 수량과 실제 포지션을 비교해 불일치를 탐지합니다.")
                 _rec_intended_raw = st.text_area(
-                    "의도 포지션 (JSON, 예: {\"삼성전자.KS\": 10, \"005490.KS\": 5})",
+                    "의도 포지션 (JSON, 예: {\"AAPL\": 10, \"MSFT\": 5})",
                     value='{}', key="rec_intended")
                 if st.button("⚖️ 포지션 대사 실행", key="rec_run"):
                     try:
@@ -8211,7 +8007,7 @@ def main():
             st.warning(f"ICT 모듈을 불러오지 못했습니다: {e}")
             return
 
-        _df, _tk, _krw = snap['df'], snap['ticker'], snap['is_krw']
+        _df, _tk = snap['df'], snap['ticker']
         _plan = build_trade_plan(_df)
         _n = st.slider("표시 캔들 수", 40, 200, 80, 10, key="plan_candles")
         st.plotly_chart(plot_ict_chart(_df, n_candles=_n, ticker=_tk, plan=_plan),
@@ -8221,7 +8017,7 @@ def main():
             st.info(f"방향성 셋업 없음 — {_plan.get('reason_invalid') or 'ICT 구조 신호 부족'}")
             return
 
-        _p = lambda v: _fmt_price(v, _krw)   # noqa: E731
+        _p = lambda v: _fmt_price(v)   # noqa: E731
         _dir = "🟢 롱" if _plan['direction'] == 'long' else "🔴 숏"
         # '확신도' 라고 부르지 않는다 — 그 등급은 결과와 연결된 것이 측정되지
         # 않았다(롱 기준 high/medium/low 기대값 구별 불가, 2026-08-10). 실행

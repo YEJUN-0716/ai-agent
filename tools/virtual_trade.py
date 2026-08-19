@@ -152,16 +152,14 @@ class VirtualBrokerExecutor:
     def buy(self, symbol: str, amount_krw: float) -> dict:
         """원화 금액으로 매수를 예약한다.
 
-        place_notional_buy 의 금액 단위는 시장을 따른다 — 미국 종목은 달러다.
+        place_notional_buy 의 금액 단위는 달러다.
         비서는 늘 원화로 말하므로 여기서 환산해서 넘긴다. 환산을 빼먹으면
         환율 배수(약 1,400배)만큼 부풀어, 체결 시점에 현금 부족으로 조용히
         폐기된다. 사장님은 "예약했습니다"라는 답만 받는다.
         """
         broker = self._module()
         amount_usd = amount_krw / broker.krw_per_usd()
-        return _run_broker(
-            broker.place_notional_buy, symbol, amount_usd, market="US"
-        )
+        return _run_broker(broker.place_notional_buy, symbol, amount_usd)
 
     def sell(self, symbol: str, qty: int) -> dict:
         return _run_broker(self._module().place_market_sell, symbol, qty)

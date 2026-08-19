@@ -234,7 +234,7 @@ def run(now: date | None = None) -> dict:
         vb.save_state(state)                            # ★ 주문 전에 저장
         for o in result["orders"]:
             vb.place_notional_buy(o["ticker"], o["qty"] * o["est_price"],
-                                  qty=o["qty"], market="US")
+                                  qty=o["qty"])
         if result["orders"]:
             state = vb.load_state()                     # 대기열이 실린 최신 장부
             meta = state.setdefault("index_meta", {})

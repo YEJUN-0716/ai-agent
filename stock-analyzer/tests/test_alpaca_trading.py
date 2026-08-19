@@ -78,7 +78,7 @@ def test_krx_order_is_refused_not_silently_sent(api):
     # 유니버스에 .KS 가 하나 남아 있으면 Alpaca 로 흘러든다. 조용히 보내면
     # 알 수 없는 심볼로 거절되거나, 더 나쁘게는 동명의 미국 종목을 산다.
     with pytest.raises(ValueError, match="미국 주식 전용"):
-        al.place_notional_buy("005930", 1000.0, market="KRX")
+        al.place_notional_buy("005930.KS", 1000.0)
     assert api["sent"] is None
 
 

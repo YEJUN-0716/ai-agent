@@ -33,12 +33,12 @@ def test_order_date_follows_us_session_not_korean_calendar(broker):
 
 def test_reservation_cannot_exceed_available_cash(broker):
     # 현금 1,000만. 600만을 예약하면 남은 가용은 400만이다.
-    broker.place_notional_buy("AAA", 6000.0, market="US")
+    broker.place_notional_buy("AAA", 6000.0)
     assert broker.available_krw(broker.load_state()) == pytest.approx(4_000_000)
     assert broker.get_account()["buying_power"] == pytest.approx(4_000_000)
 
     with pytest.raises(ValueError, match="가용 현금"):
-        broker.place_notional_buy("BBB", 6000.0, market="US")
+        broker.place_notional_buy("BBB", 6000.0)
 
     # 거부된 주문은 대기열에 남지 않는다.
     assert len(broker.load_state()["pending"]) == 1
@@ -82,7 +82,7 @@ def test_price_ignores_the_empty_row_of_a_day_not_yet_traded(broker, monkeypatch
 
 
 def test_pending_buy_fills_at_next_open_and_spends_cash(broker, monkeypatch):
-    broker.place_notional_buy("AAA", 1000.0, market="US")   # 100만원어치
+    broker.place_notional_buy("AAA", 1000.0)   # 100만원어치
     # qty 를 안 넘긴 주문은 주문 dict 도 예전 모양 그대로다.
     assert "qty" not in broker.load_state()["pending"][0]
     monkeypatch.setattr(
@@ -101,7 +101,7 @@ def test_pending_buy_fills_at_next_open_and_spends_cash(broker, monkeypatch):
 def test_qty_order_fills_exactly_that_many_shares(broker, monkeypatch):
     # 예상가 $110 로 3주를 주문했는데 시가가 $100 로 열렸다. 금액만 넘겼다면
     # 33만원으로 3주가 아니라 3주 값보다 많은 수량을 샀을 것이다.
-    broker.place_notional_buy("AAA", 330.0, market="US", qty=3)
+    broker.place_notional_buy("AAA", 330.0, qty=3)
     monkeypatch.setattr(
         broker, "next_open_price", lambda symbol, after: (100.0, "2026-07-31")
     )
@@ -116,7 +116,7 @@ def test_qty_order_is_skipped_when_cash_is_short(broker, monkeypatch):
     state = broker.load_state()
     state["cash_krw"] = 250_000.0
     broker.save_state(state)
-    broker.place_notional_buy("AAA", 200.0, market="US", qty=2)
+    broker.place_notional_buy("AAA", 200.0, qty=2)
 
     monkeypatch.setattr(
         broker, "next_open_price", lambda symbol, after: (200.0, "2026-07-31")

@@ -58,11 +58,6 @@ jobs:
       - name: 애널리스트 점수 기록
         env:
           PYTHONUTF8: "1"
-          # quant(퀀트+재무)가 붙어 재무 조회를 한다. KRX 종목은 yfinance 에
-          # ROE·순이익률이 비어 오는 일이 많아 DART 로 폴백한다 — 유니버스가
-          # S&P 500 인 동안에는 안 쓰이지만, 키가 없으면 KOSPI 유니버스로
-          # 바꾸는 순간 조용히 절반이 빠진다.
-          DART_API_KEY: ${{ secrets.DART_API_KEY }}
           UNIVERSE: ${{ github.event.inputs.universe || 'S&P 500 전체 (500종목)' }}
         run: python scripts/record_analyst_scores.py
 

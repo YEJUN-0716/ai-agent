@@ -80,7 +80,6 @@ EPS_SURPRISE_QUARTERS = 4
 EPS_ESTIMATE_FLOOR = 0.01                # 0 근처 추정치로 나눠 폭발하는 것 방지
 
 NAME_MAX_LEN = 20
-KRX_SUFFIXES = ('.KS', '.KQ')
 
 BASE_RAW_COLUMNS = ('momentum_raw', 'value_raw', 'quality_raw', 'low_vol_raw')
 
@@ -163,26 +162,7 @@ def price_factors(df, round_raw=2):
 
 # ── 재무 기반 팩터 ──────────────────────────────────────────────────
 
-def _dart_filled(ticker, roe_v, pm_v, dart_row):
-    """KRX 종목의 빈 ROE·이익률을 DART 값으로 메운다.
-
-    yfinance 는 KRX 재무를 자주 비운다. 이미 값이 있으면 덮어쓰지 않는다 —
-    DART margin 은 영업이익률이라 순이익률의 근사치로만 쓸 수 있기 때문이다.
-    """
-    if not ticker.endswith(KRX_SUFFIXES) or (roe_v and pm_v):
-        return roe_v, pm_v
-    dd = dart_row or {}
-    if not roe_v and dd.get('net_income') and dd.get('equity'):
-        try:
-            roe_v = round(dd['net_income'] / dd['equity'] * 100, 2)
-        except ZeroDivisionError:
-            pass
-    if not pm_v and dd.get('margin') is not None:
-        pm_v = dd['margin']
-    return roe_v, pm_v
-
-
-def fundamental_factors(ticker, info, dart_row=None, round_raw=2):
+def fundamental_factors(ticker, info, round_raw=2):
     """재무 dict → 밸류·퀄리티 원점수. info 가 비어도 예외 없이 0점 계열을 돌려준다.
 
     배합 계수는 factor_formulas 소유다 (factor_engine.py 와 공유).
@@ -206,8 +186,6 @@ def fundamental_factors(ticker, info, dart_row=None, round_raw=2):
     fcf_yield_pct = fcf / mcap * 100 if (fcf is not None and mcap and mcap > 0) else 0.0
     # P3-B: 발생액 품질
     accrual_q = accrual_quality(fcf, info.get('netIncomeToCommon'))
-
-    roe_v, pm_v = _dart_filled(ticker, roe_v, pm_v, dart_row)
 
     return {
         'name': name,

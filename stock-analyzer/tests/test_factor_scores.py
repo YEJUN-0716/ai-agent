@@ -69,7 +69,7 @@ CLEAN_INFO = {
 @pytest.fixture
 def patch_market(monkeypatch):
     """가격·재무·IC가중치·슬립을 전부 합성값으로 갈아끼운다."""
-    def _install(frames, infos=None, dart=None, earnings=None, ic_weights=None):
+    def _install(frames, infos=None, earnings=None, ic_weights=None):
         infos = infos or {}
         earnings = earnings or {}
 
@@ -93,7 +93,6 @@ def patch_market(monkeypatch):
 
         monkeypatch.setattr(app, "download_stock", fake_download)
         monkeypatch.setattr(app.yf, "Ticker", FakeTicker)
-        monkeypatch.setattr(app, "_dart_fallback_batch", lambda tickers: dart or {})
         # None 이면 기본 가중치 경로. 진짜 함수는 SPY 를 내려받으므로 반드시 막는다.
         monkeypatch.setattr(app, "_load_ic_factor_weights_4f",
                             lambda regime=None, benchmark=None: ic_weights)
@@ -356,30 +355,6 @@ def test_fundamentals_failure_still_produces_a_row(patch_market):
     assert result.iloc[0]["per"] is None
     assert result.iloc[0]["roe"] == 0
     assert result.iloc[0]["momentum_raw"] != 0   # 가격 팩터는 정상 계산
-
-
-def test_krx_falls_back_to_dart_when_yfinance_has_no_roe(patch_market):
-    """yfinance 는 KRX 재무를 자주 비운다. DART 폴백이 ROE·이익률을 메운다."""
-    patch_market(
-        {"005930.KS": _prices(_ramp(100, 150))},
-        infos={"005930.KS": {"trailingPE": 20.0, "priceToBook": 4.0}},
-        dart={"005930.KS": {"net_income": 30.0, "equity": 200.0, "margin": 12.5}},
-    )
-    row = app.calc_factor_scores(["005930.KS"]).iloc[0]
-    assert row["roe"] == pytest.approx(15.0)             # 30/200*100
-    # 발생액 판정 불가 → 중립 50점
-    assert row["quality_raw"] == pytest.approx(
-        round(ff.quality_raw(15.0, 12.5, ff.ACCRUAL_NEUTRAL), 2))
-
-
-def test_dart_fallback_does_not_override_present_yfinance_roe(patch_market):
-    """yfinance 값이 있으면 DART 로 덮어쓰지 않는다."""
-    patch_market(
-        {"005930.KS": _prices(_ramp(100, 150))},
-        infos={"005930.KS": CLEAN_INFO},
-        dart={"005930.KS": {"net_income": 30.0, "equity": 200.0, "margin": 12.5}},
-    )
-    assert app.calc_factor_scores(["005930.KS"]).iloc[0]["roe"] == pytest.approx(25.0)
 
 
 # ── 6. 추가 팩터 (extra_factors=True) ───────────────────────────────
