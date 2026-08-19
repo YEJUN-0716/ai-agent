@@ -866,6 +866,7 @@ def run_out_of_sample_validation(
       "train_period":          {"start": str, "end": str},
       "test_period":           {"start": str, "end": str},
       "train_factor_ic":       {factor: stats},
+      "test_factor_ic":        {factor: stats},   # n = 검증 시점 수
       "derived_test_weights":  {factor: weight},
       "test_composite_ic":     float,
       "train_composite_ic":    float,
@@ -905,9 +906,15 @@ def run_out_of_sample_validation(
     FACTORS    = ["mom_3m", "mom_1m", "low_vol", "value", "quality", "ict"]
     min_idx    = 65 + forward_days
 
-    def _walk_forward_ic(date_range, prog_start, prog_end):
+    def _walk_forward_ic(date_range, prog_start, prog_end, start_idx=min_idx):
+        """date_range 안에서 리밸런싱 시점을 훑으며 팩터별 IC 를 모은다.
+
+        start_idx 는 **가격 이력이 실제로 없는 구간**만 건너뛰기 위한 것이다.
+        점수 계산은 date_range 가 아니라 prices_dict 전체를 as_of 로 잘라 쓰므로,
+        앞에 학습 구간이 통째로 깔린 검증 구간에서는 워밍업이 필요 없다.
+        """
         factor_ics_local = {f: [] for f in FACTORS}
-        rebal_idx_list   = list(range(min_idx, len(date_range) - forward_days, rebal_days))
+        rebal_idx_list   = list(range(start_idx, len(date_range) - forward_days, rebal_days))
 
         for step_i, idx in enumerate(rebal_idx_list):
             if progress_cb:
@@ -977,7 +984,10 @@ def run_out_of_sample_validation(
     total_w  = sum(raw_w.values())
     derived_weights = {f: round(v / total_w, 4) for f, v in raw_w.items()}
 
-    test_factor_ic = _walk_forward_ic(test_dates, 0.70, 0.98)
+    # 검증 구간 앞에는 학습 5년치 가격이 그대로 있다 — 65봉 워밍업을 여기에
+    # 또 적용하면 검증 창의 앞 86 거래일(≈4개월, 시점의 27%)을 근거 없이
+    # 버리고, 아래에서 돌려주는 test_period 시작일도 실제 첫 측정일과 어긋난다.
+    test_factor_ic = _walk_forward_ic(test_dates, 0.70, 0.98, start_idx=0)
 
     if progress_cb:
         progress_cb(0.98)
@@ -1001,6 +1011,9 @@ def run_out_of_sample_validation(
         "train_period":         {"start": train_start_str, "end": train_end_str},
         "test_period":          {"start": test_start_str,  "end": test_end_str},
         "train_factor_ic":      train_factor_ic,
+        # 검증 구간 통계도 돌려준다 — 지금까지는 composite 한 숫자만 나가서
+        # 그 판정이 몇 개 시점에 기댄 것인지 밖에서 알 방법이 없었다.
+        "test_factor_ic":       test_factor_ic,
         "derived_test_weights": derived_weights,
         "test_composite_ic":    round(test_composite_ic, 4),
         "train_composite_ic":   round(train_composite_ic, 4),

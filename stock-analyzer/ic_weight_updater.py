@@ -3,7 +3,9 @@ IC 기반 팩터 가중치 자동 업데이트
 =====================================
 매주 일요일 GitHub Actions (ic-update.yml)이 실행.
 최근 5년 walk-forward IC를 계산하여 ic_weights.json에 저장.
-factor_engine.py의 calc_factor_scores()가 이 파일을 읽어 가중치에 반영.
+프로덕션 스캔(app.py)이 이 파일의 production_weights 를 읽어 가중치에 반영.
+regime_weights 블록은 2026-08-19 현재 읽는 코드가 없다 — 유일한 독자였던
+factor_engine.calc_factor_scores 가 죽은 채로 남아 있다가 삭제됐다.
 
 수동 실행:
   python ic_weight_updater.py
