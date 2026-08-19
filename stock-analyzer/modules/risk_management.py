@@ -138,7 +138,10 @@ def run_backtest_sized(df: pd.DataFrame, bt_signals_full_fn, buy_th: float = 65,
             buy_px = exec_px * (1 + slippage)
             fee = invest_amt * commission
             shares = (invest_amt - fee) / buy_px
-            entry_val = invest_amt - fee
+            # 원가는 **실제로 나간 돈**(invest_amt)이다. 수수료를 빼고 잡으면
+            # 분모가 작아져 거래별 수익률이 매수 수수료 한 다리만큼 좋아 보인다 —
+            # 자산곡선은 invest_amt 를 뺐으므로 표와 곡선이 서로 안 맞는다.
+            entry_val = invest_amt
             capital -= invest_amt
             in_pos = True
             trades.append({'날짜': dates[i], '구분': '🟢 매수', '비중': f"{target_frac*100:.0f}%", '수익률': ''})

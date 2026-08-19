@@ -336,11 +336,16 @@ def _send(ws, payload: dict):
 
 
 def _messages(ws):
-    """웹소켓 프레임 하나가 메시지 여러 개를 담은 배열로 온다."""
+    """웹소켓 프레임 하나가 메시지 여러 개를 담은 배열로 온다.
+
+    상대가 끊으면 recv() 는 빈 프레임을 계속 돌려준다. 그걸 건너뛰기만 하면
+    제너레이터가 CPU 를 태우며 영원히 돌고, stream_bars 의 재접속은 예외가 없어
+    한 번도 안 걸린다. 끊김을 끊김으로 올려야 다시 붙는다.
+    """
     while True:
         raw = ws.recv()
         if not raw:
-            continue
+            raise ConnectionError("웹소켓이 빈 프레임을 반환했습니다 — 연결 끊김")
         data = json.loads(raw)
         for msg in (data if isinstance(data, list) else [data]):
             yield msg
