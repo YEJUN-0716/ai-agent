@@ -273,7 +273,7 @@ class Brain:
             """
             try:
                 summary = study_reader.summarize_pdf(
-                    settings, settings.study_inbox / filename
+                    settings, study_materials.inbox_pdf(settings, filename)
                 )
                 saved = study_materials.save_material(
                     settings, filename,

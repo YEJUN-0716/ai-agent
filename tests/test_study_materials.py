@@ -7,6 +7,7 @@ from tools.study_materials import (
     MAX_PDF_BYTES,
     StudyError,
     list_materials,
+    inbox_pdf,
     list_new,
     material_path,
     save_material,
@@ -223,3 +224,29 @@ def test_material_path_rejects_an_unknown_id(settings):
     # Act / Assert
     with pytest.raises(StudyError):
         material_path(settings, "없는번호")
+
+
+@pytest.mark.parametrize("filename", [
+    "../../.env",
+    "../token.json",
+    "처리완료/논문.pdf",
+    "메모.txt",
+])
+def test_rejects_paths_outside_the_inbox(settings, filename, tmp_path):
+    """파일 이름은 모델이 정한다. 폴더 밖을 가리키면 읽지도 옮기지도 않는다."""
+    # Arrange — 밖에 진짜 비밀 파일이 있어도 통과하면 안 된다.
+    (tmp_path / ".env").write_text("ALPACA_KEY=진짜키", encoding="utf-8")
+    (settings.study_inbox / "메모.txt").write_text("안녕", encoding="utf-8")
+
+    # Act / Assert
+    with pytest.raises(StudyError, match="자료넣는곳"):
+        inbox_pdf(settings, filename)
+
+
+def test_accepts_a_pdf_sitting_in_the_inbox(settings):
+    """정상 파일은 그대로 통과한다 — 관문이 일까지 막으면 안 된다."""
+    # Arrange
+    (settings.study_inbox / "논문.pdf").write_bytes(b"%PDF-1.4 fake")
+
+    # Act / Assert
+    assert inbox_pdf(settings, "논문.pdf") == settings.study_inbox / "논문.pdf"

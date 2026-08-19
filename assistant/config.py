@@ -143,11 +143,17 @@ def _parse_int(name: str, default: int) -> int:
     if not value:
         return default
     try:
-        return int(value)
+        parsed = int(value)
     except ValueError as exc:
         raise ConfigError(
             f"{name} 값이 숫자가 아닙니다: {value!r}"
         ) from exc
+    # 여기를 쓰는 둘(포트, 대화 기록 개수) 다 1 이상이어야 한다. 특히
+    # history_limit 은 음수면 SQLite 가 LIMIT -1 = 무제한으로 읽어, 제한을
+    # 거는 대신 저장된 대화 전부를 매 요청에 실어 보낸다.
+    if parsed < 1:
+        raise ConfigError(f"{name} 값은 1 이상이어야 합니다: {parsed}")
+    return parsed
 
 
 def load_settings() -> Settings:

@@ -232,3 +232,16 @@ def test_secrets_are_not_in_repr(tmp_path, monkeypatch):
     # Assert
     for secret in ("sk-test-key", "123:abc", "discord-secret"):
         assert secret not in text
+
+
+@pytest.mark.parametrize("value", ["-1", "0"])
+def test_history_limit_must_be_positive(tmp_path, monkeypatch, value):
+    """음수면 SQLite가 LIMIT -1 = 무제한으로 읽어 대화 전부를 매번 실어 보낸다."""
+    # Arrange
+    for key, val in _base_env(tmp_path).items():
+        monkeypatch.setenv(key, val)
+    monkeypatch.setenv("ASSISTANT_HISTORY_LIMIT", value)
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="ASSISTANT_HISTORY_LIMIT"):
+        load_settings()
