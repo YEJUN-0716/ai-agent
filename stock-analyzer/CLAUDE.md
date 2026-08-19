@@ -79,7 +79,7 @@ These remain parallel implementations — different factor sets (app: skip-1M mo
 
 ### `modules/` — optional quant library loaded defensively
 
-`app.py` imports every module inside `try/except`, setting `_*_AVAILABLE` flags (e.g. `_ML_AVAILABLE`, `_DART_AVAILABLE`, `_TAX_KR_AVAILABLE`). The app degrades gracefully when a module or its dependency is missing, so features are guarded by these flags. Key modules: `factor_engine`, `factor_validator`, `ict_analysis`, `ml_signals`, `risk_management`, `portfolio_allocator`, `ops_safety` (kill switch / reconciliation), `tax_kr`, `toss_trading` (current broker). Point-in-time fundamentals discipline lives in `factor_engine.point_in_time_fundamentals` (EDGAR `filed`-indexed panel), not a separate DB.
+`app.py` imports every module inside `try/except`, setting `_*_AVAILABLE` flags (e.g. `_ML_AVAILABLE`, `_DART_AVAILABLE`, `_TAX_KR_AVAILABLE`). The app degrades gracefully when a module or its dependency is missing, so features are guarded by these flags. Key modules: `factor_engine`, `factor_validator`, `ict_analysis`, `ml_signals`, `risk_management`, `ops_safety` (kill switch / reconciliation), `tax_kr`, `toss_trading` (current broker). Point-in-time fundamentals discipline lives in `factor_engine.point_in_time_fundamentals` (EDGAR `filed`-indexed panel), not a separate DB.
 
 ### The weekly IC feedback loop
 
