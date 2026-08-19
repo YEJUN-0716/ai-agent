@@ -32,14 +32,20 @@ def inbox_pdf(settings: Settings, filename: str) -> Path:
 
     filename 은 모델이 정한다. 그대로 이어붙이면 `../../.env` 같은 값이
     자료넣는곳 밖의 파일을 읽어 API 로 올리고 옮기기까지 한다. 그래서
-    폴더 바로 아래의 .pdf 하나만 통과시킨다 — 하위 폴더도, 심볼릭 링크로
-    밖을 가리키는 것도 막는다.
+    폴더 바로 아래의 .pdf 파일 하나만 통과시킨다 — 하위 폴더도, 심볼릭
+    링크로 밖을 가리키는 것도 막는다.
+
+    is_file() 이 있어야 하는 이유: 압축을 풀면 `자료.pdf/` 라는 **폴더**가
+    생긴다. 이름만 보면 PDF 라 나머지 검사를 다 통과하고, 그러면 폴더를
+    읽으려다 StudyError 가 아닌 예외가 터져 대화가 끊기고, save_material
+    은 폴더째로 처리완료에 옮긴다. list_new 는 이미 폴더를 건너뛴다.
     """
     path = settings.study_inbox / filename
     if (
         Path(filename).name != filename
         or path.suffix.lower() != ".pdf"
         or path.resolve().parent != settings.study_inbox.resolve()
+        or not path.is_file()
     ):
         raise StudyError(
             f"{filename}은 자료넣는곳의 PDF가 아닙니다. "
