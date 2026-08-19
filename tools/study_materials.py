@@ -27,6 +27,27 @@ class StudyError(RuntimeError):
     """자료를 다루지 못했을 때. 메시지는 사장님께 그대로 보여준다."""
 
 
+def inbox_pdf(settings: Settings, filename: str) -> Path:
+    """자료넣는곳 안의 PDF 한 개를 가리키는 경로. 밖은 못 가리킨다.
+
+    filename 은 모델이 정한다. 그대로 이어붙이면 `../../.env` 같은 값이
+    자료넣는곳 밖의 파일을 읽어 API 로 올리고 옮기기까지 한다. 그래서
+    폴더 바로 아래의 .pdf 하나만 통과시킨다 — 하위 폴더도, 심볼릭 링크로
+    밖을 가리키는 것도 막는다.
+    """
+    path = settings.study_inbox / filename
+    if (
+        Path(filename).name != filename
+        or path.suffix.lower() != ".pdf"
+        or path.resolve().parent != settings.study_inbox.resolve()
+    ):
+        raise StudyError(
+            f"{filename}은 자료넣는곳의 PDF가 아닙니다. "
+            "폴더 안에 있는 PDF 파일 이름만 쓸 수 있습니다."
+        )
+    return path
+
+
 def list_new(settings: Settings) -> list[dict]:
     """정리를 기다리는 PDF 목록.
 
@@ -109,7 +130,7 @@ def save_material(settings: Settings, filename: str, title: str,
     반쪽만 남으면 다음 실행이 같은 자료를 다시 정리해 노트가 둘이 된다.
     그래서 어느 단계가 실패하든 앞선 단계를 되돌린다.
     """
-    source = settings.study_inbox / filename
+    source = inbox_pdf(settings, filename)
     if not source.exists():
         raise StudyError(
             f"{filename}을 자료넣는곳에서 찾지 못했습니다. "
