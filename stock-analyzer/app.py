@@ -1070,8 +1070,17 @@ def _score_pbr(v):
     return 85 if v<1 else (75 if v<2 else (55 if v<4 else (35 if v<8 else 20)))
 
 def _score_roe(v):
+    """ROE 점수 (소수 입력 — yfinance returnOnEquity 와 같은 단위).
+
+    예전엔 abs(v)<=1 일 때만 100 을 곱했다. ROE 가 100% 를 넘으면(자사주를
+    많이 산 우량주는 흔하다 — 애플이 약 1.5) 곱하지 않고 1.5% 로 읽어,
+    가장 좋은 회사에 30 점을 줬다. 0.99 는 85 점인데.
+
+    이 저장소의 다른 ROE 소비자(factor_engine, factor_scoring, app 의 팩터
+    계산)는 전부 조건 없이 *100 한다. 여기만 달랐고, 여기가 틀렸다.
+    """
     if v is None or np.isnan(v): return 50
-    r = v*100 if abs(v) <= 1 else v
+    r = v * 100
     return 10 if r<0 else (30 if r<5 else (50 if r<10 else (75 if r<20 else (90 if r<30 else 85))))
 
 def _score_growth(v):
@@ -1112,7 +1121,7 @@ def _score_fcf_yield(pct):
 def _score_roa(v):
     """ROA 전용 스코어 (yfinance 소수 반환 → % 변환 후 적용)"""
     if v is None or np.isnan(v): return 50
-    r = v * 100 if abs(v) <= 1 else v   # 소수 → %
+    r = v * 100   # 소수 → %. 조건부 변환은 ROA>33% 에서 뒤집혔다 (_score_roe 참고)
     if r < 0:    return 10
     elif r < 2:  return 30
     elif r < 5:  return 50
