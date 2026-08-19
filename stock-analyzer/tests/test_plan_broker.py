@@ -8,6 +8,8 @@
 (백테스트 쪽 규칙은 modules/trade_plan_backtest._simulate_outcome)
 """
 
+from datetime import date, datetime
+
 import numpy as np
 import pytest
 
@@ -253,3 +255,69 @@ def test_summary_counts_unfilled_setups_so_the_win_rate_cannot_inflate():
     assert perf["avg_r"] == pytest.approx(1.0)
     assert perf["win_rate"] == pytest.approx(50.0)
     assert perf["fill_rate"] == pytest.approx(66.7)
+
+
+# ── 돈이 새던 자리 (2026-08-19 리뷰) ──────────────────────────────────
+def test_limit_entry_adds_to_an_existing_position_instead_of_replacing_it(broker, monkeypatch):
+    """이미 들고 있는 종목이 지정가로 또 체결돼도 주식이 사라지면 안 된다.
+
+    예전엔 _fill_buy 만 평단을 합산하고 _settle_limit_entry 는 포지션을 통째로
+    대입했다. 그래서 기존 10주가 조용히 사라지는데 그 현금은 이미 빠진 뒤였다.
+    check_state 는 이걸 터진 뒤에 잡을 뿐 막지 못한다.
+    """
+    state = broker.load_state()
+    state["positions"]["AAA"] = {"qty": 10, "avg_price_usd": 90.0,
+                                 "entry_date": "2026-09-01",
+                                 "plan": {"stop": 80.0, "target": 120.0}}
+    broker.save_state(state)
+
+    broker.place_limit_entry("AAA", qty=10, limit_price=100.0,
+                             plan={"stop": 95.0, "target": 115.0, "grade": "A"})
+    monkeypatch.setattr(broker, "daily_bars",
+                        lambda sym, since, until=None: bars((99, 101, 97, 100)))
+    state = broker.settle_pending(broker.load_state(), 1000.0)
+
+    pos = state["positions"]["AAA"]
+    assert pos["qty"] == 20                                   # 10 이 아니라 20
+    assert pos["avg_price_usd"] == pytest.approx((90 * 10 + 99 * 10) / 20)
+    # 이미 걸린 손절선을 새 플랜이 덮으면 들고 있는 주식의 위험이 소리 없이 바뀐다.
+    assert pos["plan"]["stop"] == 80.0
+
+
+def test_a_nan_open_is_not_a_price(broker, monkeypatch):
+    """NaN 시가를 체결가로 쓰면 현금 검사를 통과해 장부가 통째로 nan 이 된다.
+
+    NaN 은 어떤 비교도 False 라 `cost > cash` 가 안 걸린다. 장이 열리기 전
+    오늘 행은 값 없이 먼저 생기므로 실제로 잡히는 경로다.
+    """
+    import pandas as pd
+    idx = pd.to_datetime(["2026-09-01", "2026-09-02"])
+    monkeypatch.setattr(broker, "_fetch_ohlc",
+                        lambda *a, **k: pd.DataFrame({"Open": [float("nan"), 101.0]}, index=idx))
+    assert broker.next_open_price("AAA", date(2026, 8, 31)) == (101.0, "2026-09-02")
+
+    monkeypatch.setattr(broker, "_fetch_ohlc",
+                        lambda *a, **k: pd.DataFrame({"Open": [float("nan")]}, index=idx[:1]))
+    assert broker.next_open_price("AAA", date(2026, 8, 31)) is None
+
+
+def test_market_date_accepts_a_naive_datetime():
+    # 러너는 UTC 로 돈다. tz 를 안 붙여 부르면 예전엔 TypeError 로 죽었다.
+    assert vb.market_date(datetime(2026, 7, 31, 1, 30)) == date(2026, 7, 30)
+
+
+def test_a_failed_plan_exit_does_not_stamp_the_previous_trade(broker, monkeypatch):
+    """청산이 아무것도 못 팔았으면 trades[-1] 은 무관한 남의 거래다."""
+    state = broker.load_state()
+    state["trades"].append({"date": "2026-09-01", "symbol": "OLD", "side": "buy", "qty": 5})
+    # 보유 목록엔 있지만 _fill_sell 이 볼 포지션이 없는 상태를 만든다.
+    state["positions"]["GHOST"] = {"qty": 3, "avg_price_usd": 100.0,
+                                   "entry_date": "2026-09-01",
+                                   "plan": {"stop": 95.0, "target": 115.0,
+                                            "entry_fill": 100.0}}
+    monkeypatch.setattr(broker, "daily_bars",
+                        lambda sym, since, until=None: bars((94, 96, 90, 95)))
+    monkeypatch.setattr(broker, "_fill_sell", lambda st, *a, **k: st)
+
+    state = broker._settle_plan_exits(state, 1000.0)
+    assert "outcome" not in state["trades"][-1]

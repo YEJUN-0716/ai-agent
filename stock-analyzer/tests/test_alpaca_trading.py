@@ -192,3 +192,46 @@ def test_expired_order_releases_its_slot_and_cash():
     # GTC 주문이 오늘만 끝난 것 — 내일 다시 체결될 수 있으니 자리는 잡아 둔다.
     assert order_accepted("done_for_day") is True
     assert order_accepted("new") is True
+
+
+# ── 재시도가 주문을 두 배로 내던 자리 (2026-08-19 리뷰) ────────────────
+def test_a_retried_order_cannot_fill_twice(monkeypatch, api):
+    """429·5xx·네트워크 오류에 같은 POST 를 다시 보내는데 주문에는 멱등 키가
+    없었다. 응답만 유실되고 서버는 주문을 받았으면 재시도가 **진짜 주문을 하나
+    더** 만든다 — 돈이 두 배로 나간다.
+
+    client_order_id 를 호출당 하나 붙이면 Alpaca 가 두 번째를 거절한다. 그리고
+    거절받은 뒤엔 그 id 로 조회해 먼저 들어간 주문을 돌려줘야, 실제로 체결된
+    주문을 러너가 실패로 기록하지 않는다.
+    """
+    monkeypatch.setattr(al.time, "sleep", lambda s: None)
+    posts = []
+
+    def fake_request(method, url, **kwargs):
+        if method == "POST":
+            posts.append(kwargs["json"]["client_order_id"])
+            # 1회차는 서버가 받았지만 응답이 유실된 셈, 2회차는 중복 거절.
+            if len(posts) == 1:
+                return FakeResponse({"message": "server error"}, status_code=503)
+            return FakeResponse({"message": "client_order_id must be unique"},
+                                status_code=422)
+        return FakeResponse({})
+
+    monkeypatch.setattr(al.requests, "request", fake_request)
+    # 중복 거절 뒤 조회 — 먼저 들어간 주문이 살아 있다.
+    monkeypatch.setattr(al.requests, "get",
+                        lambda url, **k: FakeResponse({"id": "srv-1", "status": "accepted"}))
+
+    out = al.place_notional_buy("AAPL", 1000.0)
+
+    assert len(posts) == 2 and posts[0] == posts[1]   # 재시도가 같은 키를 쓴다
+    assert out == {"id": "srv-1", "status": "accepted",
+                   "_raw": {"id": "srv-1", "status": "accepted"}}
+
+
+def test_a_genuine_rejection_still_raises_with_its_reason(monkeypatch, api):
+    # 조회에 그 주문이 없으면 진짜 거절이다. 삼키면 안 산 걸 샀다고 적는다.
+    api["reply"] = FakeResponse({"message": "insufficient buying power"}, status_code=403)
+    monkeypatch.setattr(al.requests, "get", lambda url, **k: FakeResponse({}, status_code=404))
+    with pytest.raises(requests.HTTPError, match="insufficient buying power"):
+        al.place_notional_buy("AAPL", 1000.0)
