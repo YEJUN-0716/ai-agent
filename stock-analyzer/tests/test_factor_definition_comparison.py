@@ -299,3 +299,31 @@ def test_comparison_writes_no_weights(offline_panel, monkeypatch):
     monkeypatch.setattr("builtins.open", _boom)
     res = fv.run_factor_definition_comparison(list(prices), lookback_years=1)
     assert res
+
+
+# ── 6. OOS 검증이 검증 구간을 통째로 쓴다 ────────────────────────────
+
+def test_oos_uses_the_whole_test_window(offline_panel):
+    """검증 구간 앞에는 학습 구간 가격이 깔려 있으니 워밍업을 또 빼면 안 된다.
+
+    점수 계산은 잘라 넘긴 date_range 가 아니라 prices_dict 전체를 as_of 로
+    자른다. 그런데 검증 구간에도 `65 + forward_days` 를 시작 인덱스로 적용해
+    앞 86 거래일(≈4개월)을 버리고 있었다 — 표본이 27% 줄고, 반환하는
+    test_period 시작일이 실제 첫 측정일과 어긋난다.
+    """
+    prices, idx = offline_panel
+    lookback_years, rebal, forward = 5, 21, 21
+
+    res = fv.run_out_of_sample_validation(
+        list(prices), lookback_years=lookback_years, test_fraction=0.25,
+        rebal_days=rebal, forward_days=forward)
+    assert res, "OOS 결과가 비어 있다"
+
+    # 함수가 쓰는 것과 같은 분할 규칙으로 검증 구간 길이를 다시 센다.
+    test_days = int((lookback_years * 365 + 90) * 0.25)
+    train_end = pd.Timestamp.today().normalize() - pd.Timedelta(days=test_days)
+    n_test_dates = int((idx > train_end).sum())
+    expected = len(range(0, n_test_dates - forward, rebal))
+
+    got = res["test_factor_ic"]["mom_3m"]["n"]
+    assert got == expected, f"검증 시점 {got}개 — 창 전체면 {expected}개여야 한다"

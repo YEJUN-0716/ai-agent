@@ -126,7 +126,9 @@ def test_blend_functions_work_on_series():
 # 배합을 실제로 계산하는 모듈들 — 반드시 공유 모듈을 import 해야 한다.
 # app.py 는 여기 없다. 점수 계산이 factor_scoring.py 로 넘어가면서 app.py 는
 # 배합을 더 이상 직접 다루지 않기 때문이다 (조회 루프만 남았다).
-IMPORT_GUARD_TARGETS = ["modules/factor_scoring.py", "modules/factor_engine.py"]
+# factor_engine.py 도 2026-08-19 에 빠졌다 — 배합을 쓰던 calc_factor_scores 가
+# 죽은 채로 남아 있다가 삭제돼서, 이제 그 파일은 레짐 감지와 PIT 재무만 한다.
+IMPORT_GUARD_TARGETS = ["modules/factor_scoring.py"]
 
 # 인라인 사본 금지는 app.py 까지 포함해 더 넓게 건다 — 계산이 app.py 로
 # 되돌아오는 것 자체를 막는 것이 이 가드의 목적이다.
@@ -219,8 +221,6 @@ def test_annualized_vol_pct_window_changes_the_answer():
 # 이중화가 끝난 것이다.
 LEGACY_MOMENTUM_CALLSITES = [
     ("factor_scoring.price_factors",        252, 21),   # 12-1 모멘텀 (프로덕션 스캔)
-    ("factor_engine._momentum(3M)",          64,  0),
-    ("factor_engine._momentum(1M)",          22,  0),
     ("factor_validator._calc_momentum_vol",  63,  0),   # 한 봉 짧다 (per_factor 와 불일치)
     ("factor_validator._calc_per_factor",    64,  0),
 ]
@@ -237,7 +237,6 @@ def test_shared_momentum_reproduces_each_callsite(label, lookback, skip):
 
 LEGACY_VOL_CALLSITES = [
     ("factor_scoring.price_factors", 252),   # 프로덕션 스캔
-    ("factor_engine.calc_factor_scores", 20),
     ("factor_validator", 21),                # IC 를 측정하는 구간
 ]
 
@@ -253,30 +252,8 @@ def test_shared_vol_reproduces_each_callsite(label, window):
 #
 # 공유 함수가 옳아도 호출부가 인자를 잘못 넘기면 팩터가 조용히 바뀐다.
 # factor_scoring 쪽은 test_factor_scores.py / test_sectoral_scores.py 가 이미
-# 덮고 있지만, factor_engine 과 factor_validator 에는 동작 테스트가 하나도
-# 없었다 — IC 를 만드는 코드인데도 그랬다. 여기서 구간만 못 박는다.
-
-def test_factor_engine_momentum_windows_are_pinned():
-    """factor_engine 은 days+1 봉 전과 비교한다 (1M=22, 3M=64, 6M=127)."""
-    from modules import factor_engine
-
-    close = _wiggly_series(300)
-    got = factor_engine._momentum(close)
-    assert got["1M"] == pytest.approx(ff.momentum_pct(close, 22))
-    assert got["3M"] == pytest.approx(ff.momentum_pct(close, 64))
-    assert got["6M"] == pytest.approx(ff.momentum_pct(close, 127))
-
-
-def test_factor_engine_momentum_is_zero_when_history_too_short():
-    """구간이 안 되면 0 — 예전 if/else 가 하던 것과 같아야 한다."""
-    from modules import factor_engine
-
-    close = _wiggly_series(30)
-    got = factor_engine._momentum(close)
-    assert got["3M"] == 0.0
-    assert got["6M"] == 0.0
-    assert got["1M"] == pytest.approx(ff.momentum_pct(close, 22))
-
+# 덮고 있지만, factor_validator 에는 동작 테스트가 하나도 없었다 — IC 를
+# 만드는 코드인데도 그랬다. 여기서 구간만 못 박는다.
 
 def _price_panel(n_tickers=6, n_bars=300):
     idx = pd.date_range("2024-01-01", periods=n_bars, freq="D")

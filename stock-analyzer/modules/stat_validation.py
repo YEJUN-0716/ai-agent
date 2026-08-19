@@ -17,7 +17,11 @@ def deflated_sharpe_ratio(observed_sharpe: float, n_trials: int, n_obs: int,
                            skew: float = 0.0, kurtosis: float = 3.0,
                            benchmark_sharpe: float = 0.0) -> dict:
     """
-    observed_sharpe : 관측된 연율화 Sharpe
+    observed_sharpe : 관측된 **per-period(일별) Sharpe — 연율화하지 말 것**.
+                      n_obs 와 같은 주기여야 한다. 연율화 값(√252 배)을 넘기면
+                      기준선(expected_max_sharpe)만 일별 척도로 남아 z 가 20 가까이
+                      나오고, 무엇을 넣든 dsr≈1.0 "유의미" 가 찍힌다 — 과최적화를
+                      잡으라고 만든 장치가 아무것도 못 잡게 된다.
     n_trials        : 파라미터 튜닝 시도 횟수 (buy_th×sell_th 조합 수 등)
     n_obs           : 백테스트 일별 관측치 수
     """
