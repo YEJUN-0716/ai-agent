@@ -13,56 +13,15 @@ from datetime import date, datetime
 
 import app as core
 from modules import (analyst_log, analyst_scorecard, analyst_team,
-                     krx_universe, price_panel, scalp_log)
+                     price_panel, scalp_log)
 from modules.trade_plan import MEASURED_EDGE_NOTE
 
 
-KRX_SUFFIXES = ('.KS', '.KQ')
-
-
 def _resolve_universe(raw):
-    """UNIVERSE 환경변수 → 티커 목록.
-
-    해석 순서: 고정 프리셋 → 동적 KRX 유니버스("KOSPI 100") → 쉼표구분 티커.
-    KRX 쪽을 프리셋 dict 에 넣지 않는 이유는 목록이 매일 달라지기 때문이다.
-    """
+    """UNIVERSE 환경변수 → 티커 목록. 고정 프리셋 → 쉼표구분 티커."""
     if raw in core.UNIVERSE_PRESETS:
         return core.UNIVERSE_PRESETS[raw]
-    try:
-        dynamic = krx_universe.resolve(raw)
-    except Exception as exc:
-        # 상장목록 조회 실패를 쉼표구분 티커로 잘못 해석하면, "KOSPI 100" 이
-        # 티커 하나짜리 유니버스가 돼 조용히 빈 스캔이 된다.
-        print(f"KRX 상장목록 조회 실패 ({raw}): {exc}", file=sys.stderr)
-        dynamic = None
-    if dynamic:
-        return dynamic
     return [t.strip().upper() for t in raw.split(',') if t.strip()]
-
-
-def krx_tickers(tickers):
-    return [t for t in tickers if t.endswith(KRX_SUFFIXES)]
-
-
-def krx_data_warning(tickers, dart_key=None):
-    """KRX 종목이 있는데 DART 키가 없으면 경고 문구, 아니면 None.
-
-    yfinance 는 KRX 종목의 ROE·이익률을 대체로 비워서 보낸다. DART 폴백이
-    없으면 퀄리티 원점수가 전 종목 동일값(ROE 0 · 이익률 0 · 발생액 중립)으로
-    주저앉고, Z-score 정규화가 그걸 전부 50점으로 만든다 — 4팩터 중 하나가
-    통째로 사라진다.
-
-    그런데 가격은 정상적으로 받아지므로 **실패 종목 수는 0** 이다. 알림만
-    보면 스캔이 멀쩡해 보인다. 그래서 조용히 넘기지 않고 알림에 싣는다.
-    """
-    krx = krx_tickers(tickers)
-    if not krx:
-        return None
-    key = os.environ.get('DART_API_KEY', '') if dart_key is None else dart_key
-    if key:
-        return None
-    return (f"⚠️ DART_API_KEY 미설정 — KRX {len(krx)}종목의 ROE·이익률을 "
-            f"가져올 수 없어 퀄리티 팩터가 무의미해집니다. 랭킹을 신뢰하지 마세요.")
 
 
 def _env_bool(name, default):
@@ -72,10 +31,8 @@ def _env_bool(name, default):
     return val.strip().lower() not in ('0', 'false', 'no')
 
 
-def _plan_fmt_price(ticker, value):
-    """플랜 라인용 가격 포맷 — KRX 는 ₩ 정수, 그 외 $ 소수 2자리."""
-    if ticker.endswith(('.KS', '.KQ')):
-        return f"₩{value:,.0f}"
+def _plan_fmt_price(value):
+    """플랜 라인용 가격 포맷 — $ 소수 2자리."""
     return f"${value:.2f}"
 
 
@@ -86,9 +43,9 @@ def _plan_line(ticker, plan):
     e = plan['entry']
     rr = plan['rr'][0]
     rr_s = f" (R:R {rr:.1f})" if rr else ""
-    return (f"진입 {_plan_fmt_price(ticker, e['low'])}~{_plan_fmt_price(ticker, e['high'])}"
-            f" · 손절 {_plan_fmt_price(ticker, plan['stop'])}"
-            f" · 목표 {_plan_fmt_price(ticker, plan['targets'][0])}{rr_s}")
+    return (f"진입 {_plan_fmt_price(e['low'])}~{_plan_fmt_price(e['high'])}"
+            f" · 손절 {_plan_fmt_price(plan['stop'])}"
+            f" · 목표 {_plan_fmt_price(plan['targets'][0])}{rr_s}")
 
 
 def build_message(tickers, actions, rebal, failed, warning=None, plans=None):
@@ -166,10 +123,6 @@ def main():
     tickers = _resolve_universe(universe_raw)
     print(f"유니버스: {universe_raw} ({len(tickers)}종목)")
 
-    data_warning = krx_data_warning(tickers)
-    if data_warning:
-        print(data_warning, file=sys.stderr)
-
     factor_weights = None
     if factor_timing:
         factor_weights, env = core.get_factor_timing_weights()
@@ -208,7 +161,7 @@ def main():
     except Exception as e:
         print(f"[경고] 트레이드 플랜 생성 실패 — 라인 생략: {e}", file=sys.stderr)
 
-    msg = build_message(tickers, actions, rebal, failed, warning=data_warning, plans=plans)
+    msg = build_message(tickers, actions, rebal, failed, plans=plans)
     ok, err = core.send_telegram(token, chat_id, msg)
     print(f"텔레그램 발송: {'성공' if ok else f'실패 ({err})'}")
     print(msg)
@@ -250,7 +203,7 @@ def market_regime_slug(tickers):
     판단을 못 남기는 쪽이 훨씬 비싸다.
     """
     try:
-        regime, _ = core.get_market_regime(core._scope.regime_benchmark(tickers))
+        regime, _ = core.get_market_regime()
         return regime
     except Exception as e:
         print(f"[경고] 국면 판정 실패 — neutral 로 기록: {e}")

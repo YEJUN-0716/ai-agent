@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-A Korean quant trading system for US/KRX equities. It has two faces that share one codebase:
+A Korean quant trading system for US equities. It has two faces that share one codebase:
 
 1. **Interactive Streamlit app** (`app.py`) — manual analysis, backtesting, and a quant dashboard.
 2. **Headless scripts** run on a schedule by GitHub Actions — factor scans, Telegram signal alerts, paper trading, weekly IC weight updates, and daily P&L reports.
@@ -40,7 +40,7 @@ zone's top edge. Both executable entries are negative OOS. The order plumbing is
 tested — the **entry rule** is what has to be fixed and re-measured before the gate
 (`RUN_KNOWN_NEGATIVE`) comes out.
 
-**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~280 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_krx_listing`, `test_krx_universe`, `test_market_scope`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_tax_kr`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
+**Two layers of testing exist.** (1) A **pytest suite** (`tests/`, ~280 tests across `test_bulls_signals`, `test_edgar_fundamentals`, `test_factor_formulas`, `test_factor_scores`, `test_factor_timing`, `test_ic_weights`, `test_price_panel`, `test_sectoral_scores`, `test_system_signals`, `test_universe`, `test_smoke`) runs fast and network-free; `ci.yml` gates every push to `main` and every PR with `ruff check .` + `pytest tests/`. (2) **Statistical validation** of the strategy lives in `modules/` (`factor_validator.py`, `stat_validation.py`, `strategy_backtest.py`, `survivorship_check.py`, `stress_test.py`) and is surfaced through the app's 퀀트 → 고급 분석 / 운영 안전성 sub-tabs. `ic_weight_updater.py` is the headless entry point that drives `factor_validator` end-to-end. Add a pytest test when you touch pure logic in `modules/`; keep them network-free so CI stays green.
 
 ## Architecture
 
@@ -79,7 +79,7 @@ So there is now **one** scoring engine — `app.py` + `modules/factor_scoring.py
 
 ### `modules/` — optional quant library loaded defensively
 
-`app.py` imports every module inside `try/except`, setting `_*_AVAILABLE` flags (e.g. `_ML_AVAILABLE`, `_DART_AVAILABLE`, `_TAX_KR_AVAILABLE`). The app degrades gracefully when a module or its dependency is missing, so features are guarded by these flags. Key modules: `factor_engine`, `factor_validator`, `ict_analysis`, `ml_signals`, `risk_management`, `ops_safety` (kill switch / reconciliation), `tax_kr`, `toss_trading` (current broker). Point-in-time fundamentals discipline lives in `factor_engine.point_in_time_fundamentals` (EDGAR `filed`-indexed panel), not a separate DB.
+`app.py` imports every module inside `try/except`, setting `_*_AVAILABLE` flags (e.g. `_ML_AVAILABLE`, `_TAX_KR_AVAILABLE`). The app degrades gracefully when a module or its dependency is missing, so features are guarded by these flags. Key modules: `factor_engine`, `factor_validator`, `ict_analysis`, `ml_signals`, `risk_management`, `ops_safety` (kill switch / reconciliation), `tax_kr`, `toss_trading` (current broker). Point-in-time fundamentals discipline lives in `factor_engine.point_in_time_fundamentals` (EDGAR `filed`-indexed panel), not a separate DB.
 
 ### The weekly IC feedback loop
 
@@ -97,17 +97,9 @@ So there is now **one** scoring engine — `app.py` + `modules/factor_scoring.py
 
 ### Config is entirely env-var driven; state is committed JSON
 
-There is no config file — everything comes from environment variables, supplied as GitHub Actions **secrets**: `TOSS_CLIENT_ID/SECRET/ACCOUNT_SEQ`, `TELEGRAM_TOKEN/CHAT_ID`, `DART_API_KEY`, `ALPACA_API_KEY/SECRET_KEY` (legacy), plus an Anthropic key (news sentiment) and Google service-account creds (gspread trade journal). Behavior knobs (`UNIVERSE`, `TOP_N`, `DRY_RUN`, `BUY_SCORE_MIN`, regime position caps, `TRAIL_STOP_PCT`, `PORTFOLIO_DD_STOP_PCT`, …) are also env vars — see the `workflow_dispatch` inputs in `.github/workflows/` for the authoritative list and defaults.
+There is no config file — everything comes from environment variables, supplied as GitHub Actions **secrets**: `TOSS_CLIENT_ID/SECRET/ACCOUNT_SEQ`, `TELEGRAM_TOKEN/CHAT_ID`, `ALPACA_API_KEY/SECRET_KEY` (legacy), plus an Anthropic key (news sentiment) and Google service-account creds (gspread trade journal). Behavior knobs (`UNIVERSE`, `TOP_N`, `DRY_RUN`, `BUY_SCORE_MIN`, regime position caps, `TRAIL_STOP_PCT`, `PORTFOLIO_DD_STOP_PCT`, …) are also env vars — see the `workflow_dispatch` inputs in `.github/workflows/` for the authoritative list and defaults.
 
-Runtime **state lives in version-controlled files** that the workflows `git commit` back after each run: `signal_log.json` (buy signals; 21-day forward returns tracked automatically), `equity_log.json`, `peak_prices.json` (trailing-stop reference), and `ic_weights.json`. Treat edits to these as data changes. DART caches (`dart_fund_cache.json`, `dart_corp_map.json`) and `.env` are gitignored.
-
-### KRX (Korean) universe
-
-The `한국 대형 15` preset, the DART fundamentals fallback, ₩ formatting, and `tax_kr.py` were all already in place — what was missing was one wire: `signal-alerts.yml` did not pass `DART_API_KEY`, so any KRX scan run from Actions lost the DART fallback entirely. **That failure is silent**: prices still download, so the failure count stays 0, but ROE and profit margin come back empty for most KRX names, `quality_raw` collapses to the same value for every ticker, and z-score normalization turns that into a flat 50 — one of the four factors quietly disappears. The key is now wired, and `signal_worker.krx_data_warning()` puts a warning at the top of the Telegram message whenever the universe contains KRX tickers and no key is set. `tests/test_krx_universe.py` guards both the code path and the workflow file itself.
-
-**Market awareness lives in `modules/market_scope.py`** — one place answers "which market is this universe?". `regime_benchmark()` picks `SPY` or `^KS11` (KOSPI), and `sector_etf_for_ticker()` picks SPDR or Korean sector ETFs. Both scanners pass the universe's benchmark into `_load_ic_factor_weights_4f()`, so a Korean scan no longer has its factor weights decided by whether the *US* market is above its MA200. Mixed universes fall to majority vote; ties stay US. Every ETF and index ticker in that module was verified against live data — a wrong ticker returns an empty frame from yfinance and degrades silently, so don't add one you haven't checked. Sectors with no confident KRX mapping (Real Estate, Utilities) are deliberately left empty rather than approximated.
-
-**Dynamic KRX universes** come from `modules/krx_universe.py`: set `UNIVERSE` to `KOSPI 100` or `KOSDAQ 50` and it pulls the live listing via FinanceDataReader (already a dependency), sorts by market cap, and caches to `krx_listing_cache.json` for a day. Preferred shares are filtered out — KRX codes ending in `0` are common stock, and without the filter `005935` (삼성전자우) lands in the KOSPI top 20 and gives one company two slots with distorted PER/PBR. Fixed presets still win over dynamic names, and dynamic names still fall through to comma-separated tickers; a listing-fetch failure is logged to stderr rather than silently becoming a one-ticker universe.
+Runtime **state lives in version-controlled files** that the workflows `git commit` back after each run: `signal_log.json` (buy signals; 21-day forward returns tracked automatically), `equity_log.json`, `peak_prices.json` (trailing-stop reference), and `ic_weights.json`. Treat edits to these as data changes. `.env` is gitignored.
 
 ### GitHub Actions workflows (`.github/workflows/`)
 

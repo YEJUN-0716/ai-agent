@@ -57,7 +57,7 @@ def test_order_score_travels_from_order_to_the_scorecard(signal_log, tmp_path,
     monkeypatch.setattr(vb, "next_open_price",
                         lambda symbol, after: (100.0, "2026-07-31"))
 
-    vb.place_notional_buy("AAA", 1000.0, market="US", meta={"score": 82, "rsi": 61})
+    vb.place_notional_buy("AAA", 1000.0, meta={"score": 82, "rsi": 61})
     state = vb.settle_pending(vb.load_state(), 1000.0)
 
     runner.record_virtual_fills(state["trades"])

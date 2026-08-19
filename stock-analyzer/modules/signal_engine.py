@@ -47,8 +47,6 @@ MA_LONG = 60
 # ── 리밸런싱 주기 ──────────────────────────────────────────────────
 REBALANCE_CYCLE_DAYS = 20
 
-KRX_SUFFIXES = ('.KS', '.KQ')
-
 
 def _split_candidates(tickers, factor_df, top_n):
     """팩터 랭킹 → (매수 후보, 매도 후보).
@@ -137,14 +135,13 @@ def generate_system_signals(tickers, *, fetch_prices, calc_rsi, calc_momentum, c
             is_top_factor = f_score_v >= TOP_FACTOR_SCORE
             is_strong_factor = f_score_v >= STRONG_FACTOR_SCORE
 
-            is_krx = tk.endswith(KRX_SUFFIXES)
-            fp = f"₩{cp:,.0f}" if is_krx else f"${cp:.2f}"
+            fp = f"${cp:.2f}"
 
             def _make_action(action, tw, reason, priority):
                 alloc = capital * tw
                 qty = alloc / cp if cp > 0 else 0
-                qty_str = f"{qty:,.0f}주" if is_krx else f"{qty:,.2f}주"
-                alloc_str = f"₩{alloc:,.0f}" if is_krx else f"${alloc:,.0f}"
+                qty_str = f"{qty:,.2f}주"
+                alloc_str = f"${alloc:,.0f}"
                 return {'ticker': tk, 'action': action, 'weight': f"{tw*100:.1f}%",
                         'price': fp, 'alloc': alloc_str, 'qty': qty_str,
                         'reason': reason, 'priority': priority, 'mom': f"{mom_3m:+.1f}%"}

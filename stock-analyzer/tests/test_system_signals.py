@@ -298,19 +298,6 @@ def test_us_ticker_uses_dollar_and_fractional_shares(patch_prices):
     assert "." in actions[0]["qty"]      # 소수점 주식 허용
 
 
-def test_krx_ticker_uses_won_and_whole_shares(patch_prices):
-    """KRX(.KS/.KQ)는 원화 표기 + 정수 주 — 소수점 주문이 불가능하다."""
-    patch_prices({"005930.KS": _frame(UPTREND)})
-
-    actions, _ = app.generate_system_signals(
-        ["005930.KS"], factor_df=_factor_df([("005930.KS", 90.0)]),
-        top_n=1, capital=10_000)
-
-    assert actions[0]["price"].startswith("₩")
-    assert actions[0]["alloc"].startswith("₩")
-    assert "." not in actions[0]["qty"]
-
-
 # ── 견고성 ──────────────────────────────────────────────────────────
 
 def test_unavailable_ticker_is_skipped_without_failing_the_batch(patch_prices):

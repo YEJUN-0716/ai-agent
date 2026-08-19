@@ -157,80 +157,7 @@ UNIVERSE_PRESETS = {
         "COF","ALLY","SYF","T","VZ","F","GM","INTC","CSCO",
         "HPQ","HPE","CVS","MO","KHC","DAL","LUV","AAL","OKE","WMB",
     ],
-
-    # ── 국내(KRX) ─────────────────────────────────────────────────────────
-    # '.KS'(코스피)/'.KQ'(코스닥) 접미사 형식 그대로 사용
-    "코스피 대형 30": [
-        "005930.KS","000660.KS","373220.KS","207940.KS","005380.KS",
-        "005490.KS","035420.KS","000270.KS","068270.KS","105560.KS",
-        "055550.KS","012330.KS","028260.KS","006400.KS","051910.KS",
-        "096770.KS","032830.KS","003670.KS","015760.KS","009150.KS",
-        "018260.KS","010130.KS","034730.KS","033780.KS","024110.KS",
-        "010950.KS","011200.KS","047050.KS","086790.KS","035720.KS",
-    ],
-    "코스피 대형 50": [
-        # 기존 30
-        "005930.KS","000660.KS","373220.KS","207940.KS","005380.KS",
-        "005490.KS","035420.KS","000270.KS","068270.KS","105560.KS",
-        "055550.KS","012330.KS","028260.KS","006400.KS","051910.KS",
-        "096770.KS","032830.KS","003670.KS","015760.KS","009150.KS",
-        "018260.KS","010130.KS","034730.KS","033780.KS","024110.KS",
-        "010950.KS","011200.KS","047050.KS","086790.KS","035720.KS",
-        # 추가 20
-        "066570.KS","030200.KS","017670.KS","003490.KS","078930.KS",
-        "011170.KS","329180.KS","004020.KS","139480.KS","021240.KS",
-        "002790.KS","000720.KS","001040.KS","097950.KS","316140.KS",
-        "010140.KS","051900.KS","004170.KS","011780.KS","161390.KS",
-    ],
-    "코스닥 기술주 15": [
-        "247540.KQ","091990.KQ","328130.KQ","196170.KQ","240810.KQ",
-        "086520.KQ","293490.KQ","039030.KQ","145020.KQ","263750.KQ",
-        "066970.KQ","214150.KQ","141080.KQ","058470.KQ","036830.KQ",
-    ],
-    "코스닥 기술주 25": [
-        # 기존 15
-        "247540.KQ","091990.KQ","328130.KQ","196170.KQ","240810.KQ",
-        "086520.KQ","293490.KQ","039030.KQ","145020.KQ","263750.KQ",
-        "066970.KQ","214150.KQ","141080.KQ","058470.KQ","036830.KQ",
-        # 추가 10
-        "035900.KQ","041510.KQ","122870.KQ","257720.KQ","081660.KQ",
-        "078340.KQ","032500.KQ","094360.KQ","054620.KQ","025900.KQ",
-    ],
-    # 섹터별 프리셋
-    "국내 2차전지 10": [
-        "373220.KS","006400.KS","003670.KS","096770.KS","051910.KS",
-        "086520.KQ","247540.KQ","066970.KQ","011780.KS","281820.KQ",
-    ],
-    "국내 바이오 12": [
-        "207940.KS","068270.KS","128940.KS","000100.KS","302440.KS",
-        "196170.KQ","091990.KQ","141080.KQ","145020.KQ","214150.KQ",
-        "328130.KQ","085660.KQ",
-    ],
-    "국내 반도체 10": [
-        "005930.KS","000660.KS","009150.KS","018260.KS","042700.KS",
-        "240810.KQ","039030.KQ","058470.KQ","094360.KQ","054620.KQ",
-    ],
-    "국내 금융 10": [
-        "105560.KS","055550.KS","086790.KS","024110.KS","032830.KS",
-        "000810.KS","316140.KS","006800.KS","005940.KS","016360.KS",
-    ],
 }
-
-# 종목코드 → 시장 구분 (토스 API 주문 시 market='KRX'|'US' 넘길 때 사용)
-def ticker_market(ticker: str) -> str:
-    """'.KS'/'.KQ'로 끝나면 국내(KRX), 그 외는 해외(US)로 판단."""
-    return "KRX" if ticker.endswith((".KS", ".KQ")) else "US"
-
-
-def toss_symbol(ticker: str) -> str:
-    """'.KS'/'.KQ' 접미사를 뗀 토스 실제 주문용 종목코드 반환 (국내 주문 시 필요)."""
-    return ticker.split(".")[0] if ticker_market(ticker) == "KRX" else ticker
-
-
-def market_of_symbol(sym: str) -> str:
-    """이미 .KS/.KQ가 떨어진 broker용 심볼(held 딕셔너리의 키 등)만 있을 때
-    시장을 추정. 국내 종목코드는 숫자 6자리라 이 방식으로 충분히 구분됨."""
-    return "KRX" if sym.isdigit() else "US"
 
 
 # 브로커가 주문을 확실히 거부했음을 뜻하는 상태들.
@@ -258,8 +185,8 @@ def order_accepted(fill_status: str | None) -> bool:
     return fill_status not in _DEFINITIVE_FAIL
 
 
-def place_sell(symbol: str, qty, market: str = "KRX") -> dict:
-    return _pm_market_sell(symbol, qty, market=market, dry_run=DRY_RUN)
+def place_sell(symbol: str, qty) -> dict:
+    return _pm_market_sell(symbol, qty, dry_run=DRY_RUN)
 
 
 # ── 고점·시그널 로그 ────────────────────────────────────────────────────
@@ -635,7 +562,7 @@ def check_trailing_stops(positions: list, trail_pct: float = TRAIL_STOP_PCT,
                 results.append({"symbol": sym, "dry_run": True, "gain_pct": gain_pct})
             else:
                 try:
-                    place_sell(sym, qty, market=market_of_symbol(sym))
+                    place_sell(sym, qty)
                     results.append({"symbol": sym, "ok": True, "gain_pct": gain_pct})
                     peaks.pop(sym, None)
                 except Exception as e:
@@ -650,10 +577,7 @@ def check_trailing_stops(positions: list, trail_pct: float = TRAIL_STOP_PCT,
 
 
 def _to_broker_sym(ticker: str):
-    """실제 주문에 넘길 종목코드로 변환.
-    국내(.KS/.KQ)는 접미사를 뗀 6자리 코드, 해외는 그대로(대문자) 반환."""
-    if ticker_market(ticker) == "KRX":
-        return toss_symbol(ticker)
+    """실제 주문에 넘길 종목코드로 변환 (BRK-B → BRK.B)."""
     return ticker.replace("-", ".").upper()
 
 
@@ -1068,7 +992,6 @@ def main():
                           # 사이징 분모 = 장부 R 분모. 이게 없으면 장부가
                           # 체결가로 나눠 손절을 늘 -1.00R 로 과소 기록한다.
                           "entry_ref": cand["entry_ref"]},
-                    market=market_of_symbol(sym),
                     meta=order_meta(analyst_scores, analyst_asof, cand["ticker"]),
                 )
                 if kill is not None:

@@ -62,7 +62,7 @@ def _info(sector, **overrides):
 
 @pytest.fixture
 def patch_market(monkeypatch):
-    def _install(frames, infos=None, dart=None, ic_weights=None):
+    def _install(frames, infos=None, ic_weights=None):
         infos = infos or {}
 
         class FakeTicker:
@@ -80,7 +80,6 @@ def patch_market(monkeypatch):
                             lambda tk, start=None, end=None, interval="1d":
                             frames.get(tk, pd.DataFrame()))
         monkeypatch.setattr(app.yf, "Ticker", FakeTicker)
-        monkeypatch.setattr(app, "_dart_fallback_batch", lambda tickers: dart or {})
         # 진짜 함수는 get_market_regime() 을 거쳐 SPY 를 내려받는다. 반드시 막는다.
         monkeypatch.setattr(app, "_load_ic_factor_weights_4f",
                             lambda regime=None, benchmark=None: ic_weights)
@@ -299,15 +298,6 @@ def test_fundamentals_failure_still_produces_a_row(patch_market):
     assert len(result) == 1
     assert result.iloc[0]["sector"] == "Unknown"
     assert result.iloc[0]["momentum_raw"] != 0
-
-
-def test_krx_falls_back_to_dart_when_yfinance_has_no_roe(patch_market):
-    patch_market(
-        {"005930.KS": _prices(_ramp(100, 150))},
-        infos={"005930.KS": {"sector": "Technology", "trailingPE": 20.0, "priceToBook": 4.0}},
-        dart={"005930.KS": {"net_income": 30.0, "equity": 200.0, "margin": 12.5}},
-    )
-    assert app.calc_factor_scores_sectoral(["005930.KS"]).iloc[0]["roe"] == pytest.approx(15.0)
 
 
 # ── 7. IC 가중치 — 예전에는 이 경로에 아예 안 닿았다 ────────────────

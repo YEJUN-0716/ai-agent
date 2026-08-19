@@ -60,13 +60,6 @@ def test_short_watch_section_listed():
     assert "진입 $103.00~$105.00" in msg
 
 
-def test_krx_won_formatting():
-    plan = _long_plan()
-    msg = sw.build_message(["005930.KS"], [_buy_action("005930.KS")], _REBAL, [],
-                           plans={"005930.KS": plan})
-    assert "₩95" in msg and "$" not in msg.split("📐")[1]
-
-
 def test_no_plan_line_when_invalid():
     invalid = dict(_long_plan(), valid=False)
     msg = sw.build_message(["AAA"], [_buy_action("AAA")], _REBAL, [],

@@ -92,7 +92,6 @@ jobs:
           VIRTUAL_CAPITAL_KRW:   "10000000"
           TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-          DART_API_KEY:          ${{ secrets.DART_API_KEY }}
           UNIVERSE:              ${{ github.event.inputs.universe || '미국 중소형 30;미국 금융주 15;미국 가치배당주 20;미국 AI·빅테크 15;미국 헬스케어 15' }}
           KRW_PER_USD:           ${{ github.event.inputs.krw_per_usd || '1400' }}
           # 금액이 아니라 **위험**을 고정한다. 한 종목은 자본의 15% 까지.

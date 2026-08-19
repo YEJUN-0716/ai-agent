@@ -229,7 +229,7 @@ def test_stop_out_records_the_r_the_scorecard_needs(broker, monkeypatch):
 def test_manual_market_buy_still_works(broker, monkeypatch):
     """비서(챗봇)의 수동 매수는 kind 없는 옛 주문이다. 하위호환이 깨지면
     저장소 이음매에서 조용히 죽는다 — 이미 한 번 겪은 사고다."""
-    broker.place_notional_buy("BBB", 1000.0, market="US")
+    broker.place_notional_buy("BBB", 1000.0)
     monkeypatch.setattr(broker, "next_open_price",
                         lambda sym, after: (50.0, "2026-09-02"))
 
