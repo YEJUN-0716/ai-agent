@@ -250,3 +250,13 @@ def test_accepts_a_pdf_sitting_in_the_inbox(settings):
 
     # Act / Assert
     assert inbox_pdf(settings, "논문.pdf") == settings.study_inbox / "논문.pdf"
+
+
+def test_rejects_a_directory_named_like_a_pdf(settings):
+    """압축을 풀면 `자료.pdf/` 폴더가 생긴다. 이름만 PDF 라 통과하면 안 된다."""
+    # Arrange
+    (settings.study_inbox / "압축풀린것.pdf").mkdir()
+
+    # Act / Assert
+    with pytest.raises(StudyError, match="자료넣는곳"):
+        inbox_pdf(settings, "압축풀린것.pdf")
