@@ -315,6 +315,18 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "META-2026-08-19",
+      "symbol": "META",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-19",
+      "entry_price": 541.34,
+      "score": 41.2,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }

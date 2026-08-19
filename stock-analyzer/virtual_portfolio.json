@@ -1,5 +1,5 @@
 {
-  "cash_krw": 93096401.36988771,
+  "cash_krw": 90037455.66766308,
   "positions": {
     "F": {
       "qty": 78,
@@ -16,21 +16,6 @@
       },
       "avg_price_krw": 19788.2308
     },
-    "ORCL": {
-      "qty": 6,
-      "avg_price_usd": 151.99,
-      "entry_date": "2026-08-14",
-      "plan": {
-        "stop": 142.34,
-        "target": 200.01,
-        "rr": 8.99,
-        "grade": "A",
-        "risk_pct": 3.9,
-        "entry_fill": 151.99,
-        "entry_ref": 148.1165
-      },
-      "avg_price_krw": 215290.8333
-    },
     "AAL": {
       "qty": 60,
       "avg_price_usd": 14.17,
@@ -45,21 +30,6 @@
         "entry_fill": 14.17
       },
       "avg_price_krw": 20012.3
-    },
-    "AVGO": {
-      "qty": 2,
-      "avg_price_usd": 384.31500244140625,
-      "entry_date": "2026-08-18",
-      "plan": {
-        "stop": 365.53,
-        "target": 436.99,
-        "rr": 4.82,
-        "grade": "A",
-        "risk_pct": 3.25,
-        "entry_ref": 377.8088,
-        "entry_fill": 384.315
-      },
-      "avg_price_krw": 542768.0
     },
     "CSCO": {
       "qty": 7,
@@ -90,6 +60,21 @@
         "entry_fill": 334.46
       },
       "avg_price_krw": 472358.0
+    },
+    "META": {
+      "qty": 7,
+      "avg_price_usd": 541.3400268554688,
+      "avg_price_krw": 751233.7848950922,
+      "entry_date": "2026-08-19",
+      "plan": {
+        "stop": 552.73,
+        "target": 605.81,
+        "rr": 2.41,
+        "grade": "A",
+        "risk_pct": 2.74,
+        "entry_ref": 568.29,
+        "entry_fill": 541.34
+      }
     }
   },
   "pending": [
@@ -149,35 +134,6 @@
           "verdict": 68.5
         },
         "analyst_asof": "2026-08-12"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "META",
-      "qty": 7,
-      "limit_price": 578.25,
-      "notional_krw": 5716637.522644043,
-      "placed_date": "2026-08-18",
-      "market": "US",
-      "plan": {
-        "stop": 552.73,
-        "target": 605.81,
-        "rr": 2.41,
-        "grade": "A",
-        "risk_pct": 2.74,
-        "entry_ref": 568.29
-      },
-      "meta": {
-        "score": 41.2,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 32.6,
-          "ict": 31.5,
-          "quant": 59.7,
-          "verdict": 41.2
-        },
-        "analyst_asof": "2026-08-17"
       }
     },
     {
@@ -266,9 +222,157 @@
         },
         "analyst_asof": "2026-08-17"
       }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "AVGO",
+      "qty": 9,
+      "limit_price": 386.12,
+      "notional_krw": 4822472.700527344,
+      "placed_date": "2026-08-19",
+      "plan": {
+        "stop": 365.43,
+        "target": 407.52,
+        "rr": 2.4,
+        "grade": "A",
+        "risk_pct": 3.28,
+        "entry_ref": 377.82
+      },
+      "meta": {
+        "score": 55.6,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 48.7,
+          "ict": 76.6,
+          "quant": 66.6,
+          "verdict": 55.6
+        },
+        "analyst_asof": "2026-08-18"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "WFC",
+      "qty": 54,
+      "limit_price": 86.52,
+      "notional_krw": 6483585.487148438,
+      "placed_date": "2026-08-19",
+      "plan": {
+        "stop": 82.83,
+        "target": 89.28,
+        "rr": 2.15,
+        "grade": "A",
+        "risk_pct": 2.42,
+        "entry_ref": 84.88
+      },
+      "meta": {
+        "score": 62.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 61.6,
+          "ict": 88.0,
+          "quant": 62.1,
+          "verdict": 62.9
+        },
+        "analyst_asof": "2026-08-18"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "HPE",
+      "qty": 57,
+      "limit_price": 54.92,
+      "notional_krw": 4344205.440058594,
+      "placed_date": "2026-08-19",
+      "plan": {
+        "stop": 51.8,
+        "target": 64.06,
+        "rr": 5.25,
+        "grade": "A",
+        "risk_pct": 3.65,
+        "entry_ref": 53.76
+      },
+      "meta": {
+        "score": 72.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 77.1,
+          "ict": 100.0,
+          "quant": 58.1,
+          "verdict": 72.0
+        },
+        "analyst_asof": "2026-08-18"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "MRNA",
+      "qty": 31,
+      "limit_price": 59.0,
+      "notional_krw": 2538158.1342773438,
+      "placed_date": "2026-08-19",
+      "plan": {
+        "stop": 52.77,
+        "target": 85.6,
+        "rr": 8.16,
+        "grade": "A",
+        "risk_pct": 6.36,
+        "entry_ref": 56.35
+      },
+      "meta": {}
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "DAL",
+      "qty": 61,
+      "limit_price": 70.03,
+      "notional_krw": 5928146.56246582,
+      "placed_date": "2026-08-19",
+      "plan": {
+        "stop": 66.95,
+        "target": 87.17,
+        "rr": 10.08,
+        "grade": "A",
+        "risk_pct": 2.65,
+        "entry_ref": 68.78
+      },
+      "meta": {}
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "TMO",
+      "qty": 8,
+      "limit_price": 582.31,
+      "notional_krw": 6464712.3594140615,
+      "placed_date": "2026-08-19",
+      "plan": {
+        "stop": 559.29,
+        "target": 606.75,
+        "rr": 2.62,
+        "grade": "B",
+        "risk_pct": 2.29,
+        "entry_ref": 572.4
+      },
+      "meta": {
+        "score": 66.2,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 69.6,
+          "ict": 89.2,
+          "quant": 56.3,
+          "verdict": 66.2
+        },
+        "analyst_asof": "2026-08-18"
+      }
     }
   ],
-  "realized_pnl_krw": 305859.26460981974,
+  "realized_pnl_krw": 128269.05685083522,
   "trades": [
     {
       "date": "2026-07-31",
@@ -635,6 +739,61 @@
       "target": 352.49,
       "rr": 2.37,
       "risk_pct": 3.43,
+      "plan": true
+    },
+    {
+      "date": "2026-08-19",
+      "symbol": "ORCL",
+      "side": "sell",
+      "qty": 6,
+      "price_usd": 142.34,
+      "amount_krw": 1185177.0,
+      "pnl_krw": -106568.0,
+      "return_pct": -6.35,
+      "outcome": "loss",
+      "r_realized": -1.671,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-08-19",
+      "symbol": "AVGO",
+      "side": "sell",
+      "qty": 2,
+      "price_usd": 365.53,
+      "amount_krw": 1014514.0,
+      "pnl_krw": -71022.0,
+      "return_pct": -4.89,
+      "outcome": "loss",
+      "r_realized": -1.53,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-08-19",
+      "symbol": "META",
+      "side": "buy",
+      "qty": 7,
+      "price_usd": 541.34,
+      "amount_krw": 5258636.0,
+      "limit_price": 578.25,
+      "placed_date": "2026-08-18",
+      "meta": {
+        "score": 41.2,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 32.6,
+          "ict": 31.5,
+          "quant": 59.7,
+          "verdict": 41.2
+        },
+        "analyst_asof": "2026-08-17"
+      },
+      "grade": "A",
+      "stop": 552.73,
+      "target": 605.81,
+      "rr": 2.41,
+      "risk_pct": 2.74,
       "plan": true
     }
   ],
