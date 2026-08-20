@@ -390,19 +390,41 @@ def _assemble_instant(us_gaap: dict, tags: list) -> dict:
     return fallback
 
 
+def _filed_series(d: dict) -> pd.Series:
+    """{end: (filed, val)} → filed 인덱스 Series. **같은 filed 를 합치지 않는다.**
+
+    한 공시가 대차대조표 시점을 여럿 싣는 일이 흔하다(첫 공시·비교표시). filed 를
+    dict 키로 쓰면 그중 하나만 남는데, 그 하나가 가장 늦은 시점이라는 보장이 없다
+    — 실측으로 자본총계 관측 16,984개 중 739개(4.4%)가 이렇게 사라졌고, 남은 값이
+    **더 큰 쪽**이라 AMD 2011-02-18 의 자본총계가 1.01B 대신 3.23B(2007년 값)였다.
+
+    (filed, end) 순으로 세우므로 같은 filed 안에서는 가장 늦은 시점이 마지막에
+    온다 — 소비 측 `eq.loc[:as_of].iloc[-1]` 이 그걸 집는다. assemble_income·
+    assemble_balance 가 중복 filed 를 그냥 두는 것과 같은 규칙이다.
+
+    이미 아는 시점보다 **옛 시점이 뒤늦게 처음 공시되는** 경우는 뺀다(MTCH 의
+    2020-12-31 주식수가 2022-02-24 에 처음 나온다). 남겨 두면 소비 측이 집는
+    마지막 값이 1년 전 시점으로 되돌아간다.
+    """
+    if not d:
+        return pd.Series(dtype=float)
+    rows, seen_end = [], ""
+    for filed, end, val in sorted((f, e, v) for e, (f, v) in d.items()):
+        if end <= seen_end:
+            continue
+        seen_end = end
+        rows.append((filed, val))
+    return pd.Series([v for _, v in rows],
+                     index=pd.to_datetime([f for f, _ in rows]))
+
+
 def assemble_equity(us_gaap: dict) -> pd.Series:
     """
     us-gaap → 자본총계 Series (index=filed). 대차대조표는 instant 팩트라
     duration 필터가 아니라 _instant_facts로 뽑고, 같은 시점(end)은 최초 공시만 남긴다.
     filed 인덱스라 <= as_of 필터로 look-ahead 없이 소비할 수 있다.
     """
-    d = _assemble_instant(us_gaap, EQUITY_TAGS)
-    if not d:
-        return pd.Series(dtype=float)
-    data = {}
-    for filed, val in sorted(d.values()):
-        data[pd.Timestamp(filed)] = val
-    return pd.Series(data).sort_index()
+    return _filed_series(_assemble_instant(us_gaap, EQUITY_TAGS))
 
 
 def assemble_balance(us_gaap: dict) -> pd.DataFrame:
@@ -427,15 +449,19 @@ def assemble_balance(us_gaap: dict) -> pd.DataFrame:
 
 
 def assemble_shares(us_gaap: dict) -> pd.Series:
-    """us-gaap → 희석주식수 Series (index=filed). 분기 팩트만, Q4 유도 없음."""
+    """us-gaap → 희석주식수 Series (index=filed). 분기 팩트만, Q4 유도 없음.
+
+    자본총계와 같은 이유로 _filed_series 를 쓴다 — 한 공시가 분기를 여럿 실으면
+    filed 를 키로 쓰던 옛 코드가 그중 하나만 남겼다(실측 영향은 0.02%로 작았다).
+    """
     raw = _facts_for_chain(us_gaap, SHARES_TAGS, "shares")
     if not raw:
         return pd.Series(dtype=float)
     quarters = _dedup_earliest(_quarter_facts(raw), key=lambda f: (f["start"], f["end"]))
-    data = {}
+    d = {}
     for f in sorted(quarters, key=lambda f: f["filed"]):
-        data[pd.Timestamp(f["filed"])] = float(f["val"])
-    return pd.Series(data).sort_index()
+        d.setdefault(f["end"], (f["filed"], float(f["val"])))
+    return _filed_series(d)
 
 
 _last_coverage = {"requested": 0, "resolved": 0, "failed": [], "metric_coverage": {}}

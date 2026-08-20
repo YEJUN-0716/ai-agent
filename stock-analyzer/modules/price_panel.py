@@ -150,7 +150,7 @@ def _missing_tickers(cached: pd.DataFrame, tickers: list,
     Returns
     -------
     (missing, needs_extension)
-        missing         : 캐시에 아예 없는 티커 (전 기간 다운로드 필요)
+        missing         : 캐시에 없거나 이력이 요청 구간을 못 덮는 티커
         needs_extension : 캐시 날짜 범위가 요청을 못 덮음 (전 티커 재요청 필요)
     """
     if cached.empty:
@@ -172,6 +172,21 @@ def _missing_tickers(cached: pd.DataFrame, tickers: list,
         cache_last < want_last - tol
         or cache_first > want_first + tol
     )
+
+    # 캐시에 티커가 "있다"는 그 티커의 이력이 요청 구간을 덮는다는 뜻이 아니다.
+    # 짧은 창으로 처음 받힌 티커는 그대로 두면 영원히 잘린 채 남는다 — 다음에
+    # 길게 요청해도 '있음'으로 걸러져 재다운로드가 안 되고, 조용히 짧은 이력이
+    # 돌아간다(실측: 캐시의 CSCO·INTC·PFE 가 538봉, 나머지 276종목은 1602봉).
+    # 진짜 신규상장이면 다시 받아도 짧아서 매번 재요청하게 되지만, 이미 도는
+    # 일괄 다운로드에 열 하나가 얹히는 비용이라 유니버스가 오래된 종목 위주인
+    # 지금은 사실상 공짜다.
+    if not needs_extension and "Close" in cached.columns.get_level_values(0):
+        closes = cached["Close"]
+        starts = closes.apply(lambda s: s.first_valid_index())
+        truncated = [t for t in tickers
+                     if t in have and starts.get(t) is not None
+                     and pd.Timestamp(starts[t]).normalize() > want_first + tol]
+        missing = list(dict.fromkeys(missing + truncated))
     return missing, needs_extension
 
 

@@ -6,17 +6,26 @@
 """
 import pandas as pd
 
+# OHLC 비교 허용오차(종가 대비). 수정주가는 원가격에 조정계수를 곱한 값이라
+# High == Close 인 날도 마지막 비트가 어긋난다 — 부호 없는 부등호로 재면 그게
+# 데이터 오류로 찍힌다. 실측(279종목 6년): 위반 14건 전부 폭이 종가 대비
+# 1.1e-16 수준이었고, 진짜 오류는 0건이었다. 진짜 깨진 봉은 이 문턱보다
+# 몇 자릿수 크게 어긋나므로 여유 있게 잡아도 놓치지 않는다.
+OHLC_TOL = 1e-9
+
 
 def check_ohlc_sanity(df: pd.DataFrame) -> dict:
     """OHLC 관계가 물리적으로 말이 되는지 점검."""
     issues = []
     n = len(df)
+    tol = df['Close'].abs() * OHLC_TOL
 
-    bad_high = df[(df['High'] < df['Low']) | (df['High'] < df['Open']) | (df['High'] < df['Close'])]
+    bad_high = df[(df['High'] < df['Low'] - tol) | (df['High'] < df['Open'] - tol)
+                  | (df['High'] < df['Close'] - tol)]
     if len(bad_high) > 0:
         issues.append(f"High가 다른 가격보다 낮은 날 {len(bad_high)}건 (예: {list(bad_high.index[:3])})")
 
-    bad_low = df[(df['Low'] > df['Open']) | (df['Low'] > df['Close'])]
+    bad_low = df[(df['Low'] > df['Open'] + tol) | (df['Low'] > df['Close'] + tol)]
     if len(bad_low) > 0:
         issues.append(f"Low가 다른 가격보다 높은 날 {len(bad_low)}건 (예: {list(bad_low.index[:3])})")
 

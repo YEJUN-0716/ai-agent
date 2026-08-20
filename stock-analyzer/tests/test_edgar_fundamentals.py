@@ -411,3 +411,40 @@ def test_assemble_balance_row_filed_is_latest_piece():
     assert list(bal.index) == [pd.Timestamp("2024-06-15")]
     assert bal["assets"].iloc[0] == 100 and bal["current_assets"].iloc[0] == 40
     assert bal["equity"].isna().all()
+
+
+def _instant(end, filed, val):
+    return {"end": end, "filed": filed, "val": val}
+
+
+def test_assemble_equity_keeps_every_end_from_one_filing():
+    """한 공시가 대차대조표 시점을 여럿 실어도 행이 사라지지 않는다.
+
+    filed 를 dict 키로 쓰던 옛 코드는 그중 하나(값이 큰 쪽)만 남겼다 — 실측으로
+    자본총계 관측의 4.4%가 이렇게 사라졌고, AMD 는 2011년 자본총계 자리에
+    2007년 값(3.2배)이 앉았다. 소비 측은 filed <= as_of 의 마지막을 집으므로
+    같은 filed 안에서는 가장 늦은 시점이 마지막이어야 한다.
+    """
+    ug = {"StockholdersEquity": {"units": {"USD": [
+        _instant("2007-12-29", "2011-02-18", 3230.0),   # 늦게 처음 공시된 옛 시점
+        _instant("2010-12-25", "2011-02-18", 1013.0),   # 같은 공시, 최신 시점
+    ]}}}
+    s = ef.assemble_equity(ug)
+    assert len(s) == 2
+    assert s.index.is_monotonic_increasing
+    assert s.loc[:pd.Timestamp("2011-03-01")].iloc[-1] == 1013.0
+
+
+def test_assemble_equity_drops_late_filed_older_end():
+    """이미 아는 시점보다 옛 시점이 뒤늦게 처음 공시되면 뺀다.
+
+    MTCH 의 2020-12-31 주식수가 2022-02-24 에 처음 나온다. 남겨 두면 소비 측이
+    집는 마지막 값이 1년 전 시점으로 되돌아간다.
+    """
+    ug = {"StockholdersEquity": {"units": {"USD": [
+        _instant("2021-09-30", "2021-11-05", 316.0),
+        _instant("2020-12-31", "2022-02-24", 307.0),
+    ]}}}
+    s = ef.assemble_equity(ug)
+    assert list(s) == [316.0]
+    assert s.loc[:pd.Timestamp("2022-06-30")].iloc[-1] == 316.0
