@@ -241,7 +241,18 @@ def backtest_trade_plans(
             "target_price": plan["targets"][0],
             **res,
         })
-        landing = res["exit_idx"] or res["fill_idx"] or (i + fill_window)
+        # 겹침 방지는 **실제로 포지션이 풀린 봉** 기준이어야 한다. timeout 은
+        # exit_idx 가 없지만 hold_window 봉을 다 들고 있었다 — 체결 봉을 기준
+        # 삼으면 아직 안 끝난 트레이드 위에 다음 셋업이 겹쳐 얹힌다
+        # (2026-08-20 실측: 트레이드의 2.0% 가 timeout, 그중 1.1%p 가 실제로 겹쳤다).
+        # `or` 로 고르면 인덱스 0 이 falsy 라 같은 자리에서 또 틀린다 — 명시적 None 검사.
+        if res["exit_idx"] is not None:
+            landing = res["exit_idx"]
+        elif res["fill_idx"] is not None:
+            landing = res["fill_idx"] + hold_window      # timeout — 보유 상한까지 물려 있었다
+        else:
+            landing = i + fill_window                    # nofill — 지정가를 걸어 둔 기간
+        landing = min(landing, n - 1)
         i = max(i + 1, landing + cooldown)
 
     return {

@@ -324,10 +324,21 @@ def detect_crt_setup(df: pd.DataFrame, period: int = 3) -> dict:
     최근 period 캔들을 HTF CRT Range(ERL High / ERL Low)로 설정,
     오늘(마감 후 마지막) 캔들이 ERL을 스윕 후 Range 안으로 되돌아왔는지 확인.
 
-    Phase 2 Bullish: 오늘 캔들 저가 < CRT Low AND 종가 > CRT Low
+    Phase 2 Bullish: 오늘 캔들 저가 < CRT Low AND 종가가 Range 중간~High 사이
                      → 내일 IRL(Range 내부)로 복귀 후 반대 ERL(High) 전달 예상
-    Phase 2 Bearish: 오늘 캔들 고가 > CRT High AND 종가 < CRT High
+    Phase 2 Bearish: 오늘 캔들 고가 > CRT High AND 종가가 Low~Range 중간 사이
                      → 내일 IRL로 복귀 후 반대 ERL(Low) 전달 예상
+
+    종가 조건은 "Range 안으로 되돌아왔나"가 아니라 **반대편 절반까지 회복했나**
+    다 (crt_mid 기준). 스윕 직후 겨우 ERL 위에서 끝난 캔들은 반전으로 안 친다.
+
+    ⚠️ **period 를 늘려도 "오늘 캔들"은 한 봉 그대로다.** 그래서 이 함수는
+    `calc_ict_adjustment(scale=N)` 의 시간 환산이 성립하지 않는 유일한 항이다:
+    기준 레인지만 N배로 넓어지고 스윕하는 봉은 그대로라 발동이 사실상 사라진다
+    (2026-08-20 실측 발동률 — 일봉 period=3 은 2.99%, 15분봉 period=78 은 0.01%).
+    ICT 조정점수 ±30 중 ±20 을 차지하는 최대 항이라 영향이 작지 않다. 러너는
+    scale=1 이라 지금 손해는 없지만, **일수 환산(scale>1)으로 다시 재는 날에는
+    "오늘 캔들"도 scale 봉을 묶어 하나로 만든 뒤 비교해야 한다.**
 
     반환:
       setup       "bullish" | "bearish" | None
