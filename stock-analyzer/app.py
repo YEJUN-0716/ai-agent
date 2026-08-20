@@ -3289,13 +3289,19 @@ def _analyst_scorecard_rows(days, prices, horizon):
 
     Streamlit 을 모른다 — 표시와 분리해 두어야 산술을 테스트로 잠글 수 있다.
     """
+    from modules import analyst_log as _log
     from modules import analyst_scorecard as _sc
+    from modules import scorecard_message as _msg
 
     fwd = _sc.build_forward_returns(prices, [d['date'] for d in days], horizon)
     scored = _sc.score_analysts(days, fwd, horizon)
 
     rows = []
-    for slug, stat in sorted(scored.items()):
+    # 이름을 아는 슬러그만 낸다 — 발행문과 같은 가드다. score_analysts 는
+    # 기록에서 찾아낸 슬러그를 전부 돌려주므로, 백필에 섞인 측정용 슬러그
+    # (quant_pit)가 여기서 애널리스트 한 줄로 화면에 앉는다.
+    for slug in _msg.publishable(scored):
+        stat = scored[slug]
         t_stat = stat.get('t_stat')
         decided = (stat['effective_n'] >= ANALYST_SCORECARD_MIN_EFFECTIVE_N
                    and t_stat is not None
@@ -3304,8 +3310,14 @@ def _analyst_scorecard_rows(days, prices, horizon):
             '애널리스트': _ANALYST_SLUG_NAMES.get(slug, slug),
             'IC': stat['mean_ic'],
             't': t_stat,
-            '적중률(%)': stat['hit_rate'],
+            'IC 적중률(%)': stat['hit_rate'],
             '표본(겉보기)': stat['n'],
+            # 그중 실기록이 몇 일인가. 21·63일 지평은 선행 구간이 안 지난 최근
+            # 기록을 통째로 버려서 실측 2026-08-20 기준 0 이었는데, 페이지
+            # 캡션은 로그 기준으로 "실기록 18일" 이라고 적고 있었다. 겉보기
+            # 표본 옆에 나란히 두면 그 0 이 숨을 자리가 없다.
+            '그중 실기록': _log.scored_mix(
+                _sc.scored_dates(days, fwd, slug))['live'],
             '유효표본': stat['effective_n'],
             '판정': '가능' if decided else '아직 불가',
         })
@@ -3324,6 +3336,7 @@ def _analyst_verdict_hit(days, prices, horizon):
     return _sc.verdict_hit_rate(days, fwd, slug=_analyst_team.VERDICT_SLUG)
 
 
+
 def _scalp_scorecard_rows(days, returns, horizon_bars):
     """15분봉 기록 + 저장된 선행수익률 → (IC 행, 화면판정 적중률, 차트+ICT 적중률).
 
@@ -3339,6 +3352,7 @@ def _scalp_scorecard_rows(days, returns, horizon_bars):
     Streamlit 을 모른다 — 산술을 테스트로 잠글 수 있어야 한다.
     """
     from modules import analyst_scorecard as _sc
+    from modules import scorecard_message as _msg
 
     combined = _sc.combined_days(days)
     # 겹침 보정 lag 은 봉이 아니라 '겹치는 기록 수' 다 — 26봉을 그대로 넘기면
@@ -3349,7 +3363,8 @@ def _scalp_scorecard_rows(days, returns, horizon_bars):
     scored.update(_sc.score_analysts(combined, returns, sessions))
 
     rows = []
-    for slug, stat in sorted(scored.items()):
+    for slug in _msg.publishable(scored):          # 일봉 성적표와 같은 가드
+        stat = scored[slug]
         t_stat = stat.get('t_stat')
         decided = (stat['effective_n'] >= ANALYST_SCORECARD_MIN_EFFECTIVE_N
                    and t_stat is not None
@@ -3479,10 +3494,13 @@ def render_analyst_scorecard():
                f"({days[0]['date']} ~ {days[-1]['date']})")
     if mix['backfill']:
         st.caption(
-            f"⚙️ 표본 구성: 실기록 {mix['live']}일 + **과거 재구성 "
-            f"{mix['backfill']}일**. 재구성분은 차트·ICT 만 있고 그날 화면에 뜬 "
-            "값과 소수점 단위로 다를 수 있습니다. 오늘 살아남은 종목으로 과거를 "
-            "재므로 생존자 편향이 남아 있어, IC 가 실제보다 좋게 나옵니다.")
+            f"⚙️ **기록 보관함** 기준: 실기록 {mix['live']}일 + 과거 재구성 "
+            f"{mix['backfill']}일. 아래 표의 '그중 실기록' 은 이것과 다릅니다 — "
+            "선행 구간이 아직 안 지난 최근 기록은 채점에 안 들어가서, 긴 지평은 "
+            "실기록이 0일일 수 있습니다. "
+            "재구성분은 차트·ICT 만 있고 그날 화면에 뜬 값과 소수점 단위로 다를 "
+            "수 있습니다. 오늘 살아남은 종목으로 과거를 재므로 생존자 편향이 "
+            "남아 있어, IC 가 실제보다 좋게 나옵니다.")
 
     try:
         from modules import price_panel as _panel

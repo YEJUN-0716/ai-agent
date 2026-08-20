@@ -60,15 +60,29 @@ def test_small_sample_is_never_decidable():
     assert rows[0]["판정"] == "아직 불가"
 
 
-def test_unknown_slug_falls_back_to_raw_name():
+def test_measurement_slug_never_reaches_the_screen():
+    """사전 등록 측정용 슬러그는 화면에 안 뜬다 — 발행문과 같은 가드.
+
+    백필에 섞인 `quant_pit` 이 501일치 들어 있었고, 21일 지평에서 t=1.92 ·
+    적중률 63.4% 로 성적표 표에서 제일 좋아 보이는 줄이었다. 봉인은 발행
+    경로에만 걸려 있었다.
+    """
     tickers = list("ABCDE")
     prices = _prices(tickers)
     dates = [prices["A"].index[i].strftime("%Y-%m-%d") for i in range(8)]
 
-    rows = app._analyst_scorecard_rows(
-        _days(dates, tickers, slug="newcomer"), prices, 5)
+    assert app._analyst_scorecard_rows(
+        _days(dates, tickers, slug="quant_pit"), prices, 5) == []
+    assert app._analyst_scorecard_rows(
+        _days(dates, tickers, slug="newcomer"), prices, 5) == []
 
-    assert rows[0]["애널리스트"] == "newcomer"
+
+def test_slug_name_tables_do_not_drift():
+    """화면 이름표와 발행 이름표는 같은 슬러그를 알아야 한다 — 화면이 발행
+    쪽 목록으로 거르므로, 한쪽에만 슬러그를 넣으면 이름 대신 슬러그가 뜬다."""
+    from modules import scorecard_message as sm
+
+    assert set(app._ANALYST_SLUG_NAMES) == set(sm.SLUG_NAMES)
 
 
 def test_multiple_analysts_each_get_a_row():

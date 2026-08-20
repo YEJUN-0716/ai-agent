@@ -1,9 +1,8 @@
 """
-역사적 시나리오 & 합성 충격 스트레스 테스트
+역사적 시나리오 스트레스 테스트
 =================================================================
 백테스트는 보통 "평균적인 시장 환경"에서의 성과를 보여준다.
-이 모듈은 과거 주요 급락 이벤트 구간만 잘라서 전략을 돌려보거나
-(역사적 시나리오), 가상으로 -20% 충격을 equity curve에 가해본다.
+이 모듈은 과거 주요 급락 이벤트 구간만 잘라서 전략을 다시 돌려본다.
 """
 import pandas as pd
 
@@ -69,71 +68,4 @@ def replay_historical_scenario(run_backtest_fn, full_df: pd.DataFrame,
         'metrics': metrics,
         'equity_df': equity_df,
         'trades_df': trades_df,
-    }
-
-
-def run_all_scenarios(run_backtest_fn, full_df: pd.DataFrame, **backtest_kwargs) -> list:
-    """모든 known 시나리오에 대해 replay_historical_scenario를 실행."""
-    results = []
-    for key in KNOWN_STRESS_PERIODS:
-        res = replay_historical_scenario(run_backtest_fn, full_df, key, **backtest_kwargs)
-        results.append({'scenario_key': key, **res})
-    return results
-
-
-def synthetic_shock_test(equity_curve: pd.Series,
-                          shock_pct: float = -20.0,
-                          shock_day: int = None,
-                          circuit_breaker: float = None) -> dict:
-    """
-    주어진 equity curve에 하루 만에 shock_pct% 하락을 가상으로 적용하고
-    이후 회복 과정을 시뮬레이션.
-    shock_day: None이면 중간 지점, 정수면 해당 인덱스.
-    circuit_breaker: 이 MDD 수준에서 포지션을 강제 청산(현금화)하는 규칙을 모의.
-    """
-    eq = equity_curve.copy().reset_index(drop=True)
-    n = len(eq)
-    day = shock_day if shock_day is not None else n // 2
-
-    if day >= n:
-        return {'error': 'shock_day가 equity curve 길이를 초과'}
-
-    shocked = eq.copy()
-    shocked[day:] = shocked[day:] * (1 + shock_pct / 100)
-
-    if circuit_breaker is not None:
-        peak = shocked[:day].max() if day > 0 else shocked.iloc[0]
-        for i in range(day, n):
-            if shocked[i] / peak - 1 <= circuit_breaker / 100:
-                shocked[i:] = shocked[i]
-                break
-
-    roll_max = shocked.expanding().max()
-    mdd = float(((shocked - roll_max) / roll_max * 100).min())
-    final_ret = float((shocked.iloc[-1] / shocked.iloc[0] - 1) * 100)
-
-    return {
-        'shock_pct': shock_pct,
-        'shock_day': day,
-        'post_shock_mdd_pct': round(mdd, 2),
-        'final_return_pct': round(final_ret, 2),
-        'circuit_breaker': circuit_breaker,
-        'shocked_equity': shocked,
-        'note': (f"{shock_day}일에 {shock_pct:+.0f}% 충격 적용 후 MDD {mdd:.1f}%, 최종수익률 {final_ret:.1f}%"
-                 + (f" (서킷브레이커 {circuit_breaker}% 적용)" if circuit_breaker else ""))
-    }
-
-
-def max_consecutive_loss_days(daily_returns: pd.Series) -> dict:
-    """연속 손실 일수 최대 기록."""
-    max_streak, current = 0, 0
-    for r in daily_returns:
-        if r < 0:
-            current += 1
-            max_streak = max(max_streak, current)
-        else:
-            current = 0
-    return {
-        'max_consecutive_loss_days': max_streak,
-        'note': f"최대 {max_streak}일 연속 손실 기록"
     }

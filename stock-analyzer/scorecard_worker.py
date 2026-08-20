@@ -169,7 +169,8 @@ def main():
         if not send_tg(scorecard_message.build_record_message(
                 log_date, latest.get("regime", "unknown"),
                 top, MISSING_SLUGS, cut_tie_counts(latest_combined, top),
-                dropped_ticker_count(latest, latest_combined))):
+                dropped_ticker_count(latest, latest_combined),
+                horizons=analyst_scorecard.HORIZONS)):
             print("오늘의 기록 발송 실패", file=sys.stderr)
             return 1
         publish_log.record_published_record(today, log_date)
@@ -207,9 +208,10 @@ def main():
         print(f"가격 패널 로드 실패 — 채점 불가: {e}", file=sys.stderr)
         return 1
 
-    stats_by_horizon = {}
+    stats_by_horizon, fwd_by_horizon = {}, {}
     for horizon in analyst_scorecard.HORIZONS:
         fwd = analyst_scorecard.build_forward_returns(prices, dates, horizon)
+        fwd_by_horizon[horizon] = fwd
         stats_by_horizon[horizon] = analyst_scorecard.score_analysts(
             days, fwd, horizon)
 
@@ -217,7 +219,9 @@ def main():
         stats = stats_by_horizon[horizon]
         if not send_tg(scorecard_message.build_scorecard_message(
                 horizon, stats, MISSING_SLUGS,
-                sample_mix=analyst_log.sample_mix())):
+                sample_mix=analyst_log.scored_mix(
+                    analyst_scorecard.scored_dates(
+                        days, fwd_by_horizon[horizon], COMBINED_SLUG)))):
             print(f"{horizon}일 성적표 발송 실패", file=sys.stderr)
             return 1
         n = max(s.get("n", 0) for s in stats.values())

@@ -120,8 +120,9 @@ def load_scoring_days(since=None):
     계산한 값이고, 야후가 배당·분할로 수정주가를 갱신하면 그날 화면에 뜬
     값과 미세하게 어긋난다 — 실제로 뜬 쪽이 사실이다.
 
-    표본이 무엇으로 이뤄졌는지는 sample_mix() 로 따로 센다. 이 함수가
-    "몇 개인가" 와 "무엇인가" 를 함께 답하면 화면이 둘을 구별할 수 없다.
+    표본이 무엇으로 이뤄졌는지는 따로 센다 — 채점에 실제로 들어간 날은
+    scored_mix(), 로그에 쌓인 날은 sample_mix(). 이 함수가 "몇 개인가" 와
+    "무엇인가" 를 함께 답하면 화면이 둘을 구별할 수 없다.
     """
     live = load_days(LOG_DIRNAME, since=since)
     live_dates = {d.get("date") for d in live}
@@ -131,12 +132,29 @@ def load_scoring_days(since=None):
 
 
 def sample_mix(since=None):
-    """표본 구성 — {"live": 실기록 일수, "backfill": 백필 일수}."""
+    """**로그에 쌓인** 일수 — {"live": 실기록, "backfill": 백필}.
+
+    성적표 표본과 다르다. 채점은 선행 구간이 지난 날만 쓰므로, 21·63일 지평은
+    최근 실기록을 통째로 버린다(실측 2026-08-20: 로그 실기록 18일, 두 지평의
+    실기록 채점일 0일). 성적표 옆에 붙일 숫자는 scored_mix() 로 센다.
+    """
     live = load_days(LOG_DIRNAME, since=since)
     live_dates = {d.get("date") for d in live}
     backfill = [d for d in load_days(BACKFILL_DIRNAME, since=since)
                 if d.get("date") not in live_dates]
     return {"live": len(live), "backfill": len(backfill)}
+
+
+def scored_mix(dates):
+    """**실제로 채점된** 날짜 목록 → {"live", "backfill"}.
+
+    dates 는 analyst_scorecard.scored_dates() 가 돌려준 것. 이걸 안 쓰고
+    sample_mix() 를 성적표 옆에 붙이면, 실기록이 하나도 안 들어간 지평에도
+    "실기록 18일" 이 적힌다 — 이 채널이 파는 "사후 채점" 이 거짓이 되는 자리다.
+    """
+    live_dates = {d.get("date") for d in load_days(LOG_DIRNAME)}
+    live = sum(1 for d in dates if d in live_dates)
+    return {"live": live, "backfill": len(dates) - live}
 
 
 def load_days(root=LOG_DIRNAME, since=None):

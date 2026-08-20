@@ -36,13 +36,27 @@ MISSING_REASON = {"quant": "실측 IC 표본이 없어 가중치 근거가 아�
 COMBINE_NOTE = ("종합 점수는 차트+파동+모멘텀과 ICT+CRT 의 단순 평균입니다 "
                 "— 두 점수가 모두 있는 종목만 순위에 넣습니다.")
 
+# "적중률" 은 이 저장소에서 두 가지를 가리킨다. 성적표가 내는 것은 IC 쪽인데
+# 라벨이 그냥 "적중률" 이면 구독자는 '매수한 종목이 올랐나' 로 읽는다. 실측
+# 2026-08-20 기준 21일 지평에서 그 둘은 56.5% 대 50.2% 로 6.3%p 벌어져 있고,
+# 유리한 쪽이 IC 다. 좋아 보이는 쪽을 모호한 이름으로 내보내지 않는다.
+# 문구에 매수·매도·목표가·추천을 쓰지 않는다(이 채널의 금지어). 뜻은 "개별
+# 종목의 방향이 맞은 비율이 아니다" 로 충분히 전달된다.
+HIT_RATE_NOTE = ("IC 적중률은 그날 점수 순위가 실제 수익률 순위와 같은 방향이었던 "
+                 "날의 비율입니다 — 개별 종목의 방향이 맞은 비율이 아닙니다.")
+
 
 def _slug_name(slug):
     return SLUG_NAMES.get(slug, slug)
 
 
-def _publishable(slugs):
-    """발행할 슬러그만 — 이름을 아는 것들.
+def publishable(slugs):
+    """사람에게 보여줄 슬러그만 — 이름을 아는 것들.
+
+    발행문과 앱 화면이 **같은 이 함수**를 쓴다. 예전에는 발행 경로에만 있었고,
+    그래서 백필에 섞인 측정용 슬러그 `quant_pit`(501일)이 성적표 화면에는
+    애널리스트 한 줄로 그대로 떴다 — 21일 지평에서 t=1.92 · 적중률 63.4% 로
+    표에서 제일 좋아 보이는 자리였다. 가드는 한 곳이 갖는다.
 
     성적표는 `score_analysts` 가 **기록에서 찾아낸** 슬러그를 그대로 돈다.
     측정용 슬러그(`quant_pit`)를 백필에 채우면 그날 밤 성적표가 판정 전의
@@ -64,27 +78,35 @@ def _missing_slug_lines(missing_slugs):
             for slug in missing_slugs]
 
 
+# **이 지평에서 실제로 채점된 날** 의 구성이다. 로그에 쌓인 일수가 아니다 —
+# 21·63일 지평은 선행 구간이 아직 안 지난 최근 기록을 통째로 버리므로, 로그로
+# 세면 실기록이 표본에 들어간 것처럼 보인다. 실측 2026-08-20: 21·63일 지평의
+# 실기록 채점일은 0 인데 로그 기준으로는 18일이었다. 이 채널이 파는 것이
+# "예측 기록과 사후 채점" 인 이상, 예측한 적 없는 날로만 채운 성적을 그렇게
+# 부르면 안 된다.
 BACKFILL_NOTE = (
-    "※ 표본 {backfill}일은 과거 봉으로 되돌려 계산한 재구성분입니다 "
-    "(실기록 {live}일). 재구성분은 오늘 살아남은 종목만 담고 있어 생존자 "
-    "편향이 남아 있고, IC 가 실제보다 좋게 나옵니다."
+    "※ 이 지평에서 채점된 {total}일 중 {backfill}일은 과거 봉으로 되돌려 "
+    "계산한 재구성분입니다 (실기록 {live}일). 재구성분은 오늘 살아남은 종목만 "
+    "담고 있어 생존자 편향이 남아 있고, IC 가 실제보다 좋게 나옵니다."
 )
 
 
 def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
     """N일 지평 성적표. stats 는 score_analysts() 의 반환값.
 
-    sample_mix — analyst_log.sample_mix() 의 반환값. 표본에 재구성분이 섞여
-    있으면 그 사실을 발행문에 적는다. 안 적으면 이 채널이 "예측 기록과 사후
-    채점을 공개한다" 고 해 놓고 예측한 적 없는 날을 성적으로 내보내게 된다.
+    sample_mix — **이 지평에서 실제로 채점된 날**의 {"live", "backfill"} 구성
+    (analyst_scorecard.scored_dates 로 센다). 로그에 쌓인 일수를 넣으면 안 된다
+    — 21·63일 지평은 최근 기록을 통째로 버리므로 실기록이 0 일 때도 18일이라고
+    적히고, 그러면 이 채널이 "예측 기록과 사후 채점을 공개한다" 고 해 놓고
+    예측한 적 없는 날만으로 만든 성적을 그렇게 부르게 된다.
     """
     lines = [f"📊 {horizon}일 지평 성적표", ""]
 
-    for slug in _publishable(stats):
+    for slug in publishable(stats):
         s = stats[slug]
         effective_n = float(s.get("effective_n") or 0)
         lines.append(f"*{_slug_name(slug)}*")
-        lines.append(f"  평균 IC {s['mean_ic']:+.4f} · 적중률 {s['hit_rate']:.1f}%")
+        lines.append(f"  평균 IC {s['mean_ic']:+.4f} · IC 적중률 {s['hit_rate']:.1f}%")
 
         t_stat = s.get("t_stat")
         if effective_n < MIN_EFFECTIVE_N or t_stat is None:
@@ -96,19 +118,27 @@ def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
 
     lines.extend(_missing_slug_lines(missing_slugs))
     if sample_mix and sample_mix.get("backfill"):
+        live = sample_mix.get("live", 0)
         lines.append(BACKFILL_NOTE.format(
-            backfill=sample_mix["backfill"], live=sample_mix.get("live", 0)))
+            total=sample_mix["backfill"] + live,
+            backfill=sample_mix["backfill"], live=live))
 
     lines.append("")
     lines.append(COMBINE_NOTE)
+    lines.append(HIT_RATE_NOTE)
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
 
 def build_record_message(date_str, regime, top_by_slug, missing_slugs,
-                         tie_notes=None, dropped=0):
+                         tie_notes=None, dropped=0, *, horizons):
     """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}.
+
+    horizons — 이 기록이 채점될 지평. 문장에 박아 두면 지평이 늘어도 안 따라
+    온다. 실제로 1일 지평이 HORIZONS 에 들어간 뒤에도 이 문장은 "5·21·63일"
+    이라고 나갔고, 그 사이 1일 성적표가 8회 발행됐다(2026-08-11~19).
+    기본값을 두지 않는 이유도 같다 — 기본값은 하드코딩이 숨을 자리다.
 
     missing_slugs 는 build_scorecard_message 와 같은 이유로 필요하다 —
     이 메시지는 매 영업일 나가고 구독자가 실제로 보는 것은 이쪽이다.
@@ -126,7 +156,7 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs,
     tie_notes = tie_notes or {}
     lines = [f"🧬 {date_str} 예측 기록 (국면: {regime})", ""]
 
-    for slug in _publishable(top_by_slug):
+    for slug in publishable(top_by_slug):
         entries = top_by_slug[slug]
         if not entries:
             continue
@@ -145,7 +175,8 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs,
 
     lines.append("")
     lines.append(COMBINE_NOTE)
-    lines.append("이 기록은 5·21·63일 뒤 채점됩니다.")
+    lines.append("이 기록은 "
+                 + "·".join(str(h) for h in horizons) + "일 뒤 채점됩니다.")
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)

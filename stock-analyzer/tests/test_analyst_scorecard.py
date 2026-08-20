@@ -273,3 +273,45 @@ def test_long_enough_sample_still_gets_a_t_stat():
 
     assert stats["combined"]["t_stat"] is not None
     assert stats["combined"]["effective_n"] > 0
+
+
+# ── 표본이 '몇 개'인지와 '무엇'인지는 다른 질문이다 ────────────────────
+#
+# 21·63일 지평은 선행 구간이 아직 안 지난 최근 기록을 통째로 버린다. 로그
+# 기준으로 세면 실기록이 표본에 들어간 것처럼 보이는데, 실측 2026-08-20 기준
+# 두 지평의 실기록 채점일은 0 이었고 발행문은 "실기록 18일" 이라고 적었다.
+
+def test_scored_dates_only_counts_days_that_actually_scored():
+    days = [
+        {"date": "D1", "scores": {t: {"combined": i} for i, t in enumerate("ABCDE")}},
+        {"date": "D2", "scores": {t: {"combined": i} for i, t in enumerate("ABCDE")}},
+        {"date": "D3", "scores": {t: {"combined": i} for i, t in enumerate("ABCDE")}},
+    ]
+    # D2 는 선행수익률이 없고(미래가 안 왔다), D3 는 종목이 문턱 미달이다.
+    fwd = {
+        "D1": {t: float(i) for i, t in enumerate("ABCDE")},
+        "D3": {"A": 1.0, "B": 2.0},
+    }
+
+    assert sc.scored_dates(days, fwd, "combined") == ["D1"]
+
+
+def test_scored_dates_skips_slugs_the_day_does_not_have():
+    days = [{"date": "D1",
+             "scores": {t: {"chart": i} for i, t in enumerate("ABCDE")}}]
+    fwd = {"D1": {t: float(i) for i, t in enumerate("ABCDE")}}
+
+    assert sc.scored_dates(days, fwd, "combined") == []
+    assert sc.scored_dates(days, fwd, "chart") == ["D1"]
+
+
+def test_scored_dates_agrees_with_score_analysts_n():
+    """같은 규칙이어야 한다 — 갈라지면 발행문의 표본 구성이 n 과 안 맞는다."""
+    days = [{"date": f"D{k}",
+             "scores": {t: {"combined": (i + k) % 5} for i, t in enumerate("ABCDE")}}
+            for k in range(6)]
+    fwd = {f"D{k}": {t: float(i) for i, t in enumerate("ABCDE")}
+           for k in range(4)}
+
+    stats = sc.score_analysts(days, fwd, 1)["combined"]
+    assert len(sc.scored_dates(days, fwd, "combined")) == stats["n"]

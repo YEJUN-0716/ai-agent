@@ -432,6 +432,23 @@ def test_live_record_wins_over_backfill_on_the_same_date(monkeypatch, tmp_path):
     assert al.sample_mix() == {"live": 1, "backfill": 0}
 
 
+def test_scored_mix_counts_the_graded_days_not_the_log(monkeypatch, tmp_path):
+    """긴 지평은 최근 실기록을 통째로 버린다. 그때 로그 기준으로 세면 발행문에
+    "실기록 18일" 이 적히는데 실제 채점된 실기록은 0일이었다(2026-08-20)."""
+    live, back = _mixed_logs(monkeypatch, tmp_path)
+    al.write_days([("2026-05-01", "bull", {"A": {"chart": 1.0}}),
+                   ("2026-06-01", "bull", {"A": {"chart": 2.0}})], back)
+    al.append_day("2026-07-23", "bull", {"A": {"chart": 3.0}}, root=live)
+
+    # 로그에는 실기록이 1일 있지만, 채점된 날은 백필 둘뿐이다.
+    assert al.sample_mix() == {"live": 1, "backfill": 2}
+    assert al.scored_mix(["2026-05-01", "2026-06-01"]) == {"live": 0,
+                                                           "backfill": 2}
+    assert al.scored_mix(["2026-06-01", "2026-07-23"]) == {"live": 1,
+                                                           "backfill": 1}
+    assert al.scored_mix([]) == {"live": 0, "backfill": 0}
+
+
 def test_write_days_splits_by_year_and_sorts(tmp_path):
     n = al.write_days([("2027-01-05", "bull", {"A": {"chart": 1.0}}),
                        ("2026-12-31", "bear", {"A": {"chart": 2.0}}),
