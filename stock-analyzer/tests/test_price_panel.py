@@ -248,3 +248,24 @@ def test_default_threshold_still_drops_thin_history(tmp_path, monkeypatch):
     assert price_panel.MIN_TRADING_DAYS == 80
     assert "THIN" not in prices, "기본 문턱이 느슨해졌다"
     assert set(prices) == {"AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"}
+
+
+def test_missing_includes_ticker_whose_history_is_truncated():
+    """캐시에 있어도 이력이 요청 구간을 못 덮으면 다시 받는다.
+
+    짧은 창으로 처음 받힌 티커는 그대로 두면 영원히 잘린 채 남는다 — 실측으로
+    캐시의 CSCO·INTC·PFE 가 538봉, 나머지 276종목은 1602봉이었다.
+    """
+    panel = _fake_ohlcv(["OLD", "SHORT"], n_days=400, start="2024-01-01")
+    panel.loc[panel.index[:300], ("Close", "SHORT")] = np.nan
+
+    missing, ext = price_panel._missing_tickers(
+        panel, ["OLD", "SHORT"],
+        pd.Timestamp("2024-01-01"), panel.index[-1])
+    assert not ext                     # 패널 전체 범위는 요청을 덮는다
+    assert missing == ["SHORT"]
+
+    # 짧은 창만 필요하면 그 티커도 이미 충분하다 — 헛되이 다시 받지 않는다
+    missing, _ = price_panel._missing_tickers(
+        panel, ["OLD", "SHORT"], panel.index[-30], panel.index[-1])
+    assert missing == []
