@@ -10,7 +10,13 @@ _ALL_MESSAGES 에 한 줄만 추가하면 된다.
 """
 import pytest
 
+from modules import analyst_scorecard as asc
 from modules import scorecard_message as sm
+
+# 실제 지평 상수를 그대로 쓴다. 테스트가 자기 숫자를 들고 있으면 상수가
+# 늘어도 발행문이 옛날 문장을 내보내는 것을 못 잡는다 — 1일 지평이 붙은 뒤에도
+# "5·21·63일 뒤 채점" 이 8회 나간 것이 바로 그 사고다.
+_HORIZONS = asc.HORIZONS
 
 _SMALL = {"chart": {"mean_ic": -0.03, "se": None, "t_stat": None,
                     "n": 1, "effective_n": 1.0, "hit_rate": 0.0}}
@@ -32,9 +38,10 @@ def _all_messages():
         "scorecard/normal": sm.build_scorecard_message(5, _BIG, ["quant"]),
         "scorecard/empty": sm.build_scorecard_message(5, {}, []),
         "record/normal": sm.build_record_message(
-            "2026-07-28", "bull", {"chart": [("AAPL", 73.8)]}, ["quant"]),
+            "2026-07-28", "bull", {"chart": [("AAPL", 73.8)]}, ["quant"],
+            horizons=_HORIZONS),
         "record/empty": sm.build_record_message(
-            "2026-07-28", "bull", {}, []),
+            "2026-07-28", "bull", {}, [], horizons=_HORIZONS),
     }
 
 
@@ -95,7 +102,8 @@ def test_record_message_also_discloses_missing_slug():
     """오늘의 기록은 매 영업일 나가는 쪽이라, 슬러그 누락을 감추면 안 되는
     이유가 성적표보다 오히려 강하다."""
     msg = sm.build_record_message("2026-07-28", "bull",
-                                  {"chart": [("AAPL", 73.8)]}, ["quant"])
+                                  {"chart": [("AAPL", 73.8)]}, ["quant"],
+                                  horizons=_HORIZONS)
 
     assert "퀀트+재무" in msg
     assert "실측 IC 표본이 없어 가중치 근거가 아직 없음" in msg
@@ -106,14 +114,15 @@ def test_record_message_discloses_truncated_ties():
     순위처럼 보여주게 된다."""
     msg = sm.build_record_message(
         "2026-07-28", "bull", {"ict": [("AAA", 100.0), ("BBB", 100.0)]},
-        [], {"ict": 17})
+        [], {"ict": 17}, horizons=_HORIZONS)
 
     assert "동점 17종목" in msg
 
 
 def test_record_message_omits_tie_note_when_nothing_cut():
     msg = sm.build_record_message(
-        "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [], {})
+        "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [], {},
+        horizons=_HORIZONS)
 
     assert "동점" not in msg
 
@@ -121,7 +130,8 @@ def test_record_message_omits_tie_note_when_nothing_cut():
 def test_record_message_tie_notes_defaults_to_none():
     """기존 4인자 호출이 그대로 동작해야 한다."""
     msg = sm.build_record_message(
-        "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [])
+        "2026-07-28", "bull", {"chart": [("AAA", 73.8)]}, [],
+        horizons=_HORIZONS)
 
     assert "동점" not in msg
 
@@ -129,7 +139,8 @@ def test_record_message_tie_notes_defaults_to_none():
 def test_combine_note_present_in_both_messages():
     """합성 방식을 감추면 순위의 의미를 알 수 없다."""
     record = sm.build_record_message(
-        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [])
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [],
+        horizons=_HORIZONS)
     scorecard = sm.build_scorecard_message(5, _BIG, [])
 
     assert sm.COMBINE_NOTE in record
@@ -138,21 +149,24 @@ def test_combine_note_present_in_both_messages():
 
 def test_record_message_discloses_dropped_tickers():
     msg = sm.build_record_message(
-        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [], None, 7)
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [], None, 7,
+        horizons=_HORIZONS)
 
     assert "7종목은 한쪽 점수가 없어" in msg
 
 
 def test_record_message_omits_dropped_line_when_zero():
     msg = sm.build_record_message(
-        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [], None, 0)
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [], None, 0,
+        horizons=_HORIZONS)
 
     assert "종합에서 빠졌습니다" not in msg
 
 
 def test_combined_slug_renders_as_korean_name():
     msg = sm.build_record_message(
-        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [])
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [],
+        horizons=_HORIZONS)
 
     assert "*종합* 상위 1" in msg
 
@@ -177,3 +191,37 @@ def test_pure_live_sample_says_nothing_about_backfill():
 
     assert "생존자 편향" not in msg
     assert sm.build_scorecard_message(5, _BIG, []) == msg
+
+
+def test_record_message_names_the_real_horizons():
+    """채점 지평은 상수에서 온다 — 문장에 박아 두면 지평이 늘어도 안 따라온다."""
+    msg = sm.build_record_message(
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [],
+        horizons=(1, 5, 21, 63))
+
+    assert "이 기록은 1·5·21·63일 뒤 채점됩니다." in msg
+
+    grown = sm.build_record_message(
+        "2026-07-28", "bull", {"combined": [("AAA", 70.0)]}, [],
+        horizons=(1, 5, 21, 63, 126))
+    assert "1·5·21·63·126일 뒤 채점" in grown
+
+
+def test_scorecard_message_labels_the_hit_rate_as_ic():
+    """'적중률' 은 두 가지를 가리킨다. 성적표가 내는 것은 IC 쪽이고, 실측
+    2026-08-20 기준 21일 지평에서 둘은 56.5% 대 50.2% 로 갈렸다 — 유리한 쪽을
+    모호한 이름으로 내보내지 않는다."""
+    msg = sm.build_scorecard_message(5, _BIG, [])
+
+    assert "IC 적중률 35.0%" in msg
+    assert sm.HIT_RATE_NOTE in msg
+
+
+def test_backfill_note_counts_the_scored_days_not_the_log():
+    """실기록이 한 날도 안 들어간 지평이 실제로 있다(21·63일). 그때 '실기록
+    0일' 이라고 적혀야 한다."""
+    msg = sm.build_scorecard_message(21, _BIG, [],
+                                     sample_mix={"live": 0, "backfill": 497})
+
+    assert "채점된 497일 중 497일" in msg
+    assert "실기록 0일" in msg

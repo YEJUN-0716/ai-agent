@@ -272,6 +272,27 @@ def score_analysts(days, forward_returns, horizon):
     return out
 
 
+def scored_dates(days, forward_returns, slug):
+    """그 슬러그가 **실제로 채점된** 날짜 목록. score_analysts 와 같은 규칙.
+
+    표본이 무엇으로 이뤄졌는지는 로그에 뭐가 있나가 아니라 채점에 뭐가
+    들어갔나로 세야 한다. 21·63일 지평은 선행 구간이 아직 안 지난 최근
+    기록을 통째로 버리므로, 로그 기준으로 세면 실기록이 표본에 들어간
+    것처럼 보인다 — 실측 2026-08-20, 21일 지평의 실기록 채점일은 0 인데
+    analyst_log.sample_mix() 는 18일이라고 답했다.
+
+    n 은 score_analysts 가 답한다. 이 함수는 '무엇인가' 만 답한다.
+    """
+    out = []
+    for day in days:
+        rets = forward_returns.get(day.get("date"))
+        if not rets:
+            continue
+        if _daily_ic(day.get("scores", {}), rets, slug) is not None:
+            out.append(day.get("date"))
+    return out
+
+
 def verdict_hit_rate(days, returns, slug=COMBINED_SLUG):
     """총괄 판정의 방향 적중률 — 화면에 뜬 매수/매도가 실제로 맞았나.
 
