@@ -2061,12 +2061,19 @@ def analyze_score_correlation(df):
 # ─────────────────────────────────────────────
 
 def send_telegram(token, chat_id, msg):
+    """(성공 여부, 사유). 사유에 예외 **원문을 넣지 않는다.**
+
+    requests 의 연결 오류 문구에는 요청 URL 전체가 그대로 들어간다 —
+    `/bot<토큰>/sendMessage`. 이 값을 부르는 쪽(signal_worker)이 그대로
+    출력하므로, 원문을 돌려주면 공개 Actions 로그에 봇 토큰이 남는다.
+    (같은 이유·같은 처리: scorecard_worker.send_tg)
+    """
     try:
         r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                           json={'chat_id': chat_id, 'text': msg, 'parse_mode': 'Markdown'}, timeout=5)
         return r.status_code == 200, r.json().get('description', '')
     except Exception as e:
-        return False, str(e)
+        return False, type(e).__name__
 
 
 # ─────────────────────────────────────────────
