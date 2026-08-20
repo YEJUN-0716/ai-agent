@@ -184,6 +184,25 @@ def test_backtest_runs_and_schema():
     assert out["all"]["setups"] == out["long"]["setups"] + out["short"]["setups"]
 
 
+def test_no_trade_starts_before_the_previous_one_is_out():
+    """겹침 방지는 **실제 청산 봉** 기준이어야 한다.
+
+    timeout 은 exit_idx 가 없다. 체결 봉을 기준 삼으면 아직 hold_window 를
+    들고 있는 트레이드 위에 다음 셋업이 겹쳐 얹힌다 (2026-08-20 실측: 저장
+    패널 25종목에서 트레이드의 1.1% 가 그렇게 겹쳤다).
+    """
+    hold = 15
+    out = bt.backtest_trade_plans(_oscillating(), fill_window=10, hold_window=hold)
+    trades = out["trades"]
+    assert trades, "셋업이 하나도 안 나오면 이 테스트가 무의미하다"
+    for a, b in zip(trades, trades[1:]):
+        if b["fill_idx"] is None:
+            continue
+        a_out = a["exit_idx"] if a["exit_idx"] is not None else (
+            a["fill_idx"] + hold if a["fill_idx"] is not None else a["idx"])
+        assert b["fill_idx"] >= a_out, (a, b)
+
+
 # ── 비용 환산에 필요한 가격 좌표 ─────────────────────────────────────
 #
 # R 은 위험 1단위 기준이라 그 자체로는 거래비용을 못 잰다. 손절이 진입가에서
