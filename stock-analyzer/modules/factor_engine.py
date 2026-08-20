@@ -22,9 +22,17 @@ warnings.filterwarnings("ignore")
 
 # ── 레짐별 팩터 가중치 ──────────────────────────────────────────────
 # ic_weight_updater.py 가 매주 실측 IC 로 이 값을 조정해 ic_weights.json 의
-# `regime_weights` 블록에 쓴다. **이 블록을 읽는 코드는 지금 없다** — 유일한
-# 독자였던 `_load_regime_weights` 가 위의 스캐너와 함께 죽어서 지웠다.
-# 기준값으로는 계속 쓰이므로 남긴다.
+# `regime_weights` 블록에 쓴다.
+#
+# ⚠️ **그 블록은 살아 있다. 지우지 말 것.** 2026-08-19~20 사이 이 자리에
+# "읽는 코드가 없다" 고 적혀 있었는데 사실이 아니었다. 죽은 것은 이 모듈에
+# 있던 `_load_regime_weights` 하나였고, 파일 쪽 독자는 둘이 남아 있다:
+#   - `modules/analyst_weights.load_analyst_weights` — `regime_weights.<레짐>.ict`
+#     가 **ICT 애널리스트 몫의 유일한 공급원**이다(production_weights 4팩터에는
+#     ict 가 없다). 2026-08-20 실측으로 총괄 판정의 3.6~4.2% 를 차지한다.
+#     블록이 사라지면 그 몫이 조용히 0 이 되고, 값은 성적표·공개 채널·
+#     주문 meta 로 그대로 흘러간다.
+#   - `app.py::_pick_4f_weights` — production_weights 가 없을 때의 후퇴 경로.
 REGIME_WEIGHTS = {
     "bull":    {"mom_3m": 0.315, "mom_1m": 0.225, "low_vol": 0.135, "value": 0.135, "quality": 0.09, "ict": 0.10},
     "neutral": {"mom_3m": 0.225, "mom_1m": 0.180, "low_vol": 0.180, "value": 0.180, "quality": 0.135, "ict": 0.10},

@@ -34,27 +34,42 @@ EQUITY_LOG_FILE    = "equity_log.json"
 
 
 def send_tg(msg: str):
+    """개인 채팅으로 발송한다.
+
+    예외를 잡는 이유가 둘이다. (1) 네트워크가 한 번 튀면 아침 보고가 통째로
+    죽는다. (2) requests 의 연결 오류 문구에는 **요청 URL 전체가 그대로**
+    들어간다 — `/bot<토큰>/sendMessage`. 이 저장소는 공개이고 워크플로 로그도
+    공개로 읽히므로, 그 예외를 그대로 찍으면 봇 토큰이 로그에 남는다.
+    GitHub 의 시크릿 마스킹은 2차 방어일 뿐 유일한 방어여선 안 된다.
+    (같은 이유·같은 처리: scorecard_worker.send_tg)
+    """
     if not TG_TOKEN or not TG_CHAT_ID:
         print("[TG] 환경변수 없음 — 발송 생략")
         return
-    resp = requests.post(
-        f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-        json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
-        timeout=10,
-    )
-    if resp.status_code == 400 and "parse entities" in resp.text:
+    try:
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": msg},
+            json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
             timeout=10,
         )
+        if resp.status_code == 400 and "parse entities" in resp.text:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                json={"chat_id": TG_CHAT_ID, "text": msg},
+                timeout=10,
+            )
+    except requests.exceptions.RequestException as e:
+        print(f"[TG 오류] 요청 실패 — {type(e).__name__}")
+        return
     print("[TG] 발송 성공" if resp.status_code == 200 else f"[TG 오류] {resp.text}")
 
 
 def load_equity_log() -> list:
     if os.path.exists(EQUITY_LOG_FILE):
         try:
-            with open(EQUITY_LOG_FILE) as f:
+            # encoding 명시 — 미지정 시 Windows 가 cp949 로 열고, 예외를
+            # 삼키는 이 로더는 빈 목록을 돌려준다(paper_trade_runner_toss 참고).
+            with open(EQUITY_LOG_FILE, encoding="utf-8") as f:
                 return json.load(f).get("records", [])
         except Exception:
             pass
@@ -79,13 +94,22 @@ def calc_perf(records: list) -> dict:
         max_dd = min(max_dd, (e / peak_e - 1) * 100)
 
     total_ret = (equities[-1] / equities[0] - 1) * 100
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    today_ret = None
-    if records[-1].get("date") == today_str and len(equities) >= 2:
-        today_ret = (equities[-1] / equities[-2] - 1) * 100
+
+    # 마지막 기록일의 하루 수익률. **오늘인지 따져서 끄지 않는다** — 날짜는
+    # 값과 함께 돌려주고 부르는 쪽이 라벨로 쓴다.
+    #
+    # 예전에는 `records[-1]["date"] == 오늘(UTC)` 일 때만 켰다. 이 잡의 크론은
+    # 23:30 UTC 라 GitHub 이 30분만 밀면 벽시계가 다음 날로 넘어가고, 그러면
+    # 러너가 멀쩡히 돈 날에도 "오늘 페이퍼트레이드 미실행" 이 뜬다. 실측 슬립은
+    # 이 저장소에서 20~44분이고, 15분 뒤 크론인 scorecard-publish 는 17회 중
+    # 11회가 자정을 넘겨 끝났다. 러너의 벽시계로 날짜를 정하지 않는다는
+    # 규칙은 이미 signal_worker.session_date 가 같은 이유로 세워 뒀다.
+    last_ret = ((equities[-1] / equities[-2] - 1) * 100
+                if len(equities) >= 2 else None)
 
     return {
-        "today_ret":    round(today_ret, 2) if today_ret is not None else None,
+        "last_ret":     round(last_ret, 2) if last_ret is not None else None,
+        "last_date":    records[-1].get("date"),
         "total_return": round(total_ret, 2),
         "sharpe":       round(sharpe, 2),
         "max_dd":       round(max_dd, 2),
@@ -150,11 +174,12 @@ def main():
         f"총 자산 `{equity:,.0f}원`  매수여력 `{buying_power:,.0f}원`",
     ]
 
-    if perf and perf.get("today_ret") is not None:
-        emoji = "📈" if perf["today_ret"] >= 0 else "📉"
-        lines.append(f"{emoji} 당일 *{perf['today_ret']:+.2f}%*")
-    elif perf:
-        lines.append("⚠️ 오늘 페이퍼트레이드 미실행 — 당일 수익률 없음")
+    if perf and perf.get("last_ret") is not None:
+        emoji = "📈" if perf["last_ret"] >= 0 else "📉"
+        # 기록일이 오늘이 아니면 그 날짜를 밝힌다. 숫자를 감추는 대신 언제
+        # 것인지 적는 쪽이 정직하다 — 러너가 정말 며칠 안 돌면 그게 보인다.
+        label = "당일" if perf["last_date"] == today else f"{perf['last_date']} 기준"
+        lines.append(f"{emoji} {label} *{perf['last_ret']:+.2f}%*")
 
     # 대기 주문은 장부를 직접 읽는다 — get_account()는 브로커 API 모양을 흉내내는
     # dict 라 예약분 항목이 없다(Alpaca 계정에도 그런 필드는 없다).

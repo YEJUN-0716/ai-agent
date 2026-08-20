@@ -190,10 +190,15 @@ def place_sell(symbol: str, qty) -> dict:
 
 
 # ── 고점·시그널 로그 ────────────────────────────────────────────────────
+# 이 아래 파일 입출력은 전부 encoding 을 명시한다. 안 적으면 Windows 가
+# cp949 로 열고, signal_log.json 처럼 한글이 든 파일은 조용히 깨지거나
+# 예외를 낸다 — 그런데 로더들이 예외를 삼키고 빈 목록을 돌려주므로 다음
+# 저장이 **로그 전체를 덮어쓴다**. 프로덕션은 리눅스라 지금 손해는 없지만,
+# 같은 교훈이 ic_weight_updater.py 에 이미 주석으로 남아 있는 자리다.
 def load_peak_prices() -> dict:
     if os.path.exists(PEAK_FILE):
         try:
-            with open(PEAK_FILE) as f:
+            with open(PEAK_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
@@ -201,14 +206,14 @@ def load_peak_prices() -> dict:
 
 
 def save_peak_prices(peaks: dict) -> None:
-    with open(PEAK_FILE, "w") as f:
+    with open(PEAK_FILE, "w", encoding="utf-8") as f:
         json.dump(peaks, f, indent=2, sort_keys=True)
 
 
 def load_signal_log() -> list:
     if os.path.exists(SIGNAL_LOG_FILE):
         try:
-            with open(SIGNAL_LOG_FILE) as f:
+            with open(SIGNAL_LOG_FILE, encoding="utf-8") as f:
                 return json.load(f).get("signals", [])
         except Exception:
             return []
@@ -216,7 +221,7 @@ def load_signal_log() -> list:
 
 
 def save_signal_log(signals: list) -> None:
-    with open(SIGNAL_LOG_FILE, "w") as f:
+    with open(SIGNAL_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump({"signals": signals[-300:]}, f, indent=2)
 
 
@@ -224,7 +229,7 @@ def save_signal_log(signals: list) -> None:
 def load_equity_log() -> list:
     if os.path.exists(EQUITY_LOG_FILE):
         try:
-            with open(EQUITY_LOG_FILE) as f:
+            with open(EQUITY_LOG_FILE, encoding="utf-8") as f:
                 return json.load(f).get("records", [])
         except Exception:
             return []
@@ -232,7 +237,7 @@ def load_equity_log() -> list:
 
 
 def save_equity_log(records: list) -> None:
-    with open(EQUITY_LOG_FILE, "w") as f:
+    with open(EQUITY_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump({"records": records[-504:]}, f, indent=2)  # 최대 2년(504 거래일)
 
 
@@ -296,12 +301,32 @@ def calc_performance_metrics(records: list) -> dict:
     }
 
 
-def check_portfolio_drawdown(equity_now: float, records: list) -> tuple[bool, float]:
-    """계좌 고점 대비 드로다운이 PORTFOLIO_DD_STOP_PCT 초과하면 (True, dd%) 반환."""
+def check_portfolio_drawdown(equity_now: float, records: list,
+                              deposited_now: float | None = None
+                              ) -> tuple[bool, float]:
+    """트레이딩 고점 대비 낙폭이 PORTFOLIO_DD_STOP_PCT 초과하면 (True, dd%).
+
+    **입금을 뺀 곡선으로 잰다** — 바로 위 calc_performance_metrics 와 같은 자다.
+    원본 `equity` 로 재면 증자한 날이 통째로 신고가가 되어 그날의 매매 성적이
+    낙폭에서 사라진다. 실측(2026-08-18 증자 9천만원): 그날 장부는 트레이딩
+    고점 대비 −1.85% 였는데 원본 곡선에서는 신고가라 0.00% 로 읽혔고, 누적
+    최대낙폭도 −1.09%(원본) vs −1.91%(입금 제거)로 갈렸다. 이 함수만 원본을
+    보고 있었는데, 하필 숫자가 **행동을 바꾸는** 유일한 자리다(신규 매수 차단).
+
+    `deposited_now` — 지금 시점의 누적 외부 입금. 오늘 자산이 어제와 다른 이유
+    중 입금 몫을 떼려면 필요하다. 안 주면 마지막 기록과 같다고 본다(입금이
+    없었던 날은 맞는 값이고, 있었던 날은 예전처럼 원본으로 재는 셈이 된다).
+    """
     if PORTFOLIO_DD_STOP_PCT <= 0 or not records:
         return False, 0.0
-    peak = max(r["equity"] for r in records)
-    dd   = (equity_now / peak - 1) * 100
+    probe = records + [{
+        "equity": equity_now,
+        "deposited": (records[-1].get("deposited", 0.0)
+                      if deposited_now is None else deposited_now),
+    }]
+    curve = indexed_equity(probe)
+    peak  = max(curve[:-1])
+    dd    = (curve[-1] / peak - 1) * 100
     return dd < -PORTFOLIO_DD_STOP_PCT, round(dd, 2)
 
 
@@ -576,13 +601,26 @@ def check_trailing_stops(positions: list, trail_pct: float = TRAIL_STOP_PCT,
     return results, peaks
 
 
-def _to_broker_sym(ticker: str):
-    """실제 주문에 넘길 종목코드로 변환 (BRK-B → BRK.B)."""
-    return ticker.replace("-", ".").upper()
+# 2026-08-20: 종목코드 변환(BRK-B → BRK.B)을 지웠다.
+#
+# 실주문 브로커에 넘길 코드로 바꾸던 함수인데, 붙은 브로커는 가상 장부뿐이고
+# 가상 브로커는 그 심볼을 **그대로 yfinance 에 넘긴다** — 야후는 BRK.B 를
+# 모른다. 봉이 0개면 scan_limit_fill 이 계속 'waiting' 을 돌려주므로(실측)
+# 20거래일 만료도 안 걸리고, 그 주문이 자리 1칸과 예약 현금을 영구히 붙잡는다.
+# 머리말대로 실주문 브로커는 다시 안 붙이므로 변환할 이유 자체가 없다.
+# (프로덕션 유니버스 60종목에 대시 티커는 0개였다 — 터지기 전에 지운 것이다)
 
 
 # ── 텔레그램 ──────────────────────────────────────────────────────────
 def send_tg(msg: str):
+    """개인 채팅으로 발송한다.
+
+    예외를 **타입만** 찍는 이유: requests 의 연결 오류 문구에는 요청 URL
+    전체가 그대로 들어간다 — `/bot<토큰>/sendMessage`. 이 저장소는 공개이고
+    워크플로 로그도 공개로 읽히므로, 예외를 그대로 찍으면 봇 토큰이 로그에
+    남는다. GitHub 의 시크릿 마스킹은 2차 방어일 뿐 유일한 방어여선 안 된다.
+    (같은 이유·같은 처리: scorecard_worker.send_tg, daily_report_toss.send_tg)
+    """
     if not TG_TOKEN or not TG_CHAT_ID:
         print("[TG] TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 없음 → 발송 생략")
         return
@@ -604,7 +642,7 @@ def send_tg(msg: str):
         else:
             print(f"[TG 오류] HTTP {resp.status_code}: {resp.text}")
     except Exception as e:
-        print(f"[TG 오류] {e}", file=sys.stderr)
+        print(f"[TG 오류] 요청 실패 — {type(e).__name__}", file=sys.stderr)
 
 
 # ── 트레이드 플랜 후보 ─────────────────────────────────────────────────
@@ -754,6 +792,10 @@ def main():
     # 실행을 막지는 않는다: 새 주문은 place_limit_entry 가 가용 현금으로 이미
     # 막고 있고, 여기서 러너를 세우면 거짓 경보 한 번에 하루를 통째로 날린다.
     # 대신 로그와 일별 리포트(daily_report_toss.py) 양쪽에 남긴다.
+    # 누적 외부 입금. 낙폭 판정과 자산 로그가 **같은 값**을 써야 두 곡선이
+    # 갈리지 않는다. 장부를 다시 읽지 않고 방금 정산한 것에서 꺼낸다.
+    _deposited_krw = float((_vstate.get("index_meta") or {}).get("deposited_krw", 0.0))
+
     _ledger_problems = check_state(_vstate)
     if _ledger_problems:
         print(f"  ⚠️ [장부 점검] 이상 {len(_ledger_problems)}건 — 확인 필요")
@@ -789,7 +831,8 @@ def main():
 
     # 1-1. 자산 로그 로드 & 포트폴리오 드로다운 체크
     equity_log   = load_equity_log()
-    dd_blocked, dd_pct = check_portfolio_drawdown(equity_now, equity_log)
+    dd_blocked, dd_pct = check_portfolio_drawdown(equity_now, equity_log,
+                                                  _deposited_krw)
     if dd_blocked:
         warn = (f"⚠️ 포트폴리오 드로다운 *{dd_pct:.1f}%* "
                 f"(한도: -{PORTFOLIO_DD_STOP_PCT:.0f}%) → 신규 매수 중단")
@@ -931,7 +974,7 @@ def main():
             print(f"  [킬스위치] {kill.status()['reason']} → 신규 매수 중단")
             break
 
-        sym = _to_broker_sym(cand["ticker"])
+        sym = cand["ticker"]
         if not sym or sym in held or sym in pending_syms:
             continue
 
@@ -1017,7 +1060,7 @@ def main():
     # 여기서 주문 시점에 또 올리면 체결가 자리에 어제 종가가 박힌다.
     sig_log = load_signal_log()
     prices_cache = {
-        _to_broker_sym(tk): float(df["Close"].dropna().iloc[-1])
+        tk: float(df["Close"].dropna().iloc[-1])
         for tk, df in ohlcv.items() if not df["Close"].dropna().empty
     }
     sig_log = resolve_signal_outcomes(sig_log, prices_cache)
@@ -1025,9 +1068,8 @@ def main():
     sl_summary = signal_log_summary(sig_log)
 
     # 자산 로그 업데이트
-    equity_log = append_equity_log(
-        equity_log, equity_now, spy_price, positions,
-        deposited=float((load_state().get("index_meta") or {}).get("deposited_krw", 0.0)))
+    equity_log = append_equity_log(equity_log, equity_now, spy_price, positions,
+                                   deposited=_deposited_krw)
     save_equity_log(equity_log)
     perf = calc_performance_metrics(equity_log)
 

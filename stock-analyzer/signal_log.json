@@ -68,51 +68,6 @@
       "outcome_date": "2026-08-07"
     },
     {
-      "symbol": "005930.KS",
-      "entry_date": "2026-07-23",
-      "entry_price": 266250.0,
-      "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
-      "reason": "\ud329\ud130 65\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 44)",
-      "source": "github_actions",
-      "return_pct": null
-    },
-    {
-      "symbol": "000660.KS",
-      "entry_date": "2026-07-23",
-      "entry_price": 1868000.0,
-      "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
-      "reason": "\ud329\ud130 73\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 42)",
-      "source": "github_actions",
-      "return_pct": null
-    },
-    {
-      "symbol": "055550.KS",
-      "entry_date": "2026-07-23",
-      "entry_price": 103400.0,
-      "action": "\ud83d\udfe2 \ub9e4\uc218",
-      "reason": "\ud329\ud130 54\uc810 + \uc0c1\uc2b9\ucd94\uc138 (RSI 50) | \uac70\ub798\ub7c9 \uc8fc\uc758(0.3\u00d7)",
-      "source": "github_actions",
-      "return_pct": null
-    },
-    {
-      "symbol": "000270.KS",
-      "entry_date": "2026-07-23",
-      "entry_price": 147600.0,
-      "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
-      "reason": "\ud329\ud130 54\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 49)",
-      "source": "github_actions",
-      "return_pct": null
-    },
-    {
-      "symbol": "034730.KS",
-      "entry_date": "2026-07-23",
-      "entry_price": 646000.0,
-      "action": "\ud83d\udfe1 \uc870\uac74\ubd80 \ub9e4\uc218",
-      "reason": "\ud329\ud130 68\uc810 \u2014 \ucd94\uc138 \ud655\uc778 \uc2dc \ube44\uc911 \ud655\ub300 (RSI 51)",
-      "source": "github_actions",
-      "return_pct": null
-    },
-    {
       "id": "KHC-2026-07-31",
       "symbol": "KHC",
       "action": "\ub9e4\uc218",
