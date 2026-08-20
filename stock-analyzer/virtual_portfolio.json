@@ -1,5 +1,5 @@
 {
-  "cash_krw": 90037455.66766308,
+  "cash_krw": 80067803.91067754,
   "positions": {
     "F": {
       "qty": 78,
@@ -61,19 +61,49 @@
       },
       "avg_price_krw": 472358.0
     },
-    "META": {
-      "qty": 7,
-      "avg_price_usd": 541.3400268554688,
-      "avg_price_krw": 751233.7848950922,
-      "entry_date": "2026-08-19",
+    "AVGO": {
+      "qty": 9,
+      "avg_price_usd": 364.2349853515625,
+      "avg_price_krw": 507648.86492690444,
+      "entry_date": "2026-08-20",
       "plan": {
-        "stop": 552.73,
-        "target": 605.81,
-        "rr": 2.41,
+        "stop": 365.43,
+        "target": 407.52,
+        "rr": 2.4,
         "grade": "A",
-        "risk_pct": 2.74,
-        "entry_ref": 568.29,
-        "entry_fill": 541.34
+        "risk_pct": 3.28,
+        "entry_ref": 377.82,
+        "entry_fill": 364.235
+      }
+    },
+    "WFC": {
+      "qty": 54,
+      "avg_price_usd": 85.62000274658203,
+      "avg_price_krw": 119332.0217918884,
+      "entry_date": "2026-08-20",
+      "plan": {
+        "stop": 82.83,
+        "target": 89.28,
+        "rr": 2.15,
+        "grade": "A",
+        "risk_pct": 2.42,
+        "entry_ref": 84.88,
+        "entry_fill": 85.62
+      }
+    },
+    "HPE": {
+      "qty": 57,
+      "avg_price_usd": 53.349998474121094,
+      "avg_price_krw": 74356.02635232545,
+      "entry_date": "2026-08-20",
+      "plan": {
+        "stop": 51.8,
+        "target": 64.06,
+        "rr": 5.25,
+        "grade": "A",
+        "risk_pct": 3.65,
+        "entry_ref": 53.76,
+        "entry_fill": 53.35
       }
     }
   },
@@ -226,90 +256,6 @@
     {
       "side": "buy",
       "kind": "limit_entry",
-      "symbol": "AVGO",
-      "qty": 9,
-      "limit_price": 386.12,
-      "notional_krw": 4822472.700527344,
-      "placed_date": "2026-08-19",
-      "plan": {
-        "stop": 365.43,
-        "target": 407.52,
-        "rr": 2.4,
-        "grade": "A",
-        "risk_pct": 3.28,
-        "entry_ref": 377.82
-      },
-      "meta": {
-        "score": 55.6,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 48.7,
-          "ict": 76.6,
-          "quant": 66.6,
-          "verdict": 55.6
-        },
-        "analyst_asof": "2026-08-18"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "WFC",
-      "qty": 54,
-      "limit_price": 86.52,
-      "notional_krw": 6483585.487148438,
-      "placed_date": "2026-08-19",
-      "plan": {
-        "stop": 82.83,
-        "target": 89.28,
-        "rr": 2.15,
-        "grade": "A",
-        "risk_pct": 2.42,
-        "entry_ref": 84.88
-      },
-      "meta": {
-        "score": 62.9,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 61.6,
-          "ict": 88.0,
-          "quant": 62.1,
-          "verdict": 62.9
-        },
-        "analyst_asof": "2026-08-18"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "HPE",
-      "qty": 57,
-      "limit_price": 54.92,
-      "notional_krw": 4344205.440058594,
-      "placed_date": "2026-08-19",
-      "plan": {
-        "stop": 51.8,
-        "target": 64.06,
-        "rr": 5.25,
-        "grade": "A",
-        "risk_pct": 3.65,
-        "entry_ref": 53.76
-      },
-      "meta": {
-        "score": 72.0,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 77.1,
-          "ict": 100.0,
-          "quant": 58.1,
-          "verdict": 72.0
-        },
-        "analyst_asof": "2026-08-18"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
       "symbol": "MRNA",
       "qty": 31,
       "limit_price": 59.0,
@@ -370,9 +316,93 @@
         },
         "analyst_asof": "2026-08-18"
       }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "C",
+      "qty": 31,
+      "limit_price": 131.76,
+      "notional_krw": 5692814.614511718,
+      "placed_date": "2026-08-20",
+      "plan": {
+        "stop": 125.39,
+        "target": 139.26,
+        "rr": 2.89,
+        "grade": "A",
+        "risk_pct": 2.76,
+        "entry_ref": 128.95
+      },
+      "meta": {
+        "score": 62.2,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 59.9,
+          "ict": 86.6,
+          "quant": 63.6,
+          "verdict": 62.2
+        },
+        "analyst_asof": "2026-08-19"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "RF",
+      "qty": 191,
+      "limit_price": 30.45,
+      "notional_krw": 8105922.096203613,
+      "placed_date": "2026-08-20",
+      "plan": {
+        "stop": 29.42,
+        "target": 32.29,
+        "rr": 3.93,
+        "grade": "B",
+        "risk_pct": 1.94,
+        "entry_ref": 30.0
+      },
+      "meta": {
+        "score": 59.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 55.7,
+          "ict": 100.0,
+          "quant": 60.1,
+          "verdict": 59.0
+        },
+        "analyst_asof": "2026-08-19"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "BAC",
+      "qty": 99,
+      "limit_price": 62.65,
+      "notional_krw": 8644463.228430174,
+      "placed_date": "2026-08-20",
+      "plan": {
+        "stop": 60.66,
+        "target": 65.23,
+        "rr": 3.09,
+        "grade": "B",
+        "risk_pct": 1.81,
+        "entry_ref": 61.78
+      },
+      "meta": {
+        "score": 68.8,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 69.9,
+          "ict": 89.8,
+          "quant": 63.9,
+          "verdict": 68.8
+        },
+        "analyst_asof": "2026-08-19"
+      }
     }
   ],
-  "realized_pnl_krw": 128269.05685083522,
+  "realized_pnl_krw": 151043.26878631068,
   "trades": [
     {
       "date": "2026-07-31",
@@ -794,6 +824,101 @@
       "target": 605.81,
       "rr": 2.41,
       "risk_pct": 2.74,
+      "plan": true
+    },
+    {
+      "date": "2026-08-19",
+      "symbol": "META",
+      "side": "sell",
+      "qty": 7,
+      "price_usd": 541.34,
+      "amount_krw": 5281411.0,
+      "pnl_krw": 22774.0,
+      "return_pct": 0.0,
+      "outcome": "loss",
+      "r_realized": 0.0,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-08-20",
+      "symbol": "AVGO",
+      "side": "buy",
+      "qty": 9,
+      "price_usd": 364.235,
+      "amount_krw": 4568840.0,
+      "limit_price": 386.12,
+      "placed_date": "2026-08-19",
+      "meta": {
+        "score": 55.6,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 48.7,
+          "ict": 76.6,
+          "quant": 66.6,
+          "verdict": 55.6
+        },
+        "analyst_asof": "2026-08-18"
+      },
+      "grade": "A",
+      "stop": 365.43,
+      "target": 407.52,
+      "rr": 2.4,
+      "risk_pct": 3.28,
+      "plan": true
+    },
+    {
+      "date": "2026-08-20",
+      "symbol": "WFC",
+      "side": "buy",
+      "qty": 54,
+      "price_usd": 85.62,
+      "amount_krw": 6443929.0,
+      "limit_price": 86.52,
+      "placed_date": "2026-08-19",
+      "meta": {
+        "score": 62.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 61.6,
+          "ict": 88.0,
+          "quant": 62.1,
+          "verdict": 62.9
+        },
+        "analyst_asof": "2026-08-18"
+      },
+      "grade": "A",
+      "stop": 82.83,
+      "target": 89.28,
+      "rr": 2.15,
+      "risk_pct": 2.42,
+      "plan": true
+    },
+    {
+      "date": "2026-08-20",
+      "symbol": "HPE",
+      "side": "buy",
+      "qty": 57,
+      "price_usd": 53.35,
+      "amount_krw": 4238294.0,
+      "limit_price": 54.92,
+      "placed_date": "2026-08-19",
+      "meta": {
+        "score": 72.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 77.1,
+          "ict": 100.0,
+          "quant": 58.1,
+          "verdict": 72.0
+        },
+        "analyst_asof": "2026-08-18"
+      },
+      "grade": "A",
+      "stop": 51.8,
+      "target": 64.06,
+      "rr": 5.25,
+      "risk_pct": 3.65,
       "plan": true
     }
   ],

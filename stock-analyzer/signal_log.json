@@ -282,6 +282,42 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "AVGO-2026-08-20",
+      "symbol": "AVGO",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-20",
+      "entry_price": 364.235,
+      "score": 55.6,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "WFC-2026-08-20",
+      "symbol": "WFC",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-20",
+      "entry_price": 85.62,
+      "score": 62.9,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "HPE-2026-08-20",
+      "symbol": "HPE",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-20",
+      "entry_price": 53.35,
+      "score": 72.0,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
