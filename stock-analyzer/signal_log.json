@@ -75,9 +75,9 @@
       "entry_price": 26.02,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-21",
+      "outcome_price": 25.57,
+      "return_pct": -1.73
     },
     {
       "id": "GM-2026-07-31",
@@ -87,9 +87,9 @@
       "entry_price": 88.85,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-21",
+      "outcome_price": 86.15,
+      "return_pct": -3.04
     },
     {
       "id": "COF-2026-07-31",
@@ -99,9 +99,9 @@
       "entry_price": 210.0,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-21",
+      "outcome_price": 212.48,
+      "return_pct": 1.18
     },
     {
       "id": "BAC-2026-07-31",
@@ -111,9 +111,9 @@
       "entry_price": 61.54,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-21",
+      "outcome_price": 61.86,
+      "return_pct": 0.52
     },
     {
       "id": "HPE-2026-07-31",
@@ -123,9 +123,9 @@
       "entry_price": 49.0,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-21",
+      "outcome_price": 52.89,
+      "return_pct": 7.94
     },
     {
       "id": "ALLY-2026-08-05",
@@ -314,6 +314,42 @@
       "entry_date": "2026-08-20",
       "entry_price": 53.35,
       "score": 72.0,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "C-2026-08-21",
+      "symbol": "C",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-21",
+      "entry_price": 131.22,
+      "score": 62.2,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "RF-2026-08-21",
+      "symbol": "RF",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-21",
+      "entry_price": 30.44,
+      "score": 59.0,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "BAC-2026-08-21",
+      "symbol": "BAC",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-21",
+      "entry_price": 62.33,
+      "score": 68.8,
       "rsi": null,
       "outcome_date": null,
       "outcome_price": null,

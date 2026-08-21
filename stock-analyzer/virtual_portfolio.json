@@ -1,5 +1,5 @@
 {
-  "cash_krw": 80067803.91067754,
+  "cash_krw": 62364653.638204984,
   "positions": {
     "F": {
       "qty": 78,
@@ -61,21 +61,6 @@
       },
       "avg_price_krw": 472358.0
     },
-    "AVGO": {
-      "qty": 9,
-      "avg_price_usd": 364.2349853515625,
-      "avg_price_krw": 507648.86492690444,
-      "entry_date": "2026-08-20",
-      "plan": {
-        "stop": 365.43,
-        "target": 407.52,
-        "rr": 2.4,
-        "grade": "A",
-        "risk_pct": 3.28,
-        "entry_ref": 377.82,
-        "entry_fill": 364.235
-      }
-    },
     "WFC": {
       "qty": 54,
       "avg_price_usd": 85.62000274658203,
@@ -104,6 +89,51 @@
         "risk_pct": 3.65,
         "entry_ref": 53.76,
         "entry_fill": 53.35
+      }
+    },
+    "C": {
+      "qty": 31,
+      "avg_price_usd": 131.22000122070312,
+      "avg_price_krw": 181868.29472897947,
+      "entry_date": "2026-08-21",
+      "plan": {
+        "stop": 125.39,
+        "target": 139.26,
+        "rr": 2.89,
+        "grade": "A",
+        "risk_pct": 2.76,
+        "entry_ref": 128.95,
+        "entry_fill": 131.22
+      }
+    },
+    "RF": {
+      "qty": 191,
+      "avg_price_usd": 30.440000534057617,
+      "avg_price_krw": 42189.231345661916,
+      "entry_date": "2026-08-21",
+      "plan": {
+        "stop": 29.42,
+        "target": 32.29,
+        "rr": 3.93,
+        "grade": "B",
+        "risk_pct": 1.94,
+        "entry_ref": 30.0,
+        "entry_fill": 30.44
+      }
+    },
+    "BAC": {
+      "qty": 99,
+      "avg_price_usd": 62.33000183105469,
+      "avg_price_krw": 86388.13472042233,
+      "entry_date": "2026-08-21",
+      "plan": {
+        "stop": 60.66,
+        "target": 65.23,
+        "rr": 3.09,
+        "grade": "B",
+        "risk_pct": 1.81,
+        "entry_ref": 61.78,
+        "entry_fill": 62.33
       }
     }
   },
@@ -320,89 +350,33 @@
     {
       "side": "buy",
       "kind": "limit_entry",
-      "symbol": "C",
-      "qty": 31,
-      "limit_price": 131.76,
-      "notional_krw": 5692814.614511718,
-      "placed_date": "2026-08-20",
+      "symbol": "NVDA",
+      "qty": 21,
+      "limit_price": 197.07,
+      "notional_krw": 5735836.569770508,
+      "placed_date": "2026-08-21",
       "plan": {
-        "stop": 125.39,
-        "target": 139.26,
-        "rr": 2.89,
+        "stop": 188.44,
+        "target": 232.01,
+        "rr": 7.54,
         "grade": "A",
-        "risk_pct": 2.76,
-        "entry_ref": 128.95
+        "risk_pct": 2.64,
+        "entry_ref": 193.54
       },
       "meta": {
-        "score": 62.2,
+        "score": 63.9,
         "score_role": "observed",
         "analyst": {
-          "chart": 59.9,
-          "ict": 86.6,
-          "quant": 63.6,
-          "verdict": 62.2
+          "chart": 61.4,
+          "ict": 87.2,
+          "quant": 65.9,
+          "verdict": 63.9
         },
-        "analyst_asof": "2026-08-19"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "RF",
-      "qty": 191,
-      "limit_price": 30.45,
-      "notional_krw": 8105922.096203613,
-      "placed_date": "2026-08-20",
-      "plan": {
-        "stop": 29.42,
-        "target": 32.29,
-        "rr": 3.93,
-        "grade": "B",
-        "risk_pct": 1.94,
-        "entry_ref": 30.0
-      },
-      "meta": {
-        "score": 59.0,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 55.7,
-          "ict": 100.0,
-          "quant": 60.1,
-          "verdict": 59.0
-        },
-        "analyst_asof": "2026-08-19"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "BAC",
-      "qty": 99,
-      "limit_price": 62.65,
-      "notional_krw": 8644463.228430174,
-      "placed_date": "2026-08-20",
-      "plan": {
-        "stop": 60.66,
-        "target": 65.23,
-        "rr": 3.09,
-        "grade": "B",
-        "risk_pct": 1.81,
-        "entry_ref": 61.78
-      },
-      "meta": {
-        "score": 68.8,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 69.9,
-          "ict": 89.8,
-          "quant": 63.9,
-          "verdict": 68.8
-        },
-        "analyst_asof": "2026-08-19"
+        "analyst_asof": "2026-08-20"
       }
     }
   ],
-  "realized_pnl_krw": 151043.26878631068,
+  "realized_pnl_krw": 127538.87291321112,
   "trades": [
     {
       "date": "2026-07-31",
@@ -919,6 +893,101 @@
       "target": 64.06,
       "rr": 5.25,
       "risk_pct": 3.65,
+      "plan": true
+    },
+    {
+      "date": "2026-08-20",
+      "symbol": "AVGO",
+      "side": "sell",
+      "qty": 9,
+      "price_usd": 364.39,
+      "amount_krw": 4545335.0,
+      "pnl_krw": -23504.0,
+      "return_pct": 0.04,
+      "outcome": "loss",
+      "r_realized": 0.013,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-08-21",
+      "symbol": "C",
+      "side": "buy",
+      "qty": 31,
+      "price_usd": 131.22,
+      "amount_krw": 5637917.0,
+      "limit_price": 131.76,
+      "placed_date": "2026-08-20",
+      "meta": {
+        "score": 62.2,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 59.9,
+          "ict": 86.6,
+          "quant": 63.6,
+          "verdict": 62.2
+        },
+        "analyst_asof": "2026-08-19"
+      },
+      "grade": "A",
+      "stop": 125.39,
+      "target": 139.26,
+      "rr": 2.89,
+      "risk_pct": 2.76,
+      "plan": true
+    },
+    {
+      "date": "2026-08-21",
+      "symbol": "RF",
+      "side": "buy",
+      "qty": 191,
+      "price_usd": 30.44,
+      "amount_krw": 8058143.0,
+      "limit_price": 30.45,
+      "placed_date": "2026-08-20",
+      "meta": {
+        "score": 59.0,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 55.7,
+          "ict": 100.0,
+          "quant": 60.1,
+          "verdict": 59.0
+        },
+        "analyst_asof": "2026-08-19"
+      },
+      "grade": "B",
+      "stop": 29.42,
+      "target": 32.29,
+      "rr": 3.93,
+      "risk_pct": 1.94,
+      "plan": true
+    },
+    {
+      "date": "2026-08-21",
+      "symbol": "BAC",
+      "side": "buy",
+      "qty": 99,
+      "price_usd": 62.33,
+      "amount_krw": 8552425.0,
+      "limit_price": 62.65,
+      "placed_date": "2026-08-20",
+      "meta": {
+        "score": 68.8,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 69.9,
+          "ict": 89.8,
+          "quant": 63.9,
+          "verdict": 68.8
+        },
+        "analyst_asof": "2026-08-19"
+      },
+      "grade": "B",
+      "stop": 60.66,
+      "target": 65.23,
+      "rr": 3.09,
+      "risk_pct": 1.81,
       "plan": true
     }
   ],
