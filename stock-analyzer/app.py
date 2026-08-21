@@ -3348,6 +3348,21 @@ def _analyst_scorecard_rows(days, prices, horizon):
     return rows
 
 
+_CI95_HELP = (
+    "± 는 95% 오차범위입니다. 같은 날의 판정들은 같은 시장을 함께 타므로 "
+    "독립이 아니고, 판정 개수만으로 재면 오차가 실제보다 좁게 나옵니다 — "
+    "날짜로 묶어 다시 잰 값입니다. 기록이 하루뿐이면 잴 수 없어 안 붙습니다."
+)
+
+
+def _hit_rate_text(hit):
+    """적중률 지표에 찍을 문구 — 오차범위를 알면 함께 붙인다."""
+    if hit.get('hit_rate') is None:
+        return "—"
+    ci = hit.get('ci95')
+    return f"{hit['hit_rate']}%" + (f" ± {ci}%p" if ci else "")
+
+
 def _analyst_verdict_hit(days, prices, horizon):
     """일봉 기록의 화면 총괄 판정 적중률 — 15분봉 성적표와 같은 자.
 
@@ -3456,10 +3471,10 @@ def render_scalp_scorecard():
         with _mcols[0]:
             if screen['n']:
                 st.metric(f"SCALP 판정 적중률 ({screen['hits']}/{screen['n']})",
-                          f"{screen['hit_rate']}%",
+                          _hit_rate_text(screen),
                           help=f"매수 {screen['buy_n']}건 · 매도 {screen['sell_n']}건 · "
                                f"중립 {screen['neutral_n']}건은 분모에서 뺐습니다. "
-                               "화면 상단에 뜬 판정 그대로입니다.")
+                               "화면 상단에 뜬 판정 그대로입니다.  \n" + _CI95_HELP)
             else:
                 st.metric("SCALP 판정 적중률", "—",
                           help="퀀트+재무 기록이 붙은 날부터 쌓입니다. 그 전 기록에는 "
@@ -3467,9 +3482,9 @@ def render_scalp_scorecard():
         with _mcols[1]:
             if combined['n']:
                 st.metric(f"차트+ICT 판정 적중률 ({combined['hits']}/{combined['n']})",
-                          f"{combined['hit_rate']}%",
+                          _hit_rate_text(combined),
                           help="퀀트를 뺀 옛 기준. 표본이 더 길어 참고로 남겨 둡니다 — "
-                               "화면 판정과 방향이 갈릴 수 있습니다.")
+                               "화면 판정과 방향이 갈릴 수 있습니다.  \n" + _CI95_HELP)
             else:
                 st.caption("아직 방향 판정(매수·매도)이 나온 기록이 없습니다 — 전부 중립입니다.")
         if rows:
@@ -3552,10 +3567,10 @@ def render_analyst_scorecard():
         _hit = _analyst_verdict_hit(days, prices, horizon)
         if _hit['n']:
             st.metric(f"SWING 판정 적중률 ({_hit['hits']}/{_hit['n']})",
-                      f"{_hit['hit_rate']}%",
+                      _hit_rate_text(_hit),
                       help=f"매수 {_hit['buy_n']}건 · 매도 {_hit['sell_n']}건 · "
                            f"중립 {_hit['neutral_n']}건은 분모에서 뺐습니다. "
-                           "화면 상단에 뜬 판정 그대로입니다.")
+                           "화면 상단에 뜬 판정 그대로입니다.  \n" + _CI95_HELP)
         st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
     if not any_rows:
