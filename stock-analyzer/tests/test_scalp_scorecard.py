@@ -282,3 +282,42 @@ def test_scalp_record_without_quant_has_no_verdict(monkeypatch):
     row = captured["scores"]["AAPL"]
     assert "verdict" not in row and "quant" not in row
     assert "chart" in row
+
+def test_ci95_is_wider_than_binomial_when_days_move_together():
+    """같은 날 판정이 함께 맞고 함께 틀리면 오차범위는 이항보다 넓어야 한다.
+
+    이항 오차는 판정 하나하나를 독립으로 세므로, 하루가 통째로 맞거나 통째로
+    틀리는 실제 모양에서 늘 좁게 나온다 — 15분봉 실측 과분산 2.2배.
+    """
+    import numpy as np
+
+    # 4일 × 10종목. 이틀은 전부 맞고 이틀은 전부 틀린다 → 적중률 50%.
+    days, returns = [], {}
+    for i, right in enumerate([True, True, False, False]):
+        date = f"2026-08-{10 + i:02d}"
+        days.append(_day(date, {f"T{j}": {"combined": 70.0} for j in range(10)}))
+        returns[date] = {f"T{j}": (1.0 if right else -1.0) for j in range(10)}
+
+    out = sc.verdict_hit_rate(days, returns)
+    assert out["n"] == 40 and out["hit_rate"] == 50.0
+
+    binom = 1.96 * np.sqrt(0.25 / 40) * 100      # ±15.5%p
+    assert out["ci95"] > binom * 2               # 군집 오차는 훨씬 넓다
+
+
+def test_ci95_is_none_with_a_single_day():
+    """하루치 기록으로는 날 사이 분산을 잴 수 없다 — 0 이 아니라 '모른다'."""
+    days = [_day("2026-08-06", {"UP": {"combined": 70.0},
+                                "DOWN": {"combined": 30.0}})]
+    out = sc.verdict_hit_rate(days, {"2026-08-06": {"UP": 1.0, "DOWN": -1.0}})
+
+    assert out["n"] == 2 and out["ci95"] is None
+
+
+def test_hit_rate_text_omits_ci_when_unknown():
+    """오차범위를 모르면 ± 를 붙이지 않는다 — 붙일 수 없는 것을 지어내지 않는다."""
+    import app
+
+    assert app._hit_rate_text({"hit_rate": 46.4, "ci95": 6.4}) == "46.4% ± 6.4%p"
+    assert app._hit_rate_text({"hit_rate": 46.4, "ci95": None}) == "46.4%"
+    assert app._hit_rate_text({"hit_rate": None, "ci95": None}) == "—"

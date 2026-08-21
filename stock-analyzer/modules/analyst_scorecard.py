@@ -293,6 +293,28 @@ def scored_dates(days, forward_returns, slug):
     return out
 
 
+def _cluster_ci95(per_day, p, n):
+    """날짜로 묶은 95% 오차범위(±%p). 잴 수 없으면 None.
+
+    같은 날의 판정들은 같은 시장을 함께 타므로 독립이 아니다. 이항 오차
+    √(p(1−p)/n) 로 재면 늘 좁게 나온다 — 15분봉 실측(9일 × 276종목, n=489)
+    에서 과분산 2.1배였고 오차범위는 ±4.4%p 가 아니라 ±6.4%p 였다. 적중률
+    숫자 자체는 틀리지 않지만, 그 옆의 오차범위는 틀린다.
+
+    비율추정량의 군집 강건 분산을 쓴다(군집 = 하루):
+        Var = Σ_d (h_d − p·n_d)² / (Σ_d n_d)² × D/(D−1)
+
+    날이 하나뿐이면 군집 간 분산이 정의되지 않는다 — 0 이 아니라 None
+    ("모른다") 을 돌려준다. 화면은 ± 를 아예 안 붙인다.
+    """
+    D = len(per_day)
+    if not n or p is None or D < 2:
+        return None
+    ss = sum((h - p * nd) ** 2 for h, nd in per_day)
+    var = ss / (n ** 2) * D / (D - 1)
+    return round(1.96 * float(np.sqrt(var)) * 100, 1)
+
+
 def verdict_hit_rate(days, returns, slug=COMBINED_SLUG):
     """총괄 판정의 방향 적중률 — 화면에 뜬 매수/매도가 실제로 맞았나.
 
@@ -304,15 +326,20 @@ def verdict_hit_rate(days, returns, slug=COMBINED_SLUG):
     종목이 실제로 올랐나'(판정 하나하나)다. 사장님이 화면에서 보는 것은
     이쪽이다.
 
+    ci95 는 날짜로 묶어 잰 95% 오차범위(±%p)다 — _cluster_ci95() 참고.
+    같은 날 판정은 독립이 아니므로 이항 오차를 쓰면 늘 좁게 나온다.
+
     중립 판정은 분모에서 뺀다 — 맞고 틀림이 정의되지 않는 판정을 세면
     적중률이 언제나 50% 쪽으로 눌린다. 판정을 안 낸 것이 성적을 좋게도
     나쁘게도 만들면 안 된다. 수익률 정확히 0% 는 빗나감으로 센다 —
     방향을 맞히지 못한 것이다.
     """
     hits = buy_n = sell_n = neutral_n = 0
+    per_day = []   # (그날 맞힌 수, 그날 판정 수) — 같은 날 판정은 독립이 아니다
 
     for day in days:
         rets = returns.get(day.get("date")) or {}
+        day_hits = day_n = 0
         for ticker, per_analyst in day.get("scores", {}).items():
             score = per_analyst.get(slug)
             ret = rets.get(ticker)
@@ -326,16 +353,23 @@ def verdict_hit_rate(days, returns, slug=COMBINED_SLUG):
             if verdict == '중립':
                 neutral_n += 1
                 continue
+            day_n += 1
             if verdict == '매수':
                 buy_n += 1
-                hits += 1 if ret > 0 else 0
+                day_hits += 1 if ret > 0 else 0
             else:
                 sell_n += 1
-                hits += 1 if ret < 0 else 0
+                day_hits += 1 if ret < 0 else 0
+
+        if day_n:
+            per_day.append((day_hits, day_n))
+            hits += day_hits
 
     n = buy_n + sell_n
+    p = hits / n if n else None
     return {
-        "hit_rate":  round(hits / n * 100, 1) if n else None,
+        "hit_rate":  round(p * 100, 1) if n else None,
+        "ci95":      _cluster_ci95(per_day, p, n),
         "n":         n,
         "hits":      hits,
         "buy_n":     buy_n,
