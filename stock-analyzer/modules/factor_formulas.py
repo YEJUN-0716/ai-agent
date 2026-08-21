@@ -1,17 +1,22 @@
 """
-팩터 원점수(raw) 공식 — 세 구현의 단일 진실 공급원(single source of truth)
+팩터 원점수(raw) 공식 — 단일 진실 공급원(single source of truth)
 =========================================================================
-가치·퀄리티 원점수의 배합은 아래 세 곳에서 **동일해야 한다**:
-  - app.py::calc_factor_scores          (UI + signal_worker.py)
-  - app.py::calc_factor_scores_sectoral (섹터 중립 랭킹)
-  - modules/factor_engine.py::calc_factor_scores (페이퍼트레이드 + factor_validator)
+가치·퀄리티 원점수의 배합은 아래 네 곳에서 **동일해야 한다**:
+  - modules/factor_scoring.py::fundamental_factors — 프로덕션 스캔
+    (app.py::calc_factor_scores / calc_factor_scores_sectoral · signal_worker.py)
+  - modules/factor_engine.py::point_in_time_fundamentals — PIT 재무(발생액 품질)
+  - modules/factor_validator.py::_add_value_quality_z — 주간 IC 측정
 
-과거에는 같은 수식을 세 곳에 복붙해 두고 주석으로만 "드리프트 해소"라고
-적어 뒀는데, 한쪽만 고치면 UI와 백테스트 결과가 조용히 갈렸다.
+과거에는 같은 수식을 여러 곳에 복붙해 두고 주석으로만 "드리프트 해소"라고
+적어 뒀는데, 한쪽만 고치면 UI와 백테스트 결과가 조용히 갈렸다. 2026-08-21
+에도 두 벌이 더 나왔다 — IC 측정 쪽(퀄리티 0.45/0.35/0.20)과 PIT 쪽(발생액)
+이 계수를 직접 박고 있었고, 금지 가드가 **파일을 열거하고 있어** 둘 다 밖에
+있었다. 그래서 지금 가드는 저장소를 훑는다.
 
 이 모듈이 그 배합을 소유한다. 계수를 바꾸려면 여기서만 바꾸면 되고,
 tests/test_factor_formulas.py 가 계수를 고정해 두었으므로 무단 변경은
-CI에서 실패한다.
+CI에서 실패한다. **IC 를 재는 쪽이 계수를 따로 들고 있으면, 프로덕션이 쓰지
+않는 배합의 예측력으로 실전 비중이 정해진다.**
 
 순수 산술만 쓰므로 스칼라와 pandas Series 양쪽에서 동일하게 동작한다
 (app.py 는 종목별 스칼라로, factor_engine.py 는 Series로 호출한다).

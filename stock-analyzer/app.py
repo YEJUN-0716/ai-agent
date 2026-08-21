@@ -499,23 +499,26 @@ TICKER_ETF = {
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _get_market_regime():
-    """SPY·QQQ vs MA200으로 시장 레짐 판단. 1시간 캐시."""
+def _weight_regime() -> str:
+    """가중치표를 고르는 레짐 — **페이퍼트레이드 러너와 같은 자**(SPY/MA200 + VIX).
+
+    `ic_weights.json` 의 `regime_weights`·`production_weights` 는 bull/neutral/bear
+    세 칸인데, 예전에는 그 칸을 고르는 규칙이 이 파일(`regime_of`, ±3% 버퍼,
+    VIX 안 봄)과 러너(`factor_engine.get_market_regime`, VIX 포함)로 갈려 있었다.
+    2019-12~2026-08 실측 1,680거래일 중 **231일(13.8%)이 서로 다른 답**이었고,
+    26일은 정반대였다 — 러너가 bear 라 자리를 40% 로 줄인 날 스캔은 bull 가중치
+    (모멘텀 62.9%)로 랭킹했다. 레짐이 한 칸 움직이면 비중의 14% 가 이동한다.
+
+    `regime_of` / `get_market_regime` 는 **라벨용으로 남는다** — 성적표·백필이
+    과거 날짜에 붙인 국면 라벨이 그 자로 찍혀 있어 바꾸면 기록이 안 이어진다
+    (signal_worker._regime_label 참고). 여기서 정하는 것은 "지금 어느 가중치
+    칸을 쓸 것인가" 하나다.
+    """
     try:
-        data = yf.download(['SPY', 'QQQ'], period='1y', interval='1d',
-                           progress=False, auto_adjust=True)
-        closes = data['Close']
-        flags = {}
-        for sym in ['SPY', 'QQQ']:
-            c = closes[sym].dropna()
-            if len(c) >= 200:
-                flags[sym] = float(c.iloc[-1]) > float(c.rolling(200).mean().iloc[-1])
-        spy_b, qqq_b = flags.get('SPY'), flags.get('QQQ')
-        if spy_b and qqq_b:    return 'bull'
-        if spy_b is False and qqq_b is False: return 'bear'
-        return 'mixed'
+        from modules.factor_engine import get_market_regime as _fe_regime
+        return _fe_regime()[0]
     except Exception:
-        return 'unknown'
+        return 'neutral'
 
 
 # ─────────────────────────────────────────────
@@ -2736,8 +2739,12 @@ def _pick_4f_weights(ic_data, regime):
             [('momentum', momentum), ('value', value), ('quality', quality), ('low_vol', low_vol)]}
 
 
-def _load_ic_factor_weights_4f(regime=None, benchmark=None):
+def _load_ic_factor_weights_4f(regime=None):
     """ic_weights.json에서 이 스캔의 4팩터(momentum/value/quality/low_vol) 가중치를 읽는다.
+
+    레짐은 `_weight_regime()` 이 정한다 — 러너의 노출 상한과 같은 자다
+    (예전에는 호출부가 benchmark='SPY' 를 넘겼는데, 레짐 판정은 늘 SPY+VIX 라
+    그 인자는 아무것도 고르지 않았다).
 
     `production_weights` 를 먼저 본다. 이 스캔은 12-1 모멘텀(252→21봉)과
     252봉 변동성으로 랭킹하는데, 그 예측력으로 배분된 가중치가 거기 들어 있다.
@@ -2753,7 +2760,7 @@ def _load_ic_factor_weights_4f(regime=None, benchmark=None):
         with open(ic_path, encoding='utf-8') as _f:
             _d = _json.load(_f)
         if regime is None:
-            regime, _ = get_market_regime(benchmark)
+            regime = _weight_regime()
 
         return _pick_4f_weights(_d, regime)
     except Exception:
@@ -2811,8 +2818,7 @@ def calc_factor_scores(tickers, prog_bar=None, prog_text=None,
     rdf = _scoring.rank_by_composite(
         results,
         factor_weights=factor_weights,
-        ic_weights=_load_ic_factor_weights_4f(
-            benchmark='SPY'),
+        ic_weights=_load_ic_factor_weights_4f(),
     )
     if failed:
         rdf.attrs['failed'] = failed
@@ -3028,8 +3034,7 @@ def calc_factor_scores_sectoral(tickers, factor_weights=None, prog_bar=None, pro
     rdf = _scoring.rank_by_sector_neutral_composite(
         results,
         factor_weights=factor_weights,
-        ic_weights=_load_ic_factor_weights_4f(
-            benchmark='SPY'),
+        ic_weights=_load_ic_factor_weights_4f(),
     )
     # signal_worker.py 가 텔레그램 알림에 실패 종목 수를 찍는다. 이 키가 없으면
     # 조용히 0으로 보고돼, 유니버스 절반이 죽어도 알림은 정상으로 보인다.
@@ -3244,11 +3249,8 @@ def _current_analyst_weights():
     TEAM_WEIGHTS의 3인분 비율로 폴백한다 — analyst-team-feedback-loop 승인 설계.
     """
     if _ANALYST_WEIGHTS_AVAILABLE:
-        try:
-            regime, _ = get_market_regime()
-        except Exception:
-            regime = 'neutral'
-        w = _load_analyst_weights(regime)
+        # 가중치 칸을 고르는 자는 하나다 — 러너의 노출 상한과 같은 것.
+        w = _load_analyst_weights(_weight_regime())
         if w:
             return {k: round(v * 100, 1) for k, v in w.items()}
     _fallback_total = sum(TEAM_WEIGHTS[k] for k in _DIRECTIONAL_ANALYSTS) or 1
@@ -4666,11 +4668,13 @@ def render_market_tape():
 
     시세는 마켓 보드와 같은 `_market_board_data()`(15분 캐시)에서 뽑는다 — 스트립 때문에
     네트워크 호출이 늘어나면 안 된다."""
-    regime = _get_market_regime()
+    # 화면에 뜨는 레짐과 비중을 고르는 레짐이 달랐다 — 같은 자를 쓴다.
+    regime = _weight_regime()
     r_color = {'bull': 'var(--green)', 'bear': 'var(--red)',
-               'mixed': 'var(--amber)', 'unknown': 'var(--text-4)'}.get(regime, 'var(--text-4)')
-    r_label = {'bull': '강세 · SPY·QQQ 200일선 위', 'bear': '약세 · SPY·QQQ 200일선 아래',
-               'mixed': '혼조 · 엇갈림', 'unknown': '판정 불가'}.get(regime, '판정 불가')
+               'neutral': 'var(--amber)'}.get(regime, 'var(--text-4)')
+    r_label = {'bull': '강세 · SPY 200일선 위 · VIX<25',
+               'bear': '약세 · SPY 200일선 −3% 아래 또는 VIX>30',
+               'neutral': '중립 · 그 사이'}.get(regime, '판정 불가')
 
     quotes = _market_board_data()
     cells = []
@@ -6784,12 +6788,11 @@ def main():
                         st.caption("① 시장 레짐 ② 일봉+주봉 패턴 ③ 실적 발표 근접 ④ 섹터 상대강도")
 
                         # ① 시장 레짐 배너 (항상 표시)
-                        _regime = _get_market_regime()
-                        _r_color = {'bull':'#26a69a','bear':'#ef5350','mixed':'#ff9800','unknown':'#9e9e9e'}
-                        _r_label = {'bull':'🟢 강세장 (SPY·QQQ > MA200) — 롱 우호적',
-                                    'bear':'🔴 약세장 (SPY·QQQ < MA200) — 개별 강세 패턴도 실패율 높음',
-                                    'mixed':'🟡 혼조 (SPY·QQQ 엇갈림) — 선택적 진입',
-                                    'unknown':'⚪ 레짐 확인 불가'}
+                        _regime = _weight_regime()
+                        _r_color = {'bull':'#26a69a','bear':'#ef5350','neutral':'#ff9800'}
+                        _r_label = {'bull':'🟢 강세장 (SPY > MA200, VIX<25) — 롱 우호적',
+                                    'bear':'🔴 약세장 (SPY < MA200−3% 또는 VIX>30) — 개별 강세 패턴도 실패율 높음',
+                                    'neutral':'🟡 중립 (그 사이) — 선택적 진입'}
                         _rc = _r_color.get(_regime, '#9e9e9e')
                         st.markdown(
                             f"<div style='background:{_rc}18;border:1px solid {_rc}55;"
@@ -7058,10 +7061,14 @@ def main():
                 _ic_c2.metric("ICIR", f"{_ics['icir']:+.3f}",
                               help="IC 평균/표준편차. 0.5 이상이면 안정적")
                 _ic_c3.metric("t-통계량", f"{_ics['t_stat']:+.2f}",
-                              help="|t| > 2.0이면 통계적으로 유의미")
+                              help=("|t| > 2.0이면 통계적으로 유의미. 예측 기간이 리밸런싱 "
+                                    "간격(21거래일)보다 길면 창이 겹치므로 겹치지 않는 "
+                                    f"유효표본 {_ics.get('n_effective', _ics['n_periods'])}개로 낸 값이다."))
                 _ic_c4.metric("IC 양수 비율", f"{_ics['pct_positive']:.0f}%",
                               help="60% 이상이면 팩터가 일관성 있음")
-                _ic_c5.metric("분석 기간 수", f"{_ics['n_periods']}회")
+                _ic_c5.metric("분석 기간 수", f"{_ics['n_periods']}회",
+                              help=(f"유효표본 {_ics.get('n_effective', _ics['n_periods'])}개 "
+                                    "— 창이 겹치면 관측 수보다 적다."))
 
                 # 평가 메시지
                 _verdict_parts = []

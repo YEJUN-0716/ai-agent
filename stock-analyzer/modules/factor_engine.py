@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from modules.factor_formulas import accrual_quality as _accrual_quality
+
 warnings.filterwarnings("ignore")
 
 # ── 레짐별 팩터 가중치 ──────────────────────────────────────────────
@@ -166,10 +168,13 @@ def point_in_time_fundamentals(tk: str, as_of_date, price: float,
                 mcap = price * n_shares
                 if mcap > 0:
                     out["fcf_yield"] = fcf_ttm / mcap * 100
-            # 발생액 품질 (app.py 라이브 경로와 동일 공식)
+            # 발생액 품질 — 공식은 factor_formulas 소유다(라이브 경로와 같은 함수).
+            # 여기 사본이 남아 있으면 배합을 바꿀 때 IC 쪽만 옛 값으로 잰다.
+            # 순이익이 없거나 0 이하면 NaN 으로 둔다 — 라이브의 중립 50 과 다른데,
+            # IC 는 단면 z-score 라 '판정 불가'를 중립 상수로 채우면 그 종목이
+            # 관측으로 섞인다. 소비 측 _zscore_col 이 NaN 을 z=0(평균)으로 받는다.
             if pd.notna(net_ttm) and net_ttm > 0:
-                out["accrual_q"] = (float(np.clip((fcf_ttm / net_ttm) * 50, 0, 100))
-                                    if fcf_ttm > 0 else 0.0)
+                out["accrual_q"] = _accrual_quality(fcf_ttm, net_ttm)
     except Exception:
         pass
     return out
