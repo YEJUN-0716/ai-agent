@@ -91,8 +91,23 @@ def send_tg(msg):
     return ok
 
 
+# 표본이 이 배수만큼 늘어야 같은 지평을 다시 발행한다. 1 을 더한 것으로는
+# 부족하다 — 백필로 n 이 매일 1씩 늘기 때문에 "늘었나"만 보면 게이트가 늘
+# 통과한다. 실측(2026-07-28~08-20 발행 이력): 1일 지평이 9회 발행되는 동안
+# n 은 511→519(+1.6%)였다. n=501 에서 502 로 가면 오차범위는 0.1% 줄어든다
+# — 아홉 번 중 새로운 소식은 0건이었다.
+#
+# 5% 인 이유: 표본이 5% 늘면 표준오차가 2.5% 줄어든다. "숫자가 눈에 띄게
+# 움직일 수 있게 된 시점"이 곧 발행 시점이 된다. 비율이라 자기 속도를 잡는다
+# — 표본이 적은 초기에는 자주, n≈500 에서는 지평당 26일에 한 번.
+PUBLISH_GROWTH = 1.05
+
+
 def new_horizons(stats_by_horizon, root=publish_log.LOG_DIRNAME):
-    """표본이 늘어난 지평만 돌려준다 — 같은 판정을 두 번 보내지 않는다."""
+    """표본이 의미 있게 늘어난 지평만 돌려준다 — 같은 판정을 두 번 보내지 않는다.
+
+    "늘었나"가 아니라 "PUBLISH_GROWTH 배가 됐나"를 묻는다. 이유는 위 상수 참고.
+    """
     out = []
     for horizon in sorted(stats_by_horizon):
         stats = stats_by_horizon[horizon]
@@ -100,7 +115,7 @@ def new_horizons(stats_by_horizon, root=publish_log.LOG_DIRNAME):
         if n <= 0:
             continue
         last = publish_log.last_published_n(horizon, root=root)
-        if last is None or n > last:
+        if last is None or n >= last * PUBLISH_GROWTH:
             out.append(horizon)
     return out
 

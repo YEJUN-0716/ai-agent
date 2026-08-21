@@ -34,6 +34,32 @@ def test_grown_sample_is_republished(tmp_path):
     assert _sw().new_horizons(stats, root=tmp_path) == [5]
 
 
+def test_one_more_day_at_large_n_is_not_news(tmp_path):
+    """n=500 에서 501 이 되는 것은 소식이 아니다 — 오차범위가 0.1% 줄어든다.
+
+    백필로 n 이 매일 1씩 늘기 때문에, 절대 증가만 보면 게이트가 매일 통과한다.
+    실제로 1일 지평이 그렇게 9회 연속 발행됐다(n 511→519).
+    """
+    pl.record_published("2026-08-20", 5, 500, root=tmp_path)
+
+    assert _sw().new_horizons({5: {"chart": {"n": 501}}}, root=tmp_path) == []
+
+
+def test_five_percent_growth_is_republished(tmp_path):
+    """5% 늘면 표준오차가 2.5% 줄어든다 — 이때부터 다시 발행한다."""
+    pl.record_published("2026-08-20", 5, 500, root=tmp_path)
+
+    assert _sw().new_horizons({5: {"chart": {"n": 524}}}, root=tmp_path) == []
+    assert _sw().new_horizons({5: {"chart": {"n": 525}}}, root=tmp_path) == [5]
+
+
+def test_small_samples_still_publish_often(tmp_path):
+    """비율 문턱이라 표본이 적을 때는 한 건만 늘어도 통과한다."""
+    pl.record_published("2026-07-30", 5, 4, root=tmp_path)
+
+    assert _sw().new_horizons({5: {"chart": {"n": 5}}}, root=tmp_path) == [5]
+
+
 def test_empty_stats_is_skipped(tmp_path):
     """채점된 날이 없으면 발행하지 않는다."""
     assert _sw().new_horizons({5: {}}, root=tmp_path) == []
