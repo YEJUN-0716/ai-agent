@@ -6,7 +6,7 @@
 
 1. 변동성 타겟팅(volatility targeting) — 종목 변동성에 반비례해서 비중 조절
 2. 신호 강도 비례 사이징 — 신호 65점과 95점을 다르게 취급
-3. Kelly 공식 기반 사이징 — app.py의 kelly_fraction()과 동일 공식, 연동 가능하게 재구현
+3. Kelly 공식 기반 사이징 — app.py 가 이걸 import 해서 쓴다(사본 없음)
 4. 드로다운 서킷브레이커 — MDD가 임계치를 넘으면 익스포저 자동 축소
 5. 위 요소를 모두 반영한 run_backtest_sized() — run_backtest를 확장
 
@@ -49,11 +49,18 @@ def signal_strength_weight(signal: float, buy_th: float, max_signal: float = 100
 
 
 # ─────────────────────────────────────────────
-# 3) Kelly 공식 (app.py의 kelly_fraction과 동일 로직)
+# 3) Kelly 공식 — 이 저장소의 유일한 사본
 # ─────────────────────────────────────────────
 def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
                     half_kelly: bool = True, cap: float = 0.25) -> float:
-    avg_loss_pct = abs(avg_loss_pct)  # 손실은 절댓값으로 처리
+    """Kelly Criterion 최적 투입 비율. half_kelly=True 권장.
+
+    **이 저장소에 사본을 만들지 말 것.** app.py 에 `avg_loss_pct <= 0 → 0.0`
+    인 사본이 따로 있었는데, 호출부가 넘기는 평균 손실은 늘 음수라(손실 거래
+    수익률의 평균) 리스크팀의 "권장 비중(Half-Kelly)"이 모든 종목에서 0.0% 로
+    찍혔다. 같은 입력에 이쪽은 16.3% 였다 (2026-08-21 리뷰에서 사본 삭제).
+    """
+    avg_loss_pct = abs(avg_loss_pct)  # 손실은 절댓값으로 처리 — 부호로 넘겨도 같은 답
     if avg_loss_pct == 0 or win_rate <= 0:
         return 0.0
     b = avg_win_pct / avg_loss_pct

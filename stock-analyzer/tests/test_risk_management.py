@@ -55,3 +55,15 @@ def test_no_signal_leaves_the_capital_untouched():
         frame(px), lambda df: pd.Series(50.0, index=df.index))
     assert trades.empty and metrics["total_return"] == 0.0
     assert np.allclose(eq["전략"], 10_000_000)
+
+
+def test_app_uses_the_module_kelly():
+    """app.py 가 자기 사본을 다시 만들면 여기서 잡힌다.
+
+    사본은 `avg_loss_pct <= 0 → 0.0` 이었는데 호출부가 넘기는 평균 손실은 늘
+    음수라(손실 거래 수익률의 평균), 리스크팀의 "권장 비중(Half-Kelly)"이
+    손실 거래가 하나라도 있는 모든 종목에서 0.0% 로 찍혔다.
+    """
+    import app
+    assert app.kelly_fraction(0.55, 8.0, -4.0) == pytest.approx(0.1625)
+    assert app.kelly_fraction(0.55, 8.0, 4.0) == pytest.approx(0.1625)

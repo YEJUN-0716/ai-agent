@@ -5,6 +5,8 @@ requests 의 연결 오류 문구에는 요청 URL 전체가 들어간다 —
 읽히므로, 예외 원문을 찍는 순간 토큰이 공개된다. scorecard_worker 만
 고쳐져 있고 나머지 세 벌은 안 고쳐져 있었다(2026-08-20 리뷰).
 """
+import pathlib
+
 import pytest
 import requests
 
@@ -54,3 +56,28 @@ def test_app_send_telegram_returns_no_token(boom, monkeypatch):
     monkeypatch.setattr(app.requests, "post", requests.post)
     ok, err = app.send_telegram(TOKEN, "42", "hi")
     assert ok is False and TOKEN not in err
+
+
+# 이 목록이 이 테스트가 아는 발송 사본의 전부다. 2026-08-20 리뷰는 덩어리 안의
+# 파일만 grep 해서 modules/ops_safety.py 의 다섯 번째 사본을 놓쳤다(부르는 코드가
+# 없어 2026-08-21 에 삭제). 새 사본이 생기면 여기서 먼저 걸려, 그 사본도 위처럼
+# 잠그게 만든다.
+_KNOWN_SENDERS = {
+    "app.py",
+    "daily_report_toss.py",
+    "paper_trade_runner_toss.py",
+    "scorecard_worker.py",
+}
+
+
+def test_no_unlocked_telegram_sender():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    found = {
+        str(p.relative_to(root)).replace("\\", "/")
+        for p in root.rglob("*.py")
+        if "api.telegram.org" in p.read_text(encoding="utf-8")
+    }
+    found -= {str(pathlib.Path(__file__).relative_to(root)).replace("\\", "/")}
+    assert found == _KNOWN_SENDERS, (
+        f"텔레그램 발송 사본이 바뀌었다: {found ^ _KNOWN_SENDERS} — "
+        f"새 사본이면 예외 원문 대신 type(e).__name__ 만 찍는지 여기서 잠글 것")
