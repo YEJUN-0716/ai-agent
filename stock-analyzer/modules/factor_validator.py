@@ -23,9 +23,21 @@ from scipy.stats import spearmanr
 
 from modules.factor_engine import point_in_time_fundamentals as _pit_fundamentals
 from modules.factor_formulas import (
+    QUALITY_ACCRUAL_WEIGHT as _W_ACCRUAL,
+    QUALITY_MARGIN_WEIGHT as _W_MARGIN,
+    QUALITY_ROE_WEIGHT as _W_ROE,
+    VALUE_EP_WEIGHT as _W_EP,
+    VALUE_FCF_WEIGHT as _W_FCF,
     annualized_vol_pct as _annualized_vol_pct,
     momentum_pct as _momentum_pct,
 )
+
+# PIT 재무에는 BP(장부수익률)가 없다. 라이브 배합에서 BP 를 빼고 남은 둘을
+# 다시 1 로 맞춘 비율 — **계수를 여기 적지 않고 factor_formulas 에서 유도한다.**
+# 손으로 0.571/0.429 를 박아 두면 라이브 배합을 바꿨을 때 IC 는 옛 배합을 계속
+# 재고, 프로덕션이 쓰지 않는 배합의 예측력으로 실전 비중이 정해진다.
+_VQ_DEN = _W_EP + _W_FCF
+_PIT_EP_WEIGHT, _PIT_FCF_WEIGHT = _W_EP / _VQ_DEN, _W_FCF / _VQ_DEN
 from modules.factor_scoring import (
     MOMENTUM_LOOKBACK_DAYS as _PROD_MOM_LOOKBACK,
     MOMENTUM_SKIP_DAYS     as _PROD_MOM_SKIP,
@@ -52,20 +64,20 @@ def _zscore_col(df, col, sign=1.0):
 def _add_value_quality_z(df):
     """value/quality 팩터 z-score를 app.py 라이브 배합과 동일 비율로 블렌드.
 
-    value  = 저PER(EP) + FCF수익률  (라이브 EP0.40/BP0.30/FCF0.30에서 PIT에 없는
-             BP를 빼고 EP0.571/FCF0.429로 재정규화)
-    quality = ROE0.45 + 영업이익률0.35 + 발생액0.20
+    value  = 저PER(EP) + FCF수익률  (라이브 배합에서 PIT에 없는 BP를 빼고 남은
+             둘을 재정규화 — 비율은 factor_formulas 에서 유도한다)
+    quality = ROE·이익률·발생액, factor_formulas 의 배합 그대로
     커버리지 미달로 특정 지표가 전부 NaN이면 그 성분 z=0 → 나머지로 랭킹.
     IC는 rank 기반이라 성분별 상수 스케일은 팩터 자체 IC에 영향 없음.
     """
     z_ep  = _zscore_col(df, "pe", sign=-1.0)       # 낮은 PER = 높은 value
     z_fcf = _zscore_col(df, "fcf_yield", sign=1.0)
-    df["z_value"] = z_ep * 0.571 + z_fcf * 0.429
+    df["z_value"] = z_ep * _PIT_EP_WEIGHT + z_fcf * _PIT_FCF_WEIGHT
 
     z_roe = _zscore_col(df, "roe", sign=1.0)
     z_mgn = _zscore_col(df, "margin", sign=1.0)
     z_acc = _zscore_col(df, "accrual_q", sign=1.0)
-    df["z_quality"] = z_roe * 0.45 + z_mgn * 0.35 + z_acc * 0.20
+    df["z_quality"] = z_roe * _W_ROE + z_mgn * _W_MARGIN + z_acc * _W_ACCRUAL
     return df
 from modules.price_panel import load_panel
 
@@ -225,6 +237,21 @@ def _calc_momentum_vol_scores(prices_dict: dict, as_of_date,
     return df["score"].to_dict()
 
 
+def effective_periods(n_periods: int, forward_days: int, rebal_days: int) -> float:
+    """겹치지 않는 블록 수 — IC 계열의 t 를 낼 때 n 대신 쓰는 유효표본.
+
+    선행수익률 창(forward_days)이 리밸런싱 간격(rebal_days)보다 길면 이웃 관측이
+    구간을 공유한다. 그대로 √n 을 곱하면 |t| 가 √(forward/rebal) 배 부풀고,
+    화면은 없는 엣지를 "유의함"으로 찍는다(modules/signal_decay_analysis 가
+    2026-08-20 에 고친 것과 같은 자리 — 거기서는 18칸 중 3칸이 거짓 유의였다).
+
+    보수적인 하한이다: 진짜 유효표본은 이보다 클 수 있지만, 틀리는 방향이
+    "덜 유의하게" 여야 한다.
+    """
+    overlap = max(1.0, float(forward_days) / max(rebal_days, 1))
+    return max(n_periods / overlap, 2.0)
+
+
 def run_ic_analysis(
     tickers: list,
     lookback_years: int = 2,
@@ -335,7 +362,11 @@ def run_ic_analysis(
     mean_ic = float(ic_vals.mean())
     std_ic  = float(ic_vals.std())
     icir    = mean_ic / (std_ic + 1e-9)
-    t_stat  = icir * float(np.sqrt(len(ic_vals)))
+    # 겹치는 창은 독립 표본이 아니다 — 화면의 42거래일 옵션이 21일 간격 위에서
+    # 정확히 절반을 겹친다. n 을 그대로 넣으면 |t| 가 1.41배 부풀어 없는 유의가
+    # "✅ 95% 신뢰"로 찍힌다.
+    n_eff  = effective_periods(len(ic_vals), forward_days, rebal_days)
+    t_stat = icir * float(np.sqrt(n_eff))
 
     summary = {
         "mean_ic":      round(mean_ic, 4),
@@ -344,6 +375,8 @@ def run_ic_analysis(
         "t_stat":       round(t_stat, 2),
         "pct_positive": round(float((ic_vals > 0).mean() * 100), 1),
         "n_periods":    int(len(ic_vals)),
+        # n 은 관측 수, n_eff 가 t 를 낸 수다. 둘이 다르면 창이 겹쳤다는 뜻.
+        "n_effective":  round(n_eff, 1),
     }
 
     quintile_cum = {}

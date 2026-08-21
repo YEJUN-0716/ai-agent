@@ -102,7 +102,8 @@ PRODUCTION_IC_SOURCE = {
 
 
 def derive_production_regime_weights(per_factor_ic: dict,
-                                     base_weights: dict = None) -> dict:
+                                     base_weights: dict = None,
+                                     unavailable: list = None) -> dict:
     """프로덕션 스캔(4팩터)의 레짐별 가중치를 **프로덕션 정의의 IC** 로 스케일링.
 
     app.py 는 지금까지 6팩터 레짐 가중치를 momentum = mom_3m + mom_1m 으로
@@ -117,13 +118,25 @@ def derive_production_regime_weights(per_factor_ic: dict,
     프로덕션 정의의 IC 가 하나라도 측정되지 않았으면 None 을 돌려준다.
     없는 값을 IC_FLOOR 로 메우면 그 팩터가 조용히 최소 비중으로 눌리는데,
     그게 바로 지금 고치려는 고장의 형태다. 차라리 아무것도 쓰지 않는다.
+
+    unavailable(n=0) 에 든 팩터는 **여기서도** 가중치 0 으로 뺀다 —
+    derive_ic_regime_weights 와 같은 규칙이다. 예전에는 그 가드가 위쪽 함수에만
+    있어서, EDGAR 가 죽어 value·quality 의 IC 가 n=0 이 되면(2026-07-19·07-20
+    실측 기록이 있다) regime_weights 에서는 0 으로 빠진 두 팩터가 **실전 비중을
+    정하는 이쪽에서는 IC_FLOOR 로 살아남아 bull 기준 8.6% 를 가져갔다.**
+    안 잰 신호에 자본을 배분하지 않는다는 규칙은 두 경로 모두에 걸려야 한다.
     """
     base_weights = base_weights or REGIME_WEIGHTS
+    unavailable = set(unavailable or [])
 
     for factor in PRODUCTION_FACTORS:
         stats = per_factor_ic.get(factor)
         if not stats or stats.get("n", 0) == 0:
             return None
+
+    usable = [f for f, src in PRODUCTION_IC_SOURCE.items() if src not in unavailable]
+    if not usable:
+        return None
 
     out = {}
     for regime, bw in base_weights.items():
@@ -134,16 +147,16 @@ def derive_production_regime_weights(per_factor_ic: dict,
             "low_vol":  bw.get("low_vol", 0),
         }
         scaled = {}
-        for factor, base in folded.items():
+        for factor in usable:
             ic_val = max(
                 per_factor_ic.get(PRODUCTION_IC_SOURCE[factor], {})
                              .get("mean_ic", IC_FLOOR),
                 IC_FLOOR,
             )
-            scaled[factor] = base * ic_val
+            scaled[factor] = folded[factor] * ic_val
 
         total = sum(scaled.values()) or 1.0
-        out[regime] = {f: round(v / total, 4) for f, v in scaled.items()}
+        out[regime] = {f: round(scaled.get(f, 0.0) / total, 4) for f in folded}
 
     return out
 
@@ -199,7 +212,7 @@ def main():
             print(f"    {factor:<12}: {old_w[factor]:.4f} → {new_w[factor]:.4f}  ({delta:+.4f})")
 
     # 프로덕션 스캔용 4팩터 가중치 — 프로덕션이 실제로 쓰는 정의의 IC 로 배분
-    prod_w = derive_production_regime_weights(per_factor)
+    prod_w = derive_production_regime_weights(per_factor, unavailable=ic_unavailable)
     if prod_w:
         print("\n프로덕션 스캔 가중치 (프로덕션 정의 IC 기준):")
         for regime, w in prod_w.items():

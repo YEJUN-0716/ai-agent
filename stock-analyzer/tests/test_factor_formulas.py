@@ -126,19 +126,41 @@ def test_blend_functions_work_on_series():
 # 배합을 실제로 계산하는 모듈들 — 반드시 공유 모듈을 import 해야 한다.
 # app.py 는 여기 없다. 점수 계산이 factor_scoring.py 로 넘어가면서 app.py 는
 # 배합을 더 이상 직접 다루지 않기 때문이다 (조회 루프만 남았다).
-# factor_engine.py 도 2026-08-19 에 빠졌다 — 배합을 쓰던 calc_factor_scores 가
-# 죽은 채로 남아 있다가 삭제돼서, 이제 그 파일은 레짐 감지와 PIT 재무만 한다.
-IMPORT_GUARD_TARGETS = ["modules/factor_scoring.py"]
+IMPORT_GUARD_TARGETS = [
+    "modules/factor_scoring.py",     # 프로덕션 스캔
+    "modules/factor_engine.py",      # PIT 재무 — 발생액 품질
+    "modules/factor_validator.py",   # 주간 IC 측정 — value/quality z 블렌드
+]
 
-# 인라인 사본 금지는 app.py 까지 포함해 더 넓게 건다 — 계산이 app.py 로
-# 되돌아오는 것 자체를 막는 것이 이 가드의 목적이다.
-INLINE_GUARD_TARGETS = ["app.py"] + IMPORT_GUARD_TARGETS
+# 인라인 사본 금지는 **저장소 전체**를 훑는다. 예전에는 여기도 파일을 열거했고
+# (app.py + factor_scoring.py), 그래서 factor_validator 의 퀄리티 배합
+# 0.45/0.35/0.20 과 factor_engine 의 발생액 공식 두 벌이 가드 밖에 살아 있었다
+# (2026-08-21 2차 점검). 열거형 가드는 놓친 것을 못 잡는다 — 목록이 아니라
+# 규칙을 잠근다.
+GUARD_SKIP = {"modules/factor_formulas.py"}      # 배합의 주인
+GUARD_SKIP_DIRS = ("tests", ".venv", "__pycache__", "docs")
 
-# 과거 세 곳에 복붙돼 있던 배합 리터럴. 다시 나타나면 = 공유 모듈 우회.
-# value_raw / quality_raw 대입문 안에 계수가 직접 박힌 경우만 잡는다 —
-# 무관한 기술적 지표 배합(예: ma*0.40 + rsi*0.30 + macd*0.30)까지 걸면 안 된다.
-LEGACY_VALUE_BLEND = re.compile(r"""value_raw["']?\s*[:=][^\n]*0\.40""")
-LEGACY_QUALITY_BLEND = re.compile(r"""quality_raw["']?\s*[:=][^\n]*0\.45""")
+# 배합 계수가 이름과 같은 줄에 박힌 경우만 잡는다 — 무관한 지표 배합
+# (예: ma*0.40 + rsi*0.30)까지 걸면 가드가 잡음이 된다.
+INLINE_BLENDS = [
+    (re.compile(r"value[^\n]{0,40}[:=][^\n]*0\.40[^\n]*0\.30"),
+     "가치 배합(0.40/0.30/0.30) — factor_formulas.value_raw() 를 쓸 것"),
+    (re.compile(r"quality[^\n]{0,40}[:=][^\n]*0\.45[^\n]*0\.35"),
+     "퀄리티 배합(0.45/0.35/0.20) — factor_formulas.quality_raw() 나 상수를 쓸 것"),
+    (re.compile(r"accrual[^\n]{0,40}[:=][^\n]*\*\s*50"),
+     "발생액 배합((FCF/NI)*50) — factor_formulas.accrual_quality() 를 쓸 것"),
+]
+
+
+def _guarded_sources():
+    """저장소의 모든 .py — 배합의 주인과 테스트·가상환경은 뺀다."""
+    for path in sorted(REPO_ROOT.rglob("*.py")):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if rel in GUARD_SKIP:
+            continue
+        if any(part in GUARD_SKIP_DIRS for part in path.relative_to(REPO_ROOT).parts):
+            continue
+        yield rel, path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("relpath", IMPORT_GUARD_TARGETS)
@@ -149,18 +171,22 @@ def test_engines_import_shared_formulas(relpath):
     )
 
 
-@pytest.mark.parametrize("relpath", INLINE_GUARD_TARGETS)
-def test_no_inline_blend_literals_remain(relpath):
-    """배합 계수를 인라인으로 다시 써 넣으면 실패시킨다."""
-    source = (REPO_ROOT / relpath).read_text(encoding="utf-8")
-    assert not LEGACY_VALUE_BLEND.search(source), (
-        f"{relpath} 에 가치 배합(0.40/0.30/0.30)이 인라인으로 남아 있다 — "
-        f"factor_formulas.value_raw() 를 쓸 것."
-    )
-    assert not LEGACY_QUALITY_BLEND.search(source), (
-        f"{relpath} 에 퀄리티 배합(0.45/0.35/0.20)이 인라인으로 남아 있다 — "
-        f"factor_formulas.quality_raw() 를 쓸 것."
-    )
+def test_no_inline_blend_literals_anywhere():
+    """배합 계수를 인라인으로 다시 써 넣으면 실패시킨다 — 저장소 전체."""
+    hits = []
+    for relpath, source in _guarded_sources():
+        for pattern, why in INLINE_BLENDS:
+            m = pattern.search(source)
+            if m:
+                line = source[:m.start()].count("\n") + 1
+                hits.append(f"{relpath}:{line} — {why}")
+    assert not hits, "배합 사본이 살아났다:\n  " + "\n  ".join(hits)
+
+
+def test_guard_actually_catches_a_copy():
+    """가드가 도는지 — 사본을 흉내 낸 소스가 안 걸리면 가드가 죽은 것이다."""
+    fake = 'df["z_quality"] = z_roe * 0.45 + z_mgn * 0.35 + z_acc * 0.20'
+    assert any(p.search(fake) for p, _ in INLINE_BLENDS), "가드 정규식이 사본을 못 잡는다"
 
 
 # ── 6. 가격 팩터 정의 (모멘텀 · 변동성) ─────────────────────────────

@@ -9,6 +9,8 @@
   1. 프로덕션 가중치는 mom_12_1 / low_vol_252 의 IC 로 스케일링된다.
   2. 페이퍼트레이드(`factor_engine`)가 읽는 6팩터 가중치는 영향받지 않는다.
   3. 프로덕션 IC 가 없으면 IC_FLOOR 로 메우지 않고 아예 생략한다.
+  4. n=0 인 팩터(unavailable)는 여기서도 0 으로 빠진다 — derive_ic_regime_weights
+     에만 있던 가드가 실전 비중을 정하는 이쪽에는 없었다(2026-08-21 2차 점검).
 """
 import pytest
 
@@ -164,3 +166,51 @@ def test_paper_trade_weights_are_untouched():
     assert before == after
     for regime in BASE:
         assert set(after[regime]) == set(BASE[regime])
+
+
+# ── unavailable 가드 — 두 경로에 같은 규칙이 걸려 있어야 한다 ─────────
+#
+# EDGAR 가 죽으면 value·quality 의 IC 가 n=0 이 된다. 실제로 있었던 상태다
+# (ic_weights.json 2026-07-19 · 07-20: ic_unavailable_factors = ["value","quality"]).
+# 예전 코드는 그 둘을 regime_weights 에서만 0 으로 빼고, production_weights
+# 에서는 IC_FLOOR 로 살려 bull 기준 8.6% 를 배분했다.
+
+UNAVAIL_IC = {**IC,
+              "value":   {"mean_ic": 0.0, "n": 0},
+              "quality": {"mean_ic": 0.0, "n": 0}}
+
+
+def test_unavailable_factors_get_zero_production_weight():
+    w = derive_production_regime_weights(UNAVAIL_IC, BASE, unavailable=["value", "quality"])
+    for regime in BASE:
+        assert w[regime]["value"] == 0.0, regime
+        assert w[regime]["quality"] == 0.0, regime
+
+
+def test_remaining_production_weights_still_sum_to_one():
+    w = derive_production_regime_weights(UNAVAIL_IC, BASE, unavailable=["value", "quality"])
+    for regime in BASE:
+        assert sum(w[regime].values()) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_unavailable_matches_the_sibling_guard():
+    """같은 팩터가 두 경로에서 모두 0 이어야 한다 — 한쪽만 빼면 그게 옛 고장이다."""
+    unavailable = ["value", "quality"]
+    prod = derive_production_regime_weights(UNAVAIL_IC, BASE, unavailable=unavailable)
+    legacy = derive_ic_regime_weights(UNAVAIL_IC, BASE, unavailable=unavailable)
+    for regime in BASE:
+        for factor in unavailable:
+            assert legacy[regime][factor] == 0.0
+            assert prod[regime][factor] == 0.0
+
+
+def test_no_unavailable_leaves_weights_unchanged():
+    assert (derive_production_regime_weights(IC, BASE, unavailable=[])
+            == derive_production_regime_weights(IC, BASE))
+
+
+def test_all_four_unavailable_returns_none():
+    ic = {**IC, **{k: {"mean_ic": 0.0, "n": 0}
+                   for k in ("value", "quality")}}
+    assert derive_production_regime_weights(
+        ic, BASE, unavailable=["mom_12_1", "low_vol_252", "value", "quality"]) is None
