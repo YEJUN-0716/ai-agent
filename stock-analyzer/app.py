@@ -5,6 +5,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from typing import Callable, List, NamedTuple, Optional, Union
+import re
 import requests
 import os
 import json
@@ -1340,8 +1341,14 @@ def regime_of(closes):
     else:                   return 'neutral', diff_pct
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_market_regime(benchmark=None):
-    """벤치마크 지수 vs MA200 기반 시장 국면 감지 (bull/bear/neutral)."""
+    """벤치마크 지수 vs MA200 기반 시장 국면 감지 (bull/bear/neutral). 1시간 캐시.
+
+    캐시가 붙기 전엔 `build_analyst_report` 가 방향성 보고서를 만들 때마다
+    `_current_analyst_weights()` → 여기로 들어와 SPY 를 새로 받았다. 분석
+    한 번(스윙 3인 + 스캘핑 3인)에 6회 · 실측 0.43초/회 ≒ 2.6초였다.
+    """
     benchmark = benchmark or 'SPY'
     try:
         end = datetime.now(); start = end - timedelta(days=310)
@@ -1505,30 +1512,17 @@ def geopolitical_risk_score():
 # BACKTESTING
 # ─────────────────────────────────────────────
 
-def bt_signals(df):
-    p = df['Close']
-    ma20 = p.rolling(20).mean(); ma60 = p.rolling(60).mean()
-    ma_s = pd.Series(0.0, index=p.index)
-    ma_s[p > ma20] += 30; ma_s[p > ma60] += 20; ma_s[ma20 > ma60] += 50
-
-    rsi = calc_rsi(p)
-    rsi_s = pd.Series(50.0, index=p.index)
-    rsi_s[(rsi >= 40) & (rsi <= 70)] = 65
-    rsi_s[rsi > 70] = 35
-    rsi_s[(rsi >= 30) & (rsi < 40)] = 40
-    rsi_s[rsi < 30] = 60
-
-    ml, sl2, hist = calc_macd(p)
-    macd_s = pd.Series(40.0, index=p.index)
-    macd_s[ml > sl2] = 65
-    macd_s[(ml > sl2) & (hist > 0) & (hist > hist.shift(1))] = 80
-    macd_s[(ml < sl2) & (hist < 0)] = 20
-
-    return (ma_s*0.40 + rsi_s*0.30 + macd_s*0.30).fillna(50)
-
 def bt_signals_full(df):
-    """technical_score 9개 지표를 전체 기간 벡터화 계산.
-    bt_signals(MA+RSI+MACD 3개) 대신 실제 scoring과 동일한 9개 지표를 사용."""
+    """technical_score 9개 지표를 전체 기간 벡터화 계산 — **마지막 봉에서
+    technical_score 와 같은 값을 내야 한다** (tests/test_bt_signals_full.py).
+
+    ⚠️ 창을 옮길 때 `iloc[-N]` 과 `shift(N)` 은 **한 봉 다르다.** `p.iloc[-20]`
+    은 마지막 봉 기준 19봉 전이고 `p.shift(20)` 은 20봉 전이다. 이 파일에서
+    실제로 그렇게 갈라져 있었다 — 20종목 4,000봉 실측으로 중위 0.47점·최대
+    9.35점 차이가 났고, 백테스트 임계값(58/42)에서 매수·매도·관망 판정이
+    갈리는 봉이 5.53% 였다. 파동근사만 `shift(19)`/`shift(59)` 로 맞아 있었다.
+    그래서 여기 lag 은 전부 `shift(N-1)` 로 적는다.
+    """
     p, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
 
     # ── ADX 선행 계산 ──────────────────────────
@@ -1541,14 +1535,16 @@ def bt_signals_full(df):
     ma20, ma60, ma120 = p.rolling(20).mean(), p.rolling(60).mean(), p.rolling(120).mean()
     ma_s = ((p > ma20)*20 + (p > ma60)*20 + (p > ma120)*20 +
             (ma20 > ma60)*20 + (ma60 > ma120)*20).astype(float)
-    gc = (ma20 > ma60) & (ma20.shift(5) <= ma60.shift(5))
-    dc = (ma20 < ma60) & (ma20.shift(5) >= ma60.shift(5))
+    gc = (ma20 > ma60) & (ma20.shift(4) <= ma60.shift(4))   # 스칼라 ma20.iloc[-5]
+    dc = (ma20 < ma60) & (ma20.shift(4) >= ma60.shift(4))
     gc_persist = gc & (ma20.shift(1) > ma60.shift(1)) & (ma20.shift(2) > ma60.shift(2))
     dc_persist = dc & (ma20.shift(1) < ma60.shift(1)) & (ma20.shift(2) < ma60.shift(2))
     gc_bonus = gc_persist & has_trend_bt
     dc_bonus = dc_persist & has_trend_bt
-    gc_weak = gc & ~gc_bonus
-    dc_weak = dc & ~dc_bonus
+    # 추세가 없으면 크로스 보너스 자체가 없다 — 스칼라는 `and has_trend` 밖으로
+    # 안 나간다. ~gc_bonus 만 쓰면 ADX≤20 크로스에 +5 를 얹게 된다.
+    gc_weak = gc & has_trend_bt & ~gc_persist
+    dc_weak = dc & has_trend_bt & ~dc_persist
     ma_s = (ma_s + gc_bonus.astype(float)*15 - dc_bonus.astype(float)*15
                  + gc_weak.astype(float)*5  - dc_weak.astype(float)*5).clip(0, 100).fillna(50)
 
@@ -1565,10 +1561,10 @@ def bt_signals_full(df):
     rs[(rsi > 60) & (rsi <= rsi_ob_bt)]              = 65  # 모멘텀 구간
     rs[rsi > rsi_ob_bt]                              = 35  # 과매수 → 조정 신호
     rs_b = pd.Series(0.0, index=p.index)
-    rsi_tr = rsi - rsi.shift(10)
+    rsi_tr = rsi - rsi.shift(9)          # 스칼라 rsi_s.iloc[-10]
     rs_b[(rsi_tr > 5) & (rsi > rsi_os_bt) & (rsi < rsi_ob_bt)] = 20
     rs_b[rsi_tr < -5]                                            = -10
-    pr20 = p.shift(20); rsi20 = rsi.shift(20)
+    pr20 = p.shift(19); rsi20 = rsi.shift(19)   # 스칼라 p.iloc[-20]
     rs_b[(p < pr20) & (rsi > rsi20)] += 15
     rs_b[(p > pr20) & (rsi < rsi20)] -= 15
     rs = (rs + rs_b).clip(0, 100).fillna(50)
@@ -1581,9 +1577,9 @@ def bt_signals_full(df):
     ms_b[hist > 0]               += 15
     ms_b[hist > hist.shift(1)]   += 15
     ms_b[hist <= hist.shift(1)]  -= 10
-    pr20m = p.shift(20)
-    ms_b[(p < pr20m) & (hist > hist.shift(20))] += 12
-    ms_b[(p > pr20m) & (hist < hist.shift(20))] -= 12
+    pr20m = p.shift(19)                  # 스칼라 p.iloc[-20]
+    ms_b[(p < pr20m) & (hist > hist.shift(19))] += 12
+    ms_b[(p > pr20m) & (hist < hist.shift(19))] -= 12
     ms = (ms + ms_b).clip(0, 100).fillna(50)
 
     # ── 볼린저밴드 (10%) ───────────────────────
@@ -1604,7 +1600,7 @@ def bt_signals_full(df):
 
     # ── 거래량 (7%) ────────────────────────────
     vma20 = v.rolling(20).mean().clip(lower=1e-9)
-    vr, pc5 = v / vma20, p.pct_change(5)
+    vr, pc5 = v / vma20, p.pct_change(4)   # 스칼라 p.iloc[-5]
     vs = pd.Series(50.0, index=p.index)
     vs[(pc5 > 0) & (vr > 1.2)] = 80
     vs[(pc5 > 0) & (vr < 0.8)] = 55
@@ -1652,13 +1648,14 @@ def bt_signals_full(df):
     # ── OBV (10%) ──────────────────────────────
     obv    = calc_obv(p, v)
     obv_ma = obv.rolling(20).mean()
-    obv_above = (obv > obv_ma); obv_rising = (obv > obv.shift(5)).fillna(False)
+    obv_above = (obv > obv_ma)
+    obv_rising = (obv > obv.shift(4)).fillna(False)   # 스칼라 obv.iloc[-5]
     obv_s = pd.Series(25.0, index=p.index)
     obv_s[obv_above  & obv_rising]  = 75
     obv_s[obv_above  & ~obv_rising] = 55
     obv_s[~obv_above & obv_rising]  = 40
     obv_b  = pd.Series(0.0, index=p.index)
-    pr20o  = p.shift(20); obv20 = obv.shift(20)
+    pr20o  = p.shift(19); obv20 = obv.shift(19)   # 스칼라 p.iloc[-20]
     obv_b[(p < pr20o) & (obv > obv20)] =  20
     obv_b[(p > pr20o) & (obv < obv20)] = -20
     obv_s  = (obv_s + obv_b).clip(0, 100).fillna(50)
@@ -1667,6 +1664,33 @@ def bt_signals_full(df):
     total = (ma_s*0.15 + rs*0.10 + ms*0.13 + bs*0.10 + vs*0.07 +
              wave_s*0.08 + sts*0.10 + ads*0.17 + obv_s*0.10)
     return total.fillna(50)
+
+
+# 시그널 채점 지평 — **거래일**이다. 달력일 21일은 15거래일쯤이라 저장소의
+# 다른 21일 지평(analyst_scorecard.HORIZONS)과 다른 자가 된다.
+SIGNAL_HORIZON_BARS = 21
+
+
+def score_signal(closes, entry_date, entry_price, horizon=SIGNAL_HORIZON_BARS):
+    """진입 후 `horizon` **거래일째** 종가로 수익률(%). 봉이 모자라면 None.
+
+    예전엔 "달력 21일이 지났으면 **지금 현재가**" 로 쟀다. 화면을 여는 날이
+    채점일이 되므로 60일 묵은 시그널을 오늘 열면 60일 수익률이 '21일 수익률'
+    로 적힌다. **채점 시점은 화면이 아니라 봉이 정한다.**
+
+    Streamlit·네트워크를 모른다 — 산술을 테스트로 잠글 수 있어야 한다.
+    """
+    if not entry_price or float(entry_price) <= 0 or closes is None or len(closes) == 0:
+        return None
+    idx = pd.to_datetime(closes.index)
+    if getattr(idx, 'tz', None) is not None:
+        idx = idx.tz_localize(None)
+    # 진입일 당일은 이미 체결된 값이라 세지 않는다.
+    after = pd.Series(closes.values, index=idx).dropna()
+    after = after[after.index > pd.Timestamp(entry_date)]
+    if len(after) < horizon:
+        return None
+    return round((float(after.iloc[horizon - 1]) / float(entry_price) - 1) * 100, 2)
 
 
 def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
@@ -3722,6 +3746,23 @@ def risk_analyst(ticker, backtest_report=None):
         return build_analyst_report('리스크팀', '🛡️', 50.0, [f'리스크 분석 실패: {e}'], role='sizing')
 
 
+def _dissent_note(dissenters, n_total):
+    """총괄과 다른 판정을 낸 애널리스트 문구. 없으면 None.
+
+    한 명이면 "…만", 전원이면 "전원", 그 사이면 이름을 나열한다. '만' 은
+    나머지가 동의했다는 뜻이므로 한 명일 때만 쓸 수 있는 낱말이다.
+    """
+    if not dissenters:
+        return None
+    names = ' · '.join(f"{r['icon']} {r['name']} {r['verdict']}" for r in dissenters)
+    if len(dissenters) == 1:
+        r = dissenters[0]
+        return f"{r['icon']} {r['name']}만 {r['verdict']} 의견"
+    if len(dissenters) == n_total:
+        return f"방향성 {n_total}인 전원이 총괄과 다름 — {names}"
+    return f"{len(dissenters)}/{n_total}명이 총괄과 다름 — {names}"
+
+
 def manager_consolidate(reports):
     """총괄: 방향성 3명(차트+파동+모멘텀·퀀트+재무·ICT+CRT)의 IC가중 블렌드로
     매수/매도를 판정 — 가중합 + 합의율.
@@ -3758,7 +3799,14 @@ def manager_consolidate(reports):
 
     agreement = round(max(buy_n, sell_n, neu_n) / n * 100)
     strongest = max(directional, key=lambda r: abs(r['score'] - 50))
-    weakest_agree = min(directional, key=lambda r: 0 if r['verdict'] == _team_verdict(weighted_score) else 1)
+
+    # 총괄과 다른 판정을 낸 사람들. 예전엔 min(key=0 if 동의 else 1) 로 골랐는데
+    # 그건 **동의하는** 사람을 집는다 — 그래서 반대 문구가 전원 반대일 때만
+    # 떴고(기록 18일·2,757 판정 중 0.73%), 정작 1~2명이 반대하던 86.2% 에서는
+    # 화면이 아무 말도 안 했다. 게다가 그 0.73% 에서도 첫 번째 사람을 "…만"
+    # 이라고 지목했다 — 실제로는 셋 다 반대인 경우다.
+    team_verdict = _team_verdict(weighted_score)
+    dissenters = [r for r in directional if r['verdict'] != team_verdict]
 
     # 참고 정보 — 방향성 블렌드에는 안 들어가지만 총괄 보고서에 함께 표시
     contexts = [r for r in reports if r.get('role') == 'context']
@@ -3777,8 +3825,7 @@ def manager_consolidate(reports):
         'agreement': agreement,
         'buy_n': buy_n, 'sell_n': sell_n, 'neutral_n': neu_n,
         'strongest_opinion': f"{strongest['icon']} {strongest['name']} ({strongest['score']:.0f}점, {strongest['verdict']})",
-        'dissent': (f"{weakest_agree['icon']} {weakest_agree['name']}만 {weakest_agree['verdict']} 의견"
-                    if weakest_agree['verdict'] != _team_verdict(weighted_score) else None),
+        'dissent': _dissent_note(dissenters, len(directional)),
         'macro_note': macro_note,
         'confidence_note': confidence_note,
     }
@@ -3941,7 +3988,7 @@ def signal_pipeline_status():
         reasons = [
             f"누적 시그널 {len(data)}건 (평가완료 {done} · 대기 {pending})",
             f"최근 시그널: {last_date}" + (f" ({days_since}일 전)" if days_since is not None else ''),
-            "자동 스캔: signal-alerts.yml (매일 UTC 22:30, 월~금)",
+            _workflow_line('signal-alerts.yml', '자동 스캔'),
         ]
         return build_ops_report('시그널 파이프라인', '📡', status, reasons)
     except Exception as e:
@@ -3949,13 +3996,21 @@ def signal_pipeline_status():
 
 
 def execution_mode_status():
-    """실행 모드: 현재 시스템이 시그널 전용 모드임을 명시 — 안전성 투명성 담당."""
-    return build_ops_report('실행 모드', '⚙️', '정상', [
-        '현재 모드: 시그널 전용 — 실제 주문 없음',
-        'signal-alerts.yml: 활성 (텔레그램 알림만 발송)',
-        'paper-trade-us.yml: 크론 비활성화 (DRY_RUN 기본값 true)',
-        '실제 매매는 시그널 확인 후 사용자가 직접 실행',
-    ])
+    """실행 모드: 지금 무엇이 저절로 돌고 있나 — 워크플로 파일에서 읽는다.
+
+    문장으로 박아 두던 시절 이 카드는 정확히 반대를 말했다(모듈 머리말 참고).
+    "실주문이 없다"와 "아무것도 안 돈다"는 다른 말이다 — 가상 장부는 평일마다
+    체결하고 있고, 그 사실이 이 카드에서 사라지면 안 된다.
+    """
+    trade_crons = workflow_cron('paper-trade-us.yml') or []
+    reasons = [
+        '실주문 없음 — 체결은 전부 가상 장부(virtual_portfolio.json)에만 기록된다',
+        _workflow_line('paper-trade-us.yml', '가상 장부 매매'),
+        _workflow_line('signal-alerts.yml', '시그널 알림'),
+        ('예약 실행은 DRY_RUN=false — 장부에 기록된다 (수동 실행 기본값은 true)'
+         if trade_crons else '자동 매매 없음 — 수동 실행만'),
+    ]
+    return build_ops_report('실행 모드', '⚙️', '정상', reasons)
 
 
 def risk_guardrail_status():
@@ -3969,6 +4024,59 @@ def risk_guardrail_status():
     ]
     status = '정상' if (_OPS_SAFETY_AVAILABLE and _RISK_MGMT_ENABLED) else '주의'
     return build_ops_report('리스크 가드레일', '🛡️', status, reasons)
+
+
+# ─────────────────────────────────────────────
+# 워크플로 상태 — **파일에서 읽는다.**
+# 화면에 "이 잡은 돌고 있다/멈춰 있다"를 문장으로 박아 두면 크론을 껐다 켤 때
+# 안 따라온다. 실제로 그렇게 어긋나 있었다: signal-alerts 는 2026-07-20 부터
+# 꺼져 있는데 "활성"이라고 떴고, paper-trade-us 는 평일마다 돌면서 장부에
+# 기록하는데 "크론 비활성화"라고 떴다. 두 문장이 정확히 반대였다.
+# ─────────────────────────────────────────────
+
+_WORKFLOW_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             '.github', 'workflows')
+
+
+def workflow_cron(filename):
+    """워크플로의 **살아 있는** 크론 목록. 주석 처리된 줄은 세지 않는다.
+
+    yaml 파서를 쓰지 않는 이유: 크론을 끌 때 이 저장소는 줄을 지우지 않고
+    주석으로 남긴다(끈 이유를 같이 적어 두려고). 파서는 주석을 안 보므로
+    "꺼져 있다"와 "그런 줄이 없다"를 구별하지 못한다.
+    """
+    path = os.path.join(_WORKFLOW_DIR, filename)
+    crons, in_schedule = [], False
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.readlines()
+    except OSError:
+        return None                      # 파일 자체가 없다 — 모른다고 답한다
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('#'):
+            continue                     # 주석은 꺼진 것이다
+        if stripped.startswith('schedule:'):
+            in_schedule = True
+            continue
+        if in_schedule:
+            m = re.match(r'-\s*cron:\s*["\']?([^"\']+)', stripped)
+            if m:
+                crons.append(m.group(1).strip())
+                continue
+            if stripped and not stripped.startswith('-'):
+                in_schedule = False
+    return crons
+
+
+def _workflow_line(filename, label):
+    """모듈 카드 한 줄 — 크론이 살아 있으면 시각까지, 아니면 수동 전용이라고."""
+    crons = workflow_cron(filename)
+    if crons is None:
+        return f"{label} ({filename}): ⚠️ 워크플로 파일 없음"
+    if not crons:
+        return f"{label} ({filename}): 크론 없음 — 수동 실행(workflow_dispatch)만"
+    return f"{label} ({filename}): 크론 활성 — {' · '.join(f'UTC {c}' for c in crons)}"
 
 
 def _read_json_beside_app(filename):
@@ -5220,7 +5328,7 @@ def render_signal_scorecard(signals):
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("완료 시그널", f"{s['n']}건", f"대기 {s['pending']}건")
-    c2.metric("승률", f"{s['hit_rate']:.0f}%", help="21일 후 수익 > 0인 비율")
+    c2.metric("승률", f"{s['hit_rate']:.0f}%", help="21거래일 후 수익 > 0인 비율")
     c3.metric("기대값", f"{s['expectancy']:+.2f}%", help="1회 진입당 평균 수익률")
     c4.metric("손익비", "∞" if s['profit_factor'] == float('inf') else f"{s['profit_factor']:.2f}",
               help="총이익 ÷ 총손실. 1 미만이면 따라갈수록 잃는다")
@@ -5995,7 +6103,10 @@ def main():
                     sc_val = float(score) if is_score else 0
                     clr = score_color(sc_val) if is_score else '#94a3b8'
                     lbl = score_label(sc_val) if is_score else '참고용'
-                    sc_disp = f"{sc_val:.1f}" if is_score else str(score)
+                    # is_score=False 는 점수가 아니라 %(DCF 상승여력)다. str(float)
+                    # 로 두면 -14.276137689614346 처럼 통째로 찍힌다.
+                    sc_disp = f"{sc_val:.1f}" if is_score else (
+                        f"{float(score):+.1f}%" if isinstance(score, (int, float)) else str(score))
                     bar = (f"<div style='background:var(--surface2);border-radius:4px;height:5px;margin-top:8px'>"
                            f"<div style='background:{clr};width:{min(sc_val,100):.0f}%;height:5px;border-radius:4px'></div>"
                            f"</div>") if is_score else ""
@@ -6273,9 +6384,16 @@ def main():
                                        help="99% 신뢰수준: 극단적 하루 손실 추정")
                     rk_cols2[1].metric("CVaR 95%", risk_data.get('CVaR 95%', 'N/A'),
                                        help="VaR 초과 시 평균 손실 (Expected Shortfall)")
-                    sharpe = risk_data.get('Sharpe (RF 4.5%)', 0)
+                    # 키는 calc_risk_metrics 가 그날 ^IRX 로 만든다 — 'Sharpe (RF 3.7%)'.
+                    # 여기서 'Sharpe (RF 4.5%)' 를 하드코딩해 두는 바람에 get 이 늘
+                    # 기본값 0 을 집었고, 2026-07-16(동적 RF 도입) 이후 26거래일
+                    # 내내 모든 종목이 "0.00 저조" 로 떴다. 2년으로 넓혀도 4.5% 로
+                    # 반올림된 날은 5.8% 뿐이고 마지막이 2024-10-30 이다.
+                    # risk_analyst 는 같은 값을 startswith 로 옳게 찾고 있었다.
+                    _sharpe_key = next((k for k in risk_data if k.startswith('Sharpe')), None)
+                    sharpe = risk_data.get(_sharpe_key, 0) if _sharpe_key else 0
                     sharpe_desc = ("우수" if sharpe > 1 else ("보통" if sharpe > 0 else "저조"))
-                    rk_cols2[2].metric("Sharpe Ratio", f"{sharpe:.2f}", sharpe_desc)
+                    rk_cols2[2].metric(_sharpe_key or "Sharpe Ratio", f"{sharpe:.2f}", sharpe_desc)
                     with st.expander("💡 리스크 지표 해석"):
                         st.markdown("""
     | 지표 | 의미 | 해석 기준 |
@@ -6637,14 +6755,16 @@ def main():
 
                 # ── 시그널 자동 발송 안내 ─────────────────────
                 with st.expander("📡 시그널 자동 발송 (GitHub Actions → 텔레그램)", expanded=False):
+                    # 시각을 문장에 박아 두던 자리. 그때 이 표는 시그널 알림의
+                    # 실행 시간으로 **페이퍼 트레이드의 21:30** 을 적고 있었다.
+                    _sa_crons = workflow_cron('signal-alerts.yml')
+                    if _sa_crons:
+                        st.markdown(f"**🟢 자동 발송 중** — UTC `{'`, `'.join(_sa_crons)}` (월~금)")
+                    else:
+                        st.markdown("**🛑 자동 발송 중단** — 크론이 꺼져 있어 "
+                                    "GitHub Actions 수동 실행(*Run workflow*)만 가능합니다.")
                     st.markdown(
                         """
-**⚠️ 이 시스템은 시그널 발송 전용입니다 — 실제 주문 집행 없음.**
-
-| 구분 | 실행 시간 | 워크플로 |
-|------|-----------|----------|
-| 🇺🇸 미국 장 마감 후 | 매일 UTC 21:30 (월~금) | `signal-alerts.yml` |
-
 - 장마감 후 유니버스 전체 스캔 → 팩터 상위 종목 필터링
 - 매수 / 매도 / 조건부 매수 시그널만 **텔레그램**으로 발송
 - 실제 주문은 발송하지 않으며, 직접 판단 후 수동 매매
@@ -6721,7 +6841,7 @@ def main():
             # ── 시그널 적중률 추적 (signal_log.json) ─────────────
             st.divider()
             st.subheader("📊 과거 시그널 적중률")
-            st.caption("앱 또는 GitHub Actions에서 발생한 매수 시그널의 21일 후 실제 수익률 추적.")
+            st.caption("앱 또는 GitHub Actions에서 발생한 매수 시그널의 **21거래일 후** 실제 수익률 추적 — 진입 21거래일째 종가로 채점합니다.")
             import json as _json
             _sl_path = os.path.join(os.path.dirname(__file__), "signal_log.json")
             if os.path.exists(_sl_path):
@@ -6729,33 +6849,33 @@ def main():
                     with open(_sl_path) as _slf:
                         _sl_data = _json.load(_slf).get("signals", [])
 
-                    # 21일 이상 경과한 미평가 시그널 → 현재가 조회 후 return_pct 계산
-                    _today_dt = datetime.now().date()
+                    # 미평가 시그널 → 진입 후 21**거래일**째 종가로 채점.
+                    # 현재가로 재던 시절엔 화면을 여는 날이 채점일이 됐다.
                     _needs_eval = [s for s in _sl_data
                                    if s.get('return_pct') is None
-                                   and s.get('entry_date') and s.get('entry_price')
-                                   and (_today_dt - pd.to_datetime(s['entry_date']).date()).days >= 21]
+                                   and s.get('entry_date') and s.get('entry_price')]
                     if _needs_eval:
-                        _eval_tickers = list({s['symbol'] for s in _needs_eval})
-                        _cur_prices: dict = {}
-                        for _etk in _eval_tickers:
+                        _eval_from = min(pd.to_datetime(s['entry_date']) for s in _needs_eval)
+                        _hist: dict = {}
+                        for _etk in {s['symbol'] for s in _needs_eval}:
                             try:
-                                _ep_df = yf.download(_etk, period='2d', progress=False)
+                                _ep_df = yf.download(_etk, start=_eval_from,
+                                                     end=datetime.now(), progress=False)
                                 if isinstance(_ep_df.columns, pd.MultiIndex):
                                     _ep_df.columns = _ep_df.columns.droplevel(1)
                                 if not _ep_df.empty:
-                                    _cur_prices[_etk] = float(_ep_df['Close'].dropna().iloc[-1])
+                                    _hist[_etk] = _ep_df['Close'].dropna()
                             except Exception:
                                 pass
                         _log_updated = False
-                        for _s in _sl_data:
-                            if (_s.get('return_pct') is None and _s.get('symbol') in _cur_prices
-                                    and _s.get('entry_price') and _s['entry_price'] > 0):
-                                _age = (_today_dt - pd.to_datetime(_s['entry_date']).date()).days
-                                if _age >= 21:
-                                    _s['return_pct'] = round(
-                                        (_cur_prices[_s['symbol']] / _s['entry_price'] - 1) * 100, 2)
-                                    _log_updated = True
+                        for _s in _needs_eval:
+                            _closes = _hist.get(_s['symbol'])
+                            if _closes is None:
+                                continue
+                            _r = score_signal(_closes, _s['entry_date'], _s['entry_price'])
+                            if _r is not None:
+                                _s['return_pct'] = _r
+                                _log_updated = True
                         if _log_updated:
                             try:
                                 with open(_sl_path, 'w') as _slf2:
@@ -6782,7 +6902,7 @@ def main():
                         )
                         _fig_sl.add_hline(y=0, line_color="#555", line_width=1)
                         _fig_sl.update_layout(
-                            title="시그널별 21일 수익률",
+                            title="시그널별 21거래일 수익률",
                             height=300, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                             font=dict(color=TV_TEXT),
                             xaxis=dict(gridcolor=TV_GRID, tickangle=-45),
@@ -6792,7 +6912,7 @@ def main():
                         st.plotly_chart(_fig_sl, width='stretch')
                     else:
                         if _sl_pend:
-                            st.info(f"대기 중인 시그널 {len(_sl_pend)}건 — 시그널 발생 21일 후 자동 평가됩니다.")
+                            st.info(f"대기 중인 시그널 {len(_sl_pend)}건 — 진입 21거래일 뒤 자동 채점됩니다.")
                         else:
                             st.info("아직 시그널 기록이 없습니다. '시스템 시그널 생성'을 실행하면 매수 시그널이 자동 기록됩니다.")
                 except Exception as _e:
@@ -7862,31 +7982,40 @@ def main():
 
         # ── 운영 안전성 패널 (운영·리스크 그룹) ────────────
         def render_execution_mode_panel():
-            with st.expander("📡 시그널 자동 발송 현황", expanded=True):
+            with st.expander("📡 지금 저절로 도는 것", expanded=True):
+                # 어느 잡이 도는지는 워크플로 파일이 답한다. 여기 문장으로 적어
+                # 두면 크론을 껐다 켤 때 안 따라온다 — 실제로 이 절이 주문
+                # 워크플로를 "비활성화"라고 적고 있는 동안 그 잡은 평일마다
+                # 돌면서 장부에 31건을 기록했다.
+                for _wf, _lbl in (('paper-trade-us.yml', '가상 장부 매매'),
+                                  ('signal-alerts.yml', '시그널 알림'),
+                                  ('analyst-log.yml',   '애널리스트 기록'),
+                                  ('scorecard-publish.yml', '성적표 발행'),
+                                  ('daily-report.yml',  '일일 보고')):
+                    _crons = workflow_cron(_wf)
+                    if _crons:
+                        st.markdown(f"- 🟢 **{_lbl}** (`{_wf}`) — UTC `{'`, `'.join(_crons)}` (월~금)")
+                    elif _crons == []:
+                        st.markdown(f"- ⚪ **{_lbl}** (`{_wf}`) — 크론 없음, 수동 실행만")
+                    else:
+                        st.markdown(f"- ⚠️ **{_lbl}** (`{_wf}`) — 워크플로 파일을 찾지 못함")
+
                 st.markdown(
                     """
-**🛑 현재 모드: 자동 발송 중단 — 수동 실행만 가능**
+**실주문은 나가지 않습니다.** 가상 장부 매매(`paper-trade-us.yml`)의 예약 실행은
+`DRY_RUN=false` 로 돌아 **`virtual_portfolio.json` 에만** 체결을 기록합니다
+(수동 실행 기본값은 `true` — 실수로 장부를 건드리지 않도록).
 
-`signal-alerts.yml`의 크론 스케줄은 **2026-07-20부로 비활성화**되어 있습니다.
-유니버스를 37 → 276종목으로 확대해 5년 walk-forward IC를 재측정한 결과 전 팩터가
-`|ICIR| < 0.1`로 나와, 예측력이 확인되지 않은 신호를 매일 알림으로 보내지 않기
-위해 멈춘 상태입니다 (근거: `ic_weights.json`, `docs/superpowers/specs/`).
-신호원을 다시 찾기 전까지는 재개하지 않습니다.
+**시그널 알림**(`signal-alerts.yml`)의 크론은 **2026-07-20부로 꺼져 있습니다.**
+유니버스를 37 → 276종목으로 넓혀 5년 walk-forward IC를 재측정하니 전 팩터가
+`|ICIR| < 0.1` 이었습니다 — 예측력이 확인되지 않은 신호를 매일 알림으로 보내지
+않기 위해 멈춘 상태입니다 (근거: `ic_weights.json`, `docs/superpowers/specs/`).
+지금 필요하면 GitHub Actions → *Run workflow* 로 수동 실행만 가능합니다.
 
-**지금 시그널이 필요하면:**
-- GitHub Actions → `signal-alerts.yml` → *Run workflow*(수동 실행)로만 가능합니다.
-- 실제 주문 워크플로(`paper-trade-us.yml`)도 마찬가지로 비활성화 상태입니다.
-
-**텔레그램으로 수신되는 내용 (수동 실행 시):**
-- 매수 / 조건부 매수 / 매도 / 관망 시그널
-- 종목별 현재가 · 가상 투자금 배분 · 수량 · 근거
-
-**시그널 적중률 추적:**
-- 매수 시그널은 `signal_log.json`에 자동 기록
-- 모듈 콘솔 → 시그널·종목 발굴 → '시스템 시그널' 모듈의 '📊 과거 시그널 적중률'에서 21일 후 수익률 확인
+**시그널 적중률 추적:** 매수 시그널은 `signal_log.json` 에 기록되고,
+'시스템 시그널' 모듈의 '📊 과거 시그널 적중률'에서 21거래일 후 수익률로 채점됩니다.
 """
                 )
-                st.caption("⚙️ `.github/workflows/signal-alerts.yml` · `signal_worker.py` — 크론 비활성화, 수동(workflow_dispatch) 실행만 가능. 주문 워크플로도 비활성화 상태")
 
         def render_risk_guardrail_panel():
             if not _OPS_SAFETY_AVAILABLE:
