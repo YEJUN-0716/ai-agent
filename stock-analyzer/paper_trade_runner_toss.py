@@ -330,6 +330,24 @@ def check_portfolio_drawdown(equity_now: float, records: list,
     return dd < -PORTFOLIO_DD_STOP_PCT, round(dd, 2)
 
 
+def deposit_adjusted_equity(equity_now: float, records: list,
+                            deposited_now: float) -> float:
+    """킬스위치에 넣을 '오늘 자산' — 직전 기록 이후 들어온 입금분을 뺀다.
+
+    위 check_portfolio_drawdown 과 **같은 자**를 쓰라고 있는 함수다. 원본
+    자산끼리 어제/오늘을 비교하면 증자한 날 하루 변화가 +879.6% 로 읽힌다
+    (실측 2026-08-18, 실제는 −0.77%). 그러면 일일손실 가드가 그날 통째로 눈을
+    감고, 반대로 출금한 날은 거짓 발동해 신규 매수를 전면 차단한다.
+
+    고점 대비를 보는 드로다운 스톱은 2026-08-20 리뷰에서 고쳤는데, 세 줄 아래
+    같은 질문(자산이 얼마나 빠졌나)을 재는 이 자리는 안 따라왔었다.
+    """
+    if not records:
+        return float(equity_now)
+    flow = float(deposited_now) - float(records[-1].get("deposited", 0.0) or 0.0)
+    return float(equity_now) - flow
+
+
 # ── 섹터 조회 ──────────────────────────────────────────────────────────
 _sector_cache: dict[str, str] = {}
 
@@ -844,9 +862,10 @@ def main():
                        max_errors=KS_MAX_ERRORS,
                        max_single_order_pct=KS_MAX_SINGLE_ORDER_PCT) if _KILL_SWITCH_AVAILABLE else None
     if kill is not None and equity_log:
-        # 전일(직전 레코드) 자산을 당일 기준가로 삼아 하루 급락을 감지
+        # 전일(직전 레코드) 자산을 당일 기준가로 삼아 하루 급락을 감지한다.
         kill.set_day_start_equity(float(equity_log[-1].get("equity", equity_now)))
-        if kill.check_daily_loss(equity_now):
+        if kill.check_daily_loss(
+                deposit_adjusted_equity(equity_now, equity_log, _deposited_krw)):
             ks_warn = (f"🛑 킬스위치 발동: {kill.status()['reason']} → 신규 매수 전면 중단")
             print(ks_warn); send_tg(ks_warn)
             dd_blocked = True  # 기존 매수 차단 경로 재사용

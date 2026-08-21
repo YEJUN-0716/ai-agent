@@ -587,21 +587,6 @@ def calc_sector_rotation():
         return pd.DataFrame()
 
 
-def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
-                   half_kelly: bool = True) -> float:
-    """Kelly Criterion 최적 투입 비율. half_kelly=True 권장."""
-    if avg_loss_pct <= 0 or win_rate <= 0:
-        return 0.0
-    b = avg_win_pct / avg_loss_pct
-    if b == 0:
-        return 0.0
-    f = (win_rate * b - (1 - win_rate)) / b
-    f = max(0.0, f)
-    if half_kelly:
-        f *= 0.5
-    return min(f, 0.25)
-
-
 # ─────────────────────────────────────────────
 # 통합 주식 데이터 다운로드
 # ─────────────────────────────────────────────
@@ -6751,22 +6736,25 @@ def main():
 
                 # ── 켈리 포지션 사이징 ─────────────────────────
                 with st.expander("📐 Kelly Criterion 포지션 사이징", expanded=False):
-                    st.caption("과거 백테스트 결과 기반 수학적 최적 투입 비율 — half-Kelly 적용 (안전 마진)")
-                    _kc1, _kc2, _kc3 = st.columns(3)
-                    _k_wr  = _kc1.slider("승률 (%)", 30, 80, 55, key="k_wr") / 100
-                    _k_aw  = _kc2.number_input("평균 수익 (%)", min_value=0.1, value=8.0, step=0.5, key="k_aw")
-                    _k_al  = _kc3.number_input("평균 손실 (%)", min_value=0.1, value=4.0, step=0.5, key="k_al")
-                    _kf    = kelly_fraction(_k_wr, _k_aw, _k_al, half_kelly=True)
-                    _kf_full = kelly_fraction(_k_wr, _k_aw, _k_al, half_kelly=False)
-                    _kk1, _kk2, _kk3 = st.columns(3)
-                    _kk1.metric("Kelly 비율 (Full)", f"{_kf_full*100:.1f}%", "이론 최적")
-                    _kk2.metric("Half-Kelly (권장)", f"{_kf*100:.1f}%", "실전 사용")
-                    _kk3.metric("$10,000 기준", f"${10000*_kf:,.0f}", "종목당 투입")
-                    if _kf > 0.20:
-                        st.warning("Kelly 비율이 20% 초과 — cap 적용됨. 변동성 큰 전략입니다.")
-                    elif _kf < 0.05:
-                        st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
-                    st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
+                    if not _RISK_MGMT_ENABLED:
+                        st.info("risk_management 모듈 없음 — Kelly 사이징 계산 비활성")
+                    else:
+                        st.caption("과거 백테스트 결과 기반 수학적 최적 투입 비율 — half-Kelly 적용 (안전 마진)")
+                        _kc1, _kc2, _kc3 = st.columns(3)
+                        _k_wr  = _kc1.slider("승률 (%)", 30, 80, 55, key="k_wr") / 100
+                        _k_aw  = _kc2.number_input("평균 수익 (%)", min_value=0.1, value=8.0, step=0.5, key="k_aw")
+                        _k_al  = _kc3.number_input("평균 손실 (%)", min_value=0.1, value=4.0, step=0.5, key="k_al")
+                        _kf    = kelly_fraction(_k_wr, _k_aw, _k_al, half_kelly=True)
+                        _kf_full = kelly_fraction(_k_wr, _k_aw, _k_al, half_kelly=False)
+                        _kk1, _kk2, _kk3 = st.columns(3)
+                        _kk1.metric("Kelly 비율 (Full)", f"{_kf_full*100:.1f}%", "이론 최적")
+                        _kk2.metric("Half-Kelly (권장)", f"{_kf*100:.1f}%", "실전 사용")
+                        _kk3.metric("$10,000 기준", f"${10000*_kf:,.0f}", "종목당 투입")
+                        if _kf > 0.20:
+                            st.warning("Kelly 비율이 20% 초과 — cap 적용됨. 변동성 큰 전략입니다.")
+                        elif _kf < 0.05:
+                            st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
+                        st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
 
                 # ── 시그널 자동 발송 안내 ─────────────────────
                 with st.expander("📡 시그널 자동 발송 (GitHub Actions → 텔레그램)", expanded=False):

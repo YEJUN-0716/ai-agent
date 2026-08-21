@@ -1,17 +1,19 @@
 """
-운영 안전성: 킬스위치 · 포지션 대사 · 알림 디스패처
+운영 안전성: 킬스위치 · 포지션 대사
 =================================================================
 실전 자동매매에서 가장 무서운 건 무한 손실 루프다.
-이 모듈은 세 가지 안전망을 제공한다:
+이 모듈은 두 가지 안전망을 제공한다:
 
 1. KillSwitch — 당일 손실 임계치 초과 시 거래 차단
 2. reconcile_positions — 의도 포지션 vs 브로커 실제 포지션 불일치 탐지
-3. AlertDispatcher — 텔레그램/슬랙 메시지 발송 + 최근 알림 내역 보관
-"""
-from collections import deque
-from datetime import date, datetime, timezone
 
-import requests
+알림 발송은 여기 없다. 텔레그램 발송 함수는 러너·보고서·성적표가 각자
+`send_tg` 로 들고 있고, 그 사본들은 예외 원문에 봇 토큰이 섞이지 않도록
+`type(e).__name__` 만 찍는다(tests/test_telegram_token_not_logged.py).
+여기 있던 AlertDispatcher 는 부르는 코드가 한 곳도 없는 채로 `str(e)` 를
+기록에 담고 있어 2026-08-21 리뷰에서 삭제했다 — 필요해지면 git 에 있다.
+"""
+from datetime import date
 
 
 # ─────────────────────────────────────────────
@@ -136,40 +138,3 @@ def reconcile_positions(intended: dict, broker: list,
         'missing_in_broker': missing_in_broker,
         'extra_in_broker': extra_in_broker,
     }
-
-
-# ─────────────────────────────────────────────
-# 3) AlertDispatcher
-# ─────────────────────────────────────────────
-class AlertDispatcher:
-    """
-    텔레그램으로 알림을 보내고, 최근 N건의 알림 내역을 메모리에 보관.
-    level: 'info' | 'warning' | 'critical'
-    """
-    EMOJI = {'info': 'ℹ️', 'warning': '⚠️', 'critical': '🚨'}
-
-    def __init__(self, telegram_token: str = "", telegram_chat_id: str = "",
-                 max_history: int = 100):
-        self._token = telegram_token
-        self._chat_id = telegram_chat_id
-        self._history = deque(maxlen=max_history)
-
-    def send(self, message: str, level: str = 'info') -> dict:
-        emoji = self.EMOJI.get(level, 'ℹ️')
-        full_msg = f"{emoji} [{level.upper()}] {message}"
-        ts = datetime.now(timezone.utc).isoformat()
-        record = {'ts': ts, 'level': level, 'message': message, 'sent': False, 'error': None}
-        if self._token and self._chat_id:
-            try:
-                url = f"https://api.telegram.org/bot{self._token}/sendMessage"
-                resp = requests.post(url, json={'chat_id': self._chat_id, 'text': full_msg},
-                                     timeout=10)
-                resp.raise_for_status()
-                record['sent'] = True
-            except Exception as e:
-                record['error'] = str(e)
-        self._history.append(record)
-        return record
-
-    def recent_alerts(self, n: int = 20) -> list:
-        return list(self._history)[-n:]
