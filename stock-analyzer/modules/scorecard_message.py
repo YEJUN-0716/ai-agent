@@ -5,6 +5,11 @@
 
 매수·매도·목표가 표현을 쓰지 않는다 — 점수와 순위, 사후 채점만 발행한다.
 """
+# 판정선은 analyst_scorecard 가 소유한다 — 화면(app._analyst_scorecard_rows)과
+# 발행문이 **같은 두 숫자**를 읽어야 한다. 여기에 따로 적으면 언젠가 갈라지고,
+# 그때 바깥으로 나가는 쪽이 틀린 값을 든다.
+from modules.analyst_scorecard import (DECIDE_MIN_EFFECTIVE_N,
+                                       DECIDE_T_THRESHOLD)
 
 DISCLAIMER = (
     "이 채널은 예측 기록과 사후 채점을 공개합니다. 투자 자문이나 매매 "
@@ -33,8 +38,17 @@ MISSING_REASON = {"quant": "실측 IC 표본이 없어 가중치 근거가 아�
 
 # 종합 점수가 무엇의 평균인지 밝힌다. 합성 방식을 감추면 순위의 의미를
 # 알 수 없고, 나중에 가중치를 바꿨을 때 구독자가 알아챌 방법도 없다.
-COMBINE_NOTE = ("종합 점수는 차트+파동+모멘텀과 ICT+CRT 의 단순 평균입니다 "
-                "— 두 점수가 모두 있는 종목만 순위에 넣습니다.")
+#
+# 이름을 문장에 박지 않는다 — `COMBINE_SLUGS` 에 quant 를 넣는 날 이 문장이
+# 조용히 거짓이 된다(같은 자리의 `MISSING_SLUGS` 도 함께). 이 저장소가 같은
+# 모양으로 네 번 물렸다: 리포트 산문 두 번, 채점 지평 한 번.
+# 기본값을 두지 않는 이유도 그때와 같다 — 기본값은 하드코딩이 숨을 자리다.
+_COMBINE_NOTE_TAIL = " 의 단순 평균입니다 — 그 점수가 모두 있는 종목만 순위에 넣습니다."
+
+
+def combine_note(slugs):
+    """종합 점수의 합성 방식 문구. 이름은 slugs 에서 뽑는다."""
+    return "종합 점수는 " + " · ".join(_slug_name(s) for s in slugs) + _COMBINE_NOTE_TAIL
 
 # "적중률" 은 이 저장소에서 두 가지를 가리킨다. 성적표가 내는 것은 IC 쪽인데
 # 라벨이 그냥 "적중률" 이면 구독자는 '매수한 종목이 올랐나' 로 읽는다. 실측
@@ -91,8 +105,36 @@ BACKFILL_NOTE = (
 )
 
 
-def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
-    """N일 지평 성적표. stats 는 score_analysts() 의 반환값.
+# 판정선을 문장으로 옮긴 것. t 만 찍고 끝내면 그 숫자가 선을 넘었는지 구독자가
+# 알 방법이 없다 — 실측 2026-08-22 기준 네 지평의 t 는 -0.15 / -0.20 / +0.22 /
+# -0.23 으로 전부 판정선의 10분의 1 근처인데, 발행문은 "t=0.224 · 유효표본 47.3"
+# 으로 끝나고 옆줄에는 "IC 적중률 56.2%" 가 붙어 있었다. 화면에는 '판정' 컬럼과
+# 문턱 캡션이 둘 다 있고 발행문에만 없었다 — 가드가 한 경로에만 걸린 자리이자,
+# 정확한 쪽이 안에 남고 모호한 쪽이 바깥으로 나간 자리다.
+# 이 채널의 유일한 차별화가 "못 찾으면 못 찾았다고 쓰는 것" 인 이상, 빠뜨린
+# 문장 하나가 곧 분식이다.
+DECISION_LINE = "  → 판정선(|t| ≥ {t:.1f} · 유효표본 ≥ {n}) {verdict}"
+DECISION_PASS = "통과"
+DECISION_FAIL = "미달 — 예측력을 아직 찾지 못했습니다"
+
+
+def decision_line(t_stat, effective_n):
+    """판정선 대비 결과 한 줄. 화면의 '판정' 컬럼과 같은 두 조건을 쓴다."""
+    passed = (t_stat is not None
+              and abs(t_stat) >= DECIDE_T_THRESHOLD
+              and float(effective_n) >= DECIDE_MIN_EFFECTIVE_N)
+    return DECISION_LINE.format(t=DECIDE_T_THRESHOLD, n=DECIDE_MIN_EFFECTIVE_N,
+                                verdict=DECISION_PASS if passed else DECISION_FAIL)
+
+
+def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None,
+                            *, combine_slugs):
+    """N거래일 지평 성적표. stats 는 score_analysts() 의 반환값.
+
+    지평은 **거래일**이다 — build_forward_returns 가 봉을 센다. 화면은 이미
+    "21거래일 앞선 수익률 기준" 이라고 정확히 쓰고 있었는데 발행문만 "일"
+    이었다. 실측(패널 1,607봉): 21거래일 = 달력 중위 30일, 63거래일 = 91일
+    (최대 97일). 63일 지평은 44% 빠르게 채점되는 것처럼 적히고 있었다.
 
     sample_mix — **이 지평에서 실제로 채점된 날**의 {"live", "backfill"} 구성
     (analyst_scorecard.scored_dates 로 센다). 로그에 쌓인 일수를 넣으면 안 된다
@@ -100,7 +142,7 @@ def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
     적히고, 그러면 이 채널이 "예측 기록과 사후 채점을 공개한다" 고 해 놓고
     예측한 적 없는 날만으로 만든 성적을 그렇게 부르게 된다.
     """
-    lines = [f"📊 {horizon}일 지평 성적표", ""]
+    lines = [f"📊 {horizon}거래일 지평 성적표", ""]
 
     for slug in publishable(stats):
         s = stats[slug]
@@ -114,6 +156,7 @@ def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
                 f"  판정 표본 n={s['n']} (유효 {effective_n:.1f}) — 통계적 판단 불가")
         else:
             lines.append(f"  t={t_stat} · 유효표본 {effective_n:.1f}")
+        lines.append(decision_line(t_stat, effective_n))
         lines.append("")
 
     lines.extend(_missing_slug_lines(missing_slugs))
@@ -124,7 +167,7 @@ def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
             backfill=sample_mix["backfill"], live=live))
 
     lines.append("")
-    lines.append(COMBINE_NOTE)
+    lines.append(combine_note(combine_slugs))
     lines.append(HIT_RATE_NOTE)
     lines.append("")
     lines.append(DISCLAIMER)
@@ -132,13 +175,17 @@ def build_scorecard_message(horizon, stats, missing_slugs, sample_mix=None):
 
 
 def build_record_message(date_str, regime, top_by_slug, missing_slugs,
-                         tie_notes=None, dropped=0, *, horizons):
+                         tie_notes=None, dropped=0, *, horizons, combine_slugs):
     """오늘의 예측 기록. top_by_slug 는 {slug: [(ticker, score), ...]}.
 
     horizons — 이 기록이 채점될 지평. 문장에 박아 두면 지평이 늘어도 안 따라
     온다. 실제로 1일 지평이 HORIZONS 에 들어간 뒤에도 이 문장은 "5·21·63일"
     이라고 나갔고, 그 사이 1일 성적표가 8회 발행됐다(2026-08-11~19).
     기본값을 두지 않는 이유도 같다 — 기본값은 하드코딩이 숨을 자리다.
+    **거래일**이라고 쓴다 — 채점은 봉을 센다. 63거래일은 달력으로 중위 91일
+    (최대 97일)이라, "63일 뒤" 는 44% 빠르게 채점되는 것처럼 읽힌다.
+
+    combine_slugs — 종합 점수를 만든 슬러그. 같은 이유로 기본값이 없다.
 
     missing_slugs 는 build_scorecard_message 와 같은 이유로 필요하다 —
     이 메시지는 매 영업일 나가고 구독자가 실제로 보는 것은 이쪽이다.
@@ -174,9 +221,9 @@ def build_record_message(date_str, regime, top_by_slug, missing_slugs,
         lines.append(f"※ {dropped}종목은 한쪽 점수가 없어 종합에서 빠졌습니다")
 
     lines.append("")
-    lines.append(COMBINE_NOTE)
+    lines.append(combine_note(combine_slugs))
     lines.append("이 기록은 "
-                 + "·".join(str(h) for h in horizons) + "일 뒤 채점됩니다.")
+                 + "·".join(str(h) for h in horizons) + "거래일 뒤 채점됩니다.")
     lines.append("")
     lines.append(DISCLAIMER)
     return "\n".join(lines)

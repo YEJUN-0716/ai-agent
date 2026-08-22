@@ -315,3 +315,46 @@ def test_scored_dates_agrees_with_score_analysts_n():
 
     stats = sc.score_analysts(days, fwd, 1)["combined"]
     assert len(sc.scored_dates(days, fwd, "combined")) == stats["n"]
+
+
+# ── 추정기가 무너지면 유효표본도 무너져야 한다 ──────────────────────
+#
+# `n <= 2*lag` 가지는 이미 effective_n=0 으로 답하는데, 세 줄 아래 else 는
+# 같은 붕괴(se=0.0 · NaN)에 전체 표본을 그대로 줬다. 형제 가드가 한쪽에만
+# 걸린 자리다.
+
+def _flat_days(n, ic_value):
+    """IC 가 매일 정확히 같은 값이 되도록 만든 기록 — se 가 0 이 된다."""
+    days, fwd = [], {}
+    for i in range(n):
+        d = f"D{i:03d}"
+        days.append({"date": d, "scores": {t: {"chart": float(k)}
+                                           for k, t in enumerate("ABCDEF")}})
+        # 점수 순위와 수익률 순위가 매일 완전히 일치 → 단면 IC 가 매일 1.0
+        fwd[d] = {t: float(k) * ic_value for k, t in enumerate("ABCDEF")}
+    return days, fwd
+
+
+def test_zero_se_reports_no_effective_sample():
+    days, fwd = _flat_days(40, 1.0)
+    got = sc.score_analysts(days, fwd, horizon=1)["chart"]
+
+    assert got["n"] == 40
+    assert got["mean_ic"] == 1.0          # IC 자체는 매일 1.0 로 잘 재진다
+    assert got["se"] == 0.0               # 분산이 0
+    assert got["t_stat"] is None
+    assert got["effective_n"] == 0.0      # 예전에는 40.0 이었다
+
+
+def test_single_day_does_not_leak_nan_into_t_stat():
+    """n=1 · lag=0 이면 se 가 NaN 인데 `if se` 가 참이라 t 에 nan 이 찍혔다.
+
+    15분봉 26봉 지평의 첫날(2026-08-06)이 이 자리다.
+    """
+    days, fwd = _flat_days(1, 1.0)
+    got = sc.score_analysts(days, fwd, horizon=1)["chart"]
+
+    assert got["n"] == 1
+    assert got["se"] is None
+    assert got["t_stat"] is None
+    assert got["effective_n"] == 0.0

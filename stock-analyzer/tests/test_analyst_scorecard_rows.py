@@ -103,3 +103,18 @@ def test_multiple_analysts_each_get_a_row():
     by_name = {r["애널리스트"]: r for r in rows}
     assert by_name["차트+파동+모멘텀"]["IC"] > 0
     assert by_name["ICT+CRT"]["IC"] < 0
+
+
+def test_combined_screen_labels_are_pinned_to_combine_slugs():
+    """발행문은 COMBINE_SLUGS 에서 이름을 뽑지만(scorecard_message.combine_note)
+    화면 라벨 두 곳은 아직 손으로 적혀 있다 — `_ANALYST_SLUG_NAMES['combined']`
+    ('종합(차트+ICT)') 와 render_scalp_scorecard 의 '차트+ICT 판정 적중률'.
+
+    라벨을 뽑아 쓰면 '종합(차트+파동+모멘텀 · ICT+CRT)' 처럼 표 칸에 안 맞아서
+    손으로 두되, 구성이 바뀌면 여기서 먼저 터뜨린다.
+    """
+    from modules import analyst_scorecard as asc
+
+    assert asc.COMBINE_SLUGS == ("chart", "ict"), (
+        "COMBINE_SLUGS 가 바뀌었다 — app._ANALYST_SLUG_NAMES['combined'] 와 "
+        "render_scalp_scorecard 의 '차트+ICT 판정 적중률' 라벨을 같이 고칠 것.")

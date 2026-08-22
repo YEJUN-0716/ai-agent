@@ -239,3 +239,18 @@ def test_combined_output_feeds_existing_ranking_unchanged():
 
     assert top["combined"] == [("AAA", 100.0)]
     assert _sw().cut_tie_counts(combined, top) == {"combined": 1}
+
+
+def test_missing_slugs_is_derived_not_typed():
+    """'종합 = 차트+ICT' 라는 사실이 세 곳에 손으로 적혀 있었다.
+
+    COMBINE_SLUGS 에 quant 를 넣는 날, 목록을 손으로 적어 두면 발행문이
+    "퀀트+재무는 종합 점수에 아직 안 들어감" 이라고 계속 말한다 — 들어갔는데도.
+    """
+    from modules import analyst_scorecard as asc
+    from modules import analyst_team
+
+    sw = _sw()
+    assert set(sw.MISSING_SLUGS) | set(asc.COMBINE_SLUGS) == set(
+        analyst_team.ANALYST_SLUGS)
+    assert not set(sw.MISSING_SLUGS) & set(asc.COMBINE_SLUGS)
