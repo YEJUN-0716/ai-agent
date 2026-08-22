@@ -70,3 +70,20 @@ def verdict_score(per_analyst, weights_by_slug):
     weights_by_slug = weights_by_slug or {}
     return blend_score([per_analyst[slug] for slug in DIRECTIONAL_SLUGS],
                        [weights_by_slug.get(slug, 0.0) for slug in DIRECTIONAL_SLUGS])
+
+
+def fundamental_unavailable(detail) -> bool:
+    """`app.fundamental_score` 의 detail 이 '재무를 못 받았다'를 말하는가.
+
+    야후가 조회를 막으면 예외 없이 빈 dict 가 온다. 그대로 계산하면 모든
+    항목이 None 이라 점수가 50 근처(실측 50.55)에 붙는다 — '못 받았다'가
+    '중립 판단'으로 조용히 흘러간다.
+
+    이 판별이 signal_worker 안에만 있어서 **기록은 그 종목의 quant 를 빼는데
+    화면은 50.55 를 총괄 블렌드에 그대로 넣고** 있었다. 기록 3,307 종목일로
+    재보니 총괄 라벨이 17.8%(bull 국면 가중치) 뒤집히고, 퀀트 비중이 66% 인
+    bear 국면이면 21.7% 다. 같은 질문에 두 곳이 답하고 있었으므로 여기로
+    옮긴다 — verdict_score 가 "3인이 모두 있어야 낸다"고 못 박은 것과 한 쌍이다.
+    """
+    detail = detail or {}
+    return bool(detail.get('데이터없음') or detail.get('오류'))

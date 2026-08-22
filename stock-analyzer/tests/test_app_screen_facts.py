@@ -61,15 +61,31 @@ def test_ma_cross_bonus_needs_trend():
 
 # ── 2. 워크플로 크론은 파일이 답한다 ──────────────────────────────
 
-def test_workflow_cron_reads_live_schedule():
-    """실제 워크플로 두 개로 확인한다 — 하나는 켜져 있고 하나는 꺼져 있다.
+def test_workflow_cron_reads_live_schedule(tmp_path, monkeypatch):
+    """켜짐/꺼짐을 파일에서 읽는다.
 
     화면이 이 둘을 정확히 **반대로** 말하고 있었다: 시그널 알림은 2026-07-20
     부터 주석 처리돼 있는데 "활성", 가상 장부 매매는 평일마다 돌면서 장부에
     31건을 기록하는 중인데 "크론 비활성화" 였다.
+
+    예전엔 이 테스트가 실제 파일로 signal-alerts 가 꺼져 있음을 단언했다.
+    그건 **운영 상태를 테스트에 박아 둔 것**이라, 알림을 되살리는 날 코드가
+    멀쩡한데 CI 가 깨진다. 읽는 능력만 잠그고 상태는 픽스처로 만든다.
     """
-    assert app.workflow_cron('paper-trade-us.yml'), '가상 장부 매매 크론이 살아 있어야 한다'
-    assert app.workflow_cron('signal-alerts.yml') == [], '시그널 알림 크론은 꺼져 있다'
+    monkeypatch.setattr(app, '_WORKFLOW_DIR', str(tmp_path))
+    (tmp_path / 'on.yml').write_text(
+        'on:\n  schedule:\n    - cron: "30 21 * * 1-5"\n', encoding='utf-8')
+    (tmp_path / 'off.yml').write_text(
+        'on:\n  # schedule:\n  #   - cron: "30 22 * * 1-5"\n  workflow_dispatch:\n',
+        encoding='utf-8')
+    assert app.workflow_cron('on.yml') == ['30 21 * * 1-5']
+    assert app.workflow_cron('off.yml') == [], '주석 처리는 꺼진 것이다'
+
+
+def test_real_workflow_dir_is_readable():
+    """실제 워크플로 디렉터리를 읽을 수 있어야 한다 — 경로가 어긋나면 화면이
+    전부 '워크플로 파일 없음' 으로 떨어진다. 크론이 켜졌는지는 안 본다."""
+    assert app.workflow_cron('paper-trade-us.yml') is not None
 
 
 def test_workflow_cron_distinguishes_missing_from_disabled():
