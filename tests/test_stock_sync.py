@@ -129,6 +129,21 @@ def test_pull_uses_ff_only_so_local_work_is_never_clobbered(settings, monkeypatc
     assert "--ff-only" in pull_call
 
 
+def test_as_of_measures_the_data_not_the_code(settings, monkeypatch):
+    # Arrange — 저장소를 합친 뒤로 코드 커밋이 데이터보다 늘 최신이다.
+    #           경로 한정이 빠지면 as_of 가 코드 커밋 시각을 가리킨다.
+    git = FakeGit()
+    monkeypatch.setattr(subprocess, "run", git)
+
+    # Act
+    stock_sync.refresh(settings)
+
+    # Assert
+    log_call = next(call for call in git.calls if "log" in call)
+    assert "--" in log_call
+    assert log_call[log_call.index("--") + 1:] == list(stock_sync._DATA_PATHS)
+
+
 def test_missing_git_is_reported_not_swallowed(settings, monkeypatch):
     # Arrange
     def boom(cmd, **kwargs):

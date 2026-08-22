@@ -1,4 +1,5 @@
 import json
+import types
 
 import pytest
 
@@ -80,6 +81,13 @@ class FakeBroker:
 
     def last_close_price(self, symbol: str) -> float:
         return self._prices.get(symbol, 0.0)
+
+    def reserved_krw(self, state: dict) -> float:
+        return sum(float(o.get("notional_krw", 0.0))
+                   for o in state.get("pending", []) if o.get("side") == "buy")
+
+    def available_krw(self, state: dict) -> float:
+        return float(state.get("cash_krw", 0.0)) - self.reserved_krw(state)
 
 
 @pytest.fixture
@@ -230,7 +238,7 @@ def test_reads_equity_records(settings):
     result = get_equity_history(settings, limit=1)
 
     # Assert
-    assert result == [{"date": "2026-07-28", "equity_krw": 10_120_000}]
+    assert result["records"] == [{"date": "2026-07-28", "equity_krw": 10_120_000}]
 
 
 def test_reads_analyst_scores_newest_first(settings):
@@ -285,11 +293,94 @@ def test_equity_history_returns_newest_first_with_limit(settings):
     result = get_equity_history(settings, limit=2)
 
     # Assert — 최신 2개를 최신순으로 반환
-    assert len(result) == 2
-    assert result[0]["date"] == "2026-07-28"
-    assert result[0]["equity_krw"] == 10_120_000
-    assert result[1]["date"] == "2026-07-27"
-    assert result[1]["equity_krw"] == 10_050_000
+    records = result["records"]
+    assert len(records) == 2
+    assert records[0]["date"] == "2026-07-28"
+    assert records[0]["equity_krw"] == 10_120_000
+    assert records[1]["date"] == "2026-07-27"
+    assert records[1]["equity_krw"] == 10_050_000
+
+
+def _fake_broker(monkeypatch, **funcs):
+    """브로커 모듈 자리에 필요한 함수만 꽂는다.
+
+    계산 자체는 stock-analyzer 쪽 테스트가 잠근다. 여기서 잠그는 것은
+    '비서가 원본 equity가 아니라 브로커 계산을 말한다'는 것이다.
+    """
+    module = types.SimpleNamespace(**funcs)
+    monkeypatch.setattr(
+        stock_reader, "_broker_or_none", lambda settings: module
+    )
+    return module
+
+
+def test_equity_history_reports_return_without_deposits(settings, monkeypatch):
+    # Arrange — 입금 9천만원이 들어온 실제 모양
+    (settings.stock_analyzer_path / "equity_log.json").write_text(
+        json.dumps({"records": [
+            {"date": "2026-08-17", "equity": 10_222_600.94},
+            {"date": "2026-08-18", "equity": 100_144_188.17,
+             "deposited": 90_000_000.0},
+            {"date": "2026-08-21", "equity": 99_730_867.24,
+             "deposited": 90_000_000.0},
+        ]}),
+        encoding="utf-8",
+    )
+    _fake_broker(
+        monkeypatch,
+        indexed_equity=lambda records: [10_000_000.0, 10_010_000.0, 9_973_000.0],
+    )
+
+    # Act
+    result = get_equity_history(settings)
+
+    # Assert — 자산은 9.8배가 됐지만 수익률은 −0.27%다
+    assert result["total_return_pct"] == pytest.approx(-0.27, abs=0.01)
+    assert result["deposited_krw"] == 90_000_000.0
+    assert result["records"][0]["equity_ex_deposit"] == 9_973_000.0
+
+
+def test_equity_history_warns_about_deposit_when_broker_missing(settings):
+    # Arrange — 브로커를 못 불러오면 계산은 못 해도 입금 사실은 알려야 한다
+    (settings.stock_analyzer_path / "equity_log.json").write_text(
+        json.dumps({"records": [
+            {"date": "2026-08-21", "equity": 99_730_867.24,
+             "deposited": 90_000_000.0},
+        ]}),
+        encoding="utf-8",
+    )
+
+    # Act
+    result = get_equity_history(settings)
+
+    # Assert
+    assert result["total_return_pct"] is None
+    assert "90,000,000" in result["note"]
+
+
+def test_portfolio_reports_available_cash_apart_from_reserved(settings, monkeypatch):
+    # Arrange — 현금 6,236만원 중 4,209만원이 예약에 묶여 있다
+    (settings.stock_analyzer_path / "virtual_portfolio.json").write_text(
+        json.dumps({
+            "cash_krw": 62_360_000.0,
+            "positions": {},
+            "pending": [{"symbol": "AAPL", "side": "buy",
+                         "notional_krw": 42_091_589.0}],
+        }),
+        encoding="utf-8",
+    )
+    _fake_broker(
+        monkeypatch,
+        reserved_krw=lambda state: 42_091_589.0,
+        available_krw=lambda state: 20_268_411.0,
+    )
+
+    # Act
+    result = get_virtual_portfolio(settings)
+
+    # Assert
+    assert result["reserved_krw"] == 42_091_589.0
+    assert result["available_krw"] == 20_268_411.0
 
 
 def test_recent_signals_returns_newest_first_with_limit(settings):

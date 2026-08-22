@@ -116,6 +116,20 @@ def _read_json(path: Path) -> Any | None:
         ) from exc
 
 
+def _broker_or_none(settings: Settings):
+    """stock-analyzer 브로커 모듈. 못 불러오면 None.
+
+    현금·자본곡선 계산을 여기서 새로 쓰지 않고 브로커 것을 그대로 부르기
+    위해 쓴다. 같은 계산의 사본이 두 개면 한쪽만 고쳐진다.
+    """
+    if not (settings.stock_analyzer_path / "modules" / "virtual_broker.py").exists():
+        return None
+    try:
+        return virtual_trade.broker_module(settings)
+    except virtual_trade.TradeError:
+        return None
+
+
 def get_virtual_portfolio(settings: Settings) -> dict:
     """가상 브로커 보유 현황. 아직 한 번도 안 돌았으면 started=False.
 
@@ -147,6 +161,13 @@ def get_virtual_portfolio(settings: Settings) -> dict:
         "as_of": sync["as_of"],
         "sync_note": sync["note"],
     }
+    # 현금의 상당액이 예약 매수에 묶여 있다(2026-08-22 실측 67.5%). cash_krw만
+    # 말하면 사장님이 쓸 수 있는 돈을 3.1배로 잡고 계획을 세운다.
+    broker = _broker_or_none(settings)
+    if broker is not None:
+        result["reserved_krw"] = broker.reserved_krw(data)
+        result["available_krw"] = broker.available_krw(data)
+
     # 평가금액·평가손익은 현재가가 있어야 나온다. 못 구하면 그 항목만 빠지고
     # 나머지 답은 그대로 나간다.
     result.update(_value_positions(settings, cash_krw, positions))
@@ -158,14 +179,45 @@ def get_data_freshness(settings: Settings) -> dict:
     return stock_sync.refresh(settings)
 
 
-def get_equity_history(settings: Settings, limit: int = 30) -> list[dict]:
-    """가상 브로커 자본 곡선. 최신 것부터 limit개."""
+def get_equity_history(settings: Settings, limit: int = 30) -> dict:
+    """가상 브로커 자본 곡선. 최신 것부터 limit개.
+
+    `equity`는 계좌에 있는 돈이라 입금하면 그냥 오른다 — 2026-08-18 입금
+    9,000만원이 곡선에 그대로 얹혀 있어, 그것만 읽으면 수익률이 +878%로
+    보인다(진짜는 −0.27%). 그래서 입금을 뺀 곡선(equity_ex_deposit)과 그
+    곡선의 총수익률을 함께 낸다. 계산은 브로커의 indexed_equity를 부른다.
+    """
     stock_sync.refresh(settings)
     data = _read_json(settings.stock_analyzer_path / "equity_log.json")
-    if data is None:
-        return []
-    records = data.get("records", [])
-    return records[-limit:][::-1]
+    records = (data or {}).get("records", [])
+    deposited_krw = float(records[-1].get("deposited") or 0.0) if records else 0.0
+
+    broker = _broker_or_none(settings)
+    curve = broker.indexed_equity(records) if broker is not None and records else None
+
+    start = max(len(records) - limit, 0)
+    window = []
+    for offset, rec in enumerate(records[start:]):
+        rec = dict(rec)
+        if curve is not None:
+            rec["equity_ex_deposit"] = round(curve[start + offset], 2)
+        window.append(rec)
+
+    total_return_pct = None
+    if curve and curve[0]:
+        total_return_pct = round((curve[-1] / curve[0] - 1.0) * 100, 2)
+
+    result = {
+        "records": window[::-1],
+        "deposited_krw": deposited_krw,
+        "total_return_pct": total_return_pct,
+    }
+    if total_return_pct is None and deposited_krw:
+        result["note"] = (
+            f"자산에 외부 입금 {deposited_krw:,.0f}원이 포함돼 있습니다. "
+            "자산이 늘어난 것을 수익으로 말하면 안 됩니다."
+        )
+    return result
 
 
 def get_recent_signals(settings: Settings, limit: int = 10) -> list[dict]:
