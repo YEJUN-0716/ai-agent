@@ -87,7 +87,20 @@ def find_order_blocks(df: pd.DataFrame, lookback: int = 100, min_move_pct: float
 
 # ── BOS / CHoCH ──────────────────────────────────────────────────
 def find_bos_choch(df: pd.DataFrame, swings: pd.DataFrame) -> list:
-    """시장 구조 이탈(BOS) 및 성격 변화(CHoCH) 감지."""
+    """시장 구조 이탈(BOS) 및 성격 변화(CHoCH) 감지 — **깨진 시각순**.
+
+    소비자 셋(`ict_factor_score` · `calc_ict_adjustment` · 차트 주석)이 전부
+    `events[-1]` 을 "가장 최근 구조 전환" 으로 읽는다. 그런데 이 함수는 스윙
+    **쌍 순서**로 훑으므로, 오래된 스윙이 뒤늦게 깨지면 그 이벤트가 목록 뒤로
+    가지 않는다 — 나중 쌍의 돌파가 먼저 일어났어도 목록에서는 뒤에 온다.
+    그래서 마지막에 한 번 세워서 돌려준다. 소비자마다 세우면 언젠가 한 곳이
+    안 따라온다.
+
+    (실측 2026-08-22, 저장 패널 20종목 × 30봉: 정렬 전 `events[-1]` 이 최신
+    이벤트와 다른 봉이 10.3%, 그중 **방향이 정반대인 봉이 4.67%** 였다.
+    그 봉에서 ICT 애널리스트 점수가 평균 49.4점 움직이고, 실기록 3,032건
+    기준 그중 15.8% 는 총괄 판정 라벨까지 뒤집힌다.)
+    """
     if swings.empty or len(swings) < 2:
         return []
     closes = df["Close"].values
@@ -115,7 +128,7 @@ def find_bos_choch(df: pd.DataFrame, swings: pd.DataFrame) -> list:
                     events.append({"type": label, "price": prev["price"],
                                    "date": dates[k], "idx": k})
                     break
-    return events
+    return sorted(events, key=lambda e: e["idx"])
 
 
 # ── Premium / Discount ──────────────────────────────────────────
