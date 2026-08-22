@@ -222,16 +222,18 @@ QUANT_COVERAGE_WARN_AT = 0.5
 def _quant_score(ticker, df):
     """퀀트+재무 점수 — 못 받았으면 None.
 
-    fundamental_score 는 실패해도 50.0 을 돌려준다. 화면은 사유를 함께 띄우므로
-    그걸로 충분하지만 기록은 다르다 — 50 을 적으면 '재무를 못 받았다'가
-    '중립 판단'으로 성적에 섞인다. analyst_log 가 값 없는 슬러그의 키를 아예
-    빼는 것과 같은 규칙이라, 여기서도 키를 뺄 수 있게 None 으로 바꾼다.
+    fundamental_score 는 실패해도 점수(실측 50.55)를 돌려준다. 50 을 적으면
+    '재무를 못 받았다'가 '중립 판단'으로 성적에 섞인다 — analyst_log 가 값
+    없는 슬러그의 키를 아예 빼는 것과 같은 규칙이라 None 으로 바꾼다.
+
+    판별은 analyst_team.fundamental_unavailable 이 소유한다. 예전엔 그 조건이
+    여기에만 있어서 화면은 같은 실패를 50.55 로 블렌드하고 있었다.
     """
     try:
         score, det = core.fundamental_score(ticker, df)
     except Exception:
         return None
-    if det.get('데이터없음') or det.get('오류'):
+    if analyst_team.fundamental_unavailable(det):
         return None
     return score
 

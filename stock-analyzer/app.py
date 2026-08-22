@@ -75,7 +75,7 @@ except Exception:
     _DATA_INTEGRITY_AVAILABLE = False
 
 try:
-    from modules.ops_safety import KillSwitch as _KillSwitch, reconcile_positions as _reconcile_pos
+    from modules.ops_safety import reconcile_positions as _reconcile_pos
     _OPS_SAFETY_AVAILABLE = True
 except Exception:
     _OPS_SAFETY_AVAILABLE = False
@@ -1952,13 +1952,15 @@ def calc_indicator_ics(df, horizon=20):
     ads[(adx_f>20)&(adx_f<=25)&bull]=58; ads[(adx_f>20)&(adx_f<=25)&~bull]=42
 
     obv=calc_obv(p,v); obv_ma=obv.rolling(20).mean()
-    obv_above=(obv>obv_ma); obv_rising=(obv>obv.shift(5)).fillna(False)
+    # lag 은 `shift(N-1)`. 스칼라 `iloc[-N]` 은 N-1봉 전이다 —
+    # bt_signals_full 머리말 참고. 여기만 옛 값(5/20)이 남아 있었다.
+    obv_above=(obv>obv_ma); obv_rising=(obv>obv.shift(4)).fillna(False)
     obv_s=pd.Series(25.0,index=p.index)
     obv_s[obv_above & obv_rising]=75
     obv_s[obv_above & ~obv_rising]=55
     obv_s[~obv_above & obv_rising]=40
     # OBV 다이버전스 보너스 (bt_signals_full/technical_score와 동기화)
-    pr20o=p.shift(20); obv20=obv.shift(20)
+    pr20o=p.shift(19); obv20=obv.shift(19)
     obv_b=pd.Series(0.0,index=p.index)
     obv_b[(p<pr20o)&(obv>obv20)]+=20   # 강세 다이버전스: 가격↓ OBV↑
     obv_b[(p>pr20o)&(obv<obv20)]-=20   # 약세 다이버전스: 가격↑ OBV↓
@@ -3557,7 +3559,8 @@ def render_analyst_scorecard():
         "이 규모에서는 IC 자체가 표준오차와 비슷한 크기입니다.")
 
 
-def build_analyst_report(name, icon, score, reasons, detail=None, role='directional'):
+def build_analyst_report(name, icon, score, reasons, detail=None, role='directional',
+                         unavailable=False):
     """6개 분석 파트 공통 보고서 포맷.
 
     role: 'directional'(방향성 블렌드 대상 — IC가중치 적용) |
@@ -3565,12 +3568,18 @@ def build_analyst_report(name, icon, score, reasons, detail=None, role='directio
           'confidence'(백테스트, 신뢰도 플래그) |
           'sizing'(리스크, Kelly 사이징 전용 — 이미 트레이더 단계에서 별도 소비).
     방향성 3인 외에는 방향성 점수 블렌드에 들어가지 않는다(manager_consolidate 참고).
+
+    unavailable=True 면 **점수를 못 낸 것**이다. score 는 None 이 되고 판정은
+    '판정 불가' — 계산 실패를 중립 50 으로 채우지 않는다는 규칙을 화면에서도
+    지킨다(analyst_team.fundamental_unavailable 참고).
     """
     weight = _current_analyst_weights().get(name, 33.3) if role == 'directional' else TEAM_WEIGHTS.get(name, 15)
     return {
-        'name': name, 'icon': icon, 'score': round(float(score), 1),
+        'name': name, 'icon': icon,
+        'score': None if unavailable else round(float(score), 1),
         'weight': weight, 'role': role,
-        'verdict': _team_verdict(score),
+        'verdict': '판정 불가' if unavailable else _team_verdict(score),
+        'unavailable': bool(unavailable),
         'reasons': [r for r in reasons if r][:4],
         'detail': detail or {},
     }
@@ -3613,7 +3622,18 @@ def technical_momentum_analyst(t_score, t_det, mom_data, *,
 
 
 def quant_fundamental_analyst(f_score, f_det, dcf_det=None):
-    """퀀트+재무: fundamental_score(밸류·수익성·성장성·안전성·품질) 기반."""
+    """퀀트+재무: fundamental_score(밸류·수익성·성장성·안전성·품질) 기반.
+
+    야후 재무 조회가 막히면 점수를 내지 않는다. 예전엔 그 경우에도 50.55 를
+    총괄 블렌드에 넣고 카드에는 `업종 N/A (평균 PER 20)` 한 줄만 띄웠다 —
+    화면 어디에도 '못 받았다'는 말이 없었다.
+    """
+    if _analyst_team.fundamental_unavailable(f_det):
+        return build_analyst_report(
+            '퀀트+재무', '💼', None,
+            ['야후 재무 조회 실패 — 점수 없음 (중립 50 으로 채우지 않는다)',
+             f"사유: {f_det.get('오류')}" if f_det.get('오류') else '재무 항목이 하나도 오지 않았다'],
+            f_det, unavailable=True)
     reasons = []
     if f_det.get('업종'):
         reasons.append(f"업종 {f_det['업종']} (평균 PER {f_det.get('업종평균PER','N/A')})")
@@ -3765,6 +3785,22 @@ def manager_consolidate(reports):
     if not directional:
         directional = reports
 
+    # 방향성 3인이 **모두** 있어야 판정을 낸다 — analyst_team.verdict_score 와
+    # 같은 규칙이다. 빠진 자리를 중립 50 으로 채우면 '계산 불가'가 '중립 판단'
+    # 으로 섞이고, 그날 기록은 판정을 안 남기므로 성적표가 화면을 못 재게 된다.
+    _missing = [r['name'] for r in directional if r.get('unavailable')]
+    if _missing:
+        contexts = [r for r in reports if r.get('role') == 'context']
+        return {
+            'total_score': None, 'verdict': None, 'unavailable': _missing,
+            'consensus': f"판정 불가 — {' · '.join(_missing)} 점수 없음",
+            'agreement': 0, 'buy_n': 0, 'sell_n': 0, 'neutral_n': 0,
+            'strongest_opinion': '', 'dissent': None,
+            'macro_note': (' · '.join(f"{c['icon']} {c['name']} {c['score']:.0f}점({c['verdict']})"
+                                      for c in contexts) + ' — 리스크 맥락 참고') if contexts else None,
+            'confidence_note': None,
+        }
+
     # 가중평균 산식은 modules/analyst_team 이 소유한다 — 기록 경로가 같은 값을
     # 내야 성적표가 화면 판정을 재는 것이 된다(문턱을 verdict_of 에 위임한 것과
     # 같은 이유). 여기서 식을 따로 적으면 언젠가 갈라진다.
@@ -3810,6 +3846,7 @@ def manager_consolidate(reports):
     return {
         'total_score': round(weighted_score, 1),
         'verdict': _team_verdict(weighted_score),
+        'unavailable': [],
         'consensus': consensus,
         'agreement': agreement,
         'buy_n': buy_n, 'sell_n': sell_n, 'neutral_n': neu_n,
@@ -3871,6 +3908,10 @@ def trader_signal_lines(df, manager_report, risk_report=None):
         # 보유 중인 사람과 숏을 볼 사람 둘 다에게 말이 되게 쓴다.
         stance = ('숏 진입 검토 · 보유 중이면 비중 축소' if agreement >= 75
                   else '저항 재테스트에서 소액 숏, 보유분은 일부 이익실현')
+    elif verdict is None:
+        # 총괄이 판정을 못 낸 상태(방향성 3인 중 결번). 중립과 다르다 —
+        # 중립은 "정했는데 어느 쪽도 아니다", 이건 "정하지 못했다"다.
+        stance = '총괄 판정 불가 — 구조만 본 참고선'
     else:
         stance = '총괄 중립 — 구조가 정한 방향, 신규 진입은 소액부터'
 
@@ -4003,10 +4044,15 @@ def execution_mode_status():
 
 
 def risk_guardrail_status():
-    """리스크 가드레일: 킬스위치·서킷브레이커 모듈 로드 상태와 설정 위치 안내
-    (계좌 연동 없이 모니터링만 — 실제 값 점검은 아래 위젯에서 수행)."""
+    """리스크 가드레일: 서킷브레이커 모듈 로드 상태와 점검 위치 안내.
+
+    일일 손실 킬스위치는 **러너 안에서만** 돈다. 화면에 있던 위젯은 기준선을
+    1천만원으로 박은 세션 전용 인스턴스라 러너의 판정과 무관한데 "거래 허용
+    상태"라고 찍고 있었다 — 2026-08-22 에 지웠다.
+    """
     reasons = [
-        '일일 손실 한도 킬스위치: 아래 "킬스위치" 위젯에서 설정·점검',
+        '일일 손실 한도 킬스위치: 러너(paper-trade-us)가 매 실행마다 스스로 점검한다',
+        '드로다운 스톱: 러너가 입금을 뺀 자산곡선으로 잰다 (화면 설정값 없음)',
         '포지션 대사(의도 vs 실제): 아래 "포지션 대사" 위젯에서 실행',
         ('드로다운 서킷브레이커 모듈 로드됨' if _RISK_MGMT_ENABLED
          else '⚠️ risk_management 모듈 로드 실패 — 서킷브레이커 비활성'),
@@ -4068,6 +4114,19 @@ def _workflow_line(filename, label):
     return f"{label} ({filename}): 크론 활성 — {' · '.join(f'UTC {c}' for c in crons)}"
 
 
+def _reserved_krw(ledger):
+    """대기 매수 주문이 붙잡고 있는 현금 — 산식은 virtual_broker 소유.
+
+    이 계산이 화면 두 곳에 손으로 적혀 있었다. 지금은 셋이 같은 답을 내지만,
+    예약 규칙이 바뀌는 날 앱만 옛 규칙으로 남는 자리다.
+    """
+    try:
+        from modules.virtual_broker import reserved_krw
+        return float(reserved_krw(ledger or {}))
+    except Exception:
+        return 0.0
+
+
 def _read_json_beside_app(filename):
     """앱과 같은 폴더의 JSON. 없거나 깨졌으면 None.
 
@@ -4113,8 +4172,7 @@ def equity_log_status():
                 f"현금 {ledger.get('cash_krw', 0):,.0f}원")
         reasons.append(f"총자산 {last_eq:,.0f}원 · " + head if last_eq is not None else head)
         if ledger.get('pending'):
-            reserved = sum(float(o.get('notional_krw', 0) or 0)
-                           for o in ledger['pending'] if o.get('side') == 'buy')
+            reserved = _reserved_krw(ledger)
             reasons.append(f"대기 주문 {len(ledger['pending'])}건 · "
                            f"매수대기 {reserved:,.0f}원이 현금에 묶여 있음")
         # 장부 자기 점검 — 예약·체결·만료 규칙을 스스로 되짚는다(시세 조회 없음).
@@ -4570,6 +4628,8 @@ def render_command_bar():
 def _module_accent(rep):
     """모듈 칩의 좌측 상태 바 색 + 경고 점멸 여부를 보고서에서 계산 —
     클릭 전에도 각 모듈이 어떤 상태인지 한눈에 보이게 한다."""
+    if rep.get('unavailable'):
+        return '#f59e0b', False          # 점수 없음 — 매도로도 중립으로도 칠하지 않는다
     if 'score' in rep:
         return score_color(rep['score']), rep['verdict'] == '매도'
     return _MODULE_STATUS_COLOR.get(rep['status'], '#5d6673'), rep['status'] == '경고'
@@ -4577,6 +4637,9 @@ def _module_accent(rep):
 
 def _normalize_report(rep):
     """분석 모듈(score 보고서) / 운영·시스템 모듈(status 보고서)을 공통 표시 포맷으로 변환."""
+    if rep.get('unavailable'):
+        return {'icon': rep['icon'], 'name': rep['name'], 'color': '#f59e0b',
+                'headline': '판정 불가 — 점수 없음', 'reasons': rep['reasons']}
     if 'score' in rep:
         return {'icon': rep['icon'], 'name': rep['name'], 'color': score_color(rep['score']),
                 'headline': f"{rep['score']:.0f}점 · {rep['verdict']}", 'reasons': rep['reasons']}
@@ -4972,10 +5035,24 @@ def render_today_actions():
     """[오늘] ① — 이 화면의 유일한 주인공. latest_signals.json 을 읽기만 한다."""
     data = _load_latest_signals()
     if not data:
+        # "아직 안 돌았다"와 "꺼져 있다"는 다른 말이다. 이 패널이 읽는 파일을
+        # 쓰는 잡(signal-alerts)은 2026-07-20 부터 크론이 꺼져 있었는데 화면은
+        # '아직'이라고만 했다 — 껐다 켜는 걸 문장이 못 따라가는 자리라
+        # workflow_cron() 이 이미 있는데 이 화면만 안 쓰고 있었다.
+        _sa = workflow_cron('signal-alerts.yml')
+        if _sa:
+            _head, _sub = ('아직 오늘 배치가 안 돌았습니다.',
+                           '시그널 워커가 한 번 돌면 오늘의 매수·매도 목록이 여기 뜹니다.')
+        elif _sa is None:
+            _head, _sub = ('배치 워크플로를 찾지 못했습니다.',
+                           '.github/workflows/signal-alerts.yml 이 없습니다 — 아래에서 직접 돌리십시오.')
+        else:
+            _head, _sub = ('자동 배치가 꺼져 있습니다.',
+                           '시그널 알림 크론이 꺼져 있어 이 목록은 저절로 차지 않습니다 — '
+                           '아래에서 직접 돌리면 여기에 뜹니다.')
         st.markdown(ui.card(
-            "<div style='font-size:15px;color:var(--text-2)'>아직 오늘 배치가 안 돌았습니다.</div>"
-            "<div style='font-size:13px;color:var(--text-4);margin-top:4px'>"
-            "시그널 워커가 한 번 돌면 오늘의 매수·매도 목록이 여기 뜹니다.</div>"),
+            f"<div style='font-size:15px;color:var(--text-2)'>{_head}</div>"
+            f"<div style='font-size:13px;color:var(--text-4);margin-top:4px'>{_sub}</div>"),
             unsafe_allow_html=True)
         if st.button("발굴·시그널에서 직접 돌리기", key="today_goto_siggen"):
             st.session_state['nav_goto'] = '발굴·시그널'
@@ -5046,8 +5123,8 @@ def render_account_line():
     n_pos = len(ledger.get('positions', {}) or {})
     # 대기 매수 주문이 붙잡고 있는 현금. 이걸 안 빼면 "현금 59%"가 실제로는
     # 쓸 수 있는 돈이 아니다 — 장부의 현금은 체결 전까지 줄지 않는다.
-    reserved = sum(float(o.get('notional_krw', 0) or 0)
-                   for o in (ledger.get('pending') or []) if o.get('side') == 'buy')
+    # 산식은 virtual_broker 가 소유한다(사본이 셋이었다).
+    reserved = _reserved_krw(ledger)
 
     delta_html, delta_color = None, None
     if equity is not None and prev:
@@ -5106,6 +5183,19 @@ def render_verdict_cards(snap, *, with_trader=True):
     """
     mgr, trader = snap['manager'], snap['trader']
     p = lambda v: _fmt_price(v)   # noqa: E731
+
+    # 방향성 3인 중 하나가 점수를 못 냈으면 판정도 라인도 없다. 기록도 그날은
+    # 판정을 안 남기므로(analyst_team.verdict_score), 화면만 숫자를 내면
+    # 성적표가 재지 않는 판정이 밖으로 나간다.
+    if mgr.get('total_score') is None:
+        st.markdown(f"""
+<div style="background:#f59e0b0d;border:1px solid #f59e0b40;border-radius:10px;padding:14px 18px;margin-top:4px">
+  <div style="font-size:11px;font-weight:700;color:var(--text-4);text-transform:uppercase;letter-spacing:.6px">📊 총괄 종합 보고서</div>
+  <div style="font-size:1.3rem;font-weight:800;color:#f59e0b;margin:6px 0">{mgr['consensus']}</div>
+  <div style="font-size:12px;color:var(--text-3)">방향성 3인이 모두 있어야 판정을 냅니다 —
+    빠진 자리를 중립 50 으로 채우지 않습니다. 이 상태는 애널리스트 기록에도 판정이 남지 않습니다.</div>
+</div>""", unsafe_allow_html=True)
+        return
 
     mc = score_color(mgr['total_score'])
     dissent_html = f"<br>⚠️ {mgr['dissent']}" if mgr['dissent'] else ''
@@ -5417,6 +5507,7 @@ def analyst_modules():
         return None
     mgr = snap['manager']
     mgr_rep = {'icon': '📐', 'name': '총괄', 'score': mgr['total_score'], 'verdict': mgr['verdict'],
+               'unavailable': mgr.get('total_score') is None,
                'reasons': [mgr['consensus'], f"팀 합의율 {mgr['agreement']}%",
                            f"가장 강한 의견: {mgr['strongest_opinion']}"]
                + ([mgr['dissent']] if mgr['dissent'] else [])}
@@ -5505,7 +5596,14 @@ def main():
                     prog.progress(52); msg.text("🌍 매크로·금리 분석 중...")
                     _m_score, _m_det, _m_data = macro_score()
                     _g_score, _g_det, _g_data = geopolitical_risk_score()
-                    _regime, _regime_diff = get_market_regime()
+                    # 화면 최상단 스트립과 **같은 자**를 쓴다(SPY/MA200 + VIX).
+                    # 여기만 옛 라벨 자(regime_of, ±3% 버퍼·VIX 안 봄)를 쥐고
+                    # 있어서, 한 페이지에 국면 배지 두 개가 서로 다른 말을 했다
+                    # — 1,680거래일 중 231일(13.8%) 다른 답, 26일은 정반대.
+                    # 그 국면이 국면조정 점수를 중위 1.94점(정반대면 5.02, 최대
+                    # 15.26) 움직인다. regime_of 는 성적표·백필의 **라벨**로만
+                    # 남는다(_weight_regime 머리말 참고).
+                    _regime = _weight_regime()
                     prog.progress(63); msg.text("🕐 멀티 타임프레임 분석 중...")
                     _mtf_scores      = technical_score_multi(ticker)
                     prog.progress(70); msg.text("📊 점수 최적화 중...")
@@ -5636,7 +5734,7 @@ def main():
                         'dcf_val': _dcf_val, 'dcf_det': _dcf_det,
                         'risk_data': _risk_data,
                         'news_score': _news_score, 'news_articles': _news_articles,
-                        'regime': _regime, 'regime_diff': _regime_diff,
+                        'regime': _regime,
                         't_score_adj': _t_score_adj, 'total_adj': _total_adj,
                         'info': _info, 'name': _name,
                         'cp': _cp, 'pp': _pp,
@@ -5826,14 +5924,18 @@ def main():
                     ]
 
                 def _render_report_card(_rep):
-                    _rc = score_color(_rep['score'])
+                    # 점수를 못 낸 카드는 숫자 자리를 비운다 — 50 을 그리면
+                    # '못 받았다'가 '중립 판단'으로 읽힌다.
+                    _na = _rep.get('unavailable')
+                    _rc = '#f59e0b' if _na else score_color(_rep['score'])
+                    _score_txt = '—' if _na else f"{_rep['score']:.0f}"
                     _reason_html = _reasons_to_html(_rep['reasons'], '참고할 세부 신호 없음')
                     st.markdown(f"""
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
             box-shadow:0 1px 4px rgba(0,0,0,.06);height:100%">
   <div style="font-size:12px;font-weight:700;color:var(--text-3)">{_rep['icon']} {_rep['name']} <span style="color:var(--text-4)">({_rep['weight']}%)</span></div>
   <div style="display:flex;align-items:baseline;gap:8px;margin:6px 0">
-    <span style="font-size:1.6rem;font-weight:800;color:{_rc};font-family:'JetBrains Mono',monospace">{_rep['score']:.0f}</span>
+    <span style="font-size:1.6rem;font-weight:800;color:{_rc};font-family:'JetBrains Mono',monospace">{_score_txt}</span>
     <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px;background:{_rc}20;color:{_rc}">{_rep['verdict']}</span>
   </div>
   <ul style="font-size:11px;color:var(--text-3);margin:0;padding-left:16px;line-height:1.6">{_reason_html}</ul>
@@ -6511,6 +6613,8 @@ def main():
                     else:
                         st.info(f"{len(qt_tickers)}개 종목: {', '.join(qt_tickers[:8])}{'...' if len(qt_tickers) > 8 else ''}")
             st.session_state['qt_tickers'] = qt_tickers
+            st.session_state['qt_universe_name'] = (
+                qt_preset if qt_preset != "직접 입력" else f"직접 입력 ({len(qt_tickers)}종목)")
             st.caption("💡 이 유니버스는 전략 검증·리서치 그룹의 팩터 백테스트 모듈에서도 함께 사용됩니다.")
 
         def render_factor_ranking_panel():
@@ -6657,6 +6761,21 @@ def main():
                         qt_tickers, factor_df=fdf, weights=None,
                         top_n=qt_top_n, capital=qt_capital)
                 st.session_state['qt_signals'] = {'actions': actions, 'rebal': rebal}
+
+                # ── 오늘의 액션 전체 → latest_signals.json ([오늘] 화면) ────
+                # 이 파일을 쓰는 곳이 러너뿐이었는데 그 크론은 2026-07-20 부터
+                # 꺼져 있다 — 그래서 [오늘] 화면의 주인공 패널이 만든 날부터
+                # 계속 비어 있었고, 그 빈 화면이 안내하는 탈출구가 바로 이
+                # 버튼이었다. 여기서도 같은 파일을 남긴다.
+                # signal_worker 는 app 을 import 하므로 모듈 최상단에서 부르면
+                # 순환이다. 이 시점엔 app 이 이미 다 올라와 있어 안전하다.
+                try:
+                    from signal_worker import save_latest_signals as _save_latest
+                    _save_latest(actions, rebal,
+                                 st.session_state.get('qt_universe_name', '직접 입력'),
+                                 qt_capital)
+                except Exception as _e:
+                    st.caption(f"[오늘] 화면용 기록 실패 — {_e}")
 
                 # ── 매수 시그널 → signal_log.json 저장 ──────────────────
                 import json as _json_w
@@ -6852,8 +6971,13 @@ def main():
                         _hist: dict = {}
                         for _etk in {s['symbol'] for s in _needs_eval}:
                             try:
+                                # 저장소의 다른 다운로드는 전부 auto_adjust 를
+                                # 명시한다. 여기만 기본값에 기대고 있었는데,
+                                # 그 기본값은 yfinance 버전이 정한다 —
+                                # requirements 는 >=0.2.31 을 허용한다.
                                 _ep_df = yf.download(_etk, start=_eval_from,
-                                                     end=datetime.now(), progress=False)
+                                                     end=datetime.now(), progress=False,
+                                                     auto_adjust=True)
                                 if isinstance(_ep_df.columns, pd.MultiIndex):
                                     _ep_df.columns = _ep_df.columns.droplevel(1)
                                 if not _ep_df.empty:
@@ -8024,55 +8148,57 @@ def main():
             if not _OPS_SAFETY_AVAILABLE:
                 st.error("modules/ops_safety.py 로드 실패.")
                 return
-            # 킬스위치
-            with st.expander("🛑 킬스위치 (일일 손실 한도)", expanded=True):
-                st.caption("당일 손실이 임계치를 초과하면 자동매매 거래 차단. 세션 내에서만 유지됩니다.")
-                _ks_c1, _ks_c2 = st.columns(2)
-                _ks_loss_limit = _ks_c1.number_input("일일 최대 손실 한도 (%)", value=3.0, min_value=0.5, max_value=20.0, step=0.5, key="ks_loss_limit")
-                _ks_max_errors = _ks_c2.number_input("연속 오류 한도 (회)", value=5, min_value=1, max_value=20, key="ks_max_errors")
-
-                if 'ks_instance' not in st.session_state:
-                    st.session_state['ks_instance'] = _KillSwitch(
-                        max_daily_loss_pct=_ks_loss_limit, max_errors=int(_ks_max_errors))
-
-                _ks = st.session_state['ks_instance']
-                _ks_status = _ks.status()
-
-                if _ks_status['triggered']:
-                    st.error(f"🛑 킬스위치 발동됨: {_ks_status['reason']}")
-                else:
-                    st.success("✅ 킬스위치 정상 — 거래 허용 상태")
-
-                _ks_col1, _ks_col2, _ks_col3 = st.columns(3)
-                _ks_cur_eq = _ks_col1.number_input("현재 자산가치 (원)", value=10_000_000, step=100_000, key="ks_cur_eq")
-                if _ks_col2.button("📋 손실 한도 체크", key="ks_check"):
-                    _ks.set_day_start_equity(10_000_000)
-                    if _ks.check_daily_loss(_ks_cur_eq):
-                        st.error("🛑 손실 한도 초과 → 거래 차단")
-                    else:
-                        st.success("✅ 정상 범위")
-                if _ks_col3.button("🔄 킬스위치 초기화", key="ks_reset"):
-                    _ks.reset()
-                    st.success("킬스위치 초기화 완료")
-                    st.rerun()
+            # 킬스위치 위젯은 2026-08-22 에 지웠다. 기준선을 1천만원으로 박고
+            # 자산가치를 손으로 넣는 세션 전용 인스턴스라, 러너가 실제로 쓰는
+            # 킬스위치(paper_trade_runner_toss)와 아무 관계가 없는데 화면에는
+            # "✅ 킬스위치 정상 — 거래 허용 상태"라고 찍고 있었다. 러너의 일일
+            # 손실 판정은 modules/ops_safety 가 소유하고 러너 안에서만 돈다.
 
             # 포지션 대사
             with st.expander("⚖️ 포지션 대사 (의도 vs 실제)", expanded=False):
-                st.caption("앱이 생각하는 보유 수량과 실제 포지션을 비교해 불일치를 탐지합니다.")
+                st.caption("의도한 보유 수량과 **가상 장부의 실제 보유**를 비교합니다 "
+                           "(virtual_portfolio.json — 시세 조회 없음).")
+                # 실제 포지션 자리에 빈 리스트를 넘기고 있었다. 그러면 의도한
+                # 종목이 전부 missing_in_broker 로 가고 mismatches 는 비어서
+                # 화면에 "❌ 불일치 0건"이 뜬다 — 기본값 {} 이면 아무것도
+                # 아무것과 비교하지 않고 "✅ 일치"가 뜬다. 장부는 이 파일 안에
+                # 이미 있다.
+                _rec_ledger = _read_json_beside_app("virtual_portfolio.json") or {}
+                _rec_actual = [{'symbol': _sym, 'qty': float((_pos or {}).get('qty', 0) or 0)}
+                               for _sym, _pos in (_rec_ledger.get('positions') or {}).items()]
+                st.caption(f"장부 보유 {len(_rec_actual)}종목: "
+                           + (', '.join(f"{r['symbol']} {r['qty']:g}주" for r in _rec_actual)
+                              if _rec_actual else '없음'))
                 _rec_intended_raw = st.text_area(
                     "의도 포지션 (JSON, 예: {\"AAPL\": 10, \"MSFT\": 5})",
-                    value='{}', key="rec_intended")
+                    value=json.dumps({r['symbol']: r['qty'] for r in _rec_actual},
+                                     ensure_ascii=False),
+                    key="rec_intended")
                 if st.button("⚖️ 포지션 대사 실행", key="rec_run"):
                     try:
-                        import json as _json_rec
-                        _intended = _json_rec.loads(_rec_intended_raw)
+                        _intended = json.loads(_rec_intended_raw)
                         if _OPS_SAFETY_AVAILABLE:
-                            _rec_result = _reconcile_pos(_intended, [])
-                            if _rec_result['ok']:
-                                st.success("✅ 포지션 일치")
+                            _rec_result = _reconcile_pos(_intended, _rec_actual)
+                            _rec_extra = _rec_result.get('extra_in_broker') or []
+                            if _rec_result['ok'] and not _rec_extra:
+                                st.success(f"✅ 포지션 일치 ({len(_rec_result['matched'])}종목)")
                             else:
-                                st.error(f"❌ 불일치 {len(_rec_result['mismatches'])}건")
-                                st.dataframe(pd.DataFrame(_rec_result['mismatches']), width='stretch')
+                                st.error(
+                                    "❌ " + ' · '.join(x for x in (
+                                        f"수량 불일치 {len(_rec_result['mismatches'])}건"
+                                        if _rec_result['mismatches'] else '',
+                                        f"장부에 없음 {len(_rec_result['missing_in_broker'])}건"
+                                        if _rec_result['missing_in_broker'] else '',
+                                        f"의도에 없음 {len(_rec_extra)}건" if _rec_extra else '') if x))
+                                if _rec_result['mismatches']:
+                                    st.dataframe(pd.DataFrame(_rec_result['mismatches']),
+                                                 width='stretch')
+                                if _rec_result['missing_in_broker']:
+                                    st.caption("장부에 없음: " + ', '.join(_rec_result['missing_in_broker']))
+                                if _rec_extra:
+                                    st.caption("의도에 없음: "
+                                               + ', '.join(f"{e['symbol']} {e['broker_qty']:g}주"
+                                                           for e in _rec_extra))
                         else:
                             st.info("ops_safety 모듈 없음 — 의도 포지션만 표시합니다.")
                             st.json(_intended)
