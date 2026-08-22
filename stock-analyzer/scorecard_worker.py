@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 
 import requests
 
-from modules import (analyst_log, analyst_scorecard, price_panel,
-                     publish_log, scorecard_message)
+from modules import (analyst_log, analyst_scorecard, analyst_team,
+                     price_panel, publish_log, scorecard_message)
 
 TG_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHANNEL_ID = os.environ.get("TELEGRAM_PUBLIC_CHANNEL_ID", "")
@@ -31,7 +31,13 @@ TOP_N = 5
 
 # 기록은 하지만 이 채널의 종합 점수에는 아직 안 넣는 슬러그 — 조용히 빼지 않고
 # 발행문에 사유를 밝힌다. quant 는 2026-08-07 부터 기록된다.
-MISSING_SLUGS = ["quant"]
+#
+# 목록을 손으로 적지 않는다. "종합 = 차트+ICT" 라는 사실이 COMBINE_SLUGS ·
+# 이 목록 · 발행문 문장 세 곳에 따로 적혀 있었고, COMBINE_SLUGS 에 quant 를
+# 넣는 날 나머지 둘이 조용히 거짓이 된다 (quant 가 들어갔는데 "안 들어감"
+# 이라고 발행된다). 뺄 슬러그는 하나의 규칙에서 나온다.
+MISSING_SLUGS = [s for s in analyst_team.ANALYST_SLUGS
+                 if s not in analyst_scorecard.COMBINE_SLUGS]
 
 # 종합 점수에 들어가는 애널리스트와, 그 결과를 담을 슬러그 이름.
 #
@@ -185,7 +191,8 @@ def main():
                 log_date, latest.get("regime", "unknown"),
                 top, MISSING_SLUGS, cut_tie_counts(latest_combined, top),
                 dropped_ticker_count(latest, latest_combined),
-                horizons=analyst_scorecard.HORIZONS)):
+                horizons=analyst_scorecard.HORIZONS,
+                combine_slugs=COMBINE_SLUGS)):
             print("오늘의 기록 발송 실패", file=sys.stderr)
             return 1
         publish_log.record_published_record(today, log_date)
@@ -234,6 +241,7 @@ def main():
         stats = stats_by_horizon[horizon]
         if not send_tg(scorecard_message.build_scorecard_message(
                 horizon, stats, MISSING_SLUGS,
+                combine_slugs=COMBINE_SLUGS,
                 sample_mix=analyst_log.scored_mix(
                     analyst_scorecard.scored_dates(
                         days, fwd_by_horizon[horizon], COMBINED_SLUG)))):

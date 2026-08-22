@@ -1659,7 +1659,16 @@ def bt_signals_full(df):
 from modules.signal_scorecard import score_signal  # noqa: E402
 
 
-def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
+# 백테스트 기본 임계값. 두 곳이 이 값을 쓴다 — 백테스팅 애널리스트 점수
+# (backtest_analyst)와 스트레스 테스트 패널. **백테스트 탭의 슬라이더 기본값은
+# 58/42 로 다르다**(그 탭은 사람이 손으로 돌리는 자리다). 같은 화면의 두 패널이
+# 다른 전략을 재고 있다는 뜻이므로, 스트레스 테스트 캡션에 실제 쓴 값을 적는다.
+BT_DEFAULT_BUY_TH = 65
+BT_DEFAULT_SELL_TH = 45
+
+
+def run_backtest(df, buy_th=BT_DEFAULT_BUY_TH, sell_th=BT_DEFAULT_SELL_TH,
+                 initial_capital=10_000_000,
                  commission=0.0005, slippage=0.0003,
                  f_score=None, m_score=None,
                  w_tech=100, w_fund=0, w_macro=0):
@@ -7847,9 +7856,12 @@ def main():
                         if _st_full_df.empty:
                             st.error("데이터 없음.")
                         else:
+                            # 임계값을 여기 또 적지 않는다 — run_backtest 의
+                            # 기본값이 곧 이 패널이 재는 전략이고, 그 값은
+                            # 아래 캡션에 그대로 찍힌다.
                             _st_res = _replay_scenario(
                                 run_backtest, _st_full_df, _st_scenario,
-                                buy_th=65, sell_th=45, initial_capital=10_000_000
+                                initial_capital=10_000_000
                             )
                             if 'error' in _st_res:
                                 st.error(_st_res['error'])
@@ -7859,7 +7871,10 @@ def main():
                                 _stc1.metric("전략 수익률", f"{_st_m.get('전략 수익률', 'N/A')}")
                                 _stc2.metric("MDD", f"{_st_m.get('최대낙폭(MDD)', 'N/A')}")
                                 _stc3.metric("Sharpe", f"{_st_m.get('Sharpe Ratio', 'N/A')}")
-                                st.caption(f"기간: {_st_res['period']} · {_st_res['n_rows']}거래일")
+                                st.caption(
+                                    f"기간: {_st_res['period']} · {_st_res['n_rows']}거래일 · "
+                                    f"임계값 {BT_DEFAULT_BUY_TH}/{BT_DEFAULT_SELL_TH} "
+                                    f"(백테스트 탭 기본값 58/42 와 다릅니다)")
 
             # ── 알파 디케이 ──
             with st.expander("📉 알파 디케이 모니터", expanded=False):

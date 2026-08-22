@@ -60,11 +60,18 @@ def replay_historical_scenario(run_backtest_fn, full_df: pd.DataFrame,
     except Exception as e:
         return {'error': f"백테스트 실행 오류: {e}"}
 
+    # 라벨 구간 안의 거래일만 센다. len(slice_df) 는 워밍업 버퍼까지 포함하는데
+    # 화면은 그 값을 'period' 옆에 "N거래일" 로 붙여 왔다 — COVID 시나리오는
+    # "2020-02-01 ~ 2020-04-30" 옆에 버퍼 20여 거래일이 더해진 수가 찍혔다.
+    # 기간을 말하는 숫자와 기간을 말하는 문장이 다른 구간을 가리키면 안 된다.
+    labeled = int(((slice_df.index >= pd.Timestamp(sp['start']))
+                   & (slice_df.index <= end)).sum())
+
     return {
         'scenario': sp['label'],
         'desc': sp['desc'],
         'period': f"{sp['start']} ~ {sp['end']}",
-        'n_rows': len(slice_df),
+        'n_rows': labeled,
         'metrics': metrics,
         'equity_df': equity_df,
         'trades_df': trades_df,

@@ -255,15 +255,24 @@ def score_analysts(days, forward_returns, horizon):
             continue
 
         # 유효 표본: 겹침 보정으로 표준오차가 커진 만큼 표본이 줄어든 것으로 읽는다.
-        if se and se > 0 and not np.isnan(se) and not np.isnan(plain_se):
+        #
+        # se 를 못 쓰는 경우(0.0 · NaN)에도 **위 n<=2*lag 가지와 같은 답**을
+        # 내야 한다. 예전에는 여기 else 가 `float(n)` 이어서, 세 줄 위에서
+        # "추정기가 무너지면 유효표본 0" 이라고 막아 둔 바로 그 붕괴에 전체
+        # 표본을 그대로 줬다 — 형제 가드가 한쪽에만 걸린 자리다.
+        # NaN 도 함께 막는다: se 가 NaN 이면 `if se` 가 참이라 t_stat 이
+        # `nan` 으로 표에 찍혔다(se 는 None 인데). n=1·lag=0 에서 나오는
+        # 모양이고, 15분봉 26봉 지평 첫날(2026-08-06)이 그 자리였다.
+        se_usable = bool(se) and se > 0 and not np.isnan(se)
+        if se_usable and not np.isnan(plain_se):
             effective_n = min(n * (plain_se / se) ** 2, float(n))
         else:
-            effective_n = float(n)
+            effective_n = 0.0
 
         out[slug] = {
             "mean_ic":     round(mean_ic, 4),
             "se":          round(se, 4) if not np.isnan(se) else None,
-            "t_stat":      round(mean_ic / se, 3) if se else None,
+            "t_stat":      round(mean_ic / se, 3) if se_usable else None,
             "n":           n,
             "effective_n": round(effective_n, 1),
             "hit_rate":    round(float((arr > 0).mean()) * 100, 1),
