@@ -96,6 +96,7 @@ def _assemble_plan(
     targets: list[float],
     *,
     min_rr: float = DEFAULT_MIN_RR,
+    graded: bool = True,
 ) -> dict:
     """
     순수 기하: 좌표를 받아 entry_ref·R:R·정렬·유효성을 계산한다.
@@ -126,6 +127,8 @@ def _assemble_plan(
         reason_invalid = f"손익비 부족 (T1 R:R {t1_rr:.2f} < {min_rr})"
 
     grade, risk_pct = cost_grade(entry_ref, stop)
+    if not graded:
+        grade = UNGRADED
     actionable, why_not = _actionable(valid, direction, grade, reason_invalid)
     return {
         "direction": direction,
@@ -263,6 +266,18 @@ def _confidence(magnitude: float) -> str:
 COST_GRADE_BANDS = ((2.34, "A"), (1.75, "B"), (1.34, "C"))
 COST_GRADE_BREAKEVEN_BP = {"A": 35.0, "B": 15.7, "C": 12.9, "D": 11.1}
 
+# 일봉이 아니면 등급을 못 낸다.
+#
+# 위 밴드도 손익분기 bp 도 **일봉** 13,336건으로 잰 값이다. 15분봉 플랜에
+# 그대로 대면 손절폭이 중위 0.245% 라(실측 2026-08-22, 12종목 × 30봉 = 유효
+# 플랜 124개) **124개 전부 D** 로 떨어진다 — 판정처럼 보이지만 정보가 0 인
+# 상수고, 화면이 인용하는 "손익분기 편도 11bp" 도 다른 봉의 숫자다(손절
+# 0.245% 면 편도 11bp 가 0.45R 이다).
+#
+# 그래서 D 로 답하지 않고 **모른다**고 답한다. 하루치뿐인 오차범위를 0 이
+# 아니라 None 으로 냈던 것과 같은 자리다.
+UNGRADED = "?"
+
 # ── 실행 문턱 ───────────────────────────────────────────────────────
 # valid 와 **다른 질문**이다. 한 플래그로 두 질문에 답하면 나중에 어느 쪽을
 # 고쳐야 할지 알 수 없게 된다.
@@ -313,6 +328,8 @@ def _actionable(valid: bool, direction: str, grade: str,
         return False, reason_invalid or "유효 셋업 아님"
     if direction not in ACTIONABLE_DIRECTIONS:
         return False, f"{direction} 은 비용 후 기대값이 0 근처 — 관찰만"
+    if grade == UNGRADED:
+        return False, "실행등급은 일봉으로 잰 기준 — 이 봉에서는 판정 불가, 관찰만"
     if grade not in ACTIONABLE_GRADES:
         return False, (f"실행등급 {grade} (손익분기 편도 "
                        f"{COST_GRADE_BREAKEVEN_BP[grade]:.0f}bp) — 수수료에 먹힌다")
@@ -328,6 +345,26 @@ def cost_grade(entry_ref: float, stop: float) -> tuple[str, float]:
         if risk_pct > threshold:
             return grade, risk_pct
     return "D", risk_pct
+
+
+def _is_daily(df: pd.DataFrame) -> bool:
+    """일봉 프레임인가 — 한 날짜에 봉이 둘 이상이면 아니다.
+
+    등급 밴드가 일봉으로 잰 값이라 봉 종류를 알아야 하는데, 호출부에 인자를
+    받으면 세 경로 중 한 곳이 안 따라온다(15분봉 SCALP 카드가 정확히 그
+    자리였다 — `app.build_scalp_verdict` → `trader_signal_lines`). 프레임이
+    스스로 답할 수 있는 질문이므로 여기서 본다.
+
+    "날짜가 전부 유일한가" 가 아니라 **하루에 몇 봉인가**로 본다. 중복 하나에
+    일봉 패널이 통째로 등급을 잃으면 그날 러너가 조용히 0 종목을 사는데,
+    그건 이 함수가 답할 질문이 아니다.
+
+    DatetimeIndex 가 아니면(합성 테스트 프레임) 일봉으로 친다.
+    """
+    idx = df.index
+    if not isinstance(idx, pd.DatetimeIndex) or len(idx) < 2:
+        return True
+    return bool(idx.normalize().value_counts().median() <= 1)
 
 
 def _short_trend_ok(df: pd.DataFrame, *, scale: int = 1) -> tuple[bool, str]:
@@ -391,8 +428,9 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
         "stop": 0.0, "targets": [], "rr": [], "valid": False,
         "reason_invalid": "데이터 부족", "signals": [],
         # 계획이 없으면 등급도 없다. 빠뜨리면 화면이 KeyError 로 죽는다 —
-        # 유효 계획과 무효 계획의 키 모양은 같아야 한다.
-        "cost_grade": "D", "risk_pct": 0.0,
+        # 유효 계획과 무효 계획의 키 모양은 같아야 한다. 값은 "D"(진짜로 좁은
+        # 손절)가 아니라 "?"(잰 적 없음)여야 둘이 안 섞인다.
+        "cost_grade": UNGRADED, "risk_pct": 0.0,
         "actionable": False, "reason_not_actionable": "데이터 부족",
     }
     if df is None or df.empty or len(df) < MIN_BARS * scale:
@@ -444,7 +482,11 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
             if not ok:
                 return _short_veto(why)
 
-        atr = _atr(df)
+        # 창은 전부 봉 개수 기준이라 scale 을 함께 태운다. 여기만 빠져 있어서
+        # scale=26 플랜의 손절 완충이 3.5시간짜리 ATR 로 잡히고 있었다 —
+        # 실측 위험폭의 중위 19.6%(최대 38.0%)를 다른 자로 재고 있었다.
+        # (일봉 러너는 scale=1 이라 값이 안 바뀐다)
+        atr = _atr(df, window=ATR_WINDOW * scale)
         if direction == "long":
             entry_low, entry_high, struct = _pick_long_entry(df, cur, scale=scale)
             stop = entry_low - ATR_STOP_BUFFER * atr
@@ -454,7 +496,8 @@ def build_trade_plan(df: pd.DataFrame, *, min_rr: float = DEFAULT_MIN_RR,
             stop = entry_high + ATR_STOP_BUFFER * atr
             targets = _short_targets(df, cur, (entry_low + entry_high) / 2.0, scale=scale)
 
-        plan = _assemble_plan(direction, cur, entry_low, entry_high, stop, targets, min_rr=min_rr)
+        plan = _assemble_plan(direction, cur, entry_low, entry_high, stop, targets,
+                              min_rr=min_rr, graded=_is_daily(df))
         plan["bias_score"] = adj
         plan["confidence"] = _confidence(conf_mag)
         plan["confluence"] = len(signals)

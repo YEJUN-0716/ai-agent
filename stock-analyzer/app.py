@@ -8186,9 +8186,12 @@ def main():
         # '확신도' 라고 부르지 않는다 — 그 등급은 결과와 연결된 것이 측정되지
         # 않았다(롱 기준 high/medium/low 기대값 구별 불가, 2026-08-10). 실행
         # 가치를 가르는 건 손절 거리(비용 내성)뿐이라 그쪽을 앞에 세운다.
+        # 손익분기 bp 는 일봉으로 잰 값이라 등급이 "?"(일봉 아님)이면 인용할
+        # 숫자가 없다 — 기본값을 끼워 넣지 않고 그 절만 뺀다.
+        _bp = _tp.COST_GRADE_BREAKEVEN_BP.get(_plan['cost_grade'])
+        _bp_s = f" · 손익분기 편도 {_bp:.0f}bp" if _bp is not None else ""
         st.markdown(f"**{_dir} · 실행등급 {_plan['cost_grade']} "
-                    f"(손절 {_plan['risk_pct']:.1f}% · 손익분기 편도 "
-                    f"{_tp.COST_GRADE_BREAKEVEN_BP[_plan['cost_grade']]:.0f}bp) · "
+                    f"(손절 {_plan['risk_pct']:.1f}%{_bp_s}) · "
                     f"ICT 구조 동의 {_plan['confidence'].upper()} "
                     f"({_plan['bias_score']:+.0f})**")
         if not _plan['valid']:

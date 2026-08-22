@@ -341,9 +341,13 @@ def test_cost_grade_reports_the_distance():
 
 
 def test_every_plan_carries_a_grade():
-    """유효하든 아니든 키 모양은 같아야 한다 — 화면이 KeyError 로 죽는다."""
+    """유효하든 아니든 키 모양은 같아야 한다 — 화면이 KeyError 로 죽는다.
+
+    계획이 없을 때의 값은 "D"(진짜로 좁은 손절)가 아니라 "?"(잰 적 없음)다 —
+    둘이 같은 글자면 화면이 못 잰 것을 나쁜 등급으로 읽는다.
+    """
     empty = tp.build_trade_plan(pd.DataFrame())
-    assert empty["cost_grade"] == "D" and empty["risk_pct"] == 0.0
+    assert empty["cost_grade"] == tp.UNGRADED and empty["risk_pct"] == 0.0
 
     plan = tp._assemble_plan("long", 100.0, 95.0, 97.0, 93.0, [102.0, 108.0])
     assert plan["cost_grade"] in ("A", "B", "C", "D")
