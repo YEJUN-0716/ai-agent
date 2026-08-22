@@ -80,6 +80,8 @@ jobs:
         run: python signal_worker.py
 
       - name: 시그널 로그 커밋 (변경 있을 때만)
+        # always(): 로그는 발송보다 먼저 쓰인다. 텔레그램이 죽어도 기록은 남긴다.
+        if: always()
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"

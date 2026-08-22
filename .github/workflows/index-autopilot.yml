@@ -60,6 +60,9 @@ jobs:
         run: python index_runner.py
 
       - name: 인덱스 장부 커밋
+        # always(): 입금·주문은 장부에 이미 저장된 뒤다(전제 4). 커밋을
+        # 건너뛰면 그 달 적립이 통째로 되돌려져 다음 실행에서 다시 일어난다.
+        if: always()
         shell: bash
         run: |
           # index_portfolio.json **하나만** 커밋한다. 다른 파일을 여기서 add 하면

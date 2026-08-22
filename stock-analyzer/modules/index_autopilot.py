@@ -13,6 +13,27 @@ from __future__ import annotations
 
 TARGETS = {"ITOT": 0.70, "AGG": 0.20, "GLDM": 0.10}
 
+# 계획은 전날 종가로 세우고 체결은 다음 거래일 시가다. 그 사이 갭상승이 나면
+# 계획 수량의 실제 비용이 현금을 넘고, 브로커는 그 주문을 통째로 거절한다
+# (부분 체결은 실제로 걸 수 없는 체결이라 일부러 금지했다 — virtual_broker).
+# 그러면 그 달 그 자산만 조용히 빠지는데 적립은 이미 완료로 찍혀 재시도되지
+# 않고, 벤치마크 ITOT 는 정상 매수된 걸로 계산돼 비교가 우리 쪽에 불리해진다.
+# 계획 단계에서 이만큼 남겨 두면 그 여유로 갭을 흡수한다. 남은 현금은 다음 달
+# 계획에 이월되므로 놀리는 게 아니라 미루는 것이다.
+#
+# 3% 의 근거 (2021-01~2026-08, 1,411 거래일 시가/전일종가 실측):
+#   ITOT p99 +1.62% 최대 +3.64% · AGG p99 +0.74% 최대 +1.51%
+#   GLDM p99 +2.16% 최대 +5.95%
+# 정수주 잔돈이 이미 여유로 남으므로 실효 방어폭은 이보다 넓다. 다만 GLDM 급
+# 6% 갭이 잔돈이 적은 달과 겹치면 여전히 거절될 수 있다 — 없앤 게 아니라 줄였다.
+# 적립금이 클수록 잔돈 비율이 작아져 이 버퍼가 하는 일이 커진다.
+#
+# **여기 있는 이유**: 러너에만 두면 마찰을 재는 쪽(scripts/measure_index_autopilot)
+# 이 안 따라온다 — 실제로 그랬다. 측정은 버퍼 없이 굴려 놓고 실전은 매달 3% 를
+# 남겼으니, "정수주 마찰 연 −0.03%p" 는 도는 규칙이 아닌 것으로 잰 값이었다.
+# 정상상태로 한 달치 적립금의 약 3.1% 가 늘 안 굴러간다(12개월이면 잔고의 0.26%).
+GAP_BUFFER_BP = 300.0
+
 
 def plan_orders(
     holdings: dict,
@@ -20,11 +41,16 @@ def plan_orders(
     cash_usd: float,
     targets: dict = TARGETS,
     whole_shares: bool = True,
+    gap_buffer_bp: float = GAP_BUFFER_BP,
 ) -> list[dict]:
     """이번 달 낼 매수 주문. 부족분이 큰 순서, 항상 양의 정수주.
 
     holdings 는 {티커: 보유수량}, prices 는 {티커: 1주 가격(USD)}.
-    반환 [{"ticker", "qty", "est_price"}, ...] — 총액은 cash_usd 를 넘지 않는다.
+    반환 [{"ticker", "qty", "est_price"}, ...] — 총액은 갭 버퍼를 뺀 뒤의
+    cash_usd 를 넘지 않는다.
+
+    `gap_buffer_bp` 를 **여기서** 빼는 이유: 부르는 쪽이 각자 빼면 한쪽이
+    빠뜨린다(러너는 뺐고 측정 스크립트는 안 뺐다). 규칙은 이 함수가 소유한다.
 
     `whole_shares=False` 는 **측정 전용**이다. 실운용은 소수점 매매를 안 쓴다
     (설계서 4.1). 마찰을 재려면 "같은 규칙에서 정수주 제약만 뺀 줄"이 필요한데,
@@ -37,6 +63,7 @@ def plan_orders(
         if prices.get(t, 0) <= 0:
             raise ValueError(f"{t} 가격이 없다: {prices.get(t)!r}")
 
+    cash_usd = cash_usd * (1 - gap_buffer_bp / 1e4)
     values = {t: holdings.get(t, 0) * prices[t] for t in targets}
     total = sum(values.values()) + cash_usd
     gaps = {t: total * w - values[t] for t, w in targets.items()}
@@ -72,10 +99,16 @@ def demo() -> None:
         assert o["qty"] > 0 and isinstance(o["qty"], int), o
         assert o["ticker"] != "AGG", o
 
-    # 측정용 소수점 경로: 같은 규칙인데 이월이 없다 — 그 차이가 곧 마찰이다
+    # 측정용 소수점 경로: 같은 규칙인데 이월이 없다 — 그 차이가 곧 마찰이다.
+    # 갭 버퍼는 양쪽에 똑같이 걸리므로 비교에서 약분된다.
     frac = plan_orders({}, prices, monthly, whole_shares=False)
-    assert abs(sum(o["qty"] * o["est_price"] for o in frac) - monthly) < 1e-9, frac
+    budget = monthly * (1 - GAP_BUFFER_BP / 1e4)
+    assert abs(sum(o["qty"] * o["est_price"] for o in frac) - budget) < 1e-9, frac
     assert {o["ticker"] for o in frac} == set(prices), frac
+
+    # 버퍼는 이 함수가 뺀다 — 부르는 쪽이 또 빼면 두 번 빠진다
+    assert (plan_orders({}, prices, monthly, gap_buffer_bp=0.0)[0]["qty"]
+            >= plan_orders({}, prices, monthly)[0]["qty"])
 
     # 현금 0 이면 아무것도 안 산다
     assert plan_orders({"ITOT": 10}, prices, 0.0) == []

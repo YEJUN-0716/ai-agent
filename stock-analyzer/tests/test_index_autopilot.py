@@ -79,3 +79,31 @@ def test_rejects_missing_or_broken_price():
 
 def test_targets_default_is_the_designed_mix():
     assert TARGETS == {"ITOT": 0.70, "AGG": 0.20, "GLDM": 0.10}
+
+
+# ── 갭 버퍼는 한 곳이 소유한다 ────────────────────────────────────
+
+def test_gap_buffer_is_applied_inside_plan_orders():
+    """부르는 쪽이 아니라 이 함수가 뺀다.
+
+    러너는 빼고 측정 스크립트(measure_index_autopilot)는 안 빼서, "정수주
+    마찰 연 −0.03%p" 가 실전과 다른 규칙으로 잰 값이었다.
+    """
+    prices = {"ITOT": 100.0, "AGG": 100.0, "GLDM": 100.0}
+    full = sum(o["qty"] for o in index_autopilot.plan_orders({}, prices, 10_000.0,
+                                                gap_buffer_bp=0.0))
+    buffered = sum(o["qty"] for o in index_autopilot.plan_orders({}, prices, 10_000.0))
+    assert index_autopilot.GAP_BUFFER_BP > 0
+    assert buffered < full
+
+
+def test_runner_and_measurement_use_the_same_buffer():
+    """둘 다 index_autopilot 의 상수를 쓴다 — 사본을 만들면 여기서 걸린다."""
+    import os
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for rel in ('index_runner.py', 'scripts/measure_index_autopilot.py'):
+        src = open(os.path.join(root, rel), encoding='utf-8').read()
+        assert not re.search(r'^GAP_BUFFER_BP\s*=\s*[0-9]', src, re.M), (
+            f'{rel} 이 버퍼 값을 자기 숫자로 들고 있다 — 두 규칙이 갈린다')
