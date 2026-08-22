@@ -22,6 +22,14 @@ KST = timezone(timedelta(hours=9))
 REFRESH_INTERVAL_SECONDS = 300
 GIT_TIMEOUT_SECONDS = 30
 
+# as_of 를 재는 대상. 비서가 실제로 읽는 파일들이다(stock_reader 참고).
+_DATA_PATHS = (
+    "virtual_portfolio.json",
+    "equity_log.json",
+    "signal_log.json",
+    "data",
+)
+
 # 프로세스가 사는 동안만 기억한다. 서버를 껐다 켜면 다시 당긴다.
 _last_pull_at: datetime | None = None
 
@@ -37,9 +45,15 @@ def _run_git(settings: Settings, *args: str) -> subprocess.CompletedProcess:
 
 
 def _last_commit_time(settings: Settings) -> str | None:
-    """마지막 커밋 시각. 데이터가 언제 것인지 알려주기 위해 쓴다."""
+    """마지막 커밋 시각. 데이터가 언제 것인지 알려주기 위해 쓴다.
+
+    **읽는 데이터 파일로 한정한다.** 한정하지 않으면 이 값은 코드 커밋 시각이
+    된다 — 2026-08-19 저장소를 합치면서 stock-analyzer 가 하위 폴더가 됐고,
+    그 뒤로 데이터는 그대로인데 as_of 만 앞서 나갔다(실측 중위 3.6h, 최대
+    16.2h). 폴더로 한정해도 같은 문제다. 코드 커밋도 그 폴더 안이다.
+    """
     try:
-        result = _run_git(settings, "log", "-1", "--format=%cI")
+        result = _run_git(settings, "log", "-1", "--format=%cI", "--", *_DATA_PATHS)
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:
