@@ -25,6 +25,11 @@ QUARTER_MIN_DAYS, QUARTER_MAX_DAYS = 80, 100
 ANNUAL_MIN_DAYS,  ANNUAL_MAX_DAYS  = 350, 380
 CONTAINMENT_TOL_DAYS = 10
 MIN_COVERAGE  = 0.70
+# 캐시 나이 상한(일). 캐시 파일이 있으면 나이를 안 보던 옛 동작은, 러너가 캐시를
+# 계속 물려받는 구조와 만나면 "재무가 어느 시점에 멈춰 있는지 아무도 모르는" 상태가
+# 된다(실측 2026-08-22: 로컬 캐시가 7/21 것이라 261종목 중 224종목의 2분기 공시가
+# 없었다). IC 는 주간 배치라 7일이면 다음 회차에 새 공시가 반드시 들어온다.
+CACHE_MAX_AGE_DAYS = 7
 
 # 손익·현금흐름 태그 — 전부 duration(기간) 팩트. 분기 필터 + Q4 유도 기계를 공유한다.
 TAG_CHAINS = {
@@ -103,7 +108,9 @@ BALANCE_TAGS = {
     "short_term_debt":     ["DebtCurrent", "ShortTermBorrowings",
                             "LongTermDebtCurrent", "OtherShortTermBorrowings"],
 }
-_BALANCE_COLS = list(BALANCE_TAGS)
+# 조립기는 여기 두지 않는다 — 대차대조표를 쓰는 쪽(scripts/measure_fscore.py)이
+# 회계 시점(end) 인덱스를 원해서 `_assemble_instant` 를 직접 부른다. filed 인덱스
+# 판(옛 `assemble_balance`)은 부르는 코드가 없어 걷어냈다. 필요해지면 git 에 있다.
 
 # company_tickers.json이 잘못된 CIK를 주는 종목의 수동 교정.
 # XOM은 2115436(수수료신고 ffd만)이 아니라 34088(us-gaap 438태그)이다.
@@ -154,7 +161,29 @@ def _valid_us_gaap(facts_json):
     return facts.get("us-gaap")
 
 
-def load_raw(ticker: str, cache_dir: str = None, cik: int = None):
+def _read_cached(path: str):
+    """캐시 파일의 dict. 없거나 손상됐으면 None."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None  # 손상 시 호출부가 재수집한다
+
+
+def _is_stale(path: str, max_age_days) -> bool:
+    """캐시 파일이 max_age_days 보다 오래됐는가. None 이면 늙지 않는다."""
+    if max_age_days is None:
+        return False
+    try:
+        return (time.time() - os.path.getmtime(path)) > max_age_days * 86400
+    except OSError:
+        return True
+
+
+def load_raw(ticker: str, cache_dir: str = None, cik: int = None,
+             max_age_days: int = None):
     """
     ticker의 us-gaap 팩트 dict를 반환한다. 없거나 무효면 None.
     유효할 때만 디스크에 캐시한다 (무효는 다음 실행에서 재시도 가능하도록).
@@ -162,6 +191,13 @@ def load_raw(ticker: str, cache_dir: str = None, cik: int = None):
     `cik`을 주면 티커 조회를 건너뛴다. **상장폐지 종목에는 필수다** — `get_cik`은
     SEC의 *현재* 매핑이라 죽은 티커는 없거나, 더 나쁘게는 그 티커를 물려받은
     다른 회사를 준다(BBBY: 886158 파산 → 1130713 재상장).
+
+    `max_age_days`: 캐시가 이보다 오래됐으면 다시 받는다. **기본은 None(안 늙음)
+    이다** — 사전등록 측정(quant_pit 백필 등)은 같은 입력으로 다시 돌 수 있어야
+    하므로 캐시를 마음대로 갱신하면 안 된다. 갱신이 필요한 쪽(IC 진입점
+    `fetch_*_history`)만 `CACHE_MAX_AGE_DAYS` 를 넘긴다. 파일이 있는데 갱신에
+    실패하면 **낡은 캐시를 그대로 돌려준다** — 네트워크 한 번에 종목이 통째로
+    빠져 커버리지가 흔들리는 것보다 낫다.
     """
     cache_dir = cache_dir or RAW_DIR
     if cik is None:
@@ -169,19 +205,16 @@ def load_raw(ticker: str, cache_dir: str = None, cik: int = None):
     if cik is None:
         return None
 
-    path = os.path.join(cache_dir, f"CIK{cik:010d}.json")
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass  # 손상 시 아래에서 재수집
+    path   = os.path.join(cache_dir, f"CIK{cik:010d}.json")
+    cached = _read_cached(path)
+    if cached is not None and not _is_stale(path, max_age_days):
+        return cached
 
     time.sleep(RATE_SLEEP)
     raw = _fetch_companyfacts(cik)
     ug  = _valid_us_gaap(raw)
     if ug is None:
-        return None
+        return cached
 
     os.makedirs(cache_dir, exist_ok=True)
     tmp = f"{path}.tmp"
@@ -349,6 +382,18 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
 
     행의 filed는 그 분기 태그들의 **가장 늦은** 공시일이다. 마지막 조각이 나오기
     전에는 그 행 전체를 알 수 없다 — min을 쓰면 look-ahead다.
+
+    행의 순서는 **분기말(end)** 이다. filed 로 세우면 안 된다 — 옛 분기가 뒤늦게
+    처음 공시되는 일이 흔해서(NVDA 의 2020-04-26 분기가 2021-05-26 에 처음 나온다)
+    filed 순 목록의 마지막 4행이 최근 4분기가 아니게 된다. 소비 측
+    `point_in_time_fundamentals` 는 `df[df.index <= as_of].tail(4)` 를 TTM 으로
+    쓰는데, 그 마스크는 순서를 안 건드리므로 end 순이면 tail(4)가 곧 최근 4분기다.
+    실측(5년 창·261종목): filed 순이면 PIT 관측점의 3.10%(39종목)에서 TTM 창이
+    어긋나고 ROE 가 중위 9.5% 틀렸다. `_filed_series`(자본총계·주식수)와
+    `quant_pit.quarterly` 가 이미 같은 이유로 회계 시점을 기준으로 세운다.
+
+    인덱스(filed)는 그래서 단조가 아니다 — `<= as_of` **마스크**로만 소비할 것.
+    `.loc[:as_of]` 슬라이스는 정렬된 인덱스를 요구하므로 쓰면 안 된다.
     """
     cols = {name: _assemble_metric(us_gaap, name) for name in _INCOME_COLS}
     ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
@@ -358,12 +403,12 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
     rows = []
     for end in ends:
         fileds = [cols[n][end][0] for n in cols if end in cols[n]]
-        row = {"filed": pd.Timestamp(max(fileds))}
+        row = {"filed": pd.Timestamp(max(fileds)), "end": end}
         for n in cols:
             row[n] = cols[n][end][1] if end in cols[n] else np.nan
         rows.append(row)
 
-    df = pd.DataFrame(rows).set_index("filed").sort_index()
+    df = pd.DataFrame(rows).sort_values("end").set_index("filed")
     return df[_INCOME_COLS].dropna(how="all")
 
 
@@ -399,8 +444,8 @@ def _filed_series(d: dict) -> pd.Series:
     **더 큰 쪽**이라 AMD 2011-02-18 의 자본총계가 1.01B 대신 3.23B(2007년 값)였다.
 
     (filed, end) 순으로 세우므로 같은 filed 안에서는 가장 늦은 시점이 마지막에
-    온다 — 소비 측 `eq.loc[:as_of].iloc[-1]` 이 그걸 집는다. assemble_income·
-    assemble_balance 가 중복 filed 를 그냥 두는 것과 같은 규칙이다.
+    온다 — 소비 측 `eq[eq.index <= as_of].iloc[-1]` 이 그걸 집는다.
+    assemble_income 이 중복 filed 를 그냥 두는 것과 같은 규칙이다.
 
     이미 아는 시점보다 **옛 시점이 뒤늦게 처음 공시되는** 경우는 뺀다(MTCH 의
     2020-12-31 주식수가 2022-02-24 에 처음 나온다). 남겨 두면 소비 측이 집는
@@ -425,27 +470,6 @@ def assemble_equity(us_gaap: dict) -> pd.Series:
     filed 인덱스라 <= as_of 필터로 look-ahead 없이 소비할 수 있다.
     """
     return _filed_series(_assemble_instant(us_gaap, EQUITY_TAGS))
-
-
-def assemble_balance(us_gaap: dict) -> pd.DataFrame:
-    """
-    us-gaap → 대차대조표 DataFrame (index=filed, cols=_BALANCE_COLS).
-    행은 같은 시점(end)끼리 묶고, 행의 filed 는 그 시점 항목들의 **가장 늦은**
-    공시일이다 — assemble_income 과 같은 이유로 min 은 look-ahead 다.
-    """
-    cols = {n: _assemble_instant(us_gaap, tags) for n, tags in BALANCE_TAGS.items()}
-    ends = sorted(set().union(*[set(c) for c in cols.values()])) if any(cols.values()) else []
-    if not ends:
-        return pd.DataFrame()
-
-    rows = []
-    for end in ends:
-        have = [n for n in cols if end in cols[n]]
-        row = {"filed": pd.Timestamp(max(cols[n][end][0] for n in have))}
-        row.update({n: (cols[n][end][1] if end in cols[n] else np.nan) for n in cols})
-        rows.append(row)
-    return (pd.DataFrame(rows).set_index("filed").sort_index()[_BALANCE_COLS]
-            .dropna(how="all"))
 
 
 def assemble_shares(us_gaap: dict) -> pd.Series:
@@ -482,7 +506,7 @@ def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None)
     metric_hit = {m: 0 for m in _INCOME_COLS}
 
     for tk in tickers:
-        ug = load_raw(tk)
+        ug = load_raw(tk, max_age_days=CACHE_MAX_AGE_DAYS)
         if ug is None:
             failed.append(tk)
             result[tk] = pd.DataFrame()
@@ -510,7 +534,7 @@ def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None)
         print(f"[edgar] 실패 {len(failed)}종목: {', '.join(failed[:20])}"
               + (" ..." if len(failed) > 20 else ""))
     for m, frac in metric_coverage.items():
-        flag = "  <-- 70% 미만, 제외" if frac < MIN_COVERAGE else ""
+        flag = f"  <-- {MIN_COVERAGE:.0%} 미만, 제외" if frac < MIN_COVERAGE else ""
         print(f"[edgar] {m} 커버리지 {frac:.0%}{flag}")
 
     # 커버리지 미달 지표는 전 종목에서 제외한다. 편향된 부분집합으로 IC를
@@ -532,7 +556,7 @@ def fetch_shares_history(tickers: list, start=None) -> dict:
     """희석주식수 이력. 반환 {ticker: Series(index=filed)}. start는 호환용, 무시."""
     result = {}
     for tk in tickers:
-        ug = load_raw(tk)
+        ug = load_raw(tk, max_age_days=CACHE_MAX_AGE_DAYS)
         result[tk] = assemble_shares(ug) if ug is not None else pd.Series(dtype=float)
     return result
 
@@ -542,6 +566,6 @@ def fetch_equity_history(tickers: list, start=None) -> dict:
     ROE = net_income_TTM / equity 계산에 point_in_time_fundamentals가 사용."""
     result = {}
     for tk in tickers:
-        ug = load_raw(tk)
+        ug = load_raw(tk, max_age_days=CACHE_MAX_AGE_DAYS)
         result[tk] = assemble_equity(ug) if ug is not None else pd.Series(dtype=float)
     return result

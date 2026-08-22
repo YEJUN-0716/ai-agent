@@ -13,7 +13,8 @@ PIT(Point-in-Time) 재무 데이터:
   as_of_date 기준으로 알 수 있는 재무 데이터만 사용.
   edgar_fundamentals.fetch_quarterly_fundamentals_history()의 인덱스는
   EDGAR의 실제 공시일(filed)이라 <= as_of_date 필터만으로
-  미래 데이터를 차단할 수 있다.
+  미래 데이터를 차단할 수 있다. 행 순서는 분기말(end)이라 그 필터 뒤의
+  tail(4)가 곧 최근 4분기다 — filed 는 단조가 아니므로 슬라이스는 쓰지 않는다.
 """
 
 import numpy as np
