@@ -269,3 +269,19 @@ def test_missing_includes_ticker_whose_history_is_truncated():
     missing, _ = price_panel._missing_tickers(
         panel, ["OLD", "SHORT"], panel.index[-30], panel.index[-1])
     assert missing == []
+
+
+def test_missing_includes_ticker_whose_column_is_all_nan():
+    """열이 통째로 NaN 인 티커도 다시 받는다 — 잘린 티커와 같은 구멍의 다른 쪽이다.
+
+    일괄 다운로드에서 한 티커만 실패하면 yfinance 가 빈 열을 준다. 그것도
+    '캐시에 있음'으로 세면 영원히 다시 안 받는다.
+    """
+    panel = _fake_ohlcv(["OK", "EMPTY"], n_days=400, start="2024-01-01")
+    panel[("Close", "EMPTY")] = np.nan
+
+    missing, ext = price_panel._missing_tickers(
+        panel, ["OK", "EMPTY"],
+        pd.Timestamp("2024-01-01"), panel.index[-1])
+    assert not ext
+    assert missing == ["EMPTY"]

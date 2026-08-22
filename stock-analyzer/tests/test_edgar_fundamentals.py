@@ -274,7 +274,7 @@ def test_public_api_uses_disk_cache_once(monkeypatch):
     ]}}
     seen = []
 
-    def fake_load_raw(tk, cache_dir=None):
+    def fake_load_raw(tk, cache_dir=None, **kw):
         seen.append(tk)
         return ug if tk == "AAPL" else None
 
@@ -309,7 +309,7 @@ def test_low_coverage_metric_is_dropped(monkeypatch):
     partial = {"NetIncomeLoss": only_net_income(0)}
 
     ugs = {"AAPL": good, "MSFT": partial, "NVDA": partial, "GOOGL": partial}
-    monkeypatch.setattr(ef, "load_raw", lambda tk, cache_dir=None: ugs.get(tk))
+    monkeypatch.setattr(ef, "load_raw", lambda tk, cache_dir=None, **kw: ugs.get(tk))
 
     fin = ef.fetch_quarterly_fundamentals_history(["AAPL", "MSFT", "NVDA", "GOOGL"])
     cov = ef.last_coverage()
@@ -327,7 +327,7 @@ def test_fetch_shares_history_returns_series(monkeypatch):
     ug = {"WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": [
         _fact("2020-01-01", "2020-03-31", 1000, "2020-05-01"),
     ]}}}
-    monkeypatch.setattr(ef, "load_raw", lambda tk, cache_dir=None: ug)
+    monkeypatch.setattr(ef, "load_raw", lambda tk, cache_dir=None, **kw: ug)
     out = ef.fetch_shares_history(["AAPL"])
     assert isinstance(out["AAPL"], pd.Series)
     assert out["AAPL"].iloc[-1] == 1000
@@ -403,16 +403,6 @@ def test_instant_tag_falls_back_when_primary_is_stale():
     assert {v for _, v in got.values()} == {99}
 
 
-def test_assemble_balance_row_filed_is_latest_piece():
-    """한 시점의 항목들이 다른 날 공시되면 행의 filed는 마지막 조각이다(min은 look-ahead)."""
-    ug = {"Assets": {"units": {"USD": [_ifact("2024-03-31", 100, "2024-05-01")]}},
-          "AssetsCurrent": {"units": {"USD": [_ifact("2024-03-31", 40, "2024-06-15")]}}}
-    bal = ef.assemble_balance(ug)
-    assert list(bal.index) == [pd.Timestamp("2024-06-15")]
-    assert bal["assets"].iloc[0] == 100 and bal["current_assets"].iloc[0] == 40
-    assert bal["equity"].isna().all()
-
-
 def _instant(end, filed, val):
     return {"end": end, "filed": filed, "val": val}
 
@@ -448,3 +438,61 @@ def test_assemble_equity_drops_late_filed_older_end():
     s = ef.assemble_equity(ug)
     assert list(s) == [316.0]
     assert s.loc[:pd.Timestamp("2022-06-30")].iloc[-1] == 316.0
+
+
+def test_assemble_income_rows_ordered_by_quarter_end():
+    """행 순서는 분기말이다 — 옛 분기가 뒤늦게 처음 공시돼도 tail(4)가 최근 4분기다.
+
+    filed 로 세우던 옛 코드는 목록 끝에 1년 전 분기가 끼어 TTM 창이 어긋났다
+    (실측 5년 창: PIT 관측점의 3.10%·39종목, ROE 중위 9.5% 오차).
+    """
+    quarters = [
+        # (start, end, val, filed) — 2023Q1 은 2025년 공시에 **처음** 나온다
+        ("2023-01-01", "2023-03-31",  1.0, "2025-05-01"),
+        ("2024-01-01", "2024-03-31", 10.0, "2024-05-01"),
+        ("2024-04-01", "2024-06-30", 20.0, "2024-08-01"),
+        ("2024-07-01", "2024-09-30", 30.0, "2024-11-01"),
+        ("2024-10-01", "2024-12-31", 40.0, "2025-02-01"),
+        ("2025-01-01", "2025-03-31", 50.0, "2025-05-01"),
+    ]
+    ug = {"NetIncomeLoss": {"units": {"USD": [_fact(*q) for q in quarters]}}}
+    inc = ef.assemble_income(ug)
+
+    past = inc[inc.index <= pd.Timestamp("2025-06-01")]
+    assert list(past["net_income"]) == [1.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+    assert float(past.tail(4)["net_income"].sum()) == 140.0, "TTM 은 최근 4분기 합이다"
+
+
+def test_load_raw_refetches_stale_cache(tmp_path, monkeypatch):
+    """max_age_days 를 넘긴 캐시는 다시 받는다 (안 주면 나이를 안 본다)."""
+    import json as _json
+    import os as _os
+
+    path = tmp_path / "CIK0000320193.json"
+    path.write_text(_json.dumps({"OLD": 1}), encoding="utf-8")
+    _os.utime(path, (0, 0))   # 1970년
+
+    fresh = {"facts": {"us-gaap": {"NEW": 1}}}
+    monkeypatch.setattr(ef.requests, "get", lambda url, **kw: _Resp(200, fresh))
+    monkeypatch.setattr(ef.time, "sleep", lambda *_: None)
+
+    assert ef.load_raw("AAPL", cache_dir=str(tmp_path), cik=320193) == {"OLD": 1}
+    got = ef.load_raw("AAPL", cache_dir=str(tmp_path), cik=320193, max_age_days=7)
+    assert got == {"NEW": 1}
+    assert _json.loads(path.read_text(encoding="utf-8")) == {"NEW": 1}
+
+
+def test_load_raw_keeps_stale_cache_when_refetch_fails(tmp_path, monkeypatch):
+    """갱신에 실패하면 낡은 캐시를 돌려준다 — 네트워크 한 번에 종목이 빠지면 안 된다."""
+    import json as _json
+    import os as _os
+
+    path = tmp_path / "CIK0000320193.json"
+    path.write_text(_json.dumps({"OLD": 1}), encoding="utf-8")
+    _os.utime(path, (0, 0))
+
+    monkeypatch.setattr(ef.requests, "get", lambda url, **kw: _Resp(404, {}))
+    monkeypatch.setattr(ef.time, "sleep", lambda *_: None)
+
+    assert ef.load_raw("AAPL", cache_dir=str(tmp_path), cik=320193,
+                       max_age_days=7) == {"OLD": 1}

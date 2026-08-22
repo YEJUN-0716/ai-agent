@@ -170,9 +170,10 @@ STATS = {"span_bad": 0, "material_bad": 0}
 # ---------------------------------------------------------------- 재료 조립
 
 def balance_by_end(us_gaap: dict) -> pd.DataFrame:
-    """대차대조표를 **회계 시점(end)** 으로. `ef.assemble_balance` 를 안 쓰는 이유는
-    `quant_pit.quarterly` 와 같다 — 그 함수는 end 를 버리고 filed 만 남기는데,
-    1년 전 짝을 맞추려면 end 가 필요하다. 같은 조립기를 한 단계 아래에서 부른다.
+    """대차대조표를 **회계 시점(end)** 으로. `quant_pit.quarterly` 와 같은 이유로
+    여기서 조립한다 — 1년 전 짝을 맞추려면 filed 가 아니라 end 가 인덱스여야
+    한다. 재료(`BALANCE_TAGS`·`_assemble_instant`)는 프로덕션 모듈 것을 그대로
+    쓴다. filed 인덱스 판(옛 `ef.assemble_balance`)은 부르는 코드가 없어 삭제됐다.
 
     행의 filed 는 그 시점 항목들의 **가장 늦은** 공시일이다. min 은 look-ahead 다.
     """

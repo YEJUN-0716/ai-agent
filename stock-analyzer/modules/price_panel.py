@@ -183,9 +183,14 @@ def _missing_tickers(cached: pd.DataFrame, tickers: list,
     if not needs_extension and "Close" in cached.columns.get_level_values(0):
         closes = cached["Close"]
         starts = closes.apply(lambda s: s.first_valid_index())
+        # 열이 통째로 NaN 이면 first_valid_index() 는 None 을 내지만 Series 에는
+        # **NaT** 로 들어앉는다 — `is not None` 로 거르면 안 걸리고 뒤의
+        # `pd.Timestamp(NaT).normalize()` 가 AttributeError 로 죽는다. 일괄
+        # 다운로드에서 한 티커만 실패하면 yfinance 가 빈 열을 주므로 실제로
+        # 생길 수 있는 모양이다. NaN 인 열은 잘린 것과 같이 다시 받는다.
         truncated = [t for t in tickers
-                     if t in have and starts.get(t) is not None
-                     and pd.Timestamp(starts[t]).normalize() > want_first + tol]
+                     if t in have and (pd.isna(starts.get(t))
+                                       or pd.Timestamp(starts[t]).normalize() > want_first + tol)]
         missing = list(dict.fromkeys(missing + truncated))
     return missing, needs_extension
 

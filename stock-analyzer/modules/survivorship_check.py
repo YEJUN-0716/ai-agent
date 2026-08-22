@@ -19,7 +19,7 @@ KNOWN_DELISTED_LARGE_CAPS = [
      "date": "2008-09-25", "note": "미국 최대 저축기관 파산"},
     {"ticker": "ENE",  "name": "Enron",                           "event": "회계사기/파산",
      "date": "2001-12-02", "note": "회계 부정 사건 — 시가총액 $70B에서 0으로"},
-    {"ticker": "WCG",  "name": "WorldCom",                        "event": "회계사기/파산",
+    {"ticker": "WCOM", "name": "WorldCom",                        "event": "회계사기/파산",
      "date": "2002-07-21", "note": "Enron 다음 규모의 회계 부정 파산"},
     {"ticker": "C",    "name": "Citigroup (2009 구제금융)",        "event": "주가 붕괴",
      "date": "2009-03-05", "note": "주가 $55→$0.97, 현재 상장 유지이나 주주가치 99% 소멸"},

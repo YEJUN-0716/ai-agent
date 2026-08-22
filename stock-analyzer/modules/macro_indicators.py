@@ -26,7 +26,6 @@ _SERIES = {
     "core_cpi":  "CPILFESL",   # 근원 CPI
     "unemp":     "UNRATE",     # 실업률
     "indpro":    "INDPRO",     # 산업생산지수 (PMI 대용)
-    "payems":    "PAYEMS",     # 비농업 고용
     "yc":        "T10Y2Y",     # 10Y-2Y 수익률곡선 스프레드
 }
 
@@ -86,7 +85,11 @@ def real_macro_score() -> dict:
         series = {k: _fetch_series(sid, api_key, start) for k, sid in _SERIES.items()}
 
         # ── 인플레이션 (30%) — 근원 CPI 전년比, 2% 근처가 이상적 ──
-        core_yoy = _yoy_pct(series["core_cpi"]) or _yoy_pct(series["cpi"])
+        # `or` 로 쓰면 근원 CPI 가 **정확히 0.0%** 인 달에 헤드라인으로 떨어진다.
+        # 없는 것과 0인 것은 다르다.
+        core_yoy = _yoy_pct(series["core_cpi"])
+        if core_yoy is None:
+            core_yoy = _yoy_pct(series["cpi"])
         if core_yoy is not None:
             data["근원CPI(YoY%)"] = round(core_yoy, 2)
             det["인플레이션"] = (80 if core_yoy < 2.5 else (65 if core_yoy < 3.5

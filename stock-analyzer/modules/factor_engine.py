@@ -109,9 +109,11 @@ def point_in_time_fundamentals(tk: str, as_of_date, price: float,
 
     전제 계약 (edgar_fundamentals.assemble_income이 보장):
       - fin_hist[tk]는 분기당 정확히 1행 (중복 기간 없음)
-      - 인덱스는 실제 공시일(filed), 단조 비감소
-      - 따라서 tail(4)가 서로 다른 4개 분기 = TTM으로 유효하다
+      - 인덱스는 실제 공시일(filed), **행 순서는 분기말(end)**
+      - 따라서 tail(4)가 가장 최근 4개 분기 = TTM으로 유효하다
     이 계약이 깨지면 (예: 중복 분기, 연간 행 혼입) TTM이 조용히 부풀려진다.
+    filed 는 단조가 아니다(옛 분기가 뒤늦게 처음 공시된다) — 아래 `<= as_of` 는
+    순서를 안 건드리는 **마스크**여야 하고, `.loc[:as_of]` 슬라이스면 안 된다.
 
     equity_hist(선택): 자본총계 Series(index=filed). 있으면 ROE를 계산한다.
 
