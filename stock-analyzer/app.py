@@ -1355,8 +1355,8 @@ def macro_score():
         irx = yf.download('^IRX',     start=start, end=end, progress=False)  # 3개월 T-bill (10Y-3M 스프레드)
         vix = yf.download('^VIX',     start=start, end=end, progress=False)
         dxy = yf.download('DX-Y.NYB', start=start, end=end, progress=False)
-        hyg = yf.download('HYG',      start=start, end=end, progress=False)  # 하이일드 채권
-        lqd = yf.download('LQD',      start=start, end=end, progress=False)  # 투자등급 채권
+        hyg = yf.download('HYG',      start=start, end=end, progress=False, auto_adjust=True)  # 하이일드 채권(배당 큼 — 조정가 명시)
+        lqd = yf.download('LQD',      start=start, end=end, progress=False, auto_adjust=True)  # 투자등급 채권(배당 큼 — 조정가 명시)
         gld = yf.download('GLD',      start=start, end=end, progress=False)  # 금(인플레/공포)
         for d in [tnx, irx, vix, dxy, hyg, lqd, gld]:
             if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
@@ -1842,7 +1842,7 @@ def run_portfolio_backtest(tickers, weights, period_days, buy_th, sell_th,
     # SPY 벤치마크 (같은 기간)
     spy_eq = None
     try:
-        spy_raw = yf.download('SPY', start=start, end=end, progress=False)
+        spy_raw = yf.download('SPY', start=start, end=end, progress=False, auto_adjust=True)  # 벤치마크는 총수익 기준
         if isinstance(spy_raw.columns, pd.MultiIndex):
             spy_raw.columns = spy_raw.columns.droplevel(1)
         spy_raw = spy_raw.dropna(subset=['Close'])
@@ -1864,7 +1864,7 @@ def calc_sector_relative(ticker, sector, df):
     tickers_to_dl = [market_index] + ([etf] if etf else [])
 
     try:
-        bench = yf.download(tickers_to_dl, start=start, end=end, progress=False)
+        bench = yf.download(tickers_to_dl, start=start, end=end, progress=False, auto_adjust=True)  # 상대강도 — ETF 배당 반영
         if isinstance(bench.columns, pd.MultiIndex):
             spy_close = bench['Close'][market_index].dropna()
             etf_close = bench['Close'][etf].dropna() if etf else None
