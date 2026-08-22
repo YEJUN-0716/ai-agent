@@ -12,9 +12,50 @@ signal_log.json 에 쌓이는 시그널은 발생 21일 뒤 return_pct 가 채�
 
 import math
 
+import pandas as pd
+
 # 판정 기준 — 표본 30건 미만은 통계로 다루지 않는다는 퀀트 관행
 MIN_SAMPLE = 30
 SIGNIFICANT_T = 2.0
+
+# 채점 지평 — 진입 다음 봉부터 세어 이 **거래일째** 종가로 잰다.
+SIGNAL_HORIZON_BARS = 21
+
+
+def score_signal(closes, entry_date, entry_price, horizon=SIGNAL_HORIZON_BARS):
+    """진입 후 `horizon` **거래일째** 종가로 채점. 봉이 모자라면 None.
+
+    반환 {"return_pct", "outcome_date", "outcome_price"} — 값과 **그 값이 어느
+    봉의 것인지**를 같이 준다. 날짜를 따로 채우게 두면 채점 시점이 부르는
+    쪽마다 달라진다.
+
+    예전엔 "달력 21일이 지났으면 **지금 현재가**" 로 쟀다. 그러면 재는 날이
+    채점일이 된다 — 화면은 여는 날, 러너는 도는 날. **채점 시점은 부르는
+    쪽이 아니라 봉이 정한다.**
+
+    이 규칙의 사본이 두 벌이었다(app.py 화면 / paper_trade_runner_toss 러너).
+    화면만 고쳐져 있었고, `signal_log.json` 에 실제로 값을 쓰는 건 매일 도는
+    러너였다 — 채점된 11건 전부가 21봉이 아니라 15~16봉에서 찍혔고 그중 5건은
+    아직 21봉이 안 찬 건이었다(2026-08-22 실측). 그래서 규칙을 여기 한 곳에
+    두고 양쪽이 부른다.
+
+    Streamlit·네트워크를 모른다 — 산술을 테스트로 잠글 수 있어야 한다.
+    """
+    if not entry_price or float(entry_price) <= 0 or closes is None or len(closes) == 0:
+        return None
+    idx = pd.to_datetime(closes.index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    # 진입일 당일은 이미 체결된 값이라 세지 않는다.
+    after = pd.Series(closes.values, index=idx).dropna()
+    after = after[after.index > pd.Timestamp(entry_date)]
+    if len(after) < horizon:
+        return None
+    bar = after.index[horizon - 1]
+    price = float(after.iloc[horizon - 1])
+    return {"return_pct": round((price / float(entry_price) - 1) * 100, 2),
+            "outcome_date": bar.strftime("%Y-%m-%d"),
+            "outcome_price": round(price, 2)}
 
 
 def _mean(xs):

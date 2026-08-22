@@ -163,7 +163,12 @@ def test_score_signal_counts_trading_days_not_calendar_days():
     entry = '2026-07-01'
     closes = _closes(60)          # 진입 다음 거래일부터 101, 102, ... 로 오른다
     # 진입일(첫 봉)을 뺀 21번째 봉 = 100 + 21 = 121
-    assert app.score_signal(closes, entry, 100.0) == pytest.approx(21.0)
+    scored = app.score_signal(closes, entry, 100.0)
+    assert scored['return_pct'] == pytest.approx(21.0)
+    # 값과 함께 **그 값이 어느 봉의 것인지**도 온다 — 날짜를 부르는 쪽이
+    # 채우면 채점 시점이 경로마다 갈린다(러너는 '도는 날', 화면은 '여는 날').
+    assert scored['outcome_price'] == pytest.approx(121.0)
+    assert scored['outcome_date'] == closes.index[21].strftime('%Y-%m-%d')
 
 
 def test_score_signal_waits_when_bars_are_short():

@@ -48,7 +48,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from modules import analyst_log
+from modules import analyst_log, signal_scorecard
 from modules.factor_engine import get_market_regime
 from modules.fx import fetch_krw_per_usd
 from modules.price_panel import PanelCoverageError, load_panel
@@ -110,7 +110,6 @@ KS_MAX_SINGLE_ORDER_PCT = float(os.environ.get("KS_MAX_SINGLE_ORDER_PCT", "20"))
 PEAK_FILE        = "peak_prices.json"
 SIGNAL_LOG_FILE  = "signal_log.json"
 EQUITY_LOG_FILE  = "equity_log.json"
-SIGNAL_HOLD_DAYS = 21
 
 # ── 유니버스 ──────────────────────────────────────────────────────────
 UNIVERSE_PRESETS = {
@@ -242,21 +241,29 @@ def save_equity_log(records: list) -> None:
 
 
 def append_equity_log(records: list, equity: float, spy_price: float | None,
-                       positions: list, deposited: float = 0.0) -> list:
+                       positions: list, deposited: float = 0.0,
+                       fx: float = 1.0) -> list:
     """오늘 날짜 항목이 없으면 추가, 이미 있으면 업데이트.
 
     `deposited` 는 그 시점까지의 **누적** 외부 입금이다. 이게 없으면 증자한 날
     자산 점프가 통째로 수익률이 된다(modules.virtual_broker.equity_returns).
+
+    `fx` — 미실현손익을 원화로 바꿀 환율. 러너의 실시간 환율을 **인자로** 받는다.
+    모듈 상수를 읽으면 main() 안에서 잡은 실시간 값이 아니라 fallback 1,400원이
+    쓰인다(같은 이름의 지역변수가 가린다).
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    unrealized = sum(float(p.get("unrealized_pl", 0) or 0) for p in positions)
+    # `unrealized_pl` 은 **달러**다(virtual_broker.get_positions). 같은 레코드의
+    # equity·deposited 는 원화라, 달러 그대로 넣으면 한 줄 안에 두 통화가 섞인다.
+    # 읽는 코드가 없어 손해는 0이었지만 옆에 놓인 원화와 더해질 수 있는 자리다.
+    unrealized_usd = sum(float(p.get("unrealized_pl", 0) or 0) for p in positions)
     entry = {
-        "date":           today,
-        "equity":         round(equity, 2),
-        "spy_price":      round(spy_price, 2) if spy_price else None,
-        "unrealized_pnl": round(unrealized, 2),
-        "n_positions":    len(positions),
-        "deposited":      round(deposited, 2),
+        "date":               today,
+        "equity":             round(equity, 2),
+        "spy_price":          round(spy_price, 2) if spy_price else None,
+        "unrealized_pnl_krw": round(unrealized_usd * fx, 2),
+        "n_positions":        len(positions),
+        "deposited":          round(deposited, 2),
     }
     if records and records[-1]["date"] == today:
         records[-1] = entry
@@ -349,19 +356,31 @@ def deposit_adjusted_equity(equity_now: float, records: list,
 
 
 # ── 섹터 조회 ──────────────────────────────────────────────────────────
-_sector_cache: dict[str, str] = {}
+_sector_cache: dict[str, str | None] = {}
+
+# 섹터를 못 받았을 때 쓰는 표시. **한도 계산에서 빠진다** — 조회 실패는
+# "같은 섹터"가 아니다. 예전에는 실패도 "Unknown" 이라는 하나의 섹터로 세서,
+# yfinance .info 가 막히면 보유·대기 전 종목이 같은 칸에 몰리고 섹터 한도가
+# 신규 주문을 통째로 막았다(60종목을 매 실행 조회하므로 드문 일이 아니다).
+# 계산 불가를 중립값으로 채우지 않는다는 규칙은 이 저장소가 점수 기록에서
+# 이미 지키고 있다(signal_worker._quant_score).
+SECTOR_UNKNOWN = None
 
 
-def _get_sector(ticker: str) -> str:
-    """yfinance로 섹터 조회 (결과 캐싱). 실패하면 'Unknown'."""
-    if ticker in _sector_cache:
+def _get_sector(ticker: str) -> str | None:
+    """yfinance로 섹터 조회 (결과 캐싱). 못 받으면 SECTOR_UNKNOWN(None).
+
+    실패를 캐시하지 않는다 — 한 번 막혔다고 그 실행 내내 모른 채로 두면
+    같은 실행의 뒤쪽 종목이 전부 한도 밖으로 나간다.
+    """
+    if _sector_cache.get(ticker):
         return _sector_cache[ticker]
     try:
-        info   = yf.Ticker(ticker).info
-        sector = info.get("sector") or "Unknown"
+        sector = yf.Ticker(ticker).info.get("sector") or SECTOR_UNKNOWN
     except Exception:
-        sector = "Unknown"
-    _sector_cache[ticker] = sector
+        sector = SECTOR_UNKNOWN
+    if sector:
+        _sector_cache[ticker] = sector
     return sector
 
 
@@ -485,40 +504,42 @@ def record_virtual_fills(new_trades: list) -> int:
     return len(buys)
 
 
-def resolve_signal_outcomes(signal_log: list, prices_cache: dict) -> list:
-    """entry_date + SIGNAL_HOLD_DAYS 이상 경과한 미결 시그널의 결과를 기록."""
-    today   = datetime.now(timezone.utc).date()
+def resolve_signal_outcomes(signal_log: list, closes_cache: dict) -> list:
+    """미결 시그널을 **진입 21거래일째 종가**로 채점한다 (signal_scorecard).
+
+    `closes_cache` 는 {심볼: 종가 Series}. 유니버스 밖 심볼은 진입일부터 다시
+    받아서 채운다 — 마지막 종가 하나로는 21봉째를 못 집는다.
+
+    예전에는 "달력 21일이 지났으면 그날 도는 러너가 본 종가" 였다. 달력 21일은
+    15거래일쯤이라, 채점된 11건 전부가 15~16봉에서 찍혔고 그중 5건은 21봉이
+    아직 안 찬 건이었다(2026-08-22 실측: 오차 중위 0.45%p · 최대 15.86%p,
+    부호가 뒤집힌 것 1건). `return_pct` 는 한 번 차면 다시 안 재므로 그대로
+    굳는다. 화면(app.py)은 이미 옳은 규칙을 쓰고 있었는데 **파일에 실제로
+    값을 쓰는 쪽은 러너**였다 — 사본 둘 중 프로덕션이 안 고쳐진 쪽이었다.
+    """
     updated = []
     for sig in signal_log:
         if sig.get("return_pct") is not None:
             updated.append(sig)
             continue
-        try:
-            entry_date = datetime.strptime(sig["entry_date"], "%Y-%m-%d").date()
-        except Exception:
-            updated.append(sig)
-            continue
-        if (today - entry_date).days < SIGNAL_HOLD_DAYS:
-            updated.append(sig)
-            continue
-        sym = sig["symbol"]
-        cur = prices_cache.get(sym)
-        if cur is None:
+        sym = sig.get("symbol")
+        closes = closes_cache.get(sym)
+        if closes is None and sym and sig.get("entry_date"):
             try:
-                yahoo_sym = sym.replace(".", "-")
-                raw = yf.download(yahoo_sym, period="5d", progress=False, auto_adjust=True)
+                raw = yf.download(sym, start=sig["entry_date"], progress=False,
+                                  auto_adjust=True)
                 if isinstance(raw.columns, pd.MultiIndex):
                     raw.columns = raw.columns.droplevel(1)
                 if not raw.empty:
-                    cur = float(raw["Close"].dropna().iloc[-1])
-                    prices_cache[sym] = cur
+                    closes = raw["Close"].dropna()
+                    closes_cache[sym] = closes
             except Exception:
                 pass
-        if cur and float(sig.get("entry_price", 0)) > 0:
-            ret = (cur / float(sig["entry_price"]) - 1) * 100
-            sig["outcome_price"] = round(cur, 2)
-            sig["outcome_date"]  = str(today)
-            sig["return_pct"]    = round(ret, 2)
+        scored = (signal_scorecard.score_signal(
+                      closes, sig.get("entry_date"), sig.get("entry_price"))
+                  if closes is not None else None)
+        if scored:
+            sig.update(scored)
         updated.append(sig)
     return updated
 
@@ -551,6 +572,25 @@ def plan_trade_summary(trades: list) -> dict:
     %수익률로는 백테스트의 +0.66R 과 비교할 수 없다. R 은 위험 1단위 기준이라
     손절이 촘촘한 종목과 넓은 종목을 같은 무게로 놓기 때문이다.
 
+    이름과 분모를 `trade_plan_backtest._stats` 에서 그대로 가져온다. 예전에는
+    승률 분모에 timeout 을 넣고(백테스트는 뺀다), `avg_r` 이라는 이름 하나로
+    백테스트의 두 통계(avg_r / expectancy_r)를 대신했다 — 같은 낱말이 다른
+    것을 가리키면 "장부가 백테스트 근처에 있나" 라는 이 줄의 유일한 용도가
+    사라진다. 실측(60종목 6년 · 롱 체결 1,984건): 승률 38.7% 대 38.0%.
+
+      avg_r         체결 전체 평균. **timeout 은 0** — 백테스트가 그렇게 센다
+      expectancy_r  결판(win+loss)만의 기대값
+      win_rate      wins ÷ (wins+losses) — timeout 제외
+
+    ⚠️ **avg_r 의 timeout=0 은 백테스트 쪽 결함이다.** 장부는 40거래일째 시가에
+    실제로 팔고 그 R 을 받는데(`virtual_broker.scan_plan_exit`), 백테스트는
+    "안 판 것"으로 0 을 준다(`trade_plan_backtest.placeable_r`). 실측으로 그
+    차이는 +0.0287R 이고, 비교 기준선인 +0.022R 보다 크다 — timeout 35건의
+    실제 R 이 평균 +1.96R 이기 때문이다(40봉을 버티며 손절도 안 맞은 셋업은
+    대체로 올라 있다). 여기서 백테스트를 고치지 않은 이유는 measure_entry_rule
+    재측정과 MEASURED_EDGE_NOTE 갱신이 같이 따라와야 해서다. 그때까지 실제 값은
+    `avg_r_realized` 로 따로 낸다 — 감추지는 않는다.
+
     체결률을 함께 낸다 — 미체결 폐기를 빼고 세면 승률이 부풀어 보인다
     (백테스트에서 셋업의 36% 가 진입구간 미도달로 사라졌다).
     """
@@ -559,15 +599,26 @@ def plan_trade_summary(trades: list) -> dict:
     filled   = [t for t in plans if t.get("side") == "buy"]
     resolved = [t for t in plans if t.get("outcome") in ("win", "loss", "timeout")]
     wins     = [t for t in resolved if t.get("outcome") == "win"]
+    losses   = [t for t in resolved if t.get("outcome") == "loss"]
+    decided  = wins + losses
+    n_timeout = len(resolved) - len(decided)
     n_setups = len(filled) + len(nofill)
+    r_bt = [0.0 if t.get("outcome") == "timeout" else float(t["r_realized"])
+            for t in resolved]
+    r_real = [float(t["r_realized"]) for t in resolved]
     return {
-        "n_setups":   n_setups,
-        "n_filled":   len(filled),
-        "n_resolved": len(resolved),
-        "avg_r":      round(float(np.mean([t["r_realized"] for t in resolved])), 3)
-                      if resolved else 0.0,
-        "win_rate":   round(len(wins) / len(resolved) * 100, 1) if resolved else 0.0,
-        "fill_rate":  round(len(filled) / n_setups * 100, 1) if n_setups else 0.0,
+        "n_setups":       n_setups,
+        "n_filled":       len(filled),
+        "n_resolved":     len(resolved),
+        "n_decided":      len(decided),
+        "n_timeout":      n_timeout,
+        "avg_r":          round(float(np.mean(r_bt)), 3) if resolved else 0.0,
+        "avg_r_realized": round(float(np.mean(r_real)), 3) if resolved else 0.0,
+        "expectancy_r":   round(float(np.mean(
+                              [float(t["r_realized"]) for t in decided])), 3)
+                          if decided else 0.0,
+        "win_rate":       round(len(wins) / len(decided) * 100, 1) if decided else 0.0,
+        "fill_rate":      round(len(filled) / n_setups * 100, 1) if n_setups else 0.0,
     }
 
 
@@ -997,17 +1048,21 @@ def main():
         if not sym or sym in held or sym in pending_syms:
             continue
 
-        # 섹터 집중도 제한
+        # 섹터 집중도 제한. 섹터를 못 받은 종목은 세지도, 걸리지도 않는다 —
+        # 조회 실패를 한 칸으로 묶으면 야후가 막힌 날 한도가 전 종목에 걸린다.
         sym_sector = _get_sector(sym)
-        held_in_sector = (
-            sum(1 for s in (set(held) | pending_syms)
-                if s not in sell_done and _get_sector(s) == sym_sector)
-            + ordered_sectors.get(sym_sector, 0)
-        )
-        if held_in_sector >= MAX_SECTOR_POSITIONS:
-            print(f"  [섹터 제한] {sym} ({sym_sector}) 이미 {held_in_sector}개 → 스킵")
-            skipped_sector.append(f"{sym}({sym_sector})")
-            continue
+        if sym_sector is None:
+            print(f"  [섹터 미상] {sym} — 섹터 한도 판정에서 제외")
+        else:
+            held_in_sector = (
+                sum(1 for s in (set(held) | pending_syms)
+                    if s not in sell_done and _get_sector(s) == sym_sector)
+                + ordered_sectors.get(sym_sector, 0)
+            )
+            if held_in_sector >= MAX_SECTOR_POSITIONS:
+                print(f"  [섹터 제한] {sym} ({sym_sector}) 이미 {held_in_sector}개 → 스킵")
+                skipped_sector.append(f"{sym}({sym_sector})")
+                continue
 
         # 위험 기준 수량 — 손절까지 맞으면 자본의 RISK_PCT_PER_TRADE% 를 잃는다.
         qty = plan_position_size(equity_now, cand["entry_ref"], cand["stop"],
@@ -1033,7 +1088,7 @@ def main():
 
         print(f"  [지정가 매수] {sym} {qty}주 @ ${cand['limit']:,.2f} "
               f"({notional_krw:,.0f}원, 등급 {cand['grade']}, R:R {cand['rr']}, "
-              f"섹터 {sym_sector})")
+              f"섹터 {sym_sector or '미상'})")
         if cand["signals"]:
             print(f"    ▶ {cand['signals'][0]}")
 
@@ -1041,7 +1096,8 @@ def main():
                "limit": cand["limit"], "stop": cand["stop"],
                "target": cand["target"], "rr": cand["rr"],
                "grade": cand["grade"], "risk_pct": cand["risk_pct"],
-               "notional_krw": notional_krw, "sector": sym_sector, "ok": True}
+               "notional_krw": notional_krw,
+               "sector": sym_sector or "미상", "ok": True}
         if DRY_RUN:
             rec["dry_run"] = True
         else:
@@ -1067,7 +1123,8 @@ def main():
 
         order_results.append(rec)
         buying_power -= notional_krw
-        ordered_sectors[sym_sector] = ordered_sectors.get(sym_sector, 0) + 1
+        if sym_sector is not None:
+            ordered_sectors[sym_sector] = ordered_sectors.get(sym_sector, 0) + 1
 
     # 8. 사후 처리
     if not DRY_RUN:
@@ -1078,17 +1135,15 @@ def main():
     # 성적표에는 settle_pending 이 확정한 체결만 오른다(record_virtual_fills).
     # 여기서 주문 시점에 또 올리면 체결가 자리에 어제 종가가 박힌다.
     sig_log = load_signal_log()
-    prices_cache = {
-        tk: float(df["Close"].dropna().iloc[-1])
-        for tk, df in ohlcv.items() if not df["Close"].dropna().empty
-    }
-    sig_log = resolve_signal_outcomes(sig_log, prices_cache)
+    closes_cache = {tk: df["Close"].dropna() for tk, df in ohlcv.items()
+                    if not df["Close"].dropna().empty}
+    sig_log = resolve_signal_outcomes(sig_log, closes_cache)
     save_signal_log(sig_log)
     sl_summary = signal_log_summary(sig_log)
 
     # 자산 로그 업데이트
     equity_log = append_equity_log(equity_log, equity_now, spy_price, positions,
-                                   deposited=_deposited_krw)
+                                   deposited=_deposited_krw, fx=_KRW_PER_USD)
     save_equity_log(equity_log)
     perf = calc_performance_metrics(equity_log)
 
@@ -1153,11 +1208,21 @@ def main():
     plan_perf = plan_trade_summary(_vstate["trades"])
     if plan_perf["n_resolved"] >= 3:
         lines.append(
-            f"\n*플랜 성적* (결판 {plan_perf['n_resolved']}건 / 체결 {plan_perf['n_filled']}"
+            f"\n*플랜 성적* (결판 {plan_perf['n_decided']}건 / 체결 {plan_perf['n_filled']}"
             f" / 셋업 {plan_perf['n_setups']})\n"
-            f"  기대값 `{plan_perf['avg_r']:+.2f}R`  승률 {plan_perf['win_rate']:.0f}%  "
+            f"  기대값 `{plan_perf['expectancy_r']:+.2f}R`  "
+            f"평균 `{plan_perf['avg_r']:+.2f}R`  "
+            f"승률 {plan_perf['win_rate']:.0f}%  "
             f"체결률 {plan_perf['fill_rate']:.0f}%"
         )
+        # timeout 이 있는 날만 붙인다. 백테스트가 그걸 0R 로 세기 때문에 위
+        # 평균은 실제로 받은 R 이 아니다 — 어긋난 날엔 어긋났다고 적는다.
+        if plan_perf["n_timeout"]:
+            lines.append(
+                f"  ↳ 만기청산 {plan_perf['n_timeout']}건을 실제 청산가로 세면 "
+                f"평균 `{plan_perf['avg_r_realized']:+.2f}R` "
+                f"(위 평균은 백테스트와 같게 0R 로 센 값)"
+            )
 
     # 성과 지표
     if perf:

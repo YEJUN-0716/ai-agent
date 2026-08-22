@@ -18,6 +18,7 @@ paper_trade_runner_toss.py 에 넣지 않는 이유: 규칙이 다른 두 시스
   INDEX_MONTHLY_KRW       월 적립금             (기본 1,000,000)
   INDEX_FX_SPREAD_BP      환전 스프레드 편도     (기본 10bp)
   INDEX_FEE_BP            매매 수수료 편도       (기본 25bp)
+  INDEX_GAP_BUFFER_BP     갭 대비 남겨 둘 여유   (기본: index_autopilot.GAP_BUFFER_BP)
   INDEX_DIV_WITHHOLDING   미국 배당 원천징수     (기본 0.15)
   TELEGRAM_TOKEN / TELEGRAM_PUBLIC_CHANNEL_ID   없으면 발송만 생략
   DRY_RUN                 false 여야 장부에 쓴다 (기본 true)
@@ -32,28 +33,19 @@ import yfinance as yf
 
 from modules import virtual_broker as vb
 from modules.fx import fetch_krw_per_usd
-from modules.index_autopilot import TARGETS, plan_orders
+from modules.index_autopilot import (
+    GAP_BUFFER_BP as AP_GAP_BUFFER_BP, TARGETS, plan_orders,
+)
 from scorecard_worker import send_tg   # 공개 채널 발송 — 성적표와 같은 채널
 
 MONTHLY_KRW     = float(os.environ.get("INDEX_MONTHLY_KRW", "1000000"))
 FX_SPREAD_BP    = float(os.environ.get("INDEX_FX_SPREAD_BP", "10"))
 FEE_BP          = float(os.environ.get("INDEX_FEE_BP", "25"))
 DIV_WITHHOLDING = float(os.environ.get("INDEX_DIV_WITHHOLDING", "0.15"))
-# 계획은 전날 종가로 세우고 체결은 다음 거래일 시가다. 그 사이 갭상승이 나면
-# 계획 수량의 실제 비용이 현금을 넘고, 브로커는 그 주문을 통째로 거절한다
-# (부분 체결은 실제로 걸 수 없는 체결이라 일부러 금지했다 — virtual_broker).
-# 그러면 그 달 그 자산만 조용히 빠지는데 적립은 이미 완료로 찍혀 재시도되지
-# 않고, 벤치마크 ITOT 는 정상 매수된 걸로 계산돼 비교가 우리 쪽에 불리해진다.
-# 계획 단계에서 이만큼 남겨 두면 그 여유로 갭을 흡수한다. 남은 현금은 다음 달
-# 계획에 이월되므로 놀리는 게 아니라 미루는 것이다.
-#
-# 3% 의 근거 (2021-01~2026-08, 1,411 거래일 시가/전일종가 실측):
-#   ITOT p99 +1.62% 최대 +3.64% · AGG p99 +0.74% 최대 +1.51%
-#   GLDM p99 +2.16% 최대 +5.95%
-# 정수주 잔돈이 이미 여유로 남으므로 실효 방어폭은 이보다 넓다. 다만 GLDM 급
-# 6% 갭이 잔돈이 적은 달과 겹치면 여전히 거절될 수 있다 — 없앤 게 아니라 줄였다.
-# 적립금이 클수록 잔돈 비율이 작아져 이 버퍼가 하는 일이 커진다.
-GAP_BUFFER_BP   = float(os.environ.get("INDEX_GAP_BUFFER_BP", "300"))
+# 갭 버퍼는 modules.index_autopilot 이 소유한다 — plan_orders 가 직접 뺀다.
+# 여기서 또 빼면 두 번 빠지고, 러너에만 두면 마찰을 재는 쪽이 안 따라온다
+# (실제로 그랬다 — scripts/measure_index_autopilot 이 버퍼 없이 굴리고 있었다).
+GAP_BUFFER_BP   = float(os.environ.get("INDEX_GAP_BUFFER_BP", str(AP_GAP_BUFFER_BP)))
 DRY_RUN         = os.environ.get("DRY_RUN", "true").strip().lower() != "false"
 
 # 미실현 양도세(보고용). 실현하지 않으므로 장부 현금에는 손대지 않는다.
@@ -128,10 +120,10 @@ def _deposit(state: dict, prices: dict, fx: float, month: str) -> list[dict]:
     fx_cost_krw = MONTHLY_KRW * FX_SPREAD_BP / 1e4
     state["cash_krw"] += MONTHLY_KRW - fx_cost_krw
 
-    order_cash_usd = (state["cash_krw"] / fx
-                      * (1 - FEE_BP / 1e4) * (1 - GAP_BUFFER_BP / 1e4))
+    order_cash_usd = state["cash_krw"] / fx * (1 - FEE_BP / 1e4)
     holdings = {s: p["qty"] for s, p in state["positions"].items()}
-    orders = plan_orders(holdings, prices, order_cash_usd)
+    orders = plan_orders(holdings, prices, order_cash_usd,
+                         gap_buffer_bp=GAP_BUFFER_BP)
 
     spent_usd = sum(o["qty"] * o["est_price"] for o in orders)
     fee_usd = spent_usd * FEE_BP / 1e4

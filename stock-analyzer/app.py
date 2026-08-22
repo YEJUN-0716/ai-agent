@@ -1654,31 +1654,9 @@ def bt_signals_full(df):
     return total.fillna(50)
 
 
-# 시그널 채점 지평 — **거래일**이다. 달력일 21일은 15거래일쯤이라 저장소의
-# 다른 21일 지평(analyst_scorecard.HORIZONS)과 다른 자가 된다.
-SIGNAL_HORIZON_BARS = 21
-
-
-def score_signal(closes, entry_date, entry_price, horizon=SIGNAL_HORIZON_BARS):
-    """진입 후 `horizon` **거래일째** 종가로 수익률(%). 봉이 모자라면 None.
-
-    예전엔 "달력 21일이 지났으면 **지금 현재가**" 로 쟀다. 화면을 여는 날이
-    채점일이 되므로 60일 묵은 시그널을 오늘 열면 60일 수익률이 '21일 수익률'
-    로 적힌다. **채점 시점은 화면이 아니라 봉이 정한다.**
-
-    Streamlit·네트워크를 모른다 — 산술을 테스트로 잠글 수 있어야 한다.
-    """
-    if not entry_price or float(entry_price) <= 0 or closes is None or len(closes) == 0:
-        return None
-    idx = pd.to_datetime(closes.index)
-    if getattr(idx, 'tz', None) is not None:
-        idx = idx.tz_localize(None)
-    # 진입일 당일은 이미 체결된 값이라 세지 않는다.
-    after = pd.Series(closes.values, index=idx).dropna()
-    after = after[after.index > pd.Timestamp(entry_date)]
-    if len(after) < horizon:
-        return None
-    return round((float(after.iloc[horizon - 1]) / float(entry_price) - 1) * 100, 2)
+# 시그널 채점 규칙은 modules/signal_scorecard 가 소유한다 — 화면과 러너가
+# 같은 함수를 부른다. 여기 사본을 두면 한쪽만 고쳐진다(실제로 그랬다).
+from modules.signal_scorecard import score_signal  # noqa: E402
 
 
 def run_backtest(df, buy_th=65, sell_th=45, initial_capital=10_000_000,
@@ -6880,7 +6858,7 @@ def main():
                                 continue
                             _r = score_signal(_closes, _s['entry_date'], _s['entry_price'])
                             if _r is not None:
-                                _s['return_pct'] = _r
+                                _s.update(_r)
                                 _log_updated = True
                         if _log_updated:
                             try:

@@ -66,7 +66,8 @@ jobs:
       # 선행수익률을 계산해 두지 않으면 그 날은 영영 채점할 수 없다.
       #
       # 일봉 스텝이 끝난 뒤에 돈다. 앞 스텝이 실패하면 여기까지 안 오지만,
-      # 여기가 실패해도 일봉 기록은 이미 파일로 남아 다음 스텝이 커밋한다.
+      # 여기가 실패해도 일봉 기록은 이미 파일로 남아 다음 스텝이 커밋한다
+      # (그 커밋 스텝의 if: always() 가 그걸 보장한다 — 없으면 같이 버려진다).
       - name: 15분봉 점수 기록·채점
         env:
           PYTHONUTF8: "1"
@@ -74,6 +75,13 @@ jobs:
         run: python scripts/record_scalp_scores.py
 
       - name: 기록 커밋 (변경 있을 때만)
+        # always() 인 이유: 15분봉 스텝이 실패해도 **일봉 기록은 이미 파일로
+        # 남아 있다.** 이 줄이 없으면 스텝 실패가 커밋을 통째로 건너뛰어 그날
+        # 애널리스트 기록이 사라진다 — 성적표의 유일한 재료인데 하루치가
+        # 영영 안 돌아온다(analyst_log.write_days 가 연도 파일을 통째로 다시
+        # 쓰므로 나중에 백필로 메울 수도 없다).
+        # scorecard-publish.yml 이 같은 이유로 이미 always() 를 달고 있었다.
+        if: always()
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"

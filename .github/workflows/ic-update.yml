@@ -62,6 +62,9 @@ jobs:
         run: python ic_weight_updater.py
 
       - name: ic_weights.json 커밋
+        # always(): 가중치 파일은 스크립트 끝에서 한 번에 쓰인다. 뒤 스텝이
+        # 실패해도 이미 쓰인 파일은 커밋한다 — 다시 계산하는 데 30~60분이다.
+        if: always()
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"

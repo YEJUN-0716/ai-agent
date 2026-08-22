@@ -144,6 +144,9 @@ jobs:
         run: python paper_trade_runner_toss.py
 
       - name: 추적 파일 커밋 (고점·시그널·자본·가상 포트폴리오)
+        # always(): 장부는 정산 직후 이미 저장됐다. 뒤에서 죽어도 그때까지
+        # 확정된 체결·청산은 커밋한다 — 안 하면 그날 기록이 통째로 날아간다.
+        if: always()
         # 클라우드 러너로 옮기면서 PowerShell에서 bash로 되돌렸다. PowerShell을
         # 쓰던 이유는 자택 러너의 서비스 PATH에 bash.exe가 없어서였다("bash:
         # command not found"로 이 단계만 죽고, 매매 계산은 멀쩡히 끝나는데 결과만
