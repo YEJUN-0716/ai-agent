@@ -197,6 +197,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true", help="실제로 파일을 덮어쓴다")
     ap.add_argument("--workers", type=int, default=max(os.cpu_count() - 1, 1))
+    # 패널이 못 미쳐 건너뛴 날은 나중에 다시 돌게 된다. 그때 143,791건을 통째로
+    # 다시 재면 15분이 걸린다 — 그 며칠만 자를 수 있어야 한다.
+    ap.add_argument("--since", metavar="YYYY-MM-DD",
+                    help="이 날짜 이후의 기록만 본다 (앞은 손대지 않는다)")
     args = ap.parse_args()
 
     frames = load_frames()
@@ -210,6 +214,8 @@ def main():
     for by_path in stores.values():
         for rows in by_path.values():
             for row in rows:
+                if args.since and row["date"] < args.since:
+                    continue
                 for ticker, s in row["scores"].items():
                     if "ict" in s:
                         total += 1
@@ -235,6 +241,8 @@ def main():
     for by_path in stores.values():
         for rows in by_path.values():
             for row in rows:
+                if args.since and row["date"] < args.since:
+                    continue
                 rec = recover_weights(row["scores"])
                 if rec is None and any("verdict" in s for s in row["scores"].values()):
                     weight_skips.append(row["date"])

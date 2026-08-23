@@ -191,7 +191,18 @@ def _missing_tickers(cached: pd.DataFrame, tickers: list,
         truncated = [t for t in tickers
                      if t in have and (pd.isna(starts.get(t))
                                        or pd.Timestamp(starts[t]).normalize() > want_first + tol)]
-        missing = list(dict.fromkeys(missing + truncated))
+
+        # 끝쪽도 티커마다 본다. `needs_extension` 은 **패널 전체**의 마지막
+        # 날짜만 보므로, 60종목짜리 측정 스크립트가 인덱스를 오늘까지 밀어
+        # 놓으면 나머지 233종목은 '있음'으로 걸러져 영원히 낡은 채 돌아온다
+        # (실측 2026-08-17~21: 293종목 중 60종목만 봉이 있었고 캐시는
+        # "히트"라고 답했다). 시작 쪽 잘림과 같은 결함인데 한쪽만 고쳐져
+        # 있었다 — 비용도 같다, 이미 도는 일괄 다운로드에 열이 얹힐 뿐이다.
+        lasts = closes.apply(lambda s: s.last_valid_index())
+        stale = [t for t in tickers
+                 if t in have and (pd.isna(lasts.get(t))
+                                   or pd.Timestamp(lasts[t]).normalize() < want_last - tol)]
+        missing = list(dict.fromkeys(missing + truncated + stale))
     return missing, needs_extension
 
 
