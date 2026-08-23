@@ -115,7 +115,7 @@ def main() -> None:
           f"- 손익비 기준: T1 R:R >= {min_rr} (미달 셋업은 계획 자체가 무효)\n"
           f"- 체결 판정: 진입 구간에 되돌림 닿으면 체결, fill≤{FILL_WINDOW}봉 미도달이면 미체결\n"
           f"- 결판: 체결 후 hold≤{HOLD_WINDOW}봉 내 손절/목표 선착, 같은 봉이면 손절 우선(보수적)\n"
-          f"- R: 위험 1단위 기준. 목표=+R:R, 손절=-1.0, timeout=0\n\n"
+          f"- R: 위험 1단위 기준. 목표=+R:R, 손절=-1.0, timeout=보유 상한 다음 봉 시가에 판 R\n\n"
           f"```\n{body}\n```\n\n"
           f"생성: `python scripts/measure_trade_plan.py {bars} \"\" {min_rr}`\n")
     # 기준을 바꿔 돌린 결과가 프로덕션 기준 기록을 덮어쓰면 비교가 사라진다.

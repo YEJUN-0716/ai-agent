@@ -69,14 +69,32 @@ def test_sim_nofill():
     assert r["fill_idx"] is None
 
 
-def test_sim_timeout():
-    # 체결됐지만 손절(93)·목표(110) 어느 쪽도 홀드 기간 내 미도달
+def test_sim_timeout_sells_at_the_open_after_the_hold_window():
+    # 체결됐지만 손절(93)·목표(110) 어느 쪽도 홀드 기간 내 미도달.
+    # 장부는 그때 **보유 상한 다음 봉 시가**에 판다(virtual_broker.scan_plan_exit).
+    # 예전엔 여기서 0R 을 줬다 — 장부가 실제로 받는 손익이 통째로 사라졌다.
+    highs = _arr(100, 98, 99, 99, 99)
+    lows = _arr(99, 96, 97, 97, 97)
+    opens = _arr(100, 97, 98, 98, 99)     # 체결 j=1(entry_ref=96), 상한 넘긴 봉 k=4
+    r = bt._simulate_outcome(highs, lows, 0, "long", 95, 97, 93, 110, 3.0,
+                             fill_window=3, hold_window=3, opens=opens,
+                             entry_ref=96.0)
+    assert r["outcome"] == "timeout"
+    assert r["exit_idx"] == 4
+    assert r["r"] == 1.0                  # (99 − 96) / (96 − 93)
+
+
+def test_sim_open_when_the_exit_bar_is_past_the_panel():
+    # 청산 봉이 데이터 밖이면 장부는 아직 들고 있다(scan_plan_exit → None).
+    # "결판나서 본전(0R)" 과 섞으면 안 된다 — 별도 상태로 뺀다.
     highs = _arr(100, 98, 99, 99)
     lows = _arr(99, 96, 97, 97)
+    opens = _arr(100, 97, 98, 98)
     r = bt._simulate_outcome(highs, lows, 0, "long", 95, 97, 93, 110, 3.0,
-                             fill_window=3, hold_window=3)
-    assert r["outcome"] == "timeout"
-    assert r["r"] == 0.0
+                             fill_window=3, hold_window=3, opens=opens,
+                             entry_ref=96.0)
+    assert r["outcome"] == "open"
+    assert r["exit_idx"] is None
 
 
 # ── 걸 수 있는 체결가 ──────────────────────────────────────────────

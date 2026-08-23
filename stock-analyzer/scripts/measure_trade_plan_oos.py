@@ -52,8 +52,11 @@ PANEL = Path("data/price_panel_v1.parquet")
 OUT_DIR = Path("docs/measurements")
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 MIN_LEN = 120
-FILL_WINDOW = 15
-HOLD_WINDOW = 30
+# 러너 실설정을 그대로 쓴다 — `virtual_broker.LIMIT_FILL_WINDOW`/`PLAN_HOLD_WINDOW`
+# 와 같은 값이다. 예전에는 15/30 을 손으로 적어 뒀는데, 러너가 안 쓰는 창으로
+# 잰 숫자가 문서로 남아 "어느 판의 값인가" 를 잃어버렸다(2026-08-23).
+FILL_WINDOW = int(os.environ.get("FILL_WINDOW", bt.DEFAULT_FILL_WINDOW))
+HOLD_WINDOW = int(os.environ.get("HOLD_WINDOW", bt.DEFAULT_HOLD_WINDOW))
 
 # 2026-07-24 측정이 쓴 "최근 400봉" 의 시작. 이 날 이후가 필터를 고를 때 본
 # 구간이다. 숫자를 바꿀 일이 생기면 무엇을 본 적 있는지부터 다시 세야 한다.
@@ -168,11 +171,17 @@ def main() -> None:
           f"갭이면 그날 시가)로 채점한다 — 셋업·체결 봉·승패는 그대로고 "
           f"**R 만** 다시 낸 값이다 "
           f"(`modules/trade_plan_backtest.placeable_r`, 근거는 "
-          f"`2026-08-12-entry-rule-daily.md`)\n\n"
+          f"`2026-08-12-entry-rule-daily.md`)\n"
+          f"- **2026-08-23 정정 — timeout 을 장부와 같이 센다.** 예전에는 "
+          f"보유 상한을 넘긴 트레이드를 **0R**(안 판 것)로 셌는데, 장부는 "
+          f"상한 다음 봉 시가에 실제로 팔고 그 R 을 받는다"
+          f"(`virtual_broker.scan_plan_exit`). 지금은 백테스트도 그 값으로 "
+          f"센다. 청산 봉이 패널 밖이면 0R 이 아니라 **미결로 뺀다**\n\n"
           f"```\n{report}\n```\n\n"
           f"**{verdict}**\n\n"
           f"비교 대상 — 팩터 가중치 워크포워드(`data/walkforward_result.json`)는 "
           f"IS +0.0169 / OOS −0.0046, 과최적화 폭 +0.0215 였다.\n\n"
+          f"창: 체결 {FILL_WINDOW}봉 · 보유 {HOLD_WINDOW}봉 (러너와 같은 값)\n"
           f"생성: `python scripts/measure_trade_plan_oos.py`\n")
     out_path = OUT_DIR / f"{today}-trade-plan-oos.md"
     out_path.write_text(md, encoding="utf-8")

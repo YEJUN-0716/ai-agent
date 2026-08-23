@@ -45,7 +45,8 @@ import pandas as pd  # noqa: E402
 
 from modules.intraday_session import session_ids  # noqa: E402
 from modules.trade_plan import MIN_BARS, build_trade_plan  # noqa: E402
-from modules.trade_plan_backtest import _simulate_outcome, placeable_r  # noqa: E402
+from modules.trade_plan_backtest import (  # noqa: E402
+    DEFAULT_FILL_WINDOW, DEFAULT_HOLD_WINDOW, _simulate_outcome, placeable_r)
 from modules.stat_validation import permutation_test_trades  # noqa: E402
 
 # MODE=daily 로 **일봉**에도 같은 칼을 댄다. 15분봉에서 죽은 그 가정
@@ -55,16 +56,22 @@ MODE = os.environ.get("MODE", "intraday").strip().lower()
 DAILY = MODE == "daily"
 
 if DAILY:
-    # scripts/measure_trade_plan_oos.py 와 같은 값이라야 그 +0.58R 을 대표한다.
     PANEL = Path(os.environ.get("PANEL", "data/price_panel_v1.parquet"))
-    FILL_WINDOW, HOLD_WINDOW, MIN_LEN = 15, 30, 120
+    # 기본값은 **러너 실설정**(20/40 — virtual_broker.LIMIT_FILL_WINDOW /
+    # PLAN_HOLD_WINDOW 와 같은 값)이다. 발행 중인 숫자가 이 판이라 기본이
+    # 그것을 재현해야 한다. 예전 15/30 판은 FILL_WINDOW=15 HOLD_WINDOW=30.
+    _FILL, _HOLD, MIN_LEN = DEFAULT_FILL_WINDOW, DEFAULT_HOLD_WINDOW, 120
     COST_BPS = 40.0          # 왕복. 편도 20bp = 한국 증권사 미국주식 실제 자리
-    SUFFIX = "-daily"
 else:
     PANEL = Path(os.environ.get("PANEL", "data/intraday_panel_15m.parquet"))
-    FILL_WINDOW, HOLD_WINDOW, MIN_LEN = 8, 26, MIN_BARS   # 3a·러너와 같은 값
+    _FILL, _HOLD, MIN_LEN = 8, 26, MIN_BARS   # 3a·러너와 같은 값
     COST_BPS = 6.0
-    SUFFIX = ""
+
+FILL_WINDOW = int(os.environ.get("FILL_WINDOW", _FILL))
+HOLD_WINDOW = int(os.environ.get("HOLD_WINDOW", _HOLD))
+# 산출물 이름에 창을 적는다 — 창을 바꿔 돌린 판이 같은 파일을 덮어써서
+# "어느 설정으로 낸 값인지" 를 저장소에서 잃어버린 적이 있다(-daily-w20h40).
+SUFFIX = f"-daily-w{FILL_WINDOW}h{HOLD_WINDOW}" if DAILY else ""
 
 OUT_MD = Path(f"docs/measurements/2026-08-12-entry-rule{SUFFIX}.md")
 OUT_PARQUET = Path(f"data/entry_rule_trades{SUFFIX}.parquet")
@@ -197,8 +204,9 @@ def _run_ticker(args):
     highs = df["High"].to_numpy(dtype=float)
     lows = df["Low"].to_numpy(dtype=float)
     all_opens = df["Open"].to_numpy(dtype=float)
-    # 일봉은 스윙이라 세션 청산이 없다. 주면 마지막 봉마다 시가로 털어 버린다.
-    opens = None if DAILY else df["Open"].to_numpy(dtype=float)
+    # 세션 청산(EOD)을 켜는 건 sessions 다. opens 는 timeout 청산가(보유 상한
+    # 다음 봉 시가)에 항상 필요하므로 일봉에도 준다.
+    opens = all_opens
     sessions = None if DAILY else session_ids(df.index)
     n = len(df)
     rows = []
@@ -262,8 +270,12 @@ def _run_ticker(args):
 
 
 def _filled(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """체결된 것만. "skip" 은 그 라인에서 애초에 안 거는 셋업이라 함께 뺀다."""
-    return df[~df[f"{rule}_outcome"].isin(("nofill", "skip"))]
+    """체결돼서 **결판난 것만**.
+
+    "skip" 은 그 라인에서 애초에 안 거는 셋업이라 뺀다. "open" 은 체결은 됐지만
+    청산 봉이 패널 밖이라 아직 들고 있는 것 — R 이 없으니 0 으로 섞지 않는다.
+    """
+    return df[~df[f"{rule}_outcome"].isin(("nofill", "skip", "open"))]
 
 
 def _net(df: pd.DataFrame, rule: str, cost_bps: float = COST_BPS) -> np.ndarray:
@@ -363,7 +375,23 @@ def _signal_section(oos: pd.DataFrame) -> list[str]:
     ]
 
 
+def _sweep_line(sub: pd.DataFrame) -> dict:
+    """비용 스윕에서 **문장이 인용할 값**을 뽑는다.
+
+    산문에 숫자를 손으로 적으면 재측정 때 표와 어긋난다 — 2026-08-23 에 실제로
+    어긋났다(산문 +0.105R vs 표 +0.145R). 표를 만든 계산에서 그대로 받아 쓴다.
+    """
+    means = [_net(sub, "C_갭반영", cost_bps=c).mean() for c in COST_SWEEP]
+    ts = [_tstat(_net(sub, "C_갭반영", cost_bps=c)) for c in COST_SWEEP]
+    sr, ir = np.polyfit(COST_SWEEP, means, 1)
+    st, it = np.polyfit(COST_SWEEP, ts, 1)
+    i20 = list(COST_SWEEP).index(20.0)
+    return {"be": -ir / sr, "t2": (2.0 - it) / st,
+            "r20": means[i20], "t20": ts[i20]}
+
+
 def _cost_section(oos: pd.DataFrame, ins: pd.DataFrame) -> list[str]:
+    k = _sweep_line(oos[oos["actionable"]])
     return [
         "## 그런데 0 인 것은 **40bp 가정에서**다", "",
         "위 결론은 전부 왕복 40bp(편도 20bp — 한국 증권사 미국주식) 위에 서 "
@@ -371,9 +399,10 @@ def _cost_section(oos: pd.DataFrame, ins: pd.DataFrame) -> list[str]:
         "안 건드리고 **비용 가정만** 바꿔 넣으면 부호가 갈린다.", "",
         "프로덕션이 실제로 거는 것 (actionable · C_갭반영):", "",
         *_cost_sweep(oos, ins),
-        "**왕복 손익분기는 약 45bp(편도 22bp)다.** 한국 증권사 자리(40bp)가 "
-        "그 바로 밑에 붙어 있어 남는 게 0 으로 눌린 것이지, 규칙이 0 인 게 "
-        "아니다. 판정선(|t| ≥ 2)을 넘으려면 왕복 30bp 아래가 필요하다.", "",
+        f"**왕복 손익분기는 약 {k['be']:.0f}bp(편도 {k['be'] / 2:.0f}bp)다.** "
+        f"한국 증권사 자리(40bp)가 그 밑에 있어 남는 게 0 근처로 눌린 것이지, "
+        f"규칙이 0 인 게 아니다. 판정선(|t| ≥ 2)을 넘으려면 왕복 "
+        f"{k['t2']:.0f}bp 아래가 필요하다.", "",
         "**안 본 구간과 본 구간이 같은 방향으로 움직인다** — 비용을 낮췄을 때 "
         "한쪽만 살아나는 게 아니라 둘 다 살아난다. 과최적화로 만든 값이 아니다.", "",
         "**그래서 다음에 손볼 것은 신호가 아니라 비용이다.** Alpaca 는 커미션 "
@@ -413,7 +442,7 @@ def _phantom(df: pd.DataFrame, label: str) -> list[str]:
     "가격이 구간 상단까지만 왔는데 백테스트가 중간값에 사 준" 건이다. 그
     가격에 시장이 거래된 적이 없다.
     """
-    a = df[df["A_백테스트_outcome"] != "nofill"]
+    a = _filled(df, "A_백테스트")
     real = a[a["B_ref지정가_outcome"] != "nofill"]
     ph = a[a["B_ref지정가_outcome"] == "nofill"]
     if a.empty:
@@ -485,6 +514,8 @@ def _single_lines(df: pd.DataFrame) -> list[str]:
 
 
 def _write_report(df: pd.DataFrame, span: str) -> str:
+    # 산문이 인용하는 값은 표를 만든 계산에서 받아 쓴다 — 손으로 적지 않는다.
+    k = _sweep_line(df[df["actionable"] & (df["entry_date"] < IS_START)])
     if DAILY:
         head = [
             "# 진입 방식 — **일봉** 트레이드 플랜에 같은 칼을 댄다 (2026-08-12)",
@@ -527,8 +558,9 @@ def _write_report(df: pd.DataFrame, span: str) -> str:
             "Bullish OB(셋업 68%)의 **비용 전** 엣지가 +0.050R 인데 40bp 가 "
             "0.23R 이다 — 신호가 비용의 1/4 이다. 그래서 비용 가정만 바꿔 "
             "넣어 봤고(아래 \"0 인 것은 40bp 가정에서다\"), **왕복 20bp 에서 "
-            "actionable OOS 가 +0.105R (t +2.86) 로 살아난다.** 왕복 손익분기가 "
-            "약 45bp 인데 한국 증권사 자리(40bp)가 **그 바로 밑에 붙어 있어** "
+            f"actionable OOS 가 {k['r20']:+.3f}R (t {k['t20']:+.2f}) 로 "
+            f"살아난다.** 왕복 손익분기가 약 {k['be']:.0f}bp 인데 한국 증권사 "
+            "자리(40bp)가 **그 밑에 있어** "
             "남는 게 0 으로 눌린 것이다 — 규칙이 0 인 게 아니다.", "",
             f"279종목 일봉 · {span} · 왕복 {COST_BPS:.0f}bp(편도 20bp)", "",
         ]
@@ -657,7 +689,8 @@ def _write_report(df: pd.DataFrame, span: str) -> str:
         "좁혀서 다시 쟀고(D·E), 어느 라인도 양수가 아니다. 구간 폭은 "
         "**A 가 왜 그렇게 좋아 보였는지**를 설명하는 값이지, 고치면 되는 "
         "결함이 아니었다.", "",
-        f"생성: `MODE={MODE} python scripts/measure_entry_rule.py`", "",
+        f"생성: `MODE={MODE} FILL_WINDOW={FILL_WINDOW} HOLD_WINDOW={HOLD_WINDOW} "
+        f"python scripts/measure_entry_rule.py`", "",
     ]
     return "\n".join(body)
 

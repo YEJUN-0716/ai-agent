@@ -29,7 +29,8 @@ target_price 를 남기는 이유가 이것이다.
     비용(주당) = c × 진입가 + c × 청산가
     비용(R)    = 비용(주당) / |진입가 - 손절가|
 
-청산가는 win 이면 목표, loss 면 손절, timeout 이면 진입가로 본다.
+청산가는 win 이면 목표, loss 면 손절, timeout 이면 보유 상한 다음 봉 시가다
+(갭이면 그 시가 — `placeable_r` 이 걸 수 있는 값으로 다시 낸다).
 
 ## 어느 비용 수준을 봐야 하나
 
@@ -59,8 +60,10 @@ CACHE = Path("data/trade_plan_trades.parquet")     # data/* 는 gitignore 대상
 OUT_DIR = Path("docs/measurements")
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 MIN_LEN = 120
-FILL_WINDOW = 15
-HOLD_WINDOW = 30
+# 러너 실설정을 그대로 쓴다 — `virtual_broker.LIMIT_FILL_WINDOW`/`PLAN_HOLD_WINDOW`
+# 와 같은 값이다. 손으로 적어 둔 15/30 은 러너가 안 쓰는 창이었다(2026-08-23).
+FILL_WINDOW = int(os.environ.get("FILL_WINDOW", bt.DEFAULT_FILL_WINDOW))
+HOLD_WINDOW = int(os.environ.get("HOLD_WINDOW", bt.DEFAULT_HOLD_WINDOW))
 
 # 편도 비용(bp). 왕복은 이 값의 두 배가 든다.
 COST_BP = [0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]
@@ -76,7 +79,8 @@ def _run_ticker(args):
         df, fill_window=FILL_WINDOW, hold_window=HOLD_WINDOW)
     rows = []
     for t in out["trades"]:
-        if t["outcome"] == "nofill":
+        # "open" = 청산 봉이 패널 밖이라 아직 들고 있다 — 손익이 아직 없다.
+        if t["outcome"] in ("nofill", "open"):
             continue                       # 체결 안 된 셋업은 비용도 안 든다
         rows.append({
             "ticker": tk, "entry_date": df.index[t["idx"]],
@@ -234,7 +238,7 @@ def main() -> None:
           f"- 체결 {len(df):,}건 · {raw['entry_date'].min().date()} ~ "
           f"{raw['entry_date'].max().date()}\n"
           f"- 비용(R) = (체결가 + 청산가) × 편도비용 / |entry_ref − 손절가|\n"
-          f"- 청산가: win=목표, loss=손절, timeout=체결가\n"
+          f"- 청산가: win=목표, loss=손절, timeout=보유 상한 다음 봉 시가\n"
           f"- **2026-08-16 정정 ①.** 체결가는 러너가 거는 지정가(구간 상단, "
           f"갭이면 그날 시가)다 — 예전 판은 여기에 구간 중간값을 넣어 "
           f"손익분기를 편도 45.8bp 로 냈다. 걸 수 없는 가격이었다\n"
@@ -242,6 +246,8 @@ def main() -> None:
           f"갭하면 그날 시가에 나간다 — 롱 손절의 **13.5%** 가 손절가보다 "
           f"나쁘게 청산된다. 손절가를 그대로 적던 판은 전체 손익분기를 "
           f"11.7bp 로 냈다\n"
+          f"- **2026-08-23 정정 ③.** timeout 을 장부와 같이 센다 — 보유 상한 "
+          f"다음 봉 시가에 실제로 판 값이다. 예전 판은 0R(안 판 것)로 셌다\n"
           f"- 표의 숫자는 **그 비용에서의 평균 순 R** (체결 트레이드 기준)\n\n"
           f"```\n{report}\n```\n\n"
           f"**전체 손익분기: 편도 {be:.1f}bp (왕복 {be * 2:.1f}bp)**\n\n"

@@ -109,7 +109,7 @@ def _net_r(trades: list[dict], cost_bps: float = COST_BPS) -> list[float]:
     """
     out = []
     for t in trades:
-        if t["outcome"] == "nofill":
+        if t["outcome"] in ("nofill", "open"):    # 아직 안 판 것은 손익이 없다
             continue
         rp = t["risk_pct"]
         cost_r = (cost_bps / 10000.0) / rp if rp and rp == rp else float("nan")

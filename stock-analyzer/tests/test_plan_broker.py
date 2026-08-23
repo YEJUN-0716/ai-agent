@@ -74,6 +74,32 @@ def test_position_times_out_at_the_open_after_the_hold_window():
     assert vb.scan_plan_exit(quiet[:-1], stop=90.0, target=115.0) is None
 
 
+def test_backtest_and_ledger_time_out_at_the_same_price():
+    """같은 가격 경로에서 두 자가 같은 R 을 내야 한다.
+
+    2026-08-23 이전에는 갈라져 있었다: 장부는 보유 상한 다음 봉 시가에 실제로
+    팔고 그 R 을 받는데, 백테스트는 timeout 을 **0R** 로 셌다("안 판 것").
+    그 차이가 발행 중인 기대값보다 컸다.
+    """
+    path = [(100.0, 101.0, 99.0, 100.0)] * vb.PLAN_HOLD_WINDOW + [(103.0, 104.0, 102.0, 103.0)]
+    stop, target, entry_ref = 90.0, 200.0, 100.0
+
+    ledger = vb.scan_plan_exit(bars(*path), stop=stop, target=target)
+    assert ledger["outcome"] == "timeout"
+    ledger_r = vb.realized_r(entry_ref, stop, ledger["price"], entry_ref)
+
+    # 백테스트는 start_idx 다음 봉부터 체결을 찾는다 — 앞에 한 봉을 더 붙인다.
+    full = [(100.0, 100.0, 100.0, 100.0)] + list(path)
+    highs = np.array([b[1] for b in full])
+    lows = np.array([b[2] for b in full])
+    opens = np.array([b[0] for b in full])
+    sim = bt._simulate_outcome(
+        highs, lows, 0, "long", 99.0, 101.0, stop, target, 10.0,
+        hold_window=vb.PLAN_HOLD_WINDOW, opens=opens, entry_ref=entry_ref)
+    assert sim["outcome"] == "timeout"
+    assert sim["r"] == pytest.approx(ledger_r)
+
+
 def test_realized_r_divides_by_plan_risk_not_by_the_fill():
     # 분모는 러너가 사이징한 값(entry_ref − stop)이다. 백테스트와 같은 자.
     # 구간 상단(101)에 채워지면 실제 주당 위험이 계획(5)보다 넓으므로
