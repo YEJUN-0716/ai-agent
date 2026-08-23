@@ -63,7 +63,7 @@ except Exception:
     _ML_AVAILABLE = False
 
 try:
-    from modules.risk_management import run_backtest_sized, kelly_fraction
+    from modules.risk_management import KELLY_CAP, run_backtest_sized, kelly_fraction
     _RISK_MGMT_ENABLED = True
 except Exception:
     _RISK_MGMT_ENABLED = False
@@ -6782,11 +6782,21 @@ def main():
                 _sl_path_w = os.path.join(os.path.dirname(__file__), "signal_log.json")
                 _buy_acts  = [a for a in actions if '매수' in a['action']]
                 if _buy_acts:
+                    # 읽기가 실패하면 **쓰지 않는다.** 예전에는 예외를 삼키고
+                    # 빈 목록으로 이어 갔는데, 바로 아래 `open(w)` 가 파일을
+                    # 자르므로 기존 기록이 통째로 사라졌다(실측 재현: 30건
+                    # 8,979바이트 → 131바이트 깨진 JSON, 그 뒤 러너·워커·비서
+                    # 전부 0건). 못 읽은 파일을 덮어쓰는 것보다 안 쓰는 게 낫다.
                     _existing_w: dict = {}
+                    _read_ok = True
                     if os.path.exists(_sl_path_w):
                         try:
-                            with open(_sl_path_w) as _fw: _existing_w = _json_w.load(_fw)
-                        except Exception: pass
+                            with open(_sl_path_w, encoding='utf-8') as _fw:
+                                _existing_w = _json_w.load(_fw)
+                        except Exception as _ew:
+                            _read_ok = False
+                            st.error(f"signal_log.json 을 읽지 못해 기록을 건너뜁니다 "
+                                     f"— {type(_ew).__name__}. 파일을 확인하십시오.")
                     _sigs_w = _existing_w.get('signals', [])
                     _today_w = datetime.now().strftime('%Y-%m-%d')
                     _existing_keys = {(s.get('symbol'), s.get('entry_date')) for s in _sigs_w}
@@ -6800,9 +6810,11 @@ def main():
                                             'reason': _a['reason'], 'source': 'app',
                                             'return_pct': None})
                     try:
-                        with open(_sl_path_w, 'w') as _fw2:
-                            _json_w.dump({'signals': _sigs_w}, _fw2, ensure_ascii=False, indent=2)
-                        signal_pipeline_status.clear()
+                        if _read_ok:
+                            with open(_sl_path_w, 'w', encoding='utf-8') as _fw2:
+                                _json_w.dump({'signals': _sigs_w}, _fw2,
+                                             ensure_ascii=False, indent=2)
+                            signal_pipeline_status.clear()
                     except Exception: pass
 
             if 'qt_signals' in st.session_state:
@@ -6860,8 +6872,9 @@ def main():
                         _kk1.metric("Kelly 비율 (Full)", f"{_kf_full*100:.1f}%", "이론 최적")
                         _kk2.metric("Half-Kelly (권장)", f"{_kf*100:.1f}%", "실전 사용")
                         _kk3.metric("$10,000 기준", f"${10000*_kf:,.0f}", "종목당 투입")
-                        if _kf > 0.20:
-                            st.warning("Kelly 비율이 20% 초과 — cap 적용됨. 변동성 큰 전략입니다.")
+                        if _kf >= KELLY_CAP:
+                            st.warning(f"Kelly 비율이 상한 {KELLY_CAP*100:.0f}% 에 걸렸습니다. "
+                                       "변동성 큰 전략입니다.")
                         elif _kf < 0.05:
                             st.info("Kelly 비율이 낮음 — 승률 또는 손익비를 개선하거나 포지션 축소 권장.")
                         st.caption("Kelly 공식: f* = (p×b − q) / b, b=avg_win/avg_loss, Half-Kelly = f*/2")
@@ -6958,7 +6971,7 @@ def main():
             _sl_path = os.path.join(os.path.dirname(__file__), "signal_log.json")
             if os.path.exists(_sl_path):
                 try:
-                    with open(_sl_path) as _slf:
+                    with open(_sl_path, encoding='utf-8') as _slf:
                         _sl_data = _json.load(_slf).get("signals", [])
 
                     # 미평가 시그널 → 진입 후 21**거래일**째 종가로 채점.
@@ -6995,7 +7008,7 @@ def main():
                                 _log_updated = True
                         if _log_updated:
                             try:
-                                with open(_sl_path, 'w') as _slf2:
+                                with open(_sl_path, 'w', encoding='utf-8') as _slf2:
                                     _json.dump({'signals': _sl_data}, _slf2,
                                                ensure_ascii=False, indent=2)
                                 signal_pipeline_status.clear()
@@ -7448,7 +7461,7 @@ def main():
                         textposition='outside', textfont=dict(size=11)))
                     fig_bar.add_hline(y=0, line_color=TV_TEXT, line_width=1, opacity=0.4)
                     fig_bar.update_layout(
-                        title=dict(text=f"점수 구간별 평균 20일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
+                        title=dict(text=f"점수 구간별 평균 20거래일 후 수익률 (n={len(cr20['scatter'])})", font=dict(size=13)),
                         height=340, plot_bgcolor=TV_BG, paper_bgcolor=TV_PAPER,
                         font=dict(color=TV_TEXT),
                         xaxis=dict(title='신호 점수 구간', gridcolor=TV_GRID),
