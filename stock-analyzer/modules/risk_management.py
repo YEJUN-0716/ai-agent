@@ -51,8 +51,14 @@ def signal_strength_weight(signal: float, buy_th: float, max_signal: float = 100
 # ─────────────────────────────────────────────
 # 3) Kelly 공식 — 이 저장소의 유일한 사본
 # ─────────────────────────────────────────────
+# 상한을 여기가 소유한다. 화면 경고문이 "20% 초과 — cap 적용됨" 이라고 손으로
+# 적어 두고 있었는데 실제 상한은 25% 였다 — 20~25% 구간에선 안 걸린 cap 이
+# 걸렸다고 말했다. 문장은 이 값을 읽는다.
+KELLY_CAP = 0.25
+
+
 def kelly_fraction(win_rate: float, avg_win_pct: float, avg_loss_pct: float,
-                    half_kelly: bool = True, cap: float = 0.25) -> float:
+                    half_kelly: bool = True, cap: float = KELLY_CAP) -> float:
     """Kelly Criterion 최적 투입 비율. half_kelly=True 권장.
 
     **이 저장소에 사본을 만들지 말 것.** app.py 에 `avg_loss_pct <= 0 → 0.0`

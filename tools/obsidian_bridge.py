@@ -265,7 +265,7 @@ def _push_signals(home: list[str] | None = None) -> int:
     lines = [f"# 📈 매수 신호 (최근 {len(recent)}건)", "",
              MANAGED_TAG, "",
              f"갱신: {datetime.now():%Y-%m-%d %H:%M}", "",
-             "| 날짜 | 종목 | 액션 | 진입가 | 21일 수익률 |",
+             "| 날짜 | 종목 | 액션 | 진입가 | 21거래일 수익률 |",
              "|---|---|---|---|---|"]
     for s in recent:
         ret = s.get("return_pct")
