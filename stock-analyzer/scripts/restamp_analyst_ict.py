@@ -3,6 +3,8 @@
 
     python scripts/restamp_analyst_ict.py            # 미리보기 (안 쓴다)
     python scripts/restamp_analyst_ict.py --write    # 실제로 덮어쓴다
+    python scripts/restamp_analyst_ict.py --scalp    # 15분봉 기록(data/scalp_log)
+    python scripts/restamp_analyst_ict.py --since 2026-08-15   # 그 날 이후만
 
 ## 왜 필요한가
 
@@ -12,6 +14,11 @@
 점수가 평균 49.4점 어긋났고, 그 값이 `data/analyst_log*` 에 그대로 남아 있다.
 
 ## 무엇을 건드리는가
+
+일봉 기록(`data/analyst_log*`)이 기본이고, `--scalp` 이면 15분봉
+기록(`data/scalp_log`)을 같은 규칙으로 찍는다. 15분봉은 저장된 패널이 없어
+매번 새로 받아야 하고 yfinance 가 60일 지난 봉을 안 준다 — **분봉 기록은
+60일 안에 고쳐야 한다.**
 
 **`ict` 만 다시 찍는다.** `chart` 는 손대지 않는다 — 야후가 배당·분할로 과거
 수정주가를 계속 갱신하기 때문에 지금 다시 계산하면 그날 화면에 뜬 값과
@@ -58,6 +65,12 @@ MIN_BARS = 60
 PANEL = os.path.join("data", "price_panel_v1.parquet")
 STORES = (os.path.join("data", "analyst_log_backfill"),
           os.path.join("data", "analyst_log"))
+# 15분봉 기록(--scalp). 창은 일봉처럼 날짜가 아니라 기준봉(asof)이 잡는다.
+SCALP_STORES = (os.path.join("data", "scalp_log"),)
+SCALP_MIN_BARS = 26 * 5          # signal_worker.SCALP_MIN_BARS 와 같아야 한다
+# 분봉은 저장된 패널이 없다 — 받은 걸 여기 두고 미리보기와 --write 가 **같은
+# 봉**을 본다. 두 번 받으면 미리보기에서 승인한 숫자가 아닌 게 써진다.
+SCALP_PANEL_CACHE = os.path.join(".tmp", "restamp_scalp_panel.parquet")
 DECIMALS = 1
 # 가중치 되찾기 — 저장된 점수가 소수 1자리라 잔차는 반올림 크기를 넘지 않아야
 # 한다. 넘으면 verdict 가 세 점수의 가중평균이 아니라는 뜻이므로 손대지 않는다.
@@ -105,8 +118,8 @@ def legacy_find_bos_choch(df, swings):
 
 
 def _score_ticker(task):
-    """한 종목의 (날짜 → (옛값, 새값)). 새값은 순서가 실제로 갈린 날만 다시 잰다."""
-    ticker, df, dates = task
+    """한 종목의 (기록키 → (옛값, 새값)). 새값은 순서가 실제로 갈린 날만 다시 잰다."""
+    ticker, df, keys, window_days, min_bars = task
     import modules.ict_analysis as ict
     from modules.analyst_team import ict_score
 
@@ -128,12 +141,14 @@ def _score_ticker(task):
                                ict.calc_ict_adjustment(cut)["adjustment"]), DECIMALS)
 
     out = {}
-    for date in dates:
-        asof = pd.Timestamp(date)
-        cut = df[(df.index <= asof) & (df.index > asof - pd.Timedelta(days=WINDOW_DAYS))]
-        # 마지막 봉이 그 날짜여야 한다. 휴장일이나 패널이 못 미치는 날은 건너뛴다 —
-        # 다른 날의 구조로 그 날 점수를 덮어쓰면 수리가 아니라 훼손이다.
-        if len(cut) < MIN_BARS or cut.index[-1] != asof:
+    for key in keys:
+        asof = pd.Timestamp(key)
+        cut = df[df.index <= asof]
+        if window_days:
+            cut = cut[cut.index > asof - pd.Timedelta(days=window_days)]
+        # 마지막 봉이 그 시각이어야 한다. 휴장일이나 패널이 못 미치는 기록은
+        # 건너뛴다 — 다른 봉의 구조로 그 기록을 덮어쓰면 수리가 아니라 훼손이다.
+        if len(cut) < min_bars or cut.index[-1] != asof:
             continue
         state["split"] = False
         ict.find_bos_choch = legacy_spy
@@ -144,7 +159,7 @@ def _score_ticker(task):
         else:
             new = old                      # 순서가 안 갈렸으면 고쳐도 같은 값이다
         ict.find_bos_choch = fixed
-        out[date] = (old, new)
+        out[key] = (old, new)
     return ticker, out
 
 
@@ -181,6 +196,38 @@ def load_frames():
     return frames
 
 
+def load_scalp_frames(tickers):
+    """15분봉 프레임 — 받아서 캐시에 둔다(미리보기와 --write 가 같은 봉을 봐야 한다).
+
+    저장된 분봉 패널이 없어서 매번 새로 받아야 하는데, yfinance 는 60일 지난
+    봉을 안 준다. 즉 **기록이 오래되면 재현이 불가능해진다** — scalp_log 를
+    고치려면 60일 안에 해야 한다. 지금 재현율은 99.1%(3,262/3,291) 다.
+    """
+    if os.path.exists(SCALP_PANEL_CACHE):
+        panel = pd.read_parquet(SCALP_PANEL_CACHE)
+        print(f"분봉 캐시 사용: {SCALP_PANEL_CACHE} (지우면 다시 받는다)")
+    else:
+        from modules import price_panel
+        panel = price_panel._download_chunked(
+            tickers, period=price_panel.INTRADAY_PERIOD,
+            interval=price_panel.INTRADAY_INTERVAL)
+        if panel.empty:
+            return {}
+        # 기록의 asof 와 같은 축이어야 한다 (price_panel.load_intraday 와 같은 규칙).
+        if getattr(panel.index, "tz", None) is not None:
+            panel.index = panel.index.tz_convert("UTC").tz_localize(None)
+        os.makedirs(os.path.dirname(SCALP_PANEL_CACHE) or ".", exist_ok=True)
+        panel.to_parquet(SCALP_PANEL_CACHE)
+
+    frames = {}
+    for ticker in sorted(set(panel.columns.get_level_values(1))):
+        df = pd.DataFrame({f: panel[(f, ticker)]
+                           for f in ("Open", "High", "Low", "Close")}).dropna()
+        if len(df) >= SCALP_MIN_BARS:
+            frames[ticker] = df
+    return frames
+
+
 def load_store(root):
     """{연도파일: [행, ...]} — 줄 순서를 그대로 지킨다."""
     out = {}
@@ -201,15 +248,19 @@ def main():
     # 다시 재면 15분이 걸린다 — 그 며칠만 자를 수 있어야 한다.
     ap.add_argument("--since", metavar="YYYY-MM-DD",
                     help="이 날짜 이후의 기록만 본다 (앞은 손대지 않는다)")
+    ap.add_argument("--scalp", action="store_true",
+                    help="일봉(data/analyst_log*) 대신 15분봉(data/scalp_log)을 찍는다")
     args = ap.parse_args()
 
-    frames = load_frames()
-    print(f"패널 {len(frames)}종목 · "
-          f"{min(f.index[0] for f in frames.values()).date()} ~ "
-          f"{max(f.index[-1] for f in frames.values()).date()}")
+    stores = {root: load_store(root)
+              for root in (SCALP_STORES if args.scalp else STORES)}
 
-    stores = {root: load_store(root) for root in STORES}
-    wanted = {}                                   # ticker -> {날짜}
+    # 기록을 여는 키 — 일봉은 날짜, 15분봉은 기준봉(asof)이다. 15분봉은 하루에
+    # 봉이 26개라 날짜만으로는 어느 봉의 구조인지 알 수 없다.
+    def row_key(row):
+        return row["asof"] if args.scalp else row["date"]
+
+    wanted = {}                                   # ticker -> {기록키}
     total = 0
     for by_path in stores.values():
         for rows in by_path.values():
@@ -219,10 +270,24 @@ def main():
                 for ticker, s in row["scores"].items():
                     if "ict" in s:
                         total += 1
-                        wanted.setdefault(ticker, set()).add(row["date"])
+                        wanted.setdefault(ticker, set()).add(row_key(row))
     print(f"ict 가 있는 기록 {total:,}건 · 종목 {len(wanted)}")
 
-    tasks = [(t, frames[t], sorted(d)) for t, d in sorted(wanted.items()) if t in frames]
+    if args.scalp:
+        frames = load_scalp_frames(sorted(wanted))
+        window, min_bars = None, SCALP_MIN_BARS
+    else:
+        frames = load_frames()
+        window, min_bars = WINDOW_DAYS, MIN_BARS
+    if not frames:
+        print("봉을 하나도 못 받았다 — 아무것도 안 한다.", file=sys.stderr)
+        return 1
+    print(f"패널 {len(frames)}종목 · "
+          f"{min(f.index[0] for f in frames.values())} ~ "
+          f"{max(f.index[-1] for f in frames.values())}")
+
+    tasks = [(t, frames[t], sorted(d), window, min_bars)
+             for t, d in sorted(wanted.items()) if t in frames]
     missing = sorted(set(wanted) - set(frames))
     if missing:
         print(f"패널에 없는 종목 {len(missing)}: {', '.join(missing[:8])}")
@@ -254,7 +319,7 @@ def main():
                     if per_date is None:
                         stats["no_ticker"] += 1
                         continue
-                    pair = per_date.get(row["date"])
+                    pair = per_date.get(row_key(row))
                     if pair is None:
                         stats["no_bars"] += 1
                         continue
