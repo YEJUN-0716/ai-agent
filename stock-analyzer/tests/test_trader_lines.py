@@ -206,14 +206,16 @@ def test_gate_badge_on_a_setup_that_clears_the_gate(flat_df, monkeypatch):
     """딱지는 **통과했다는 사실**만 말한다.
 
     2026-08-12 까지는 "✅ 추천" 이었다. 그 말이 약속하는 초과수익이 측정에서
-    안 나왔다 — 걸 수 있는 진입·청산으로 재면 편도 20bp 후 +0.04R 이다
+    안 나왔다 — 걸 수 있는 진입·청산으로 재면 편도 20bp 후 +0.06R 이다
     (2026-08-16 재측정). 게이트는 남기되 문구는 게이트가 하는 일에 맞춘다.
     """
     html = _card_html(flat_df, monkeypatch, _plan())
 
     assert '실행 문턱 통과' in html
     assert '추천' not in html          # 다시 기어들어오면 여기서 잡는다
-    assert '+0.04R' in html            # 근거 수치를 같이 낸다
+    # 수치는 MEASURED_EDGE_NOTE 한 곳에만 산다 — 여기 베껴 적으면 또 갈린다.
+    from modules.trade_plan import MEASURED_EDGE_NOTE
+    assert MEASURED_EDGE_NOTE in html  # 근거 수치를 같이 낸다
 
 
 def test_no_recommendation_when_the_reward_does_not_cover_the_risk(flat_df, monkeypatch):

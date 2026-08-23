@@ -201,7 +201,7 @@ def _stats(trades: list[dict]) -> dict:
         "timeouts": len([t for t in trades if t["outcome"] == "timeout"]),
         "eod_exits": len([t for t in trades if t["outcome"] == "eod"]),
         "win_rate": (len(wins) / len(resolved)) if resolved else float("nan"),
-        # avg_r: timeout 을 0 으로 포함한 체결 트레이드 평균 (실현 기대 R)
+        # avg_r: 체결 트레이드 전체 평균 — timeout 도 실제 청산 R 로 들어간다
         "avg_r": (sum(t["r"] for t in filled) / len(filled)) if filled else float("nan"),
         # expectancy_r: 결판난 트레이드만의 기대값
         "expectancy_r": (sum(t["r"] for t in resolved) / len(resolved)) if resolved else float("nan"),

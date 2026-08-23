@@ -75,27 +75,26 @@ def test_runner_stats_match_backtest_definitions():
     """같은 트레이드 집합이면 승률·기대값·평균이 세 자리까지 같아야 한다.
 
     예전에는 러너가 승률 분모에 timeout 을 넣고 백테스트는 뺐다. 이름
-    `avg_r` 도 백테스트에서는 '체결 전체(timeout=0)' 인데 러너에서는
-    '결판 평균' 이었다. 두 자가 갈리면 "장부가 백테스트 근처에 있나" 를
-    물을 수 없다.
+    `avg_r` 도 백테스트에서는 '체결 전체' 인데 러너에서는 '결판 평균'
+    이었다. 두 자가 갈리면 "장부가 백테스트 근처에 있나" 를 물을 수 없다.
     """
     from modules.trade_plan_backtest import _stats
 
     cases = [("win", 2.0), ("win", 1.5), ("loss", -1.4), ("loss", -1.0),
              ("timeout", 0.8), ("timeout", -0.3)]
     mine = runner.plan_trade_summary([_ledger(o, r) for o, r in cases])
-    theirs = _stats([_bt(o, 0.0 if o == "timeout" else r) for o, r in cases])
+    theirs = _stats([_bt(o, r) for o, r in cases])
 
     assert mine["win_rate"] == pytest.approx(theirs["win_rate"] * 100, abs=0.05)
     assert mine["expectancy_r"] == pytest.approx(theirs["expectancy_r"], abs=5e-4)
     assert mine["avg_r"] == pytest.approx(theirs["avg_r"], abs=5e-4)
 
 
-def test_timeout_is_kept_out_of_win_rate_but_shown_as_realized():
-    """timeout 은 승률 분모에서 빠지고, 실제로 받은 R 은 따로 남는다."""
+def test_timeout_is_kept_out_of_win_rate_but_counted_at_its_real_r():
+    """timeout 은 승률 분모에서 빠지고, 평균R 에는 실제로 받은 R 로 들어간다."""
     s = runner.plan_trade_summary([
         _ledger("win", 2.0), _ledger("loss", -1.0), _ledger("timeout", 1.9)])
     assert s["n_decided"] == 2 and s["n_timeout"] == 1
     assert s["win_rate"] == pytest.approx(50.0)          # 1/2, 1/3 이 아니다
-    assert s["avg_r"] == pytest.approx((2.0 - 1.0 + 0.0) / 3, abs=5e-4)
-    assert s["avg_r_realized"] == pytest.approx((2.0 - 1.0 + 1.9) / 3, abs=5e-4)
+    assert s["avg_r"] == pytest.approx((2.0 - 1.0 + 1.9) / 3, abs=5e-4)
+    assert "avg_r_realized" not in s        # 자가 둘로 갈라지면 여기서 걸린다

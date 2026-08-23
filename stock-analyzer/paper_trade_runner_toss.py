@@ -578,18 +578,15 @@ def plan_trade_summary(trades: list) -> dict:
     것을 가리키면 "장부가 백테스트 근처에 있나" 라는 이 줄의 유일한 용도가
     사라진다. 실측(60종목 6년 · 롱 체결 1,984건): 승률 38.7% 대 38.0%.
 
-      avg_r         체결 전체 평균. **timeout 은 0** — 백테스트가 그렇게 센다
+      avg_r         체결 전체 평균. timeout 도 **실제 청산 R** 로 센다
       expectancy_r  결판(win+loss)만의 기대값
       win_rate      wins ÷ (wins+losses) — timeout 제외
 
-    ⚠️ **avg_r 의 timeout=0 은 백테스트 쪽 결함이다.** 장부는 40거래일째 시가에
-    실제로 팔고 그 R 을 받는데(`virtual_broker.scan_plan_exit`), 백테스트는
-    "안 판 것"으로 0 을 준다(`trade_plan_backtest.placeable_r`). 실측으로 그
-    차이는 +0.0287R 이고, 비교 기준선인 +0.022R 보다 크다 — timeout 35건의
-    실제 R 이 평균 +1.96R 이기 때문이다(40봉을 버티며 손절도 안 맞은 셋업은
-    대체로 올라 있다). 여기서 백테스트를 고치지 않은 이유는 measure_entry_rule
-    재측정과 MEASURED_EDGE_NOTE 갱신이 같이 따라와야 해서다. 그때까지 실제 값은
-    `avg_r_realized` 로 따로 낸다 — 감추지는 않는다.
+    2026-08-23 이전에는 avg_r 이 timeout 을 0 으로 셌다 — 백테스트가 그랬기
+    때문이다. 장부는 보유 상한 다음 봉 시가에 실제로 팔고 그 R 을 받으므로
+    (`virtual_broker.scan_plan_exit`) 그쪽이 맞았고, 백테스트를 고쳤다
+    (PR #179). 이제 두 자가 같은 것을 센다 — `avg_r_realized` 라는 별도 값도
+    없다. 보정 폭은 OOS 에서 +0.0223R → +0.0618R 이었다.
 
     체결률을 함께 낸다 — 미체결 폐기를 빼고 세면 승률이 부풀어 보인다
     (백테스트에서 셋업의 36% 가 진입구간 미도달로 사라졌다).
@@ -603,8 +600,6 @@ def plan_trade_summary(trades: list) -> dict:
     decided  = wins + losses
     n_timeout = len(resolved) - len(decided)
     n_setups = len(filled) + len(nofill)
-    r_bt = [0.0 if t.get("outcome") == "timeout" else float(t["r_realized"])
-            for t in resolved]
     r_real = [float(t["r_realized"]) for t in resolved]
     return {
         "n_setups":       n_setups,
@@ -612,8 +607,7 @@ def plan_trade_summary(trades: list) -> dict:
         "n_resolved":     len(resolved),
         "n_decided":      len(decided),
         "n_timeout":      n_timeout,
-        "avg_r":          round(float(np.mean(r_bt)), 3) if resolved else 0.0,
-        "avg_r_realized": round(float(np.mean(r_real)), 3) if resolved else 0.0,
+        "avg_r":          round(float(np.mean(r_real)), 3) if resolved else 0.0,
         "expectancy_r":   round(float(np.mean(
                               [float(t["r_realized"]) for t in decided])), 3)
                           if decided else 0.0,
@@ -1215,14 +1209,6 @@ def main():
             f"승률 {plan_perf['win_rate']:.0f}%  "
             f"체결률 {plan_perf['fill_rate']:.0f}%"
         )
-        # timeout 이 있는 날만 붙인다. 백테스트가 그걸 0R 로 세기 때문에 위
-        # 평균은 실제로 받은 R 이 아니다 — 어긋난 날엔 어긋났다고 적는다.
-        if plan_perf["n_timeout"]:
-            lines.append(
-                f"  ↳ 만기청산 {plan_perf['n_timeout']}건을 실제 청산가로 세면 "
-                f"평균 `{plan_perf['avg_r_realized']:+.2f}R` "
-                f"(위 평균은 백테스트와 같게 0R 로 센 값)"
-            )
 
     # 성과 지표
     if perf:
