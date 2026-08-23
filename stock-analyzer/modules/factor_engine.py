@@ -82,6 +82,19 @@ def get_market_regime() -> tuple:
     return regime, {"spy_ratio": round(spy_ratio, 3), "vix": round(vix_cur, 1)}
 
 
+# 직전 4분기의 분기말 간격 — 3분기 간격(273일) ± 허용(45일). quant_pit 이
+# 이 자를 그대로 쓴다(같은 질문에 자가 둘이면 안 된다).
+TTM_SPAN_DAYS, TTM_SPAN_TOL_DAYS = 273, 45
+
+
+def _ttm_window_ok(recent_q) -> bool:
+    """직전 4행이 실제로 1년치인가. `end` 열이 없으면 판단을 못 하므로 통과시킨다."""
+    if len(recent_q) != 4 or "end" not in recent_q.columns:
+        return len(recent_q) == 4
+    span = (recent_q["end"].iloc[-1] - recent_q["end"].iloc[0]).days
+    return abs(span - TTM_SPAN_DAYS) <= TTM_SPAN_TOL_DAYS
+
+
 def _ttm(recent_q, col):
     """recent_q 에서 col 의 TTM 합. 직전 4분기가 다 차지 않으면 NaN.
 
@@ -111,6 +124,8 @@ def point_in_time_fundamentals(tk: str, as_of_date, price: float,
       - fin_hist[tk]는 분기당 정확히 1행 (중복 기간 없음)
       - 인덱스는 실제 공시일(filed), **행 순서는 분기말(end)**
       - 따라서 tail(4)가 가장 최근 4개 분기 = TTM으로 유효하다
+      - `end`(분기말) 열이 있으면 그 4행이 정말 1년치인지 여기서 확인한다.
+        분기가 빠진 구간(실측 2년 창 1.87%·19종목, 중위 366일)은 아예 안 낸다.
     이 계약이 깨지면 (예: 중복 분기, 연간 행 혼입) TTM이 조용히 부풀려진다.
     filed 는 단조가 아니다(옛 분기가 뒤늦게 처음 공시된다) — 아래 `<= as_of` 는
     순서를 안 건드리는 **마스크**여야 하고, `.loc[:as_of]` 슬라이스면 안 된다.
@@ -130,6 +145,11 @@ def point_in_time_fundamentals(tk: str, as_of_date, price: float,
             return out
 
         recent_q = past.tail(4)
+        # 분기가 빠진 구간에서는 tail(4) 가 1년이 아니다 — 15개월에 걸친 네
+        # 분기를 TTM 이라 부르면 합이 조용히 어긋난다. 이 자리에서 걸러야
+        # net_ttm 에 기대는 PER·마진·ROE·FCF 가 한꺼번에 안 나온다.
+        if not _ttm_window_ok(recent_q):
+            return out
         net_ttm   = _ttm(recent_q, "net_income")
         rev_ttm   = _ttm(recent_q, "revenue")
         op_ttm    = _ttm(recent_q, "operating_income")
