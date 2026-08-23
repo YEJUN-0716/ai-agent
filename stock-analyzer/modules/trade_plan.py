@@ -316,7 +316,7 @@ ACTIONABLE_GRADES = ("A", "B")
 ACTIONABLE_DIRECTIONS = ("long",)
 # 화면·알림이 인용하는 실측 한 줄. 숫자가 여러 곳에 흩어지면 한 곳만 고치는
 # 날이 온다 — 근거는 여기 하나만 두고 표시하는 쪽이 가져다 쓴다.
-MEASURED_EDGE_NOTE = ("실측 편도 20bp 후 +0.04R (OOS 3,727건, t≈1.1 · 날짜 "
+MEASURED_EDGE_NOTE = ("실측 편도 20bp 후 +0.06R (OOS 3,286건, t≈1.5 · 날짜 "
                       "군집 미보정) — 이 게이트는 수익이 아니라 손실을 막는 "
                       "문턱이다")
 
