@@ -376,7 +376,11 @@ def _assemble_metric(us_gaap: dict, name: str) -> dict:
 def assemble_income(us_gaap: dict) -> pd.DataFrame:
     """
     us-gaap → 분기 손익·현금흐름 DataFrame
-    (index=filed, cols=[revenue, operating_income, net_income, operating_cash_flow, capex]).
+    (index=filed, cols=[end, revenue, operating_income, net_income, operating_cash_flow, capex]).
+
+    `end`(분기말)을 열로 싣는다. 소비 측이 tail(4)를 TTM 으로 쓰는데, 분기가
+    빠진 구간에서는 그 4행이 1년이 아니다 — 열이 없으면 소비 측이 그걸 알 방법이
+    없다(factor_engine.point_in_time_fundamentals).
     같은 분기의 태그들은 같은 공시(filed)에서 오므로 end 기준으로 정렬한다.
     현금흐름 태그는 누적(YTD) 공시라 _ytd_quarters로 따로 조립한다.
 
@@ -403,13 +407,13 @@ def assemble_income(us_gaap: dict) -> pd.DataFrame:
     rows = []
     for end in ends:
         fileds = [cols[n][end][0] for n in cols if end in cols[n]]
-        row = {"filed": pd.Timestamp(max(fileds)), "end": end}
+        row = {"filed": pd.Timestamp(max(fileds)), "end": pd.Timestamp(end)}
         for n in cols:
             row[n] = cols[n][end][1] if end in cols[n] else np.nan
         rows.append(row)
 
     df = pd.DataFrame(rows).sort_values("end").set_index("filed")
-    return df[_INCOME_COLS].dropna(how="all")
+    return df[["end"] + _INCOME_COLS].dropna(how="all", subset=_INCOME_COLS)
 
 
 def _instant_facts(raw: list) -> list:
@@ -498,7 +502,7 @@ def last_coverage() -> dict:
 
 def fetch_quarterly_fundamentals_history(tickers: list, reporting_lag_days=None) -> dict:
     """
-    분기 손익 이력. 반환 {ticker: DataFrame(index=filed, cols=[revenue,operating_income,net_income])}.
+    분기 손익 이력. 반환 {ticker: DataFrame(index=filed, cols=[end,revenue,operating_income,net_income,...])}.
     reporting_lag_days는 기존 시그니처 호환용 — EDGAR는 실제 filed를 주므로 무시.
     """
     global _last_coverage

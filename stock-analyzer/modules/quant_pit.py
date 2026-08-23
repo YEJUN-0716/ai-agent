@@ -62,7 +62,9 @@ TTM_TAGS = ("revenue", "net_income", "operating_cash_flow", "capex")
 CORE_TAGS = ("revenue", "net_income")
 
 # 4개 분기말의 간격(3분기 ≈ 273일)과 1년 전 짝(365일). PEAD 와 같은 ±45일.
-SPAN_DAYS, YOY_DAYS, TOL_DAYS = 273, 365, 45
+from modules.factor_engine import TTM_SPAN_DAYS as SPAN_DAYS  # noqa: E402
+from modules.factor_engine import TTM_SPAN_TOL_DAYS as TOL_DAYS  # noqa: E402
+YOY_DAYS = 365
 
 # 현행 fundamental_score 의 항목 가중치에서 **만들 수 있는 것만** 남긴 것.
 # 합이 0.80 인 게 정상이다 — 안전성(10%)·F-Score(10%) 를 뺀 자리다.
