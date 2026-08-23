@@ -13,7 +13,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from assistant.config import Settings
+from assistant.config import WEB_CHAT_ID, Settings
+from channels.chat import ChatChannel
 from tools import virtual_trade
 
 # 이 이름으로 온 요청만 받는다. localhost에만 바인딩해도 이 검사가 없으면
@@ -81,16 +82,18 @@ def create_app(settings: Settings, brain, trade_executor=None) -> FastAPI:
     async def index() -> str:
         return _PAGE
 
+    # 텔레그램·디스코드와 같은 창구 로직을 태운다. 직접 brain.ask 로 가면
+    # `/승인`·`/거절`·`/도움` 이 전부 질문으로 흘러가는데, 안내문은 먹는다고
+    # 말한다 — 웹에서만 승인이 안 되던 이유다.
+    channel = ChatChannel(settings, brain, trade_executor, name="web")
+
     @app.post("/chat")
     async def chat(payload: ChatRequest) -> dict:
         question = payload.message.strip()
         if not question:
             raise HTTPException(status_code=400, detail="메시지가 비어 있습니다.")
-        try:
-            # 두뇌는 동기 코드다. 이벤트 루프를 막지 않도록 스레드로 넘긴다.
-            reply = await asyncio.to_thread(brain.ask, question, "web")
-        except Exception as exc:  # noqa: BLE001 — 사용자에게 그대로 알린다
-            return {"reply": f"처리 중 문제가 생겼습니다: {exc}"}
+        # 두뇌는 동기 코드다. 이벤트 루프를 막지 않도록 스레드로 넘긴다.
+        reply = await asyncio.to_thread(channel.handle_text, WEB_CHAT_ID, question)
         return {"reply": reply}
 
     @app.get("/pending")

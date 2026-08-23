@@ -61,6 +61,35 @@ def _last_commit_time(settings: Settings) -> str | None:
     return result.stdout.strip() or None
 
 
+def working_tree_busy(path) -> str | None:
+    """사람이 그 폴더에서 작업 중이면 이유, 아니면 None.
+
+    **무인 잡이 사람의 작업 트리를 움직이면 안 된다.** 브랜치가 main 이 아니거나
+    수정 중인 파일이 있으면 당기지 않는다 — 그런 날은 데이터가 조금 옛것이
+    되지만, 남의 작업을 흔드는 것보다 훨씬 싸다.
+
+    2026-08-19 저장소를 합친 뒤로는 당기는 대상이 **비서 자기 소스**이기도 하다.
+    가드는 obsidian_bridge 쪽 사본에만 있었고 5분마다 도는 이쪽엔 없었다.
+
+    git 이 없거나 느리면 예외를 그대로 올린다 — 부르는 쪽이 이미 다룬다.
+    """
+    def git(*args) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        ).stdout.strip()
+
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch != "main":
+        return f"작업 중(브랜치 {branch or '알 수 없음'})이라 최신화를 건너뛰었습니다."
+    if git("status", "--porcelain"):
+        return "작업 중(수정된 파일 있음)이라 최신화를 건너뛰었습니다."
+    return None
+
+
 def reset_throttle() -> None:
     """간격 제한을 초기화한다. 테스트 전용."""
     global _last_pull_at
@@ -93,6 +122,13 @@ def refresh(settings: Settings, force: bool = False) -> dict:
         }
 
     try:
+        busy = working_tree_busy(settings.stock_analyzer_path)
+        if busy:
+            return {
+                "pulled": False,
+                "as_of": _last_commit_time(settings),
+                "note": f"{busy} 아래 숫자는 지난 데이터일 수 있습니다.",
+            }
         result = _run_git(settings, "pull", "--ff-only", "origin", "main")
     except FileNotFoundError:
         return {

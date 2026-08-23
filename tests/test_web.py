@@ -229,3 +229,36 @@ def test_chat_endpoint_cannot_execute_a_trade(settings):
     # Assert — 브로커는 불리지 않고 제안은 그대로 대기 중이다
     assert executor.calls == []
     assert len(list_pending_requests(settings)) == 1
+
+
+def test_approve_command_in_chat_actually_approves(settings):
+    # Arrange — 안내문(_HELP)이 '/승인 <번호>' 가 먹는다고 말한다. 웹에서만
+    # 그 말이 거짓이었다 — /chat 이 창구를 안 거치고 두뇌로 직행했다.
+    brain = FakeBrain()
+    executor = FakeExecutor()
+    client = make_client(create_app(settings, brain, trade_executor=executor))
+    proposal = request_trade(settings, "buy", "AAPL", amount_krw=1_000_000)
+
+    # Act
+    response = client.post(
+        "/chat", json={"message": f"/승인 {proposal['request_id']}"}
+    )
+
+    # Assert — 주문이 나가고, 질문으로 흘러가지 않는다
+    assert executor.calls == [("buy", "AAPL", 1_000_000.0)]
+    assert "예약했습니다" in response.json()["reply"]
+    assert brain.asked == []
+    assert list_pending_requests(settings) == []
+
+
+def test_help_command_in_chat_is_not_a_question(settings):
+    # Arrange
+    brain = FakeBrain()
+    client = make_client(create_app(settings, brain))
+
+    # Act
+    response = client.post("/chat", json={"message": "/도움"})
+
+    # Assert — 창구가 답한다. 두뇌를 부르면 API 값만 쓰고 안내문도 아니다
+    assert "/승인" in response.json()["reply"]
+    assert brain.asked == []

@@ -37,12 +37,20 @@ def fresh_throttle():
 
 
 class FakeGit:
-    """git 호출을 가로채 기록한다."""
+    """git 호출을 가로채 기록한다. 기본은 '깨끗한 main' 이다."""
 
-    def __init__(self, pull_returncode: int = 0, stderr: str = "") -> None:
+    def __init__(
+        self,
+        pull_returncode: int = 0,
+        stderr: str = "",
+        branch: str = "main",
+        dirty: str = "",
+    ) -> None:
         self.calls: list[list[str]] = []
         self._pull_returncode = pull_returncode
         self._stderr = stderr
+        self._branch = branch
+        self._dirty = dirty
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(cmd)
@@ -50,10 +58,35 @@ class FakeGit:
             return subprocess.CompletedProcess(
                 cmd, self._pull_returncode, stdout="", stderr=self._stderr
             )
+        if "rev-parse" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=self._branch, stderr="")
+        if "status" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=self._dirty, stderr="")
         # git log -1 --format=%cI
         return subprocess.CompletedProcess(
             cmd, 0, stdout="2026-07-30T07:29:00+09:00\n", stderr=""
         )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"branch": "feature/x"}, {"dirty": " M app.py"}],
+    ids=["다른 브랜치", "수정 중인 파일"],
+)
+def test_does_not_pull_while_someone_is_working_there(settings, monkeypatch, kwargs):
+    # Arrange — 5분마다 도는 무인 갱신이 사장님 작업 트리를 움직이면 안 된다.
+    # 저장소를 합친 뒤로는 그 트리가 비서 자기 소스이기도 하다.
+    git = FakeGit(**kwargs)
+    monkeypatch.setattr(subprocess, "run", git)
+
+    # Act
+    result = stock_sync.refresh(settings)
+
+    # Assert — 당기지 않고, 데이터가 옛것일 수 있다고 말한다
+    assert not any("pull" in call for call in git.calls)
+    assert result["pulled"] is False
+    assert "작업 중" in result["note"]
+    assert "지난 데이터일 수 있습니다" in result["note"]
 
 
 def test_pulls_and_reports_data_age(settings, monkeypatch):
