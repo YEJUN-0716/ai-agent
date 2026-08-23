@@ -22,6 +22,10 @@ VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 # 모든 요청이 400이 되므로, 조용히 고장나게 두지 말고 시작할 때 알린다.
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
+# 웹 창구엔 보낸 사람 번호가 없다. 창구 공통 로직이 번호를 요구하므로
+# 이 값 하나를 쓴다 (허용 검사는 루프백 바인딩 + Host 검증이 한다).
+WEB_CHAT_ID = 0
+
 STUDY_INBOX_NAME = "자료넣는곳"
 
 # 자료넣는곳 안의 이 폴더는 '이미 정리한 것'이다. 새 자료를 훑을 때 건너뛴다.
@@ -62,6 +66,9 @@ class Settings:
         return {
             "telegram": self.telegram_allowed_chat_ids,
             "discord": self.discord_allowed_user_ids,
+            # 웹은 루프백에만 열려 있고 Host 검증까지 붙어 있다 — 접속한 사람이
+            # 곧 사장님이라 명단이 없다. 대신 이 고정 번호 하나로 통과시킨다.
+            "web": frozenset({WEB_CHAT_ID}),
         }.get(channel, frozenset())
 
     @property

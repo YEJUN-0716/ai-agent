@@ -566,23 +566,21 @@ def _refresh_stock_repo() -> None:
     성적표 기록은 GitHub Actions 러너가 만들어 origin/main 에 커밋한다.
     이 PC 의 사본을 당겨오지 않으면 볼트는 마지막으로 당긴 날에 멈춘다.
 
-    **작업 중일 때는 건드리지 않는다.** 브랜치가 main 이 아니거나 수정 중인
-    파일이 있으면 그냥 넘어간다 — 무인 잡이 사람의 작업 트리를 움직이면
-    안 된다. 그런 날은 볼트가 조금 옛것이 되지만, 그게 훨씬 싸다.
+    **작업 중일 때 건드리지 않는 판단은 `stock_sync.working_tree_busy` 하나뿐이다.**
+    여기에 사본을 두면 5분마다 도는 비서 쪽과 갈린다 — 실제로 갈려 있었다.
     """
     import subprocess
 
-    def git(*args):
-        return subprocess.run(("git", "-C", str(STOCK_DIR)) + args,
-                              capture_output=True, text=True, timeout=120)
+    sys.path.insert(0, str(PROJECT_DIR))
+    from tools.stock_sync import working_tree_busy
 
     try:
-        branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        dirty = bool(git("status", "--porcelain").stdout.strip())
-        if branch != "main" or dirty:
-            print(f"[건너뜀] 작업 중이라 pull 생략 (branch={branch}, dirty={dirty})")
+        busy = working_tree_busy(STOCK_DIR)
+        if busy:
+            print(f"[건너뜀] {busy}")
             return
-        out = git("pull", "--ff-only")
+        out = subprocess.run(("git", "-C", str(STOCK_DIR), "pull", "--ff-only"),
+                             capture_output=True, text=True, timeout=120)
         print(f"pull: {(out.stdout or out.stderr).strip().splitlines()[-1:]}")
     except Exception as e:
         print(f"[건너뜀] pull 실패 — 있는 파일로 진행: {e}")

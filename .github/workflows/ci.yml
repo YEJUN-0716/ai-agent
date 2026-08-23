@@ -53,7 +53,10 @@ jobs:
           python-version: "3.12"
 
       - name: 의존성 설치
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt ruff
+
+      - name: Ruff 린트 (ruff.toml 의 F·E9 규칙)
+        run: python -m ruff check .
 
       - name: Pytest (비서)
         run: python -m pytest tests/ -q
