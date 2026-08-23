@@ -8,7 +8,9 @@
     목표 중 무엇을 먼저 쳤나 → 방향별 체결률·승률·평균 R·기대값(R).
 
 R 은 위험 1단위 기준 손익. 둘 다 같은 봉이면 **손절 우선(보수적)**, 홀드
-기간 내 미결이면 timeout(0).
+기간 내 미결이면 timeout — **보유 상한 다음 봉 시가에 판 R** 이다(장부와 같은
+규칙, 2026-08-23). 그 봉이 데이터 밖이면 결판이 안 난 것이라 outcome="open"
+으로 빠진다 — 0R 로 세면 장부가 실제로 받는 손익이 통째로 사라진다.
 
 **산 값은 구간 중간값이 아니라 걸 수 있는 지정가다.** 러너는 구간 상단에
 지정가를 걸고(`paper_trade_runner_toss.py:667`) 갭이 나면 그날 시가에
@@ -49,10 +51,14 @@ def _simulate_outcome(
     """
     start_idx 다음 봉부터 진입 체결을 찾고, 체결되면 손절/목표를 시뮬레이션.
 
-    반환: {"outcome": "win"|"loss"|"timeout"|"eod"|"nofill", "r": float,
+    반환: {"outcome": "win"|"loss"|"timeout"|"eod"|"nofill"|"open", "r": float,
            "fill_idx": int|None, "exit_idx": int|None}
       long  체결: 이후 봉의 Low  <= entry_high (되돌림 진입)
       short 체결: 이후 봉의 High >= entry_low
+
+    보유 상한(hold_window)을 넘긴 트레이드는 **그 다음 봉 시가**에 턴다 —
+    `virtual_broker.scan_plan_exit` 이 장부에서 실제로 하는 것과 같은 규칙이다.
+    그 봉이 없으면(패널 끝) 아직 들고 있는 것이므로 "open" 으로 뺀다.
 
     sessions 를 주면 **당일 청산 단타**로 시뮬레이션한다 (opens 도 함께 필요).
     세션 마지막 봉에서는 손절·목표를 보지 않고 그 봉의 **시가**로 턴다 —
@@ -106,7 +112,21 @@ def _simulate_outcome(
             return {"outcome": "loss", "r": -1.0, "fill_idx": fill_idx, "exit_idx": k}
         if hit_tgt:
             return {"outcome": "win", "r": float(rr), "fill_idx": fill_idx, "exit_idx": k}
-    return {"outcome": "timeout", "r": 0.0, "fill_idx": fill_idx, "exit_idx": None}
+    # 보유 상한을 넘겼다 — 장부는 **그 다음 봉 시가에 실제로 판다**
+    # (`virtual_broker.scan_plan_exit`). 백테스트도 같은 값을 받아야 두 자가
+    # 같은 트레이드를 같은 값으로 센다. 예전엔 여기서 r=0.0 을 줬다("안 판 것").
+    k = fill_idx + hold_window
+    if opens is None or k >= n:
+        # 청산 봉이 데이터 밖 = 장부라면 **아직 들고 있다**(scan_plan_exit → None).
+        # 0R 로 세면 "결판나서 본전" 과 구별이 사라진다 — 미결로 따로 뺀다.
+        return {"outcome": "open", "r": 0.0, "fill_idx": fill_idx, "exit_idx": None}
+    exit_px = float(opens[k])
+    if direction == "long":
+        r = (exit_px - entry_ref) / (entry_ref - stop)
+    else:
+        r = (entry_ref - exit_px) / (stop - entry_ref)
+    return {"outcome": "timeout", "r": round(float(r), 4),
+            "fill_idx": fill_idx, "exit_idx": k}
 
 
 def placeable_r(res: dict, plan: dict, limit: float, opens: np.ndarray,
@@ -128,9 +148,10 @@ def placeable_r(res: dict, plan: dict, limit: float, opens: np.ndarray,
                 "risk_pct": res.get("risk_pct", float("nan"))}
     long = plan["direction"] == "long"
     fill = min(opens[j], limit) if long else max(opens[j], limit)
-    if res["outcome"] in ("timeout", "skip"):
-        # 미결은 원 백테스트가 0 으로 센다. 산 값은 남긴다 — 체결됐으니
-        # 거래비용은 실제로 나갔고, 비용 환산에 그 값이 필요하다.
+    if res["outcome"] in ("open", "skip"):
+        # 아직 안 판 것(청산 봉이 데이터 밖)은 R 이 없다. 산 값은 남긴다 —
+        # 체결됐으니 거래비용은 실제로 나갔고, 비용 환산에 그 값이 필요하다.
+        # timeout 은 여기 없다: 보유 상한 다음 봉 시가에 **실제로 팔았다**.
         return {**res, "r": 0.0, "fill_price": float(fill),
                 "exit_price": float(fill),
                 "risk_pct": res.get("risk_pct", float("nan"))}
@@ -152,7 +173,7 @@ def placeable_r(res: dict, plan: dict, limit: float, opens: np.ndarray,
     elif res["outcome"] == "win":
         exit_px = max(ex_open, plan["targets"][0]) if long else \
             min(ex_open, plan["targets"][0])
-    else:                                    # eod — 세션 마지막 봉 시가
+    else:                                    # eod·timeout — 청산 봉 시가
         exit_px = ex_open
     r = (exit_px - fill) if long else (fill - exit_px)
     return {**res, "r": float(r / plan_risk), "fill_price": float(fill),
@@ -170,7 +191,10 @@ def _stats(trades: list[dict]) -> dict:
     return {
         "setups": len(trades),
         "filled": len(filled),
-        "nofill": len(trades) - len(filled),
+        # 뺄셈으로 세면 안 된다 — "open"(청산 봉이 데이터 밖, 아직 들고 있다)
+        # 이 미체결로 둔갑한다. 체결은 됐고 결판이 안 났을 뿐이다.
+        "nofill": len([t for t in trades if t["outcome"] == "nofill"]),
+        "open": len([t for t in trades if t["outcome"] == "open"]),
         "wins": len(wins),
         "losses": len(losses),
         # 뺄셈으로 세면 안 된다 — EOD 청산이 전부 timeout 으로 잡힌다.

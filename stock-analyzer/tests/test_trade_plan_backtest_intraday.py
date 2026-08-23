@@ -60,14 +60,15 @@ def test_short_eod_exit_r_sign():
     assert res["r"] == 0.5
 
 
-def test_sessions_none_keeps_old_timeout_behaviour():
-    # 세션을 안 주면 예전 그대로 — 홀드 창 안에 아무것도 안 닿으면 timeout, R=0.
+def test_sessions_none_is_a_swing_trade_not_an_eod_exit():
+    # 세션을 안 주면 EOD 청산이 없다. 홀드 창 안에 아무것도 안 닿고 청산 봉도
+    # 데이터 밖이면 아직 들고 있는 것 — "open".
     highs = np.array([100.0, 101, 102, 103])
     lows = np.array([100.0, 99, 98, 97])
     res = _simulate_outcome(
         highs, lows, 0, "long",
         entry_low=98.0, entry_high=100.0, stop=80.0, target=130.0, rr=3.0)
-    assert res["outcome"] == "timeout"
+    assert res["outcome"] == "open"
     assert res["r"] == 0.0
 
 
@@ -80,9 +81,12 @@ def test_stats_counts_eod_apart_from_timeout():
         {"outcome": "timeout", "r": 0.0},
         {"outcome": "nofill", "r": 0.0},
     ]
+    trades.append({"outcome": "open", "r": 0.0})
     s = _stats(trades)
     assert s["filled"] == 4
+    # "open"(청산 봉이 데이터 밖)을 뺄셈으로 세면 미체결로 둔갑한다.
     assert s["nofill"] == 1
+    assert s["open"] == 1
     assert s["timeouts"] == 1
     assert s["eod_exits"] == 1
     # avg_r 은 체결 4건 평균 — EOD 손익이 섞여 들어가야 한다.
