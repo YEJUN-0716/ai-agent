@@ -366,6 +366,18 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "HPE-2026-08-25",
+      "symbol": "HPE",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-08-25",
+      "entry_price": 53.6,
+      "score": 66.8,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
