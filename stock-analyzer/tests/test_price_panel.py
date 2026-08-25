@@ -285,3 +285,26 @@ def test_missing_includes_ticker_whose_column_is_all_nan():
         pd.Timestamp("2024-01-01"), panel.index[-1])
     assert not ext
     assert missing == ["EMPTY"]
+
+
+def test_missing_includes_ticker_whose_last_bar_is_stale():
+    """인덱스가 오늘까지 밀려 있어도, 봉이 며칠 전에 끊긴 티커는 다시 받는다.
+
+    `needs_extension` 은 패널 **전체**의 마지막 날짜만 본다. 60종목짜리 측정
+    스크립트가 인덱스를 밀어 놓으면 나머지는 '있음'으로 걸러져 낡은 채 돌아온다
+    (실측 2026-08-17~21: 293종목 중 60종목만 봉이 있는데 캐시는 "히트"였다).
+    """
+    panel = _fake_ohlcv(["FRESH", "STALE"], n_days=400, start="2024-01-01")
+    panel.loc[panel.index[-10:], ("Close", "STALE")] = np.nan
+
+    missing, ext = price_panel._missing_tickers(
+        panel, ["FRESH", "STALE"],
+        pd.Timestamp("2024-01-01"), panel.index[-1])
+    assert not ext                     # 패널 전체 범위는 요청을 덮는다
+    assert missing == ["STALE"]
+
+    # 옛 구간을 요청하면 그 티커도 낡지 않았다 — 헛되이 다시 받지 않는다
+    missing, _ = price_panel._missing_tickers(
+        panel, ["FRESH", "STALE"],
+        pd.Timestamp("2024-01-01"), panel.index[-30])
+    assert missing == []
