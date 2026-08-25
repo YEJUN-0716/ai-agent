@@ -78,3 +78,32 @@ def test_future_filings_are_never_used():
 
     # 2025-05-01 공시분이 빠져 3분기밖에 안 남는다 → 미측정.
     assert np.isnan(out["margin"])
+
+
+def _ends(*dates):
+    """분기말(end) 열을 붙인 4행 패널 — assemble_income 이 싣는 그 열."""
+    fin = _fin()
+    fin[TK]["end"] = pd.to_datetime(list(dates))
+    return fin
+
+
+def test_quarter_gap_is_not_a_ttm():
+    """분기가 빠지면 tail(4)가 1년이 아니다 — 15개월치 합을 TTM 이라 부르면 안 된다.
+
+    EDGAR 캐시 실측(5년 창·293종목): PIT 관측점의 2.16%(34종목)가 이 자리이고,
+    매출 TTM 이 가장 가까운 성한 창 대비 중위 3.2%·최대 821% 어긋났다.
+    """
+    fin = _ends("2024-06-30", "2024-09-30", "2024-12-31", "2025-06-30")  # 2025Q1 없음
+    out = pit(TK, ASOF, price=50.0, fin_hist=fin,
+              shares_hist=SHARES, equity_hist=EQUITY)
+
+    assert all(np.isnan(v) for v in out.values()), "구멍 난 창은 아무 값도 내면 안 된다"
+
+
+def test_four_real_quarters_still_measured():
+    """성한 4분기는 end 열이 붙어도 그대로 낸다 — 가드가 멀쩡한 관측점을 지우면 안 된다."""
+    fin = _ends("2024-06-30", "2024-09-30", "2024-12-31", "2025-03-31")
+    out = pit(TK, ASOF, price=50.0, fin_hist=fin,
+              shares_hist=SHARES, equity_hist=EQUITY)
+
+    assert out["margin"] == pytest.approx(400 / 4000 * 100)

@@ -1,5 +1,5 @@
 {
-  "cash_krw": 62364653.638204984,
+  "cash_krw": 61662591.386525296,
   "positions": {
     "F": {
       "qty": 78,
@@ -76,21 +76,6 @@
         "entry_fill": 85.62
       }
     },
-    "HPE": {
-      "qty": 57,
-      "avg_price_usd": 53.349998474121094,
-      "avg_price_krw": 74356.02635232545,
-      "entry_date": "2026-08-20",
-      "plan": {
-        "stop": 51.8,
-        "target": 64.06,
-        "rr": 5.25,
-        "grade": "A",
-        "risk_pct": 3.65,
-        "entry_ref": 53.76,
-        "entry_fill": 53.35
-      }
-    },
     "C": {
       "qty": 31,
       "avg_price_usd": 131.22000122070312,
@@ -134,6 +119,21 @@
         "risk_pct": 1.81,
         "entry_ref": 61.78,
         "entry_fill": 62.33
+      }
+    },
+    "HPQ": {
+      "qty": 119,
+      "avg_price_usd": 29.08,
+      "avg_price_krw": 40195.24783203125,
+      "entry_date": "2026-08-24",
+      "plan": {
+        "stop": 27.63,
+        "target": 32.19,
+        "rr": 3.99,
+        "grade": "A",
+        "risk_pct": 3.2,
+        "entry_ref": 28.55,
+        "entry_fill": 29.08
       }
     }
   },
@@ -194,35 +194,6 @@
           "verdict": 68.5
         },
         "analyst_asof": "2026-08-12"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "HPQ",
-      "qty": 119,
-      "limit_price": 29.08,
-      "notional_krw": 4887292.564970703,
-      "placed_date": "2026-08-18",
-      "market": "US",
-      "plan": {
-        "stop": 27.63,
-        "target": 32.19,
-        "rr": 3.99,
-        "grade": "A",
-        "risk_pct": 3.2,
-        "entry_ref": 28.55
-      },
-      "meta": {
-        "score": 72.1,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 76.1,
-          "ict": 99.8,
-          "quant": 60.3,
-          "verdict": 72.1
-        },
-        "analyst_asof": "2026-08-17"
       }
     },
     {
@@ -374,9 +345,37 @@
         },
         "analyst_asof": "2026-08-20"
       }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "HPE",
+      "qty": 71,
+      "limit_price": 54.13,
+      "notional_krw": 5312227.727836914,
+      "placed_date": "2026-08-24",
+      "plan": {
+        "stop": 51.75,
+        "target": 63.44,
+        "rr": 6.44,
+        "grade": "A",
+        "risk_pct": 2.94,
+        "entry_ref": 53.32
+      },
+      "meta": {
+        "score": 66.8,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 68.5,
+          "ict": 100.0,
+          "quant": 59.1,
+          "verdict": 66.8
+        },
+        "analyst_asof": "2026-08-21"
+      }
     }
   ],
-  "realized_pnl_krw": 127538.87291321112,
+  "realized_pnl_krw": -29582.388837308623,
   "trades": [
     {
       "date": "2026-07-31",
@@ -988,6 +987,47 @@
       "target": 65.23,
       "rr": 3.09,
       "risk_pct": 1.81,
+      "plan": true
+    },
+    {
+      "date": "2026-08-24",
+      "symbol": "HPE",
+      "side": "sell",
+      "qty": 57,
+      "price_usd": 51.8,
+      "amount_krw": 4081172.0,
+      "pnl_krw": -157121.0,
+      "return_pct": -2.91,
+      "outcome": "loss",
+      "r_realized": -0.791,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-08-24",
+      "symbol": "HPQ",
+      "side": "buy",
+      "qty": 119,
+      "price_usd": 29.08,
+      "amount_krw": 4783234.0,
+      "limit_price": 29.08,
+      "placed_date": "2026-08-18",
+      "meta": {
+        "score": 72.1,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 76.1,
+          "ict": 99.8,
+          "quant": 60.3,
+          "verdict": 72.1
+        },
+        "analyst_asof": "2026-08-17"
+      },
+      "grade": "A",
+      "stop": 27.63,
+      "target": 32.19,
+      "rr": 3.99,
+      "risk_pct": 3.2,
       "plan": true
     }
   ],
