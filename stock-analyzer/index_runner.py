@@ -141,6 +141,9 @@ def _deposit(state: dict, prices: dict, fx: float, month: str) -> list[dict]:
     meta["fees_krw"] = meta.get("fees_krw", 0.0) + fx_cost_krw + fee_usd * fx
     meta["last_deposit"] = {
         "month":       month,
+        # 보고서가 **이 뒤에 붙은 체결만** 이번 달 몫으로 센다. 날짜로 자르면
+        # 러너 시계와 체결일이 어긋나는 순간 조용히 0건이 되므로 개수로 센다.
+        "trades_before": len(state.get("trades", [])),
         "krw":         MONTHLY_KRW,
         "usd":         (MONTHLY_KRW - fx_cost_krw) / fx,
         "fx":          fx,
@@ -159,10 +162,21 @@ def build_report(state: dict, fx: float, prices: dict) -> str:
     """
     meta = state.get("index_meta", {})
     dep = meta.get("last_deposit", {})
-    ordered = {o["ticker"]: o for o in dep.get("orders", [])}
+
+    # **계획가가 아니라 체결가로 적는다.** 주문은 종가로 계획하고 체결은 다음
+    # 거래일 시가라, 계획액을 적으면 갭만큼 어긋난 채로 발행된다 — 그런데 이월은
+    # 체결 뒤 실제 현금이라, 읽는 사람이 적립 − 매수 − 수수료 를 해 보면 안 맞는다
+    # (실측 리허설: 계획 $334.82 vs 체결 $338.00, 이월이 $3.38 안 맞았다).
+    trades = state.get("trades", [])
+    filled = {}
+    for tr in trades[dep.get("trades_before", len(trades)):]:
+        if tr["side"] == "buy" and tr["symbol"] in TARGETS:
+            f = filled.setdefault(tr["symbol"], {"qty": 0, "usd": 0.0})
+            f["qty"] += tr["qty"]
+            f["usd"] += tr["qty"] * tr["price_usd"]
     buys = " · ".join(
-        f"{t} {ordered[t]['qty']}주 ${ordered[t]['qty'] * ordered[t]['est_price']:,.2f}"
-        if t in ordered else f"{t} 0주(이월)"
+        f"{t} {filled[t]['qty']}주 ${filled[t]['usd']:,.2f}"
+        if t in filled else f"{t} 0주(이월)"
         for t in TARGETS
     )
 

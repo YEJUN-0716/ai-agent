@@ -227,3 +227,32 @@ def test_real_run_report_has_no_dry_run_warning(runner, capsys):
     assert second["reported"]
     assert "DRY_RUN" not in capsys.readouterr().out
     assert "DRY_RUN" not in runner.sent[0]
+
+
+def test_report_buy_line_is_the_fill_not_the_plan(runner, monkeypatch):
+    """보고서의 매수액은 **체결가**로 적힌다 — 그래야 산수가 닫힌다.
+
+    주문은 종가로 계획하고 체결은 다음 거래일 시가다. 계획액을 적으면 갭만큼
+    어긋나는데 이월은 체결 뒤 실제 현금이라, 읽는 사람이
+    `적립 − 매수 − 수수료 = 이월` 을 해 보면 안 맞는다. 9월 첫 회차 리허설에서
+    실제로 계획 $334.82 vs 체결 $338.00 로 $3.38 이 떴다.
+    """
+    monkeypatch.setattr(vb, "next_open_price",
+                        lambda sym, after: (PRICES[sym] * 1.02, "2026-08-04"))
+
+    runner.run(now=date(2026, 8, 3))
+    runner.run(now=date(2026, 8, 4))
+    msg = runner.sent[0]
+
+    dep = vb.load_state()["index_meta"]["last_deposit"]
+    planned = {o["ticker"]: o["qty"] * o["est_price"] for o in dep["orders"]}
+    fills = {t["symbol"]: t["qty"] * t["price_usd"] for t in vb.load_state()["trades"]}
+    assert planned and fills != planned, "갭이 안 걸렸다 — 이 테스트가 무의미하다"
+    for sym, usd in fills.items():
+        assert f"{sym} " in msg and f"${usd:,.2f}" in msg
+    for usd in planned.values():
+        assert f"${usd:,.2f}" not in msg, "계획가가 아직 보고서에 있다"
+
+    # 산수가 닫히는가: 적립 − 매수 − 수수료 == 이월 (달러 기준, 반올림 1센트)
+    carry = vb.load_state()["cash_krw"] / FX
+    assert abs(dep["usd"] - sum(fills.values()) - dep["fee_usd"] - carry) < 0.01
