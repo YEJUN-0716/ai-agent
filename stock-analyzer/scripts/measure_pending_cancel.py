@@ -34,10 +34,17 @@ from scripts.measure_portfolio import (  # noqa: E402
 # 통과선의 의미가 측정마다 달라진다.
 from scripts.measure_pead import excess_cagr_ci, mde_pp  # noqa: E402
 
-OUT_MD = Path("docs/measurements/2026-08-16-pending-cancel.md")
-
-BASE_WINDOW = 15        # 측정 하네스가 실제로 쓴 창 (measure_entry_rule.py:60)
+# 기준선 창. parquet 의 `expire_date` 가 그 창에서 잘려 저장되므로 이 값은
+# **읽는 parquet 과 짝**이라야 한다 — 러너 설정(20/40)으로 재려면
+#   FILL_WINDOW=20 HOLD_WINDOW=40 python scripts/measure_entry_rule.py
+#   TRADES=data/entry_rule_trades-daily-w20h40.parquet BASE_WINDOW=20 #       python scripts/measure_pending_cancel.py
+# 순서로 부른다. 창은 줄일 수만 있고 늘릴 수 없다.
+BASE_WINDOW = int(os.environ.get("BASE_WINDOW", "15"))
 RUNNER_WINDOW = 20      # 러너가 실제로 도는 창 (modules/virtual_broker.py:200)
+SHORT_WINDOWS = tuple(w for w in (5, 10, 15) if w < BASE_WINDOW)
+
+OUT_MD = Path("docs/measurements/2026-08-16-pending-cancel"
+              f"{'' if BASE_WINDOW == 15 else f'-w{BASE_WINDOW}'}.md")
 N_PLACEBO = 100
 JUDGE_COST = 6.0
 MDE_GATE = 4.0          # %p. 넘으면 판정은 "실패"가 아니라 "미측정"
@@ -120,13 +127,14 @@ def main() -> int:
     cal = close.index
 
     base = run_arm(act, close)
-    arms: list[tuple[str, dict, int]] = [("기준선 (창 15, 취소 없음)", base, 0)]
+    arms: list[tuple[str, dict, int]] = [
+        (f"기준선 (창 {BASE_WINDOW}, 취소 없음)", base, 0)]
 
     r1 = run_arm(act, close, cancel="grade")
     arms.append(("**R1** A후보가 대기 B를 취소", r1, 0))
 
     lost = {}
-    for w in (5, 10):
+    for w in SHORT_WINDOWS:
         sw, lost[w] = shorten_window(act, w, cal)
         arms.append((f"{'**R2** ' if w == 5 else ''}창 {w}거래일",
                      run_arm(sw, close), lost[w]))
