@@ -1,10 +1,11 @@
 name: 성적표 공개 채널 발행
 
 on:
-  # 23:45 UTC = KST 08:45. daily-report(23:30 UTC)와 15분 간격을 둔다.
-  # 기록기(analyst-log.yml, 23:00 UTC)가 끝난 뒤다 — 실제 여유는 45분.
+  # 22:52 UTC = KST 07:52. daily-report(22:37 UTC)와 15분 간격을 둔다.
+  # 기록기(analyst-log.yml, 22:07 UTC)가 끝난 뒤다 — 실제 여유는 45분.
+  # 2026-08-28: 23:45 → 22:52 (GitHub 예약 큐 적체 흡수, 정각·30분 회피).
   schedule:
-    - cron: "45 23 * * 1-5"
+    - cron: "52 22 * * 1-5"
   workflow_dispatch:
 
 concurrency:
