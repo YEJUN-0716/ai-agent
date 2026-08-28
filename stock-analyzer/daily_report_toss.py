@@ -17,7 +17,7 @@ equity_log.json(paper_trade_runner_toss.py가 기록) + 현재 포지션.
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import requests
@@ -62,6 +62,34 @@ def send_tg(msg: str):
         print(f"[TG 오류] 요청 실패 — {type(e).__name__}")
         return
     print("[TG] 발송 성공" if resp.status_code == 200 else f"[TG 오류] {resp.text}")
+
+
+def schedule_delay(now=None) -> str:
+    """예약보다 많이 늦게 돌았으면 한 줄로 알린다 (아니면 빈 문자열).
+
+    GitHub 은 예약(cron) 실행 시각을 보장하지 않는다. 2026-08 말 큐 적체로
+    아침 브리핑이 오후 3시대에 도착했는데, 늦었다는 걸 아는 방법이 "사장님이
+    시계를 본다" 뿐이었다. 늦게 온 메시지가 스스로 늦었다고 말하게 한다.
+
+    잡이 아예 안 뜨면 이 줄도 안 온다 — 침묵은 여전히 침묵으로만 읽힌다.
+    """
+    cron = os.environ.get("GH_EVENT_SCHEDULE", "").split()
+    if len(cron) < 2 or not cron[0].isdigit() or not cron[1].isdigit():
+        return ""                      # 수동 실행 등 예약이 아닌 트리거
+    now = now or datetime.now(timezone.utc)
+    due = now.replace(hour=int(cron[1]), minute=int(cron[0]),
+                      second=0, microsecond=0)
+    if due > now:                      # 자정을 넘겨 밀렸다 — 어제치 예약이다
+        due -= timedelta(days=1)
+    # ponytail: 24시간 넘는 지연은 하루로 접힌다. 그쯤이면 크론이 아니라
+    # 러너를 갈아야 하는 상황이라 눈금을 더 늘리지 않는다.
+    late = int((now - due).total_seconds() // 60)
+    if late < 30:                      # 몇 분 지연은 늘 있다 — 소음
+        return ""
+    h, m = divmod(late, 60)
+    late_txt = f"{h}시간 {m}분" if h else f"{m}분"
+    return (f"⏱ 예약({int(cron[1]):02d}:{int(cron[0]):02d} UTC)보다 "
+            f"{late_txt} 늦게 실행됨")
 
 
 def load_equity_log() -> list:
