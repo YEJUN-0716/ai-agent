@@ -37,4 +37,7 @@ jobs:
           # 러너와 같은 가상 장부(virtual_portfolio.json)를 읽는다.
           TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 이 잡이 얼마나 늦게 떴는지 스스로 재려면 예약 시각이 필요하다.
+          # 수동 실행(workflow_dispatch)에선 빈 값이고, 그때는 재지 않는다.
+          GH_EVENT_SCHEDULE:  ${{ github.event.schedule }}
         run: python daily_report_toss.py
