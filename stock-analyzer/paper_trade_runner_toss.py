@@ -57,7 +57,7 @@ from modules.virtual_broker import (
     place_market_sell  as _pm_market_sell,
     get_account        as _pt_get_account,
     get_positions      as _pt_get_positions,
-    equity_returns, indexed_equity,
+    equity_returns, indexed_equity, session_date,
 )
 
 try:
@@ -252,7 +252,9 @@ def append_equity_log(records: list, equity: float, spy_price: float | None,
     모듈 상수를 읽으면 main() 안에서 잡은 실시간 값이 아니라 fallback 1,400원이
     쓰인다(같은 이름의 지역변수가 가린다).
     """
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # 러너 벽시계가 아니라 이 실행이 정리하는 장의 날짜다 — 예약이 자정을
+    # 넘겨 밀리면 벽시계는 다음 날(심지어 토요일)을 가리킨다.
+    today = session_date().isoformat()
     # `unrealized_pl` 은 **달러**다(virtual_broker.get_positions). 같은 레코드의
     # equity·deposited 는 원화라, 달러 그대로 넣으면 한 줄 안에 두 통화가 섞인다.
     # 읽는 코드가 없어 손해는 0이었지만 옆에 놓인 원화와 더해질 수 있는 자리다.
@@ -443,6 +445,8 @@ def append_signals_to_log(new_signals: list, existing_log: list) -> list:
     거래일 시가에 일어나므로 기록하는 날(오늘)과 체결일이 다르다. 오늘로
     찍으면 보유 기간이 하루씩 짧게 계산돼 성적이 어긋난다.
     """
+    # 여기는 벽시계 그대로 둔다 — 살아 있는 호출자는 전부 entry_date 를 넘긴다.
+    # signal-alerts 워크플로(현재 크론 꺼짐)가 돌아오면 session_date() 로 바꿀 것.
     default_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # signal-alerts 워크플로가 남기는 항목에는 id가 없다. 없는 항목은
     # symbol-entry_date 조합으로 같은 키를 만들어 중복 판정에 참여시킨다.

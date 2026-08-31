@@ -16,6 +16,9 @@ import requests
 
 from modules import (analyst_log, analyst_scorecard, analyst_team,
                      price_panel, publish_log, scorecard_message)
+# 발행기가 브로커를 부르는 게 아니라, 장 마감 뒤 배치가 쓰는 날짜 규칙이
+# 거기 산다. market_date() 와 나란히 둬야 둘을 헷갈리지 않는다.
+from modules.virtual_broker import session_date
 
 TG_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TG_CHANNEL_ID = os.environ.get("TELEGRAM_PUBLIC_CHANNEL_ID", "")
@@ -174,7 +177,7 @@ def main():
         print("기록이 없다 — 발행할 것이 없다.", file=sys.stderr)
         return 1
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = session_date().isoformat()
     latest = days[-1]
     log_date = latest.get("date", "")
 
