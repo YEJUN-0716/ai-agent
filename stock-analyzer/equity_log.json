@@ -133,7 +133,7 @@
       "deposited": 90000000.0
     },
     {
-      "date": "2026-08-27",
+      "date": "2026-08-26",
       "equity": 100051792.52,
       "spy_price": 766.08,
       "unrealized_pnl_krw": 484055.26,
@@ -141,7 +141,7 @@
       "deposited": 90000000.0
     },
     {
-      "date": "2026-08-28",
+      "date": "2026-08-27",
       "equity": 99129347.31,
       "spy_price": 771.1,
       "unrealized_pnl_krw": -139895.5,
@@ -149,7 +149,7 @@
       "deposited": 90000000.0
     },
     {
-      "date": "2026-08-29",
+      "date": "2026-08-28",
       "equity": 99183263.52,
       "spy_price": 769.35,
       "unrealized_pnl_krw": -81522.69,

@@ -60,6 +60,31 @@ def market_date(now: datetime | None = None) -> date:
     return ts.tz_convert("America/New_York").date()
 
 
+def session_date(now: datetime | None = None) -> date:
+    """**장 마감 뒤에 도는 배치**가 기록에 찍을 거래일.
+
+    market_date() 와 묻는 질문이 다르다. 그쪽은 "지금 이 순간 미국 달력으로
+    며칠인가"(장중 주문에 쓴다), 이쪽은 "이 실행이 정리하는 장이 언제였나"다.
+    예약이 제때 뜨면 둘은 같은 값이라 오래 구분할 필요가 없었다.
+
+    2026-08 말 GitHub 예약 큐가 밀리면서 갈라졌다. 목요일치 실행이 금요일
+    05:32 UTC(뉴욕 01:32)에 떠서 장부에 '8/28' 로 찍혔고, 금요일치는 토요일에
+    떠서 **장이 서지도 않는 '8/29'** 가 됐다. 8/26 은 통째로 빠졌다.
+
+    규칙: 이 배치들은 뉴욕 17:30(21:30 UTC) 이후에만 예약된다. 그러니 뉴욕
+    시각이 정오 이전이면 전날 장을 정리하는 실행이 밀려서 온 것이다 — 다음
+    장 마감(뉴욕 16:00)까지 아직 멀어 오늘 장을 정리했을 리가 없다. 18시간
+    반까지 밀려도 맞는 값이 나온다(실측 최대 지연은 8시간이었다).
+
+    장중에 부르면 안 된다. 뉴욕 10시에 부르면 '어제'가 나온다 — 그 질문의
+    답은 market_date() 다.
+    """
+    ts = pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    ny = ts.tz_convert("America/New_York")
+    return (ny - pd.Timedelta(days=1)).date() if ny.hour < 12 else ny.date()
+
+
 def reserved_krw(state: dict) -> float:
     """대기 중인 매수 주문이 이미 붙잡고 있는 현금."""
     return sum(
