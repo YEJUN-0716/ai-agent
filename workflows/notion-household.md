@@ -118,6 +118,22 @@ on a Free plan, you can try one chart for free." 그런데 API는 차트 생성�
 
 공휴일 휴강은 반영하지 않았다. 휴강일을 알려주시면 지운다.
 
+## 숫자 읽어주기 (합계를 못 켰을 때의 길)
+
+표 그룹 합계를 사장님이 못 켜셨으면, 내가 읽어서 알려준다. `query-data-sources`로
+가계부 데이터소스를 긁고 합계는 내가 낸다.
+
+**SQL 모드에 집계를 넣으면 거부된다.** `SUM`·`GROUP BY`·`substr`를 쓰면
+`the query could not be parsed safely`가 뜬다. 열만 뽑는 평범한 SELECT는 통과한다.
+그러니 행을 다 받아서 합계는 이쪽에서 계산한다.
+
+```
+SELECT "항목", "date:날짜:start", "금액", "분류", "구분"
+FROM "collection://ae679f91-f6b6-4e87-b049-6ab0180dc68f"
+```
+
+무료 플랜은 이 도구가 `available_with_limit`이다. 자주 부르지 않는다.
+
 ## 나중에 (지금은 안 만든다)
 
 노션 타이핑이 귀찮아지면, 이미 돌고 있는 디스코드 비서(`workflows/ai-assistant.md`)에
