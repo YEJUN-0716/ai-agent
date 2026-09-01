@@ -1,0 +1,53 @@
+{
+  "cash_krw": 997522.6296628298,
+  "positions": {},
+  "pending": [
+    {
+      "side": "buy",
+      "symbol": "ITOT",
+      "notional_krw": 457954.22963419184,
+      "placed_date": "2026-09-01",
+      "meta": {},
+      "qty": 2
+    },
+    {
+      "side": "buy",
+      "symbol": "AGG",
+      "notional_krw": 132993.9052338777,
+      "placed_date": "2026-09-01",
+      "meta": {},
+      "qty": 1
+    }
+  ],
+  "realized_pnl_krw": 0.0,
+  "trades": [],
+  "index_meta": {
+    "dividends": {},
+    "bench_itot_shares": 4.3519742171439,
+    "last_deposit_month": "2026-09",
+    "deposit_count": 1,
+    "deposited_krw": 1000000.0,
+    "fees_krw": 2477.370337170174,
+    "last_deposit": {
+      "month": "2026-09",
+      "trades_before": 0,
+      "krw": 1000000.0,
+      "usd": 726.899676164992,
+      "fx": 1374.3299560546875,
+      "fx_cost_usd": 0.7276273034684604,
+      "fee_usd": 1.0749749946594238,
+      "orders": [
+        {
+          "ticker": "ITOT",
+          "qty": 2,
+          "est_price": 166.61000061035156
+        },
+        {
+          "ticker": "AGG",
+          "qty": 1,
+          "est_price": 96.7699966430664
+        }
+      ]
+    }
+  }
+}
