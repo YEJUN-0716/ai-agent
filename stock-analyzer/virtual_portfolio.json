@@ -1,5 +1,5 @@
 {
-  "cash_krw": 60926140.92953572,
+  "cash_krw": 66469807.9113155,
   "positions": {
     "F": {
       "qty": 78,
@@ -15,21 +15,6 @@
         "entry_ref": 13.8101
       },
       "avg_price_krw": 19788.2308
-    },
-    "AAL": {
-      "qty": 60,
-      "avg_price_usd": 14.17,
-      "entry_date": "2026-08-18",
-      "plan": {
-        "stop": 13.14,
-        "target": 15.4,
-        "rr": 2.76,
-        "grade": "A",
-        "risk_pct": 4.38,
-        "entry_ref": 13.7419,
-        "entry_fill": 14.17
-      },
-      "avg_price_krw": 20012.3
     },
     "CSCO": {
       "qty": 7,
@@ -91,21 +76,6 @@
         "entry_fill": 131.22
       }
     },
-    "RF": {
-      "qty": 191,
-      "avg_price_usd": 30.440000534057617,
-      "avg_price_krw": 42189.231345661916,
-      "entry_date": "2026-08-21",
-      "plan": {
-        "stop": 29.42,
-        "target": 32.29,
-        "rr": 3.93,
-        "grade": "B",
-        "risk_pct": 1.94,
-        "entry_ref": 30.0,
-        "entry_fill": 30.44
-      }
-    },
     "BAC": {
       "qty": 99,
       "avg_price_usd": 62.33000183105469,
@@ -121,19 +91,19 @@
         "entry_fill": 62.33
       }
     },
-    "HPE": {
-      "qty": 71,
-      "avg_price_usd": 53.599998474121094,
-      "avg_price_krw": 74086.45179716498,
-      "entry_date": "2026-08-25",
+    "GOOGL": {
+      "qty": 18,
+      "avg_price_usd": 336.0,
+      "avg_price_krw": 461758.08984375,
+      "entry_date": "2026-09-01",
       "plan": {
-        "stop": 51.75,
-        "target": 63.44,
-        "rr": 6.44,
-        "grade": "A",
-        "risk_pct": 2.94,
-        "entry_ref": 53.32,
-        "entry_fill": 53.6
+        "stop": 327.55,
+        "target": 373.16,
+        "rr": 6.77,
+        "grade": "B",
+        "risk_pct": 1.76,
+        "entry_ref": 333.43,
+        "entry_fill": 336.0
       }
     }
   },
@@ -221,35 +191,6 @@
           "ict": 91.1,
           "quant": 67.7,
           "verdict": 62.0
-        },
-        "analyst_asof": "2026-08-17"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "GOOGL",
-      "qty": 18,
-      "limit_price": 336.51,
-      "notional_krw": 8554555.609760743,
-      "placed_date": "2026-08-18",
-      "market": "US",
-      "plan": {
-        "stop": 327.55,
-        "target": 373.16,
-        "rr": 6.77,
-        "grade": "B",
-        "risk_pct": 1.76,
-        "entry_ref": 333.43
-      },
-      "meta": {
-        "score": 57.1,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 51.2,
-          "ict": 72.6,
-          "quant": 66.8,
-          "verdict": 57.1
         },
         "analyst_asof": "2026-08-17"
       }
@@ -373,9 +314,83 @@
         },
         "analyst_asof": "2026-08-26"
       }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "HPE",
+      "qty": 52,
+      "limit_price": 53.56,
+      "notional_krw": 3827534.7951953122,
+      "placed_date": "2026-09-01",
+      "plan": {
+        "stop": 49.99,
+        "target": 63.44,
+        "rr": 5.35,
+        "grade": "A",
+        "risk_pct": 4.07,
+        "entry_ref": 52.11
+      },
+      "meta": {
+        "score": 60.8,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 58.6,
+          "ict": 96.9,
+          "quant": 59.1,
+          "verdict": 60.8
+        },
+        "analyst_asof": "2026-08-31"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "ISRG",
+      "qty": 12,
+      "limit_price": 376.31,
+      "notional_krw": 6205863.813896485,
+      "placed_date": "2026-09-01",
+      "plan": {
+        "stop": 361.58,
+        "target": 405.34,
+        "rr": 4.03,
+        "grade": "A",
+        "risk_pct": 2.35,
+        "entry_ref": 370.29
+      },
+      "meta": {}
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "HPQ",
+      "qty": 111,
+      "limit_price": 25.53,
+      "notional_krw": 3894475.9754223633,
+      "placed_date": "2026-09-01",
+      "plan": {
+        "stop": 23.89,
+        "target": 32.19,
+        "rr": 7.31,
+        "grade": "A",
+        "risk_pct": 4.01,
+        "entry_ref": 24.89
+      },
+      "meta": {
+        "score": 63.6,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 66.1,
+          "ict": 79.1,
+          "quant": 55.5,
+          "verdict": 63.6
+        },
+        "analyst_asof": "2026-08-31"
+      }
     }
   ],
-  "realized_pnl_krw": -289129.26023989636,
+  "realized_pnl_krw": -952835.92589275,
   "trades": [
     {
       "date": "2026-07-31",
@@ -1069,6 +1084,75 @@
       "outcome": "loss",
       "r_realized": -1.576,
       "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-09-01",
+      "symbol": "AAL",
+      "side": "sell",
+      "qty": 60,
+      "price_usd": 13.14,
+      "amount_krw": 1083482.0,
+      "pnl_krw": -117256.0,
+      "return_pct": -7.27,
+      "outcome": "loss",
+      "r_realized": -1.711,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-09-01",
+      "symbol": "RF",
+      "side": "sell",
+      "qty": 191,
+      "price_usd": 29.42,
+      "amount_krw": 7722382.0,
+      "pnl_krw": -335761.0,
+      "return_pct": -3.35,
+      "outcome": "loss",
+      "r_realized": -1.759,
+      "grade": "B",
+      "plan": true
+    },
+    {
+      "date": "2026-09-01",
+      "symbol": "HPE",
+      "side": "sell",
+      "qty": 71,
+      "price_usd": 51.75,
+      "amount_krw": 5049448.0,
+      "pnl_krw": -210690.0,
+      "return_pct": -3.45,
+      "outcome": "loss",
+      "r_realized": -1.178,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-09-01",
+      "symbol": "GOOGL",
+      "side": "buy",
+      "qty": 18,
+      "price_usd": 336.0,
+      "amount_krw": 8311646.0,
+      "limit_price": 336.51,
+      "placed_date": "2026-08-18",
+      "meta": {
+        "score": 57.1,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 51.2,
+          "ict": 72.6,
+          "quant": 66.8,
+          "verdict": 57.1
+        },
+        "analyst_asof": "2026-08-17"
+      },
+      "grade": "B",
+      "stop": 327.55,
+      "target": 373.16,
+      "rr": 6.77,
+      "risk_pct": 1.76,
       "plan": true
     }
   ],

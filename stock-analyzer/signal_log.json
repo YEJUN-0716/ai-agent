@@ -378,6 +378,18 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "GOOGL-2026-09-01",
+      "symbol": "GOOGL",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-09-01",
+      "entry_price": 336.0,
+      "score": 57.1,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
