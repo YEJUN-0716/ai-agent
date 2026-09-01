@@ -75,9 +75,9 @@
       "entry_price": 26.02,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-31",
+      "outcome_price": 25.67,
+      "return_pct": -1.35
     },
     {
       "id": "GM-2026-07-31",
@@ -87,9 +87,9 @@
       "entry_price": 88.85,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-31",
+      "outcome_price": 86.32,
+      "return_pct": -2.85
     },
     {
       "id": "COF-2026-07-31",
@@ -99,9 +99,9 @@
       "entry_price": 210.0,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-31",
+      "outcome_price": 214.51,
+      "return_pct": 2.15
     },
     {
       "id": "BAC-2026-07-31",
@@ -111,9 +111,9 @@
       "entry_price": 61.54,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-31",
+      "outcome_price": 61.94,
+      "return_pct": 0.65
     },
     {
       "id": "HPE-2026-07-31",
@@ -123,9 +123,9 @@
       "entry_price": 49.0,
       "score": null,
       "rsi": null,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-08-31",
+      "outcome_price": 52.24,
+      "return_pct": 6.61
     },
     {
       "id": "ALLY-2026-08-05",
