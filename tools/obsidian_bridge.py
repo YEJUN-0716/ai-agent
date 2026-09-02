@@ -26,7 +26,7 @@ import json
 import os
 import shutil
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOME = Path.home()
@@ -598,10 +598,53 @@ def _refresh_stock_repo() -> None:
         print(f"[건너뜀] pull 실패 — 있는 파일로 진행: {e}")
 
 
+def _heartbeat() -> None:
+    """살아 있다는 흔적을 저장소에 하루 한 번 남긴다 — 죽은 사람 스위치.
+
+    이 잡은 자택 PC 에서만 돈다. 클라우드 점검(`tools/healthcheck.py`)은 러너에서
+    도니까 **이 PC 가 조용해진 걸 알 방법이 없다.** 로그는 여기 남아봐야 아무도
+    안 읽는다(2026-09-02 에 2주치 로그가 그렇게 쌓여 있었다). 저장소에 날짜 한 줄을
+    커밋해두면 그쪽에서 "3일째 소식 없음"으로 대신 잡아준다.
+
+    실패해도 조용히 넘어간다 — 동기화 본업을 막을 이유가 없고, 다음 시간에 또 온다.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    path = PROJECT_DIR / "data" / "heartbeat.json"
+    try:
+        if json.loads(path.read_text(encoding="utf-8")).get("date") == today:
+            return  # 오늘 것은 이미 찍었다 — 커밋은 하루 한 번이면 충분하다
+    except Exception:
+        pass  # 없거나 깨졌으면 새로 쓴다
+
+    import subprocess
+
+    def git(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(("git", "-C", str(PROJECT_DIR), *args),
+                              capture_output=True, text=True, timeout=60)
+
+    try:
+        # 사람이 작업 중인 트리에 커밋을 얹지 않는다 — 쓰기 **전에** 본다.
+        if git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != "main":
+            return
+        if git("status", "--porcelain").stdout.strip():
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = json.dumps({"date": today, "job": "obsidian_sync"}, ensure_ascii=False)
+        with path.open("w", encoding="utf-8") as f:
+            print(record, file=f)  # 끝 개행은 print 가 붙인다
+        git("add", "--", "data/heartbeat.json")
+        git("commit", "-m", f"chore: 동기화 생존 신호 {today}")
+        out = git("push", "origin", "main")
+        print(f"생존 신호 {today}" + ("" if out.returncode == 0 else " (push 실패 — 다음 시간에 재시도)"))
+    except Exception as e:
+        print(f"[건너뜀] 생존 신호 실패: {e}")
+
+
 def cmd_sync() -> int:
     """작업 스케줄러가 부르는 진입점 — 원격 갱신 + push 한 번."""
     print(f"── sync {datetime.now():%Y-%m-%d %H:%M:%S} ──")
     _refresh_stock_repo()
+    _heartbeat()
     return cmd_push()
 
 
