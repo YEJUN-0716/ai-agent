@@ -24,6 +24,7 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -84,9 +85,16 @@ def 넣기(item: dict, 날짜: date) -> None:
 
 
 def 대상달(argv: list[str], 오늘: date) -> date:
-    """--month YYYY-MM 이 있으면 그 달, 없으면 이번 달의 1일."""
+    """--month YYYY-MM 이 있으면 그 달, 없으면 이번 달의 1일.
+
+    형식을 여기서 못 박는다. 이 값은 수동 실행 입력에서 오고, 밖에서 온 글자를
+    그대로 믿으면 안 되는 자리다.
+    """
     if "--month" in argv:
-        연, 월 = argv[argv.index("--month") + 1].split("-")
+        값 = argv[argv.index("--month") + 1]
+        if not re.fullmatch(r"\d{4}-\d{2}", 값):
+            raise ValueError(f"--month 는 YYYY-MM 형식이어야 한다: {값!r}")
+        연, 월 = 값.split("-")
         return date(int(연), int(월), 1)
     return date(오늘.year, 오늘.month, 1)
 
