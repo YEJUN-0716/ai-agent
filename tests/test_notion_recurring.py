@@ -43,3 +43,8 @@ def test_이상한_달은_거부한다(나쁜값):
     # 이 값은 수동 실행 입력에서 온다 — 밖에서 온 글자를 그대로 믿지 않는다
     with pytest.raises(ValueError):
         nr.대상달(["--month", 나쁜값], date(2026, 9, 17))
+
+
+def test_month_에_값이_없으면_거부한다():
+    with pytest.raises(ValueError):
+        nr.대상달(["--month"], date(2026, 9, 17))
