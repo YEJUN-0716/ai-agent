@@ -91,7 +91,8 @@ def 대상달(argv: list[str], 오늘: date) -> date:
     그대로 믿으면 안 되는 자리다.
     """
     if "--month" in argv:
-        값 = argv[argv.index("--month") + 1]
+        뒤 = argv[argv.index("--month") + 1:]
+        값 = 뒤[0] if 뒤 else ""
         if not re.fullmatch(r"\d{4}-\d{2}", 값):
             raise ValueError(f"--month 는 YYYY-MM 형식이어야 한다: {값!r}")
         연, 월 = 값.split("-")
