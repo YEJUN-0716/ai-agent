@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "30 23 * * *"
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: "알림 경로만 시험 발송 (점검은 건너뜀)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,4 +41,4 @@ jobs:
         env:
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python tools/healthcheck.py --telegram
+        run: python tools/healthcheck.py --telegram ${{ inputs.test_alert && '--test' || '' }}

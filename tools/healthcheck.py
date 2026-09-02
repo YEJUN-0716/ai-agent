@@ -13,6 +13,10 @@
 사용법
   python tools/healthcheck.py              # 표 출력, 낡은 게 있으면 exit 1
   python tools/healthcheck.py --telegram   # 낡은 게 있을 때만 텔레그램 발송
+  python tools/healthcheck.py --telegram --test  # 알림 경로만 시험 발송
+
+**한 번도 울린 적 없는 경보는 고장 나 있어도 모른다.** 평소엔 조용한 게 정상이라
+발송 경로가 언제 망가졌는지 알 방법이 없어서, 시험 발송을 따로 뒀다.
 
 환경변수: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID (없으면 발송만 생략)
 """
@@ -88,6 +92,10 @@ def send_telegram(text: str) -> None:
 
 
 def main() -> int:
+    if "--test" in sys.argv:
+        send_telegram("🔔 산출물 점검 — 알림 경로 시험. 이 메시지가 보이면 경보가 살아 있습니다.")
+        return 0
+
     now = datetime.now(timezone.utc)
     ages = {path: last_commit_at(path) for path, _, _ in CHECKS}
     bad = audit(now, ages)
