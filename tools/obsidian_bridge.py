@@ -38,10 +38,12 @@ VAULT = Path(os.environ.get(
 # 옛 경로(~/stock-analyzer)로 남아 있던 동안 sync 는 매시간 성공(exit 0)하면서
 # 측정·신호·성적표·Alpaca 를 전부 "없음"으로 건너뛰었다 — 볼트만 조용히 비었다.
 STOCK_DIR = Path(os.environ.get("STOCK_DIR", PROJECT_DIR / "stock-analyzer"))
+# 슬러그는 저장소 경로에서 나온다. 2026-08-19 폴더를 옮긴 뒤로도 옛 슬러그가
+# 남아 있어서 볼트에는 이사 전 메모리(47개)가 계속 밀리고 있었다 — 현재는 51개다.
+# STOCK_DIR 과 같은 사고이고, 같은 이유로 조용했다(없는 게 아니라 옛것이라 더 조용).
 MEMORY_DIR = Path(os.environ.get(
     "MEMORY_DIR",
-    HOME / ".claude" / "projects"
-    / "c--Users-1aass-OneDrive-Desktop-AI-AGENT" / "memory"))
+    HOME / ".claude" / "projects" / "c--Users-1aass-ai-agent" / "memory"))
 
 # 볼트 안 폴더 이름 (사람이 옵시디언에서 볼 이름)
 MEMORY_SUB = "Agent Memory"
