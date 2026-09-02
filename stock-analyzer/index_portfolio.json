@@ -1,26 +1,41 @@
 {
-  "cash_krw": 997522.6296628298,
-  "positions": {},
-  "pending": [
+  "cash_krw": 412525.91618848906,
+  "positions": {
+    "ITOT": {
+      "qty": 2,
+      "avg_price_usd": 166.7899932861328,
+      "avg_price_krw": 226689.28438938595,
+      "entry_date": "2026-09-02"
+    },
+    "AGG": {
+      "qty": 1,
+      "avg_price_usd": 96.83999633789062,
+      "avg_price_krw": 131618.14469556883,
+      "entry_date": "2026-09-02"
+    }
+  },
+  "pending": [],
+  "realized_pnl_krw": 0.0,
+  "trades": [
     {
-      "side": "buy",
+      "date": "2026-09-02",
       "symbol": "ITOT",
-      "notional_krw": 457954.22963419184,
-      "placed_date": "2026-09-01",
-      "meta": {},
-      "qty": 2
+      "side": "buy",
+      "qty": 2,
+      "price_usd": 166.79,
+      "amount_krw": 453379.0,
+      "meta": {}
     },
     {
-      "side": "buy",
+      "date": "2026-09-02",
       "symbol": "AGG",
-      "notional_krw": 132993.9052338777,
-      "placed_date": "2026-09-01",
-      "meta": {},
-      "qty": 1
+      "side": "buy",
+      "qty": 1,
+      "price_usd": 96.84,
+      "amount_krw": 131618.0,
+      "meta": {}
     }
   ],
-  "realized_pnl_krw": 0.0,
-  "trades": [],
   "index_meta": {
     "dividends": {},
     "bench_itot_shares": 4.3519742171439,
@@ -48,6 +63,7 @@
           "est_price": 96.7699966430664
         }
       ]
-    }
+    },
+    "last_report_month": "2026-09"
   }
 }
