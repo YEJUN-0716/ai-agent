@@ -1,0 +1,39 @@
+name: 산출물 날짜 점검
+
+# 잡이 성공했는지가 아니라 **결과물이 갱신됐는지**를 본다.
+# 2026-09-02 에 exit 0 으로 성공하면서 2주 동안 아무것도 안 만든 잡을 셋 발견했다.
+# 근거·기준은 tools/healthcheck.py 상단에 있다.
+on:
+  # 평일 저녁 체인(paper-trade 21:30 → analyst 22:07 → scorecard 22:52 UTC)이
+  # 끝난 뒤. 그날 것이 나왔는지 그날 안에 본다.
+  schedule:
+    - cron: "30 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 저장소 체크아웃
+        # ⚠️ fetch-depth: 0 필수 — 점검이 파일 mtime 이 아니라 git log 를 읽는다.
+        # 얕은 클론이면 이력이 없어서 전 항목이 "이력 없음"으로 뜬다.
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Python 3.12 설정
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # 의존성 설치 없음 — 점검은 표준 라이브러리만 쓴다.
+      - name: 점검 (낡은 게 있으면 텔레그램 + 잡 실패)
+        env:
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python tools/healthcheck.py --telegram

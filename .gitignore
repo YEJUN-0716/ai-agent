@@ -8,7 +8,10 @@ token.json
 !.tmp/.gitkeep
 
 # Generated data caches (예: analyze 실행 시 stock-analyzer 가격 패널 캐시가 생김)
-/data/
+# data/ 는 통째로 무시하되 생존 신호 한 줄만 예외.
+# (`/data/` 로 폴더를 막으면 그 아래 예외는 git 이 아예 안 본다 — `/data/*` 여야 한다)
+/data/*
+!/data/heartbeat.json
 /*.parquet
 
 # Python
