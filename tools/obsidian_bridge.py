@@ -34,7 +34,10 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 VAULT = Path(os.environ.get(
     "OBSIDIAN_VAULT", HOME / "OneDrive" / "Desktop" / "ObsidianVault"))
-STOCK_DIR = Path(os.environ.get("STOCK_DIR", HOME / "stock-analyzer"))
+# 2026-08-19 저장소를 합친 뒤 stock-analyzer 는 이 저장소 안에 있다. 기본값이
+# 옛 경로(~/stock-analyzer)로 남아 있던 동안 sync 는 매시간 성공(exit 0)하면서
+# 측정·신호·성적표·Alpaca 를 전부 "없음"으로 건너뛰었다 — 볼트만 조용히 비었다.
+STOCK_DIR = Path(os.environ.get("STOCK_DIR", PROJECT_DIR / "stock-analyzer"))
 MEMORY_DIR = Path(os.environ.get(
     "MEMORY_DIR",
     HOME / ".claude" / "projects"
@@ -566,18 +569,25 @@ def _refresh_stock_repo() -> None:
     성적표 기록은 GitHub Actions 러너가 만들어 origin/main 에 커밋한다.
     이 PC 의 사본을 당겨오지 않으면 볼트는 마지막으로 당긴 날에 멈춘다.
 
-    **작업 중일 때 건드리지 않는 판단은 `stock_sync.working_tree_busy` 하나뿐이다.**
-    여기에 사본을 두면 5분마다 도는 비서 쪽과 갈린다 — 실제로 갈려 있었다.
+    **사람이 그 폴더에서 작업 중이면 당기지 않는다.** 브랜치가 main 이 아니거나
+    수정 중인 파일이 있으면 건너뛴다 — 데이터가 조금 옛것이 되는 편이 남의 작업
+    트리를 흔드는 것보다 훨씬 싸다. 2026-09-02 비서를 폐기하기 전에는 이 판단이
+    `tools/stock_sync.working_tree_busy` 에 있었다(비서와 사본이 갈리지 않게).
+    이제 부르는 곳이 여기 하나뿐이라 그대로 들여왔다.
     """
     import subprocess
 
-    sys.path.insert(0, str(PROJECT_DIR))
-    from tools.stock_sync import working_tree_busy
+    def git(*args) -> str:
+        return subprocess.run(("git", "-C", str(STOCK_DIR), *args),
+                              capture_output=True, text=True, timeout=30).stdout.strip()
 
     try:
-        busy = working_tree_busy(STOCK_DIR)
-        if busy:
-            print(f"[건너뜀] {busy}")
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        if branch != "main":
+            print(f"[건너뜀] 작업 중(브랜치 {branch or '알 수 없음'})이라 최신화를 건너뛰었습니다.")
+            return
+        if git("status", "--porcelain"):
+            print("[건너뜀] 작업 중(수정된 파일 있음)이라 최신화를 건너뛰었습니다.")
             return
         out = subprocess.run(("git", "-C", str(STOCK_DIR), "pull", "--ff-only"),
                              capture_output=True, text=True, timeout=120)
