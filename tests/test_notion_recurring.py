@@ -1,5 +1,7 @@
 """결제일 보정 — 31일 결제가 2월에 사라지면 안 된다. 네트워크 없음."""
 import sys
+
+import pytest
 from datetime import date
 from pathlib import Path
 
@@ -34,3 +36,10 @@ def test_대상달_기본은_이번_달():
 
 def test_대상달을_지정하면_그_달():
     assert nr.대상달(["--month", "2027-02"], date(2026, 9, 17)) == date(2027, 2, 1)
+
+
+@pytest.mark.parametrize("나쁜값", ["2027-2; rm -rf /", "$(whoami)", "2027", ""])
+def test_이상한_달은_거부한다(나쁜값):
+    # 이 값은 수동 실행 입력에서 온다 — 밖에서 온 글자를 그대로 믿지 않는다
+    with pytest.raises(ValueError):
+        nr.대상달(["--month", 나쁜값], date(2026, 9, 17))

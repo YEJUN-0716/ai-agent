@@ -35,10 +35,19 @@ jobs:
           python-version: "3.12"
 
       # 의존성 설치 없음 — 표준 라이브러리만 쓴다.
+      # ⚠️ 수동 실행 입력을 run: 안에 ${{ }} 로 직접 박으면 안 된다. 깃허브가 셸에
+      # 넘기기 **전에** 글자를 갈아끼우기 때문에, month 에 `; rm -rf ...` 를 적으면
+      # 그대로 명령이 된다(스크립트 인젝션). env 로 넘기면 셸이 값으로만 다룬다.
       - name: 반복 항목 입력
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-        run: python tools/notion_recurring.py ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.month && format('--month {0}', inputs.month) || '' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MONTH: ${{ inputs.month }}
+        run: |
+          set --
+          if [ "$DRY_RUN" = "true" ]; then set -- "$@" --dry-run; fi
+          if [ -n "$MONTH" ]; then set -- "$@" --month "$MONTH"; fi
+          python tools/notion_recurring.py "$@"
 
       # 한 달에 한 번만 도는 잡이라, 조용히 실패하면 다음 달까지 아무도 모른다.
       - name: 실패하면 알린다
