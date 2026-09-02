@@ -1,5 +1,5 @@
 {
-  "cash_krw": 66469807.9113155,
+  "cash_krw": 64185918.96958184,
   "positions": {
     "F": {
       "qty": 78,
@@ -30,36 +30,6 @@
         "entry_fill": 111.24
       },
       "avg_price_krw": 157104.2857
-    },
-    "SYK": {
-      "qty": 2,
-      "avg_price_usd": 334.46,
-      "entry_date": "2026-08-18",
-      "plan": {
-        "stop": 314.86,
-        "target": 352.49,
-        "rr": 2.37,
-        "grade": "A",
-        "risk_pct": 3.43,
-        "entry_ref": 326.04,
-        "entry_fill": 334.46
-      },
-      "avg_price_krw": 472358.0
-    },
-    "WFC": {
-      "qty": 54,
-      "avg_price_usd": 85.62000274658203,
-      "avg_price_krw": 119332.0217918884,
-      "entry_date": "2026-08-20",
-      "plan": {
-        "stop": 82.83,
-        "target": 89.28,
-        "rr": 2.15,
-        "grade": "A",
-        "risk_pct": 2.42,
-        "entry_ref": 84.88,
-        "entry_fill": 85.62
-      }
     },
     "C": {
       "qty": 31,
@@ -104,6 +74,36 @@
         "risk_pct": 1.76,
         "entry_ref": 333.43,
         "entry_fill": 336.0
+      }
+    },
+    "HPE": {
+      "qty": 52,
+      "avg_price_usd": 51.9900016784668,
+      "avg_price_krw": 70651.28983464651,
+      "entry_date": "2026-09-02",
+      "plan": {
+        "stop": 49.99,
+        "target": 63.44,
+        "rr": 5.35,
+        "grade": "A",
+        "risk_pct": 4.07,
+        "entry_ref": 52.11,
+        "entry_fill": 51.99
+      }
+    },
+    "ISRG": {
+      "qty": 12,
+      "avg_price_usd": 369.0,
+      "avg_price_krw": 501448.83837890625,
+      "entry_date": "2026-09-02",
+      "plan": {
+        "stop": 361.58,
+        "target": 405.34,
+        "rr": 4.03,
+        "grade": "A",
+        "risk_pct": 2.35,
+        "entry_ref": 370.29,
+        "entry_fill": 369.0
       }
     }
   },
@@ -318,52 +318,6 @@
     {
       "side": "buy",
       "kind": "limit_entry",
-      "symbol": "HPE",
-      "qty": 52,
-      "limit_price": 53.56,
-      "notional_krw": 3827534.7951953122,
-      "placed_date": "2026-09-01",
-      "plan": {
-        "stop": 49.99,
-        "target": 63.44,
-        "rr": 5.35,
-        "grade": "A",
-        "risk_pct": 4.07,
-        "entry_ref": 52.11
-      },
-      "meta": {
-        "score": 60.8,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 58.6,
-          "ict": 96.9,
-          "quant": 59.1,
-          "verdict": 60.8
-        },
-        "analyst_asof": "2026-08-31"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "ISRG",
-      "qty": 12,
-      "limit_price": 376.31,
-      "notional_krw": 6205863.813896485,
-      "placed_date": "2026-09-01",
-      "plan": {
-        "stop": 361.58,
-        "target": 405.34,
-        "rr": 4.03,
-        "grade": "A",
-        "risk_pct": 2.35,
-        "entry_ref": 370.29
-      },
-      "meta": {}
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
       "symbol": "HPQ",
       "qty": 111,
       "limit_price": 25.53,
@@ -388,9 +342,55 @@
         },
         "analyst_asof": "2026-08-31"
       }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "WFC",
+      "qty": 54,
+      "limit_price": 86.52,
+      "notional_krw": 6349076.121445312,
+      "placed_date": "2026-09-02",
+      "plan": {
+        "stop": 82.8,
+        "target": 89.28,
+        "rr": 2.12,
+        "grade": "A",
+        "risk_pct": 2.44,
+        "entry_ref": 84.88
+      },
+      "meta": {
+        "score": 68.9,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 69.4,
+          "ict": 100.0,
+          "quant": 62.1,
+          "verdict": 68.9
+        },
+        "analyst_asof": "2026-09-01"
+      }
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "SYF",
+      "qty": 80,
+      "limit_price": 77.19,
+      "notional_krw": 8391725.926171875,
+      "placed_date": "2026-09-02",
+      "plan": {
+        "stop": 74.91,
+        "target": 79.35,
+        "rr": 2.18,
+        "grade": "B",
+        "risk_pct": 1.83,
+        "entry_ref": 76.31
+      },
+      "meta": {}
     }
   ],
-  "realized_pnl_krw": -952835.92589275,
+  "realized_pnl_krw": -934116.91243988,
   "trades": [
     {
       "date": "2026-07-31",
@@ -1153,6 +1153,78 @@
       "target": 373.16,
       "rr": 6.77,
       "risk_pct": 1.76,
+      "plan": true
+    },
+    {
+      "date": "2026-09-02",
+      "symbol": "SYK",
+      "side": "sell",
+      "qty": 2,
+      "price_usd": 314.86,
+      "amount_krw": 855752.0,
+      "pnl_krw": -88964.0,
+      "return_pct": -5.86,
+      "outcome": "loss",
+      "r_realized": -1.753,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-09-02",
+      "symbol": "WFC",
+      "side": "sell",
+      "qty": 54,
+      "price_usd": 89.28,
+      "amount_krw": 6551613.0,
+      "pnl_krw": 107683.0,
+      "return_pct": 4.27,
+      "outcome": "win",
+      "r_realized": 1.785,
+      "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-09-02",
+      "symbol": "HPE",
+      "side": "buy",
+      "qty": 52,
+      "price_usd": 51.99,
+      "amount_krw": 3673867.0,
+      "limit_price": 53.56,
+      "placed_date": "2026-09-01",
+      "meta": {
+        "score": 60.8,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 58.6,
+          "ict": 96.9,
+          "quant": 59.1,
+          "verdict": 60.8
+        },
+        "analyst_asof": "2026-08-31"
+      },
+      "grade": "A",
+      "stop": 49.99,
+      "target": 63.44,
+      "rr": 5.35,
+      "risk_pct": 4.07,
+      "plan": true
+    },
+    {
+      "date": "2026-09-02",
+      "symbol": "ISRG",
+      "side": "buy",
+      "qty": 12,
+      "price_usd": 369.0,
+      "amount_krw": 6017386.0,
+      "limit_price": 376.31,
+      "placed_date": "2026-09-01",
+      "meta": {},
+      "grade": "A",
+      "stop": 361.58,
+      "target": 405.34,
+      "rr": 4.03,
+      "risk_pct": 2.35,
       "plan": true
     }
   ],

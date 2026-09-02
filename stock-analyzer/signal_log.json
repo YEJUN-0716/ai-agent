@@ -390,6 +390,30 @@
       "outcome_date": null,
       "outcome_price": null,
       "return_pct": null
+    },
+    {
+      "id": "HPE-2026-09-02",
+      "symbol": "HPE",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-09-02",
+      "entry_price": 51.99,
+      "score": 60.8,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "ISRG-2026-09-02",
+      "symbol": "ISRG",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-09-02",
+      "entry_price": 369.0,
+      "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
     }
   ]
 }
