@@ -1,0 +1,47 @@
+name: 가계부 반복 항목 입력
+
+# 노션에는 "매달 반복되는 행" 이 없다. 손으로 채우는 표는 언젠가 반드시 빈다.
+# 근거·항목 목록은 tools/notion_recurring.py 상단에 있다.
+on:
+  # 매월 1일 00:00 UTC (한국시간 오전 9시).
+  schedule:
+    - cron: "0 0 1 * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "넣지 않고 무엇이 들어갈지만 본다"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  recurring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v5
+
+      - name: Python 3.12 설정
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # 의존성 설치 없음 — 표준 라이브러리만 쓴다.
+      - name: 반복 항목 입력
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        run: python tools/notion_recurring.py ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      # 한 달에 한 번만 도는 잡이라, 조용히 실패하면 다음 달까지 아무도 모른다.
+      - name: 실패하면 알린다
+        if: failure()
+        env:
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "import sys; sys.path.insert(0, 'tools'); import healthcheck; \
+            healthcheck.send_telegram('⚠️ 가계부 반복 항목 입력이 실패했습니다. 이번 달 구독료가 안 들어갔을 수 있습니다.')"
