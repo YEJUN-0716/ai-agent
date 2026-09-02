@@ -26,3 +26,11 @@ def test_등록된_항목은_가계부_선택지_안에_있다():
         assert item["분류"] in 분류, item
         assert item["구분"] in {"지출", "수입"}, item
         assert 1 <= item["일"] <= 31, item
+
+
+def test_대상달_기본은_이번_달():
+    assert nr.대상달([], date(2026, 9, 17)) == date(2026, 9, 1)
+
+
+def test_대상달을_지정하면_그_달():
+    assert nr.대상달(["--month", "2027-02"], date(2026, 9, 17)) == date(2027, 2, 1)
