@@ -12,6 +12,10 @@ on:
         description: "넣지 않고 무엇이 들어갈지만 본다"
         type: boolean
         default: false
+      month:
+        description: "특정 달만 채운다 (YYYY-MM). 비우면 이번 달"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -34,7 +38,7 @@ jobs:
       - name: 반복 항목 입력
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-        run: python tools/notion_recurring.py ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: python tools/notion_recurring.py ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.month && format('--month {0}', inputs.month) || '' }}
 
       # 한 달에 한 번만 도는 잡이라, 조용히 실패하면 다음 달까지 아무도 모른다.
       - name: 실패하면 알린다

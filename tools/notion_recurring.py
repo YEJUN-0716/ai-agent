@@ -12,8 +12,9 @@
 두 번 돌든, 사장님이 이미 손으로 적었든, 결과는 같다.
 
 사용법
-  python tools/notion_recurring.py            # 이번 달 것을 채운다
-  python tools/notion_recurring.py --dry-run  # 무엇을 넣을지만 보여준다
+  python tools/notion_recurring.py                  # 이번 달 것을 채운다
+  python tools/notion_recurring.py --dry-run        # 무엇을 넣을지만 보여준다
+  python tools/notion_recurring.py --month 2027-02  # 특정 달을 채운다(빠진 달 메우기)
 
 환경변수: NOTION_TOKEN (내부 통합 토큰. 통합을 「살림」 페이지에 연결해야 보인다)
 """
@@ -82,21 +83,28 @@ def 넣기(item: dict, 날짜: date) -> None:
     })
 
 
+def 대상달(argv: list[str], 오늘: date) -> date:
+    """--month YYYY-MM 이 있으면 그 달, 없으면 이번 달의 1일."""
+    if "--month" in argv:
+        연, 월 = argv[argv.index("--month") + 1].split("-")
+        return date(int(연), int(월), 1)
+    return date(오늘.year, 오늘.month, 1)
+
+
 def main() -> int:
     if not os.environ.get("NOTION_TOKEN"):
         print("NOTION_TOKEN 이 없다. 노션 내부 통합 토큰을 환경변수(러너는 시크릿)에 넣어야 한다.",
               file=sys.stderr)
         return 1
 
-    오늘 = date.today()
-    첫날 = date(오늘.year, 오늘.month, 1)
-    말일 = date(오늘.year, 오늘.month, calendar.monthrange(오늘.year, 오늘.month)[1])
+    첫날 = 대상달(sys.argv, date.today())
+    말일 = date(첫날.year, 첫날.month, calendar.monthrange(첫날.year, 첫날.month)[1])
     dry = "--dry-run" in sys.argv
 
     for item in RECURRING:
-        날짜 = 결제일(오늘.year, 오늘.month, item["일"])
+        날짜 = 결제일(첫날.year, 첫날.month, item["일"])
         if 이미_있나(item["항목"], 첫날, 말일):
-            print(f"건너뜀 {item['항목']} — {오늘:%Y-%m} 에 이미 있다")
+            print(f"건너뜀 {item['항목']} — {첫날:%Y-%m} 에 이미 있다")
             continue
         if dry:
             print(f"[예정] {item['항목']} {item['금액']}원 → {날짜}")
