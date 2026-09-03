@@ -77,8 +77,17 @@ Home 을 다시 그린다. **덮어쓰기 방식** — `Agent Memory/`, `Stock A
 안 노트와 `Home.md` 는 직접 고쳐도 다음 push 때 덮어써진다(각 노트 상단에 표식 있음).
 
 ### 3) 무인 갱신 (매시간)
-작업 스케줄러 `ObsidianSync` 가 `tools/obsidian_sync.cmd` → `sync` 를 매시간 부른다.
-`sync` 는 stock-analyzer 를 원격에 맞춘 뒤 push 한다. 로그는 `.tmp/obsidian_sync.log`.
+작업 스케줄러 `ObsidianSync` 가 `tools/obsidian_sync_hidden.vbs` → `obsidian_sync.cmd`
+→ `sync` 를 매시간 부른다. `sync` 는 stock-analyzer 를 원격에 맞춘 뒤 push 한다.
+로그는 `.tmp/obsidian_sync.log`.
+
+**vbs 한 겹이 왜 있나 (2026-09-03).** 스케줄러가 `.cmd` 를 직접 부르면 Interactive
+로그온이라 **매시간 검은 콘솔 창이 깜빡인다** — 사장님이 다른 작업 중이면 포커스를
+뺏긴다. 정석은 작업 principal 을 S4U(로그온 여부 무관 실행)로 바꾸는 건데 **관리자
+권한이 필요해서** (`Set-ScheduledTask: Access is denied`) 못 썼다. `wscript.exe` 로
+vbs 를 부르면 콘솔이 아예 안 생긴다. vbs 는 `Run(..., 0, True)` 의 반환값을
+`WScript.Quit` 으로 넘겨서 **실패 코드가 스케줄러까지 그대로 올라간다** — 창을
+숨긴다고 고장을 숨기면 안 된다.
 
 ## 경계 / 주의
 - 볼트의 관리 노트는 전부 **출력**이라 push 가 덮어쓴다. 볼트에서 고쳐도 남지 않는다.
