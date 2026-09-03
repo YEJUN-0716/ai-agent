@@ -1,5 +1,5 @@
 {
-  "cash_krw": 64185918.96958184,
+  "cash_krw": 67711099.75430351,
   "positions": {
     "F": {
       "qty": 78,
@@ -74,21 +74,6 @@
         "risk_pct": 1.76,
         "entry_ref": 333.43,
         "entry_fill": 336.0
-      }
-    },
-    "HPE": {
-      "qty": 52,
-      "avg_price_usd": 51.9900016784668,
-      "avg_price_krw": 70651.28983464651,
-      "entry_date": "2026-09-02",
-      "plan": {
-        "stop": 49.99,
-        "target": 63.44,
-        "rr": 5.35,
-        "grade": "A",
-        "risk_pct": 4.07,
-        "entry_ref": 52.11,
-        "entry_fill": 51.99
       }
     },
     "ISRG": {
@@ -388,9 +373,37 @@
         "entry_ref": 76.31
       },
       "meta": {}
+    },
+    {
+      "side": "buy",
+      "kind": "limit_entry",
+      "symbol": "ADBE",
+      "qty": 14,
+      "limit_price": 261.65,
+      "notional_krw": 4967566.487341308,
+      "placed_date": "2026-09-03",
+      "plan": {
+        "stop": 248.76,
+        "target": 294.53,
+        "rr": 4.97,
+        "grade": "A",
+        "risk_pct": 2.99,
+        "entry_ref": 256.42
+      },
+      "meta": {
+        "score": 64.1,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 61.0,
+          "ict": 73.6,
+          "quant": 69.0,
+          "verdict": 64.1
+        },
+        "analyst_asof": "2026-09-01"
+      }
     }
   ],
-  "realized_pnl_krw": -934116.91243988,
+  "realized_pnl_krw": -1082803.1991198189,
   "trades": [
     {
       "date": "2026-07-31",
@@ -1225,6 +1238,20 @@
       "target": 405.34,
       "rr": 4.03,
       "risk_pct": 2.35,
+      "plan": true
+    },
+    {
+      "date": "2026-09-02",
+      "symbol": "HPE",
+      "side": "sell",
+      "qty": 52,
+      "price_usd": 49.99,
+      "amount_krw": 3525181.0,
+      "pnl_krw": -148686.0,
+      "return_pct": -3.85,
+      "outcome": "loss",
+      "r_realized": -0.943,
+      "grade": "A",
       "plan": true
     }
   ],
