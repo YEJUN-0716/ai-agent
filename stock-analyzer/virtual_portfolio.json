@@ -1,5 +1,5 @@
 {
-  "cash_krw": 67711099.75430351,
+  "cash_krw": 62108968.275848925,
   "positions": {
     "F": {
       "qty": 78,
@@ -89,6 +89,21 @@
         "risk_pct": 2.35,
         "entry_ref": 370.29,
         "entry_fill": 369.0
+      }
+    },
+    "NFLX": {
+      "qty": 53,
+      "avg_price_usd": 78.53,
+      "avg_price_krw": 105700.59393310547,
+      "entry_date": "2026-09-04",
+      "plan": {
+        "stop": 74.9,
+        "target": 91.48,
+        "rr": 6.9,
+        "grade": "A",
+        "risk_pct": 2.73,
+        "entry_ref": 77.0,
+        "entry_fill": 78.53
       }
     }
   },
@@ -270,34 +285,6 @@
           "verdict": 63.9
         },
         "analyst_asof": "2026-08-20"
-      }
-    },
-    {
-      "side": "buy",
-      "kind": "limit_entry",
-      "symbol": "NFLX",
-      "qty": 53,
-      "limit_price": 78.53,
-      "notional_krw": 5726328.101795655,
-      "placed_date": "2026-08-28",
-      "plan": {
-        "stop": 74.9,
-        "target": 91.48,
-        "rr": 6.9,
-        "grade": "A",
-        "risk_pct": 2.73,
-        "entry_ref": 77.0
-      },
-      "meta": {
-        "score": 58.8,
-        "score_role": "observed",
-        "analyst": {
-          "chart": 55.8,
-          "ict": 65.3,
-          "quant": 65.0,
-          "verdict": 58.8
-        },
-        "analyst_asof": "2026-08-26"
       }
     },
     {
@@ -1252,6 +1239,33 @@
       "outcome": "loss",
       "r_realized": -0.943,
       "grade": "A",
+      "plan": true
+    },
+    {
+      "date": "2026-09-04",
+      "symbol": "NFLX",
+      "side": "buy",
+      "qty": 53,
+      "price_usd": 78.53,
+      "amount_krw": 5602131.0,
+      "limit_price": 78.53,
+      "placed_date": "2026-08-28",
+      "meta": {
+        "score": 58.8,
+        "score_role": "observed",
+        "analyst": {
+          "chart": 55.8,
+          "ict": 65.3,
+          "quant": 65.0,
+          "verdict": 58.8
+        },
+        "analyst_asof": "2026-08-26"
+      },
+      "grade": "A",
+      "stop": 74.9,
+      "target": 91.48,
+      "rr": 6.9,
+      "risk_pct": 2.73,
       "plan": true
     }
   ],

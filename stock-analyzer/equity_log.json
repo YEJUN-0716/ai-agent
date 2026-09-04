@@ -187,6 +187,14 @@
       "unrealized_pnl_krw": 579492.73,
       "n_positions": 6,
       "deposited": 90000000.0
+    },
+    {
+      "date": "2026-09-04",
+      "equity": 98476716.04,
+      "spy_price": 770.19,
+      "unrealized_pnl_krw": 369352.83,
+      "n_positions": 7,
+      "deposited": 90000000.0
     }
   ]
 }

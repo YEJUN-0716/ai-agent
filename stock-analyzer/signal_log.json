@@ -135,9 +135,9 @@
       "entry_price": 45.04,
       "score": 65.9,
       "rsi": 54.4,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-09-03",
+      "outcome_price": 43.59,
+      "return_pct": -3.22
     },
     {
       "id": "CVS-2026-08-05",
@@ -147,9 +147,9 @@
       "entry_price": 93.72,
       "score": 60.5,
       "rsi": 49.9,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-09-03",
+      "outcome_price": 97.2,
+      "return_pct": 3.71
     },
     {
       "id": "T-2026-08-05",
@@ -159,9 +159,9 @@
       "entry_price": 22.66,
       "score": 60.2,
       "rsi": 55.9,
-      "outcome_date": null,
-      "outcome_price": null,
-      "return_pct": null
+      "outcome_date": "2026-09-03",
+      "outcome_price": 26.19,
+      "return_pct": 15.58
     },
     {
       "id": "VZ-2026-08-07",
@@ -410,6 +410,18 @@
       "entry_date": "2026-09-02",
       "entry_price": 369.0,
       "score": null,
+      "rsi": null,
+      "outcome_date": null,
+      "outcome_price": null,
+      "return_pct": null
+    },
+    {
+      "id": "NFLX-2026-09-04",
+      "symbol": "NFLX",
+      "action": "\ub9e4\uc218",
+      "entry_date": "2026-09-04",
+      "entry_price": 78.53,
+      "score": 58.8,
       "rsi": null,
       "outcome_date": null,
       "outcome_price": null,
