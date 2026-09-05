@@ -72,3 +72,8 @@ data/smallcap/prices_adj/
 
 # 스크래치 — 버려도 되는 중간 산출물
 .tmp/
+
+# 빗각 8단계 번인 장부. 러너 상태(열린 포지션·채널 파라미터)가 여기 산다 —
+# 무시하면 다음 회차가 포지션을 못 보고 다리를 다시 걸거나 타임아웃을 놓친다.
+!data/bitgak_paper_ledger.jsonl
+!data/bitgak_paper_probe.json
