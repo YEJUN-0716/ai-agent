@@ -177,7 +177,7 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int) -> None:
     span = (min(d.index[0] for _, d in tasks).date(),
             max(d.index[-1] for _, d in tasks).date())
 
-    cached = json.loads(CACHE.read_text()) if CACHE.exists() else {}
+    cached = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
     if mkt in cached:
         real_arm, plac_arm = cached[mkt]
         print(f"  (캐시 {CACHE} 에서 읽음 — 지우면 다시 스캔한다)", flush=True)
@@ -192,7 +192,7 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int) -> None:
                 if i % 50 == 0 or i == len(tasks):
                     print(f"  ..{i}/{len(tasks)}종목", flush=True)
         cached[mkt] = (real_arm, plac_arm)
-        CACHE.write_text(json.dumps(cached))
+        CACHE.write_text(json.dumps(cached), encoding="utf-8")
     tickers = sorted(set(real_arm) | set(plac_arm))
 
     print(f"\n### {label} — {len(tasks)}종목 · {span[0]}~{span[1]}")
