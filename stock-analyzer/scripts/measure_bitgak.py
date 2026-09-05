@@ -66,7 +66,8 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "scripts"))
 
 from pilot_bitgak_power import (  # noqa: E402  — 규칙은 정찰 것을 그대로 쓴다
-    MIN_LEN, US_PANEL, _ohlcv, crypto_panel, scan,
+    LARGECAP_PANEL, LARGECAP_START, LARGECAP_UNIVERSE, MIN_LEN, US_PANEL,
+    _ohlcv, crypto_panel, member_masks, scan,
 )
 
 REPS, SEED = 2000, 20260905     # 사전 등록 3.1
@@ -75,28 +76,42 @@ CACHE = Path("data/bitgak_arms.json")  # 스캔 결과만 캐시 — 집계는 �
                                        # 코드 실행이 아니라 숫자 읽기여야 한다.
                                        # `data/` 는 gitignore — 지우면 그냥 다시 스캔한다
 GATE = 0.14                     # 트레이드 기하학 OOS — 이 자보다 무디면 판정 안 한다
-COST_R = {"us": 0.020, "crypto": 0.025}       # 사전 등록 §4 — 봉인
-COST_PCT = {"us": 0.0012, "crypto": 0.0030}   # 왕복 12bp / 30bp (참고용 환산에만)
+COST_R = {"us": 0.020, "crypto": 0.025, "largecap": 0.019}   # 사전 등록 §4 — 봉인
+COST_PCT = {"us": 0.0012, "crypto": 0.0030, "largecap": 0.0012}  # 왕복 12bp / 30bp
+
+# 5단계 참고 행 (사전 등록 §6) — 판정이 아니라 해석용. 진입일로만 자른다.
+SPAN_A = ("2020-03-01", "2026-12-31")   # 유니버스 고정, 창 효과
+SPAN_C = ("2017-09-01", "2020-02-29")   # 이번에 새로 생긴 구간만
+DROP_3B = (2024, 2025, 2026)            # ③b — 최근 3년을 통째로
 
 
 # ── 두 팔 ──────────────────────────────────────────────────────
 def _job(args):
-    tk, df = args
+    tk, df, mask = args
     seed = zlib.crc32(tk.encode()) % 10 ** 6      # 정찰과 같은 씨앗
     out = {}
     for arm, s in (("real", None), ("placebo", seed)):
         out[arm] = [(int(df.index[t["idx"]].year), int(df.index[t["idx"]].toordinal()),
                      float(t["r"]), float(t["risk_pct"]), t["outcome"])
-                    for t in scan(df, seed=s)]
+                    for t in scan(df, seed=s) if mask is None or mask[t["idx"]]]
     return tk, out
 
 
 # ── 집계 ───────────────────────────────────────────────────────
-def _net(rows, mkt, per_trade=False, resolved_only=False, drop_year=None):
-    """비용 차감 R. `per_trade` 면 채널 폭 대비로 빼는 참고값(자유도 H)."""
+def _net(rows, mkt, per_trade=False, resolved_only=False, drop_year=None, span=None):
+    """비용 차감 R. `per_trade` 면 채널 폭 대비로 빼는 참고값(자유도 H).
+
+    `drop_year` 는 한 해(③a) 또는 여러 해(③b). `span` 은 (시작, 끝) 날짜 —
+    **진입일**로만 자른다(참고 A/C). 규칙은 안 건드린다.
+    """
+    drop = {drop_year} if isinstance(drop_year, int) else set(drop_year or ())
+    lo_o, hi_o = ((pd.Timestamp(span[0]).toordinal(), pd.Timestamp(span[1]).toordinal())
+                  if span else (None, None))
     out = []
     for year, _day, r, risk_pct, outcome in rows:
-        if drop_year is not None and year == drop_year:
+        if year in drop:
+            continue
+        if lo_o is not None and not (lo_o <= _day <= hi_o):
             continue
         if resolved_only and outcome not in ("win", "loss"):
             continue
@@ -171,11 +186,25 @@ def _overlap(real_arm, plac_arm) -> float:
     return hit / tot if tot else float("nan")
 
 
-def market(panel: pd.DataFrame, label: str, mkt: str, workers: int) -> None:
-    tasks = [(tk, d) for tk in sorted({t for _, t in panel.columns})
-             if len(d := _ohlcv(panel, tk)) >= MIN_LEN]
-    span = (min(d.index[0] for _, d in tasks).date(),
-            max(d.index[-1] for _, d in tasks).date())
+def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
+           universe: Path = None, start=None) -> None:
+    """`universe` 가 있으면 5단계 — 진입일이 그 달의 구성종목일 때만 센다.
+
+    스캔은 전 이력 위에서 돈다(매물대 252봉 예열). 거르는 건 진입일뿐이고
+    규칙 A~F 는 손도 안 댄다 (사전 등록 §1, `pilot_bitgak_power.member_masks`).
+    """
+    frames = {tk: d for tk in sorted({t for _, t in panel.columns})
+              if len(d := _ohlcv(panel, tk)) >= MIN_LEN}
+    masks = ({} if universe is None
+             else member_masks(universe, {t: d.index for t, d in frames.items()}, start))
+    tasks = [(tk, d, None if universe is None else masks[tk])
+             for tk, d in frames.items() if universe is None or tk in masks]
+    if universe is None:
+        span = (min(d.index[0] for _, d, _ in tasks).date(),
+                max(d.index[-1] for _, d, _ in tasks).date())
+    else:   # 노출은 이력 전체가 아니라 **구성종목이었던 날**만
+        span = (min(d.index[m][0] for _, d, m in tasks).date(),
+                max(d.index[m][-1] for _, d, m in tasks).date())
 
     cached = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
     if mkt in cached:
@@ -222,13 +251,23 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int) -> None:
     for y in years:
         w = _verdict(real_arm, plac_arm, tickers, mkt, mde, drop_year=y)
         loyo[y] = w
-    ok3 = all(w["c1"] and w["c2"] for w in loyo.values())
-    print(f"  ③ 안정   그 해를 빼고 다시 → {_ox(ok3)}")
+    ok3a = all(w["c1"] and w["c2"] for w in loyo.values())
+    ok3 = ok3a
+    print(f"  ③{'a' if universe is not None else ''} 안정   그 해를 빼고 다시 → {_ox(ok3a)}")
     for y, w in loyo.items():
         # 소수 3자리로는 ② 의 경계(차이 vs MDE)가 같은 값으로 보인다 — 4자리로 찍는다.
         print(f"       −{y}  ①{_ox(w['c1'])}(하한 {w['lo_real']:+.4f}R) "
               f"②{_ox(w['c2'])}(차이 {w['diff']:+.4f}R vs MDE {mde:.4f}R, "
               f"하한 {w['lo_diff']:+.4f}R)")
+
+    if universe is not None:      # ③b — 최근 3년을 통째로 (사전 등록 5.2)
+        b = _verdict(real_arm, plac_arm, tickers, mkt, mde, drop_year=DROP_3B)
+        ok3b = b["c1"] and b["c2"]
+        ok3 = ok3a and ok3b
+        print(f"  ③b 안정  {'·'.join(map(str, DROP_3B))} 를 통째로 빼고 → {_ox(ok3b)}"
+              f"   ①{_ox(b['c1'])}(하한 {b['lo_real']:+.4f}R) "
+              f"②{_ox(b['c2'])}(차이 {b['diff']:+.4f}R vs MDE {mde:.4f}R, "
+              f"하한 {b['lo_diff']:+.4f}R)   n={b['n']}")
 
     # 분기 순서가 결론을 바꾼다 — 사전 등록 3.3 의 네 갈래를 그 순서로 읽는다.
     # ③ 은 "①② 가 통과했을 때 그게 한 해가 만든 값인가"를 묻는 조건이다. 전
@@ -254,6 +293,12 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int) -> None:
     print(f"  참고 비용/폭   진짜 {r3['mean']:+.3f}R  차이 {r3['diff']:+.3f}R  "
           f"①{_ox(r3['c1'])}②{_ox(r3['c2'])}   (자유도 H — 판정은 고정 "
           f"{COST_R[mkt]}R)")
+    if universe is not None:      # 사전 등록 §6 — 판정이 아니라 해석용
+        for name, sp in (("A 창 2020-03~", SPAN_A), ("C 창 ~2020-02", SPAN_C)):
+            w = _verdict(real_arm, plac_arm, tickers, mkt, mde, span=sp)
+            print(f"  참고 {name}  진짜 {w['mean']:+.3f}R  위약 {w['plac']:+.3f}R  "
+                  f"차이 {w['diff']:+.3f}R (하한 {w['lo_diff']:+.4f}R)  "
+                  f"①{_ox(w['c1'])}②{_ox(w['c2'])}   n={w['n']}")
     print(f"  겹침          두 팔 진입이 같은 종목·같은 날 {_overlap(real_arm, plac_arm) * 100:.1f}%"
           f"   (위약이 닮은 만큼 MDE 는 하한이다)")
 
@@ -271,8 +316,14 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int) -> None:
 
 
 def run() -> None:
-    workers = int(sys.argv[1]) if len(sys.argv) > 1 else max((os.cpu_count() or 2) - 1, 1)
+    args = [a for a in sys.argv[1:] if a != "largecap"]
+    workers = int(args[0]) if args else max((os.cpu_count() or 2) - 1, 1)
     print(f"워커 {workers} · 부트스트랩 {REPS}회 시드 {SEED} · 게이트 {GATE}R", flush=True)
+    if "largecap" in sys.argv[1:]:      # 5단계 — 편향 없는 PIT 대형주 패널
+        market(pd.read_parquet(LARGECAP_PANEL),
+               "미국주식 (PIT 대형주 · 5단계) — 판정", "largecap", workers,
+               universe=LARGECAP_UNIVERSE, start=LARGECAP_START)
+        return
     market(pd.read_parquet(US_PANEL), "미국주식 (대형주 패널) — 주 판정", "us", workers)
     market(crypto_panel(), "크립토 (yfinance 일봉) — 부 판정", "crypto", workers)
     print("\n다중검정: 두 시장에 각각 양측 5% 를 썼다. 주 판정은 미국주식이다.")
@@ -318,7 +369,20 @@ def selftest() -> None:
     b = {"T0": [(2020, 6, 0.0, 0.06, "win")]}
     assert abs(_overlap(a, b) - 0.5) < 1e-12
 
-    print("selftest OK — 비용·짝짓기·LOYO·타임아웃·겹침 5종")
+    # ⑦ ③b — 여러 해를 한꺼번에 뺀다 (③a 의 한 해 빼기와 같은 자리)
+    many = {"T0": mk([1.0], 2023) + mk([-1.0], 2024) + mk([-1.0], 2025)}
+    assert _net(many["T0"], "us", drop_year=(2024, 2025)).size == 1
+    assert _net(many["T0"], "us", drop_year=2024).size == 2
+
+    # ⑧ 참고 행 A/C — 진입일로만 자른다. 경계는 양끝 포함.
+    o = lambda d: pd.Timestamp(d).toordinal()
+    days = [(2019, o("2019-06-01"), 1.0, 0.06, "win"),
+            (2020, o("2020-03-01"), 1.0, 0.06, "win"),
+            (2021, o("2021-06-01"), 1.0, 0.06, "win")]
+    assert _net(days, "us", span=SPAN_C).size == 1        # 2019 만
+    assert _net(days, "us", span=SPAN_A).size == 2        # 2020-03-01 포함
+
+    print("selftest OK — 비용·짝짓기·LOYO·타임아웃·겹침·③b·창 7종")
 
 
 if __name__ == "__main__":
