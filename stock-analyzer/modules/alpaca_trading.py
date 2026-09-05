@@ -297,7 +297,8 @@ def place_market_sell(symbol: str, qty,
 def place_stop_sell(symbol: str, qty: int, stop_price: float,
                     client_id: str = "", client_secret: str = "",
                     account_seq: str = "",
-                    dry_run: bool = False) -> dict:
+                    dry_run: bool = False, tif: str = "day",
+                    client_order_id: str = "") -> dict:
     """손절 **스톱** 매도. 가격이 stop_price 를 건드리면 시장가로 전환된다.
 
     백테스트는 손절가에 정확히 체결된다고 가정한다. 실제로는 트리거된 뒤
@@ -306,6 +307,9 @@ def place_stop_sell(symbol: str, qty: int, stop_price: float,
 
     당일(day)로 건다 — 단타는 15:45 에 전량 청산하므로 스톱이 밤을 넘길 일이
     없고, GTC 로 두면 다음 날 갭에 엉뚱하게 터진다.
+
+    `tif` 기본값이 그 "day" 다 — **기존 호출자의 body 는 한 글자도 안 바뀐다.**
+    빗각 8단계는 40봉을 들고 가므로 `tif="gtc"` 로 건다(스윙은 밤을 넘겨야 한다).
     """
     qty = int(qty)
     if qty < 1:
@@ -318,14 +322,137 @@ def place_stop_sell(symbol: str, qty: int, stop_price: float,
         return {"id": "dry_run", "symbol": symbol, "qty": qty,
                 "stop_price": stop_price, "status": "dry_run"}
 
-    return _submit({
+    body = {
         "symbol":        symbol,
         "qty":           str(qty),
         "side":          "sell",
         "type":          "stop",
         "stop_price":    str(round(float(stop_price), 2)),
-        "time_in_force": "day",
-    }, client_id, client_secret)
+        "time_in_force": tif,
+    }
+    if client_order_id:
+        body["client_order_id"] = client_order_id
+    return _submit(body, client_id, client_secret)
+
+
+def place_limit_sell(symbol: str, qty: int, limit_price: float,
+                     client_id: str = "", client_secret: str = "",
+                     account_seq: str = "",
+                     dry_run: bool = False, tif: str = "gtc",
+                     client_order_id: str = "") -> dict:
+    """익절 **지정가** 매도. `place_limit_buy` 의 매도판이다.
+
+    `place_limit_buy` 는 매수만 걸었다 — 그 docstring 이 "손절·목표 라인은 아직
+    안 붙는다"고 적어 둔 자리가 여기다. 목표선 다리(J-3)가 이 주문이다.
+
+    기본 GTC: 목표선은 며칠~몇 주 뒤에 닿는다. day 로 걸면 매일 만료돼 밤사이
+    갭업이 그냥 지나간다.
+    """
+    qty = int(qty)
+    if qty < 1:
+        raise ValueError(f"{symbol} 지정가 매도 수량이 1주 미만입니다 (소수점 매매 불가).")
+    if limit_price <= 0:
+        raise ValueError(f"{symbol} 목표가가 0 이하입니다: {limit_price}")
+
+    if dry_run:
+        print(f"  [DRY_RUN] 지정가 매도: {symbol} {qty}주 @ ${limit_price:,.2f}")
+        return {"id": "dry_run", "symbol": symbol, "qty": qty,
+                "limit_price": limit_price, "status": "dry_run"}
+
+    body = {
+        "symbol":        symbol,
+        "qty":           str(qty),
+        "side":          "sell",
+        "type":          "limit",
+        "limit_price":   str(round(float(limit_price), 2)),
+        "time_in_force": tif,
+    }
+    if client_order_id:
+        body["client_order_id"] = client_order_id
+    return _submit(body, client_id, client_secret)
+
+
+# ── MOC (market-on-close) ──────────────────────────────────────────────
+# `time_in_force: "cls"` 가 마감 경매 주문이다. 이 두 글자가 틀리면 Alpaca 는
+# **당일 시장가**로 받아 장중에 체결한다 — 규칙(종가 진입)이 아닌 매매가 된다.
+# 조용히 틀리는 종류라 selftest ① 이 body 를 글자 그대로 검사한다.
+#
+# 컷오프는 15:50 ET. 그 뒤 제출은 거절된다(러너가 시각을 직접 검사하는 이유).
+def _moc(symbol: str, qty: int, side: str, api_key: str, secret_key: str,
+         dry_run: bool, client_order_id: str) -> dict:
+    qty = int(qty)
+    if qty < 1:
+        raise ValueError(f"{symbol} MOC 수량이 1주 미만입니다 (소수점 매매 불가).")
+    if dry_run:
+        print(f"  [DRY_RUN] MOC {side}: {symbol} {qty}주")
+        return {"id": "dry_run", "symbol": symbol, "qty": qty, "status": "dry_run"}
+    body = {
+        "symbol":        symbol,
+        "qty":           str(qty),
+        "side":          side,
+        "type":          "market",
+        "time_in_force": "cls",
+    }
+    if client_order_id:
+        body["client_order_id"] = client_order_id
+    return _submit(body, api_key, secret_key)
+
+
+def place_moc_buy(symbol: str, qty: int,
+                  client_id: str = "", client_secret: str = "",
+                  account_seq: str = "",
+                  dry_run: bool = False, client_order_id: str = "") -> dict:
+    """진입 **MOC** 매수 (J-1) — 당일 공식 종가로 체결된다."""
+    return _moc(symbol, qty, "buy", client_id, client_secret, dry_run, client_order_id)
+
+
+def place_moc_sell(symbol: str, qty: int,
+                   client_id: str = "", client_secret: str = "",
+                   account_seq: str = "",
+                   dry_run: bool = False, client_order_id: str = "") -> dict:
+    """타임아웃 **MOC** 매도 (J-4) — 40봉째 종가 청산."""
+    return _moc(symbol, qty, "sell", client_id, client_secret, dry_run, client_order_id)
+
+
+def replace_order(order_id: str, limit_price: float = None,
+                  stop_price: float = None, qty: int = None,
+                  client_id: str = "", client_secret: str = "",
+                  dry_run: bool = False, client_order_id: str = "") -> dict:
+    """대기 중인 주문의 **가격만** 바꾼다. PATCH /v2/orders/{id}.
+
+    채널선이 기울어져 있어 손절·목표 다리 값이 매 거래일 바뀐다. 취소 후
+    재제출로 하면 그 사이 몇 초 동안 **다리 없는 포지션**이 생긴다 — 정정이
+    그 창을 없앤다.
+
+    ⚠️ Alpaca 는 정정을 "옛 주문 replaced + **새 주문 생성**"으로 처리한다.
+    반환되는 id 는 **새 id** 이고 옛 id 는 죽는다. 호출자가 id 를 갱신하지 않으면
+    다음 날 정정이 죽은 주문을 때리고, 상호 취소가 살아 있는 다리를 못 찾는다.
+    """
+    if dry_run:
+        print(f"  [DRY_RUN] 주문 정정: {order_id} limit={limit_price} stop={stop_price}")
+        return {"id": order_id, "status": "dry_run"}
+
+    body = {}
+    if limit_price is not None:
+        body["limit_price"] = str(round(float(limit_price), 2))
+    if stop_price is not None:
+        body["stop_price"] = str(round(float(stop_price), 2))
+    if qty is not None:
+        body["qty"] = str(int(qty))
+    if client_order_id:
+        body["client_order_id"] = client_order_id
+    if not body:
+        raise ValueError("정정할 값이 하나도 없습니다.")
+
+    resp = _request_with_retry("PATCH", f"{base_url()}/v2/orders/{order_id}",
+                               headers=_headers(client_id, client_secret),
+                               json=body, timeout=15)
+    if resp.status_code >= 400:
+        raise requests.HTTPError(
+            f"Alpaca 주문 정정 거절 HTTP {resp.status_code}: {resp.text}", response=resp)
+    data = resp.json()
+    return {"id": str(data.get("id", "")), "status": str(data.get("status", "")),
+            "_raw": data}
 
 
 # ── 체결 확인 ──────────────────────────────────────────────────────────
