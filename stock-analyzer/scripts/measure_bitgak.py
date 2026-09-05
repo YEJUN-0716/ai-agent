@@ -186,6 +186,17 @@ def _overlap(real_arm, plac_arm) -> float:
     return hit / tot if tot else float("nan")
 
 
+def _cache_key(mkt: str, **opts) -> str:
+    """캐시 키 — 스캔 결과를 바꾸는 인자를 **전부** 넣는다.
+
+    키가 시장 이름 하나였을 때(6단계까지), 규칙이나 체결 규약을 바꾸고 돌려도
+    옛 스캔이 그대로 되돌아왔다. 실패가 아니라 **성공처럼 보이는 정지**다 —
+    새 규칙을 안 재고 "쟀다"는 숫자가 나온다.
+    **`scan()` 에 인자를 새로 열면 반드시 여기에 더한다.**
+    """
+    return "|".join([mkt] + [f"{k}={opts[k]}" for k in sorted(opts)])
+
+
 def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
            universe: Path = None, start=None) -> None:
     """`universe` 가 있으면 5단계 — 진입일이 그 달의 구성종목일 때만 센다.
@@ -206,9 +217,10 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
         span = (min(d.index[m][0] for _, d, m in tasks).date(),
                 max(d.index[m][-1] for _, d, m in tasks).date())
 
+    key = _cache_key(mkt)
     cached = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
-    if mkt in cached:
-        real_arm, plac_arm = cached[mkt]
+    if key in cached:
+        real_arm, plac_arm = cached[key]
         print(f"  (캐시 {CACHE} 에서 읽음 — 지우면 다시 스캔한다)", flush=True)
     else:
         real_arm, plac_arm = {}, {}
@@ -220,7 +232,7 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
                     plac_arm[tk] = got["placebo"]
                 if i % 50 == 0 or i == len(tasks):
                     print(f"  ..{i}/{len(tasks)}종목", flush=True)
-        cached[mkt] = (real_arm, plac_arm)
+        cached[key] = (real_arm, plac_arm)
         CACHE.write_text(json.dumps(cached), encoding="utf-8")
     tickers = sorted(set(real_arm) | set(plac_arm))
 
@@ -382,7 +394,13 @@ def selftest() -> None:
     assert _net(days, "us", span=SPAN_C).size == 1        # 2019 만
     assert _net(days, "us", span=SPAN_A).size == 2        # 2020-03-01 포함
 
-    print("selftest OK — 비용·짝짓기·LOYO·타임아웃·겹침·③b·창 7종")
+    # ⑨ 캐시 키 — 스캔을 바꾸는 인자가 키를 바꿔야 한다.
+    assert _cache_key("largecap") == "largecap"
+    assert _cache_key("largecap", shapes="both") != _cache_key("largecap")
+    assert _cache_key("largecap", fill="gap") != _cache_key("largecap", fill="ideal")
+    assert _cache_key("largecap", a=1, b=2) == _cache_key("largecap", b=2, a=1)
+
+    print("selftest OK — 비용·짝짓기·LOYO·타임아웃·겹침·③b·창·캐시키 8종")
 
 
 if __name__ == "__main__":
