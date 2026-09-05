@@ -200,19 +200,68 @@ def _level(ch, k: float, x: int) -> float:
     return y1 + slope * (x - x1) + k * offset
 
 
+def shape_at(prev_close, close, low, lvl_prev, lvl, tol: float = 0.0) -> str | None:
+    """한 봉·한 선의 진입 형태 (7단계 자유도 I). 안 걸리면 None.
+
+    **두 형태는 상호 배타다** — 직전 종가 조건이 정반대(`<=` vs `>`)라 한 봉·한
+    선에서 둘 다 참일 수 없다. 그래서 우선순위 규칙이 없다. 이 배타성이 깨지면
+    "가장 높은 발동 선" 규칙이 형태에 따라 다른 답을 내므로, selftest 가 격자로
+    매번 확인한다.
+    """
+    # `tol` 은 **판정에 안 쓰는 보고용 손잡이**다(7단계 §5.4 "반대 방향"). 종가가
+    # 선 아래 tol 안쪽에서 끝난 봉까지 세어, 15:50 에 선 위였다면 실제로 샀을
+    # 트레이드가 몇 건인지 본다. 기본 0.0 이면 규칙 그대로다.
+    if close <= lvl - tol * abs(close):
+        return None
+    if prev_close <= lvl_prev:
+        return "breakout"          # I-a — 선 아래 있다가 위로 넘겨 마감
+    if low <= lvl:
+        return "support"           # I-b — 선 위에 있다가 선까지 눌렸다가 지켜냈다
+    return None                    # 선 위에서 하루 종일 놀았다
+
+
+def fill_px(outcome: str, op_x: float, lvl: float, fill: str) -> float:
+    """청산 체결가 (7단계 자유도 J). `ideal` 은 6단계 — 선에 정확히 체결.
+
+    `gap` 은 걸 수 있는 주문이다: 스톱은 갭이면 시가에 터지고(J-2, 불리),
+    지정가는 유리한 갭을 그대로 받는다(J-3). 사다리는 가격 순이라 이 하네스의
+    트레이드는 전부 롱 모양이다(손절이 진입 아래) — 그래서 min/max 가 각각
+    "나쁜 쪽"과 "좋은 쪽"이다.
+    """
+    if fill != "gap":
+        return lvl
+    return min(op_x, lvl) if outcome == "loss" else max(op_x, lvl)
+
+
 # ── 스캔 ────────────────────────────────────────────────────────
-def scan(df: pd.DataFrame, seed: int | None = None) -> list[dict]:
+def scan(df: pd.DataFrame, seed: int | None = None,
+         shapes: tuple[str, ...] = ("breakout",),
+         fill: str = "ideal", entry: str = "close",
+         tol: float = 0.0) -> list[dict]:
     """한 종목 전 구간. `seed` 가 있으면 위약 팔.
 
     진입: 종가가 채널선 하나를 **위로 넘겨 마감**. 손절 = 가격 기준 한 칸 아래
     선(없으면 진입 안 함 — 명세의 level 0 규칙을 방향 무관하게 옮긴 것),
     익절 = 한 칸 위 선(자유도 F). 종목당 동시 1포지션.
+
+    **기본값 조합 `("breakout",)·ideal·close` 는 4·6단계와 글자 그대로 같은
+    경로다.** 7단계 사전 등록이 연 자유도 셋만 인자로 나왔다:
+
+      shapes  I-a `breakout` = 돌파 후 안착 (`cl[i]>선` 이고 `cl[i-1]<=선`)
+              I-b `support`  = 지지 확인   (`cl[i]>선`, `cl[i-1]>선`, `lo[i]<=선`)
+              직전 종가 조건이 정반대라 **상호 배타** — 우선순위 규칙이 없다.
+      fill    J  `ideal` = 6단계(손절 정확히 s, 익절 정확히 tg)
+                 `gap`   = 걸 수 있는 주문 — 손절 min(Open,s), 익절 max(Open,tg)
+      entry   J-1 `close`(MOC) / `nextopen` = 다음 거래일 시가(참고 F)
+
+    사전 등록: `docs/superpowers/specs/2026-09-05-bitgak-stage7-design.md` §2.
     """
     sw = find_swing_points(df, lookback=SWING_L)
     if len(sw) < 3:
         return []
     qual = _qualify(df, sw)
     hi, lo, cl = df["High"].values, df["Low"].values, df["Close"].values
+    op = df["Open"].values
     n = len(df)
     # 채널은 풀이 바뀔 때만 바뀐다 — 매 봉 다시 고르지 않는다(속도가 아니라 정의).
     change = set(int(v) for v in np.r_[sw["idx"].values + SWING_L,
@@ -235,30 +284,53 @@ def scan(df: pd.DataFrame, seed: int | None = None) -> list[dict]:
         for pos, k in enumerate(rung):
             if pos == 0:                       # 아래에 선이 없다 = 손절 못 건다
                 continue
-            if cl[i] > _level(ch, k, i) and cl[i - 1] <= _level(ch, k, i - 1):
-                hit = (pos, k, rung[pos - 1])
+            shape = shape_at(cl[i - 1], cl[i], lo[i],
+                             _level(ch, k, i - 1), _level(ch, k, i), tol)
+            if shape in shapes:                # 가장 **높은** 발동 선을 취한다
+                hit = (pos, k, rung[pos - 1], shape)
         if hit is None:
             i += 1
             continue
-        pos, k, k_stop = hit
+        pos, k, k_stop, shape = hit
         step = k - k_stop                      # 사다리 한 칸(부호 포함)
-        entry, risk = cl[i], cl[i] - _level(ch, k_stop, i)
-        if risk <= 0 or risk / entry < MIN_RISK_PCT:
+        # 진입 봉 e — MOC 는 신호 봉 그 자리, 참고 F 는 다음 거래일 시가다.
+        # 손절선은 **신호일(i) 것**을 쓴다(사전 등록 §8 참고 F 규약).
+        if entry == "nextopen":
+            if i + 1 > n - 1:                  # 다음 거래일이 없다 — 버린다
+                i += 1
+                continue
+            e, px = i + 1, op[i + 1]
+        else:
+            e, px = i, cl[i]
+        risk = px - _level(ch, k_stop, i)
+        if risk <= 0 or risk / px < MIN_RISK_PCT:
             i += 1
             continue
-        out, r, x = "timeout", 0.0, min(i + HOLD, n - 1)
-        for x in range(i + 1, min(i + HOLD, n - 1) + 1):
+        # `r_ideal` 은 같은 트레이드를 6단계 식(정확히 s / 정확히 tg)으로 센 값.
+        # 갭이 R 을 얼마나 먹었는지 **짝지어** 보고하려고 같이 들고 간다
+        # (사전 등록 §8 "같이 보고하는 것"). 체결 규약은 진입 결정을 안 바꾸므로
+        # 두 값은 언제나 같은 트레이드의 두 청산가다.
+        out, r, ri, x = "timeout", 0.0, 0.0, min(e + HOLD, n - 1)
+        for x in range(e + 1, min(e + HOLD, n - 1) + 1):
             s, tg = _level(ch, k_stop, x), _level(ch, k + step, x)
             if lo[x] <= s:                     # 같은 봉에 둘 다면 손절(보수적)
-                out, r = "loss", (s - entry) / risk
+                out, ri = "loss", (s - px) / risk
+                r = (fill_px("loss", op[x], s, fill) - px) / risk
                 break
             if hi[x] >= tg:
-                out, r = "win", (tg - entry) / risk
+                out, ri = "win", (tg - px) / risk
+                r = (fill_px("win", op[x], tg, fill) - px) / risk
                 break
         if out == "timeout":
-            r = (cl[x] - entry) / risk
+            r = ri = (cl[x] - px) / risk       # 타임아웃은 MOC — 갭이 없다
         trades.append({"idx": i, "exit": x, "outcome": out, "r": float(r),
-                       "risk_pct": float(risk / entry), "hold": x - i})
+                       "r_ideal": float(ri),
+                       "risk_pct": float(risk / px), "hold": x - e,
+                       "shape": shape,
+                       # 여유 — 종가가 발동선을 얼마나 넘겼나. 7단계 「시점」
+                       # 판정선의 한쪽 조각이다(사전 등록 §5.4). 새 자료가 아니라
+                       # 저장 패널에서 그냥 나오는 값이라 여기서 같이 들고 간다.
+                       "margin": float((cl[i] - _level(ch, k, i)) / cl[i])})
         i = x + 1                              # 보유 중엔 새 진입 무시
     return trades
 
