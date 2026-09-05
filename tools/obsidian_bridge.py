@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -475,6 +476,94 @@ def _push_alpaca(home: list[str] | None = None) -> int:
     return len(orders)
 
 
+def _push_bitgak(home: list[str] | None = None) -> int:
+    """빗각 8단계 페이퍼 배관 번인 — 러너의 `report` 를 그대로 받아 적는다.
+
+    판정을 여기서 다시 계산하지 않는다. 판정선 다섯은 `run_bitgak_paper.report()`
+    안에 있고, 같은 숫자를 두 곳에서 내면 언젠가 갈라진다([[_push_scorecard]] 와
+    같은 이유). 서브프로세스로 부르는 것도 같은 취지 — 러너의 상대경로·sys.path
+    를 흉내내다 조용히 다른 장부를 읽는 사고를 원천 차단한다.
+
+    번인 중에는 판정이 「미측정」이라 러너가 exit 1 을 낸다. 정상이므로
+    returncode 는 보지 않고 stdout 의 JSON 만 읽는다.
+    """
+    dest = VAULT / STOCK_SUB / "Bitgak Burn-in.md"
+    runner = STOCK_DIR / "scripts" / "run_bitgak_paper.py"
+    if not runner.exists():
+        print(f"[건너뜀] 빗각 러너 없음: {runner}")
+        return 0
+    try:
+        out = subprocess.run((sys.executable, "-X", "utf8", str(runner), "report"),
+                             cwd=STOCK_DIR, capture_output=True, text=True,
+                             encoding="utf-8", timeout=180).stdout
+        rep, _ = json.JSONDecoder().raw_decode(out.lstrip())
+    except Exception as e:
+        print(f"[건너뜀] 빗각 판정 읽기 실패: {e}")
+        return 0
+
+    def mark(key: str) -> str:
+        # 아직 하루도 안 돌았으면 ②③ 은 "위반이 0건"이라 ok 로 나온다 — 참이지만
+        # 공허하다. 그대로 체크를 찍으면 시작도 안 한 번인이 3/5 통과로 읽힌다.
+        if not rep["days"] and key != "gate":
+            return "—"
+        return "✅" if rep.get(key, {}).get("ok") else "⬜"
+
+    days, smp = rep["days"], rep["sample"]
+    lines = ["# 📐 빗각 8단계 — 페이퍼 배관 번인", "", MANAGED_TAG, "",
+             f"갱신: {datetime.now():%Y-%m-%d %H:%M} · "
+             f"판정 **{rep['verdict']}** · 진행 {len(days)}/5일", "",
+             "> 배관만 본다 — 수익·슬리피지는 판정에 안 들어간다(8단계 §4). "
+             "통과해도 노선은 「보류」다.", "",
+             f"- 진입 제출 **{smp['entry_submitted']}건** / 문턱 {smp['threshold']}건 "
+             f"{'✅' if smp['ok'] else '⬜ (못 넘으면 미측정)'}",
+             f"- 실행일: {', '.join(days) if days else '아직 없음'}", "",
+             "## 판정선", "", "| | 항목 | 상태 | 실측 |", "|---|---|---|---|"]
+
+    o1, o2, o3, o4, o5 = (rep[k] for k in
+                          ("1_orders", "2_cutoff", "3_match", "4_legs", "5_ops"))
+    f = o1["filled"]
+    lines += [
+        f"| 0 | 도구 게이트(선값 일치) | {mark('gate')} | "
+        f"불일치 {rep['gate']['n_mismatch']}건 |",
+        f"| ① | 주문 네 종류 성립 | {mark('1_orders')} | "
+        f"진입 {f['entry']} · 타임아웃 {f['timeout']} · 손절 {f['stop']} · 목표 {f['limit']}"
+        f" · 미분류 거절 {o1['unclassified']} |",
+        f"| ② | 15:50 지각·중복 | {mark('2_cutoff')} | "
+        f"지각 {len(o2['late_days'])}일 · 중복 {len(o2['duplicates'])}건 |",
+        f"| ③ | 스캔↔주문 대조 | {mark('3_match')} | "
+        f"유령 {len(o3['ghost'])} · 누락 {len(o3['missing'])} "
+        f"(매수여력 차단 {o3['blocked_buying_power']}) |",
+        f"| ④ | 다리 유지·초과 매도 | {mark('4_legs')} | "
+        f"{o4['leg_ok']}/{o4['leg_total']} 유지 · 초과 매도 {o4['oversell']} |",
+        f"| ⑤ | 무개입 완주 | {mark('5_ops')} | "
+        f"{o5['clean_days']}/{o5['of']}일 · 코드 결함 개입 {o5['code_interventions']} |",
+        ""]
+
+    if o5["interventions"]:
+        lines += ["## 개입 기록", "", "| 날짜 | 원인 | 내용 |", "|---|---|---|"]
+        lines += [f"| {d} | {c} | {t} |" for d, c, t in o5["interventions"]]
+        lines.append("")
+
+    obs = rep["observed"]
+    gaps = obs["close_gap_bp"]
+    lines += ["## 관측치 (판정 아님 — 9단계로 넘김)", "",
+              f"- 청산 괴리: {len(gaps)}건"
+              + (f" · 중위 {sorted(gaps)[len(gaps) // 2]:.1f}bp" if gaps else ""),
+              f"- 정정 {obs['amends']}건 · 정정 실패 {obs['amend_failed']}건", ""]
+    if obs["cron_et"]:
+        lines += ["| 날짜 | 제출시각(ET) | 멱등 건너뜀 |", "|---|---|---|"]
+        lines += [f"| {d} | {t} | {'예' if s else '아니오'} |"
+                  for d, t, s in obs["cron_et"]]
+        lines.append("")
+
+    _write(dest, "\n".join(lines) + "\n")
+    if home is not None:
+        home.append(f"빗각 번인 **{rep['verdict']}** · {len(days)}/5일 · "
+                    f"진입 {smp['entry_submitted']}/{smp['threshold']}건")
+    print(f"빗각 번인 {len(days)}일 · 판정 {rep['verdict']} → {dest}")
+    return len(days)
+
+
 def _push_content() -> int:
     """유튜브 대본을 볼트로 — 편당 대본 1장 + 녹음용 1장, 그리고 목차.
 
@@ -558,6 +647,7 @@ def cmd_push() -> int:
     _push_signals(home)
     _push_scorecard()
     _push_alpaca(home)
+    _push_bitgak(home)
     _push_content()
     _push_home(measurements, home)
     print("push 완료.")
