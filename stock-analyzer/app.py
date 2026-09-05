@@ -603,6 +603,21 @@ def download_stock(ticker, start, end, interval='1d'):
     return df
 
 
+@st.cache_data(ttl=900, show_spinner="빗각 작도 중...")
+def _bitgak_state(ticker, end):
+    """빗각 차트용 (시세, 상태). 분석 탭의 df(520일)로는 작도가 안 된다.
+
+    러너가 보는 첫 봉이 400번째라 최소 ~660봉이 필요하다 — 화면 때문에 그
+    숫자를 낮추면 잰 적 없는 규칙이 된다. 그래서 여기만 따로 길게 받는다.
+    """
+    from modules.bitgak_chart import bitgak_state
+    _d = download_stock(ticker, start=end - timedelta(days=1600), end=end)
+    if _d.empty:
+        return _d, {"error": "시세 없음"}
+    _d = _d.dropna(subset=['Close'])
+    return _d, bitgak_state(_d)
+
+
 # 섹터 상대강도 비교용 ETF. yfinance 가 돌려주는 영문 섹터명이 키다.
 # 전부 실제 조회로 확인했다 — 추측으로 넣으면 yfinance 가 조용히 빈 프레임을
 # 주고, UI 는 "데이터 없음" 이 아니라 그냥 빈 화면을 보여준다.
@@ -6026,7 +6041,7 @@ def main():
                     return _fig
 
                 _VIEW_TV, _VIEW_ICT = "TradingView", "구조 (ICT)"
-                _VIEW_SR, _VIEW_CH  = "지지 · 저항", "추세 채널"
+                _VIEW_SR, _VIEW_CH  = "지지 · 저항", "빗각 채널"
                 _view = st.radio("차트 뷰", [_VIEW_TV, _VIEW_ICT, _VIEW_SR, _VIEW_CH],
                                  horizontal=True, label_visibility="collapsed", key="chart_view")
 
@@ -6082,25 +6097,42 @@ def main():
                                 st.markdown(f"- {fmt_p(s['level'])} ({s['dist_pct']:+.1f}%)")
 
                 else:
+                    # 빗각 채널 — 8단계 페이퍼 러너와 **같은 규칙**을 그린다.
+                    # 화면 전용 회귀채널(옛 find_trend_channel)은 걷어냈다.
                     try:
-                        from modules.ict_analysis import find_trend_channel, plot_channel_chart
-                        _cdc1, _cdc2 = st.columns([2, 1])
-                        _n_ch  = _cdc1.slider("표시 캔들 수", 40, 200, 80, 10, key="ch_candles")
-                        _sw_lb = _cdc2.slider("스윙 민감도", 3, 10, 5, 1, key="ch_swing")
+                        from modules.bitgak_chart import plot_bitgak_chart
+                        _n_ch = st.slider("표시 캔들 수", 60, 250, 120, 10, key="ch_candles")
+                        _bg_df, _bg = _bitgak_state(ticker, end_dt)
                         st.plotly_chart(
-                            plot_channel_chart(df, n_candles=_n_ch, swing_lookback=_sw_lb, ticker=ticker),
+                            plot_bitgak_chart(_bg_df, _bg, n_candles=_n_ch, ticker=ticker),
                             width='stretch')
-                        _ch = find_trend_channel(df, lookback=_n_ch, swing_lookback=_sw_lb)
-                        if _ch:
-                            _dir_map = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
-                            _cc1, _cc2, _cc3 = st.columns(3)
-                            _cc1.metric("채널 방향", _dir_map.get(_ch["direction"], _ch["direction"]))
-                            _cc2.metric("채널 폭 (%)", f"{_ch['width_pct']:.1f}%")
-                            _cc3.metric("현재 위치", f"{_ch['zone']} ({_ch['position_pct']:.0f}%)")
+                        if not _bg or _bg.get("error"):
+                            st.info(f"빗각 작도 실패 — {(_bg or {}).get('error', '데이터 없음')}")
                         else:
-                            st.info("채널 감지 실패 — 캔들 수를 늘리거나 스윙 민감도를 낮춰보세요.")
+                            _dir_map = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
+                            _kb = _bg["k_below"][0] if _bg["k_below"] else None
+                            _ka = _bg["k_above"][0] if _bg["k_above"] else None
+                            _cc1, _cc2, _cc3, _cc4 = st.columns(4)
+                            _cc1.metric("채널 방향", _dir_map[_bg["direction"]],
+                                        f"{_bg['slope_pct']:+.2f}%/봉")
+                            _cc2.metric("현재 칸",
+                                        f"L{_kb:g} ~ L{_ka:g}" if _kb is not None and _ka is not None
+                                        else ("사다리 위" if _ka is None else "사다리 아래"))
+                            _cc3.metric("12선 폭", f"{_bg['width_pct']:.1f}%")
+                            _hit = _bg["hit"]
+                            _cc4.metric("오늘 발동",
+                                        {"breakout": "돌파 안착", "support": "지지 확인"}[_hit["shape"]]
+                                        if _hit else "없음")
+                            if _hit:
+                                st.success(
+                                    f"진입 {fmt_p(_hit['px'])} · 손절 {fmt_p(_hit['stop_lvl'])} "
+                                    f"· 목표 {fmt_p(_hit['target_lvl'])} — "
+                                    f"위험 {_hit['risk_pct']*100:.2f}%, 여유 {_hit['margin']*100:.2f}%")
+                            st.caption(
+                                f"변곡점 3점 → 피보 12선(0~5.5). 전 구간 발동 {_bg['n_trades']}회. "
+                                "규칙은 8단계 페이퍼 러너와 동일 — 성과 판정은 아직 진행 중입니다.")
                     except Exception as _e:
-                        st.warning(f"채널 분석 오류: {_e}")
+                        st.warning(f"빗각 분석 오류: {_e}")
 
                 # ── 컨센서스 + 지표 수치 (뷰와 무관하게 항상 표시) ──────────
                 st.divider()

@@ -223,18 +223,22 @@ def _carried_channel(df: pd.DataFrame, sw, qual, trades: list, i: int):
 
     건너뛴 구간은 scan() 이 낸 트레이드의 (진입, 청산] 이다. 규칙을 다시 짠 게
     아니라 **scan() 자신의 출력으로 그 루프의 방문 순서를 되짚는다.**
+
+    반환은 `(채널, 3점)` — 3점은 규칙에 안 쓰이고 차트가 변곡점을 찍는 재료다
+    (`modules/bitgak_chart.py`). 채널이 없으면 둘 다 None.
     """
     n = len(df)
     change = {int(v) for v in np.r_[sw["idx"].values + SWING_L,
                                     qual[np.isfinite(qual)]] if v < n}
     resume = {t["idx"]: t["exit"] + 1 for t in trades}
-    ch, v = None, max(MIN_LEN, POC_WIN + SWING_L)
+    ch, pts, v = None, None, max(MIN_LEN, POC_WIN + SWING_L)
     while v <= i:
         if ch is None or v in change:
             t3 = _triple(sw, qual, v)
             ch = _channel(t3) if t3 else None
+            pts = t3 if ch else None
         v = resume.get(v, v + 1)
-    return ch
+    return ch, pts
 
 
 def lines_at(df: pd.DataFrame, shapes: tuple = SHAPES,
@@ -257,7 +261,7 @@ def lines_at(df: pd.DataFrame, shapes: tuple = SHAPES,
     qual = _qualify(df, sw)
     if trades is None:
         trades = scan(df, shapes=shapes, fill="gap", entry="close")
-    ch = _carried_channel(df, sw, qual, trades, i)
+    ch, _ = _carried_channel(df, sw, qual, trades, i)
     if ch is None:
         return None
 
