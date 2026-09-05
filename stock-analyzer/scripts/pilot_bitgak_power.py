@@ -72,6 +72,16 @@ from modules.ict_analysis import find_swing_points  # noqa: E402
 
 US_PANEL = Path("data/price_panel_v1.parquet")
 CRYPTO_PANEL = Path("data/crypto_panel.parquet")
+
+# 5단계 — 생존자 편향 없는 대형주 패널(`python scripts/pilot_bitgak_power.py largecap`).
+# 4단계의 293종목은 **지금 상장돼 있는** 이름만 손으로 적은 목록이라, 죽은 회사가
+# 하나도 없다. 이쪽은 웨이백 SEC 스냅샷으로 지은 월별 상위 1,000 이다.
+# 창 시작 2017-09-01 은 그 스냅샷의 첫 기준일(2017-08-31) 다음 날이고, 그보다
+# 앞은 "그날 뭐가 상장돼 있었나"를 복원할 재료가 없다(실측: 웨이백 CDX 에
+# company_tickers.json 이 2017-08-28 이전에 없다. Alpaca 봉도 2016-01-04 이 바닥).
+LARGECAP_PANEL    = Path("data/largecap_ohlcv_panel.parquet")
+LARGECAP_UNIVERSE = Path("data/largecap_universe.parquet")
+LARGECAP_START    = pd.Timestamp("2017-09-01")
 CRYPTO = ["BTC-USD", "ETH-USD", "XRP-USD", "LTC-USD", "BCH-USD", "ADA-USD",
           "DOGE-USD", "LINK-USD", "XLM-USD", "SOL-USD", "AVAX-USD", "DOT-USD"]
 FIELDS = ["Open", "High", "Low", "Close", "Volume"]
@@ -300,10 +310,41 @@ def _ohlcv(panel: pd.DataFrame, tk: str) -> pd.DataFrame:
 
 
 def _job(args):
-    tk, df = args
+    tk, df, mask = args
     # `hash()` 는 프로세스마다 씨앗이 달라 워커를 나누면 재현이 안 된다 — crc32 로 고정.
     seed = zlib.crc32(tk.encode()) % 10 ** 6
-    return tk, _counts_only(scan(df)), np.array([t["r"] for t in scan(df, seed=seed)])
+    keep = (lambda ts: ts) if mask is None else (lambda ts: [t for t in ts if mask[t["idx"]]])
+    return (tk, _counts_only(keep(scan(df))),
+            np.array([t["r"] for t in keep(scan(df, seed=seed))]))
+
+
+def member_masks(universe: Path, index_by_tk: dict, start) -> dict:
+    """{종목: 진입 허용 마스크} — 그 달에 유니버스 구성종목이었던 날만 True.
+
+    합집합(한 번이라도 상위 1,000 이었던 종목)의 **전 이력**을 쓰면 미래를 본다:
+    2024년에 상위 1,000 에 들어온 종목은 "그 사이에 커졌다"는 이유로 뽑힌 것이라,
+    그 종목의 2018년 트레이드를 세는 순간 승자만 골라 센 게 된다.
+
+    스캔은 전 이력 위에서 돈다(매물대 252봉 예열이 창 앞을 먹는다). 거르는 건
+    **진입일**뿐이다 — 규칙 A~F 는 손도 안 댄다.
+    """
+    u = pd.read_parquet(universe)
+    udates = pd.DatetimeIndex(sorted(u["date"].unique()))
+    flags = {}
+    for aid, g in u.groupby("asset_id", sort=False):
+        f = np.zeros(len(udates), dtype=bool)
+        f[udates.get_indexer(pd.DatetimeIndex(g["date"].unique()))] = True
+        flags[aid] = f
+    out = {}
+    for tk, idx in index_by_tk.items():
+        f = flags.get(tk)
+        if f is None:
+            continue
+        pos = np.searchsorted(udates.to_numpy(), idx.to_numpy(), side="right") - 1
+        m = (pos >= 0) & f[np.clip(pos, 0, len(udates) - 1)] & np.asarray(idx >= start)
+        if m.any():
+            out[tk] = m
+    return out
 
 
 def crypto_panel() -> pd.DataFrame:
@@ -316,18 +357,28 @@ def crypto_panel() -> pd.DataFrame:
     return got
 
 
-def table(panel: pd.DataFrame, label: str, workers: int) -> None:
-    tasks = []
+def table(panel: pd.DataFrame, label: str, workers: int,
+          universe: Path = None, start=None) -> None:
+    frames = {}
     for tk in sorted({t for _, t in panel.columns}):
         df = _ohlcv(panel, tk)
         if len(df) >= MIN_LEN:
-            tasks.append((tk, df))
+            frames[tk] = df
+    masks = ({} if universe is None
+             else member_masks(universe, {t: d.index for t, d in frames.items()}, start))
+    tasks = [(tk, df, None if universe is None else masks.get(tk))
+             for tk, df in frames.items() if universe is None or tk in masks]
     if not tasks:
         print(f"\n### {label} — 쓸 수 있는 종목이 없다")
         return
-    span_lo = min(d.index[0] for _, d in tasks)
-    span_hi = max(d.index[-1] for _, d in tasks)
-    years = sum(len(d) for _, d in tasks) / 252.0
+    if universe is None:
+        span_lo = min(d.index[0] for _, d, _ in tasks)
+        span_hi = max(d.index[-1] for _, d, _ in tasks)
+        years = sum(len(d) for _, d, _ in tasks) / 252.0
+    else:   # 노출은 이력 전체가 아니라 **구성종목이었던 날**만 센다
+        span_lo = min(d.index[m][0] for _, d, m in tasks)
+        span_hi = max(d.index[m][-1] for _, d, m in tasks)
+        years = sum(int(m.sum()) for _, _, m in tasks) / 252.0
 
     real = {"n": 0, "resolved": 0, "timeout": 0}
     risk, hold, hit, placebo = [], [], 0, {}
@@ -358,8 +409,13 @@ def table(panel: pd.DataFrame, label: str, workers: int) -> None:
 
 
 def run() -> None:
-    workers = int(sys.argv[1]) if len(sys.argv) > 1 else max((os.cpu_count() or 2) - 1, 1)
+    args = [a for a in sys.argv[1:] if a != "largecap"]
+    workers = int(args[0]) if args else max((os.cpu_count() or 2) - 1, 1)
     print(f"워커 {workers} · 손절/익절 한 칸 · 보유 {HOLD}봉 · 스윙 L={SWING_L}", flush=True)
+    if "largecap" in sys.argv[1:]:      # 5단계 — 편향 없는 패널만 잰다(크립토는 닫혔다)
+        table(pd.read_parquet(LARGECAP_PANEL), "미국주식 (PIT 대형주 · 5단계)",
+              workers, universe=LARGECAP_UNIVERSE, start=LARGECAP_START)
+        return
     table(pd.read_parquet(US_PANEL), "미국주식 (대형주 패널)", workers)
     table(crypto_panel(), "크립토 (yfinance 일봉)", workers)
 
@@ -407,8 +463,27 @@ def selftest() -> None:
     losses = [t["r"] for t in scan(_synth(seed=3)) if t["outcome"] == "loss"]
     assert losses and -2.0 < float(np.mean(losses)) < -0.5, losses[:5]
 
+    # ⑥ 구성종목 마스크 — 기준일에 든 달만 True, 창 시작 앞은 무조건 False.
+    import tempfile
+    u = pd.DataFrame({"date": pd.to_datetime(["2017-08-31", "2017-09-30",
+                                              "2017-10-31", "2017-08-31"]),
+                      "asset_id": ["1:A", "1:A", "1:A", "2:B"]})
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "u.parquet"
+        u.to_parquet(p)
+        idx = pd.DatetimeIndex(["2017-08-15", "2017-09-15", "2017-10-15",
+                                "2017-11-15", "2017-12-15"])
+        mk = member_masks(p, {"1:A": idx, "2:B": idx, "3:C": idx},
+                          pd.Timestamp("2017-09-01"))
+    assert "3:C" not in mk                       # 유니버스에 없는 종목
+    # 마지막 기준일은 **앞으로 이어진다** — 2026-07-31 구성이 패널 끝(8월 중순)까지
+    # 간다는 뜻이고, 그게 월별 리밸런스의 정의다. 죽은 종목은 그 앞 기준일에서
+    # 이미 빠지므로 여기 안 걸린다.
+    assert list(mk["1:A"]) == [False, True, True, True, True]    # 창 앞만 False
+    assert list(mk["2:B"]) == [False, True, False, False, False]  # 한 달만 구성종목
+
     print(f"selftest OK — 합성 {len(full)}트레이드, 손절 평균 "
-          f"{np.mean(losses):+.2f}R")
+          f"{np.mean(losses):+.2f}R · 마스크 OK")
 
 
 if __name__ == "__main__":

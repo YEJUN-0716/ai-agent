@@ -51,6 +51,13 @@ SPANS     = os.path.join(OUT_DIR, "listing_spans.parquet")
 PANEL     = "data/smallcap_panel.parquet"
 REPORT    = "data/smallcap_panel_report.json"
 
+# OHLCV 모드 — 빗각 5단계가 고가/저가/거래량을 쓴다(스윙점·매물대). 종가 패널은
+# 이 셋이 없어서 못 쓴다. 새 스크립트를 안 만드는 이유는 largecap 모드와 같다:
+# 받는 방법이 두 벌로 갈리면 한쪽만 고치는 날이 온다. 샤드 폴더를 따로 두는 건
+# 기존 종가 샤드 21MB 를 무효화하지 않으려는 것이다(소형주도 같은 조립을 쓴다).
+OHLCV       = False
+EXTRA_COLS  = ["open", "high", "low", "volume"]
+
 # 재활용 티커의 **이전 주인**은 봉을 못 구한다 — 실측으로 알게 된 것.
 #
 # `886158:BBBY`(파산한 Bed Bath & Beyond)의 2023-04 종가가 $19 로 나왔다. 그때
@@ -107,6 +114,17 @@ def _bucketed(tickers) -> dict:
     return {b: sorted(v) for b, v in sorted(out.items())}
 
 
+def _shard_rows(sym: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """봉 한 종목 → 샤드 행. OHLCV 모드면 네 칸을 더 담는다."""
+    out = pd.DataFrame({"ticker": sym,
+                        "date": frame.index.tz_localize(None).normalize(),
+                        "close": frame["Close"].astype("float32").to_numpy()})
+    if OHLCV:
+        for c in EXTRA_COLS:
+            out[c] = frame[c.capitalize()].astype("float32").to_numpy()
+    return out
+
+
 # ── 1. 조정 일봉 ───────────────────────────────────────────────────────
 def step_prices(force: bool = False) -> str:
     u = pd.read_parquet(UNIVERSE)
@@ -130,9 +148,7 @@ def step_prices(force: bool = False) -> str:
         if os.path.exists(shard) and not force:
             continue
         bars = _bars_tolerant(batch, end, start=START_DATE, adjustment="all")
-        rows = [pd.DataFrame({"ticker": sym,
-                              "date": frame.index.tz_localize(None).normalize(),
-                              "close": frame["Close"].astype("float32").to_numpy()})
+        rows = [_shard_rows(sym, frame)
                 for sym, frame in bars.items() if not frame.empty]
         df = (pd.concat(rows, ignore_index=True) if rows
               else pd.DataFrame(columns=["ticker", "date", "close"]))
@@ -150,8 +166,9 @@ def step_prices(force: bool = False) -> str:
         shard = pd.read_parquet(path)
         if shard.empty:
             continue
-        closes_by_ticker = {t: g.set_index("date")["close"].sort_index()
-                            for t, g in shard.groupby("ticker", sort=False)}
+        by_ticker = {t: g.set_index("date").sort_index()
+                     for t, g in shard.groupby("ticker", sort=False)}
+        closes_by_ticker = {t: g["close"] for t, g in by_ticker.items()}
         part = [spans_by_ticker[t] for t in closes_by_ticker if t in spans_by_ticker]
         if not part:
             continue
@@ -176,25 +193,37 @@ def step_prices(force: bool = False) -> str:
                 cut.append(aid)
             if len(s) == 0:
                 continue
-            longs.append(pd.DataFrame({"asset_id": aid, "date": s.index,
-                                       "close": s.to_numpy()}))
+            row = pd.DataFrame({"asset_id": aid, "date": s.index,
+                                "close": s.to_numpy()})
+            if OHLCV:
+                # 종가 계열이 이미 상장 구간·0.0·조정 사고를 다 통과한 뒤다.
+                # 나머지 네 칸은 그 날짜에 맞춰 따라만 온다 — 자르는 판단을
+                # 두 번 하지 않는다.
+                ex = by_ticker[aid.partition(":")[2]].reindex(s.index)
+                for c in EXTRA_COLS:
+                    row[c] = ex[c].to_numpy()
+            longs.append(row)
 
     if not longs:
         raise RuntimeError("일봉을 하나도 못 받았습니다.")
     long = pd.concat(longs, ignore_index=True).drop_duplicates(["asset_id", "date"])
-    wide = long.pivot(index="date", columns="asset_id", values="close").sort_index()
-    wide.columns = pd.MultiIndex.from_product([["Close"], wide.columns],
-                                              names=["Price", "Ticker"])
+    cols = ["close"] + (EXTRA_COLS if OHLCV else [])
+    wide = pd.concat(
+        {c.capitalize(): long.pivot(index="date", columns="asset_id", values=c)
+         for c in cols}, axis=1).sort_index()
+    wide.columns.names = ["Price", "Ticker"]
     wide.index.name = None
     wide.to_parquet(PANEL)
+    n_listings = len({t for _, t in wide.columns})
     with open(REPORT, "w", encoding="utf-8") as f:
-        json.dump({"days": int(wide.shape[0]), "listings": int(wide.shape[1]),
+        json.dump({"days": int(wide.shape[0]), "listings": n_listings,
+                   "fields": sorted({p for p, _ in wide.columns}),
                    "start": str(wide.index.min().date()),
                    "end": str(wide.index.max().date()),
                    "adjustment": "all",
                    "dropped_recycled": sorted(dropped),
                    "cut_at_adjustment_jump": sorted(cut)}, f, ensure_ascii=False, indent=2)
-    _say(f"패널 {PANEL} — {wide.shape[0]}일 × {wide.shape[1]}종목 "
+    _say(f"패널 {PANEL} — {wide.shape[0]}일 × {n_listings}종목 "
          f"({wide.index.min().date()} ~ {wide.index.max().date()}) · "
          f"재활용 티커 이전 주인 {len(dropped)}종목 제외 · "
          f"조정 사고로 앞구간을 자른 종목 {len(cut)}")
@@ -255,8 +284,21 @@ def use_largecap():
     START_DATE = pd.Timestamp("2016-01-01")
 
 
+def use_largecap_ohlcv():
+    """대형주 OHLCV — 빗각 5단계용. 유니버스·기간은 largecap 과 같고 칸만 늘린다."""
+    global OHLCV, SHARD_DIR, PANEL, REPORT
+    use_largecap()
+    OHLCV     = True
+    SHARD_DIR = "data/largecap/ohlcv_adj"
+    PANEL     = "data/largecap_ohlcv_panel.parquet"
+    REPORT    = "data/largecap_ohlcv_panel_report.json"
+
+
 def main(argv) -> int:
-    if "largecap" in argv[1:]:
+    if "ohlcv" in argv[1:]:
+        use_largecap_ohlcv()
+        _say(f"대형주 OHLCV 모드 — {UNIVERSE} → {PANEL}")
+    elif "largecap" in argv[1:]:
         use_largecap()
         _say(f"대형주 모드 — {UNIVERSE} → {PANEL}")
     steps = [a for a in argv[1:] if a in ("prices", "facts")] or ["prices", "facts"]
