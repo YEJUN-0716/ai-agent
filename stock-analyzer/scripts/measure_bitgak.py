@@ -1,11 +1,31 @@
 #!/usr/bin/env python
-"""빗각 채널 — 사전 등록한 판정선으로 **처음 기대값을 본다.** (4단계)
+"""빗각 채널 — 사전 등록한 판정선으로 **처음 기대값을 본다.** (4단계~)
 
     python scripts/measure_bitgak.py [워커수]
     python scripts/measure_bitgak.py selftest
+    python scripts/measure_bitgak.py largecap [--shapes both] [--fill gap]
+                                              [--liq 5e6] [--entry nextopen]
 
 사전 등록: `docs/superpowers/specs/2026-09-05-bitgak-design.md` (판정선 봉인)
 1단계 명세: `docs/bitgak-spec.md` · 2단계 정찰: `docs/measurements/2026-09-04-bitgak-power.md`
+7단계 사전 등록: `docs/superpowers/specs/2026-09-05-bitgak-stage7-design.md`
+
+## 7단계 스위치 — **집계식·판정식은 한 줄도 새로 안 짰다**
+
+    --shapes both     자유도 I — 돌파 후 안착 + 지지 확인 (기본은 돌파만 = 6단계)
+    --fill   gap      자유도 J — 손절 min(Open,s) · 익절 max(Open,tg)
+    --entry  nextopen 참고 F — 진입을 다음 거래일 시가로
+    --liq    5e6      유동성 컷 — 진입일 직전 20일 중위 거래대금 ≥ · 종가 ≥ $5
+    --tol    0.00149  **판정 아님** — 종가 문턱을 δ 만큼 내려 "15:50 엔 참이었을"
+                      봉까지 센다. 사전 등록 §5.4 의 반대 방향 보고용
+
+앞의 셋은 `pilot_bitgak_power.scan()` 인자로 그대로 내려가고, `--liq` 는 구성종목
+마스크와 **같은 자리**에서 진입일만 거른다. 아무 스위치도 안 주면 6단계와 글자
+그대로 같은 경로다 — 그게 참고 C(재현) 행이다.
+
+**스위치는 반드시 캐시 키에 들어간다**(`_cache_key`). 6단계까지 키가 시장 이름
+하나였을 때, 규칙을 바꾸고 돌려도 옛 스캔이 그대로 되돌아왔다 — 실패가 아니라
+**성공처럼 보이는 정지**다(PR #218).
 
 ## 이 파일이 하는 일 — 집계뿐이다
 
@@ -86,14 +106,32 @@ DROP_3B = (2024, 2025, 2026)            # ③b — 최근 3년을 통째로
 
 
 # ── 두 팔 ──────────────────────────────────────────────────────
+def _liq_mask(df: pd.DataFrame, liq: float, min_px: float = 5.0) -> np.ndarray:
+    """유동성 컷 (7단계 사전 등록 §6) — 진입일 **직전** 20거래일 중위 거래대금.
+
+    `shift(1)` 이 그 "직전"이다: 진입일 자신의 거래량을 넣으면 그날 뭐가 터졌는지
+    보고 들어가는 게 된다. 거래대금은 조정가 기준이라 당시 명목보다 **작게**
+    나오는 쪽이고(사전 등록 §9), 그 방향이면 컷이 보수적으로 틀린다.
+
+    구성종목 마스크와 같은 자리에서 **진입일만** 거른다 — 규칙 A~H 는 안 건드린다.
+    """
+    dv = (df["Close"] * df["Volume"]).rolling(20).median().shift(1).values
+    return (dv >= liq) & (df["Close"].values >= min_px)
+
+
 def _job(args):
-    tk, df, mask = args
+    tk, df, mask, opts = args
     seed = zlib.crc32(tk.encode()) % 10 ** 6      # 정찰과 같은 씨앗
+    liq = float(opts.pop("liq", 0.0) or 0.0)      # 컷은 스캔 인자가 아니다 — 진입일 필터
+    if liq > 0:
+        lm = _liq_mask(df, liq)
+        mask = lm if mask is None else (mask & lm)
     out = {}
     for arm, s in (("real", None), ("placebo", seed)):
         out[arm] = [(int(df.index[t["idx"]].year), int(df.index[t["idx"]].toordinal()),
-                     float(t["r"]), float(t["risk_pct"]), t["outcome"])
-                    for t in scan(df, seed=s) if mask is None or mask[t["idx"]]]
+                     float(t["r"]), float(t["risk_pct"]), t["outcome"],
+                     t["shape"], float(t["r_ideal"]), float(t["margin"]))
+                    for t in scan(df, seed=s, **opts) if mask is None or mask[t["idx"]]]
     return tk, out
 
 
@@ -108,7 +146,7 @@ def _net(rows, mkt, per_trade=False, resolved_only=False, drop_year=None, span=N
     lo_o, hi_o = ((pd.Timestamp(span[0]).toordinal(), pd.Timestamp(span[1]).toordinal())
                   if span else (None, None))
     out = []
-    for year, _day, r, risk_pct, outcome in rows:
+    for year, _day, r, risk_pct, outcome, *_rest in rows:
         if year in drop:
             continue
         if lo_o is not None and not (lo_o <= _day <= hi_o):
@@ -198,7 +236,7 @@ def _cache_key(mkt: str, **opts) -> str:
 
 
 def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
-           universe: Path = None, start=None) -> None:
+           universe: Path = None, start=None, **opts) -> None:
     """`universe` 가 있으면 5단계 — 진입일이 그 달의 구성종목일 때만 센다.
 
     스캔은 전 이력 위에서 돈다(매물대 252봉 예열). 거르는 건 진입일뿐이고
@@ -208,16 +246,16 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
               if len(d := _ohlcv(panel, tk)) >= MIN_LEN}
     masks = ({} if universe is None
              else member_masks(universe, {t: d.index for t, d in frames.items()}, start))
-    tasks = [(tk, d, None if universe is None else masks[tk])
+    tasks = [(tk, d, None if universe is None else masks[tk], dict(opts))
              for tk, d in frames.items() if universe is None or tk in masks]
     if universe is None:
-        span = (min(d.index[0] for _, d, _ in tasks).date(),
-                max(d.index[-1] for _, d, _ in tasks).date())
+        span = (min(d.index[0] for _, d, _, _ in tasks).date(),
+                max(d.index[-1] for _, d, _, _ in tasks).date())
     else:   # 노출은 이력 전체가 아니라 **구성종목이었던 날**만
-        span = (min(d.index[m][0] for _, d, m in tasks).date(),
-                max(d.index[m][-1] for _, d, m in tasks).date())
+        span = (min(d.index[m][0] for _, d, m, _ in tasks).date(),
+                max(d.index[m][-1] for _, d, m, _ in tasks).date())
 
-    key = _cache_key(mkt)
+    key = _cache_key(mkt, **opts)
     cached = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
     if key in cached:
         real_arm, plac_arm = cached[key]
@@ -314,11 +352,36 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
     print(f"  겹침          두 팔 진입이 같은 종목·같은 날 {_overlap(real_arm, plac_arm) * 100:.1f}%"
           f"   (위약이 닮은 만큼 MDE 는 하한이다)")
 
+    # 채널 한 칸 중위 — 여유 bp 환산의 분모다(사전 등록 §4: 6.16% 를 재활용하지
+    # 않고 **이 행에서 다시 잰 값**으로 나눈다).
+    flat = [t for rows in real_arm.values() for t in rows]
+    if flat:
+        med = float(np.median([t[3] for t in flat]))
+        print(f"  채널 한 칸    중위 {med * 100:.2f}% (주가 대비) → "
+              f"1bp = {0.0001 / med:.6f}R   (1R = {med * 10000:.1f}bp)")
+        # 형태별 분해 — **판정 아님**(사전 등록 §3.1). 발동 수만 여기서 센다.
+        shp = defaultdict(int)
+        for t in flat:
+            shp[t[5]] += 1
+        if len(shp) > 1 or "breakout" not in shp:
+            print("  형태별 발동   " + " · ".join(
+                f"{k} {v}({v / len(flat) * 100:.1f}%)" for k, v in sorted(shp.items())))
+        # 갭이 R 을 얼마나 먹었나 — 같은 트레이드의 두 청산가를 짝지어 뺀다.
+        for name, oc in (("손절", "loss"), ("익절", "win")):
+            g = [t[2] - t[6] for t in flat if t[4] == oc]
+            if g:
+                print(f"  갭 {name}      평균 {np.mean(g):+.4f}R  (n={len(g)}, "
+                      f"갭 문 트레이드 {sum(abs(x) > 1e-12 for x in g) / len(g) * 100:.1f}%)")
+        bad = [t for t in flat if t[4] == "loss"]
+        if bad:
+            print(f"  손절 −1R 초과 {sum(t[2] < -1.0 for t in bad) / len(bad) * 100:.1f}% "
+                  f"(6단계 식으로는 {sum(t[6] < -1.0 for t in bad) / len(bad) * 100:.1f}%)")
+
     print("  연도별 (그 해만)")
     per = defaultdict(lambda: [[], []])
     for k, arm in ((0, real_arm), (1, plac_arm)):
         for rows in arm.values():
-            for year, _d, r, risk, _o in rows:
+            for year, _d, r, risk, *_rest in rows:
                 per[year][k].append(r - COST_R[mkt])
     for y in years:
         a, b = per[y]
@@ -327,14 +390,50 @@ def market(panel: pd.DataFrame, label: str, mkt: str, workers: int,
               f"{np.mean(a) - np.mean(b):+.3f}R")
 
 
+SHAPES = {"breakout": ("breakout",), "support": ("support",),
+          "both": ("breakout", "support")}
+
+
+def _opts(argv: list[str]) -> tuple[dict, list[str]]:
+    """7단계 스위치를 판다 — `--shapes both --fill gap --liq 5e6 --entry nextopen`.
+
+    **기본값은 6단계 경로다.** 아무 스위치도 안 주면 `scan()` 기본 인자가 그대로
+    가고, 캐시 키도 옛 키와 같아야 한다(`_cache_key` 는 기본값을 안 넣는다).
+    """
+    opts, rest, i = {}, [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--shapes", "--fill", "--entry", "--liq", "--tol"):
+            v = argv[i + 1]
+            i += 2
+            if a == "--shapes":
+                opts["shapes"] = SHAPES[v]
+            elif a in ("--liq", "--tol"):
+                opts[a[2:]] = float(v)
+            else:
+                opts[a[2:]] = v
+            continue
+        rest.append(a)
+        i += 1
+    # 기본값과 같은 값은 키에서 뺀다 — `--shapes breakout` 이 6단계 캐시를 그대로 탄다.
+    for k, default in (("shapes", ("breakout",)), ("fill", "ideal"),
+                       ("entry", "close"), ("liq", 0.0), ("tol", 0.0)):
+        if opts.get(k) == default:
+            opts.pop(k)
+    return opts, rest
+
+
 def run() -> None:
-    args = [a for a in sys.argv[1:] if a != "largecap"]
+    opts, argv = _opts(sys.argv[1:])
+    args = [a for a in argv if a != "largecap"]
     workers = int(args[0]) if args else max((os.cpu_count() or 2) - 1, 1)
     print(f"워커 {workers} · 부트스트랩 {REPS}회 시드 {SEED} · 게이트 {GATE}R", flush=True)
-    if "largecap" in sys.argv[1:]:      # 5단계 — 편향 없는 PIT 대형주 패널
+    if opts:
+        print(f"7단계 스위치 {opts}  (캐시 키 {_cache_key('largecap', **opts)})", flush=True)
+    if "largecap" in argv:              # 5단계 — 편향 없는 PIT 대형주 패널
         market(pd.read_parquet(LARGECAP_PANEL),
-               "미국주식 (PIT 대형주 · 5단계) — 판정", "largecap", workers,
-               universe=LARGECAP_UNIVERSE, start=LARGECAP_START)
+               "미국주식 (PIT 대형주) — 판정", "largecap", workers,
+               universe=LARGECAP_UNIVERSE, start=LARGECAP_START, **opts)
         return
     market(pd.read_parquet(US_PANEL), "미국주식 (대형주 패널) — 주 판정", "us", workers)
     market(crypto_panel(), "크립토 (yfinance 일봉) — 부 판정", "crypto", workers)
@@ -400,7 +499,77 @@ def selftest() -> None:
     assert _cache_key("largecap", fill="gap") != _cache_key("largecap", fill="ideal")
     assert _cache_key("largecap", a=1, b=2) == _cache_key("largecap", b=2, a=1)
 
-    print("selftest OK — 비용·짝짓기·LOYO·타임아웃·겹침·③b·창·캐시키 8종")
+    # ── 7단계 (사전 등록 §11) — 새 자유도 I·J 와 유동성 컷 ────────────
+    from pilot_bitgak_power import _synth, fill_px, shape_at
+
+    df = _synth()
+    cl, op = df["Close"].values, df["Open"].values
+    BOTH = ("breakout", "support")
+
+    # ⑩ 기본값 조합이 6단계 경로와 **글자 그대로** 같다.
+    assert scan(df) == scan(df, shapes=("breakout",), fill="ideal", entry="close")
+
+    # ⑪ I-a·I-b 는 상호 배타다 — 한 봉·한 선에서 둘 다 참일 수 없다.
+    #    `shape_at` 이 답을 하나만 내므로 격자로 두 조건을 **따로** 세서 확인한다.
+    grid = (-1.0, 0.0, 1.0)
+    seen = set()
+    for pc in grid:
+        for c in grid:
+            for lw in grid:
+                for lp in grid:
+                    a = c > 0.0 and pc <= lp                    # I-a
+                    b = c > 0.0 and pc > lp and lw <= 0.0       # I-b
+                    assert not (a and b), (pc, c, lw, lp)
+                    got = shape_at(pc, c, lw, lp, 0.0)
+                    assert got == ("breakout" if a else "support" if b else None)
+                    seen.add(got)
+    assert seen == {"breakout", "support", None}, seen
+
+    # ⑫ 선 위에서 저가만 선을 찍고 종가가 위 → **I-b 만**.
+    assert shape_at(105.0, 104.0, 99.0, 100.0, 100.0) == "support"
+    assert shape_at(105.0, 104.0, 101.0, 100.0, 100.0) is None   # 안 눌렸다
+    assert shape_at(99.0, 104.0, 99.0, 100.0, 100.0) == "breakout"
+
+    # ⑬ 체결 규약은 **진입 결정을 안 바꾼다** — 트레이드 집합이 그대로여야 한다.
+    ideal, gap = scan(df, shapes=BOTH), scan(df, shapes=BOTH, fill="gap")
+    key = lambda ts: [(t["idx"], t["exit"], t["outcome"], t["r_ideal"]) for t in ts]
+    assert key(ideal) == key(gap) and gap
+
+    nogap = worse = better = deep = 0
+    for t in gap:
+        px = float(cl[t["idx"]])
+        risk = t["risk_pct"] * px
+        lvl = px + t["r_ideal"] * risk          # 청산선을 R 에서 되짚는다
+        if t["outcome"] == "timeout":
+            assert t["r"] == t["r_ideal"]       # MOC — 갭이 없다
+            continue
+        want = fill_px(t["outcome"], float(op[t["exit"]]), lvl, "gap")
+        assert abs((want - px) / risk - t["r"]) < 1e-9, t
+        if abs(t["r"] - t["r_ideal"]) < 1e-12:
+            nogap += 1                          # ④ 갭이 없으면 기본과 일치
+        elif t["outcome"] == "loss":
+            # ⑤ 손절선 아래로 갭다운 → 이상적 손절보다 **나쁘다**.
+            #    선이 기울어져 있어 이상적 손절도 정확히 −1 이 아니다 — 그래서
+            #    문턱은 −1 이 아니라 짝지은 `r_ideal` 이다(6단계와 같은 이유).
+            worse += 1
+            assert t["r"] < t["r_ideal"], t
+            deep += t["r"] < -1.0
+        else:
+            # ⑥ 익절선 위로 갭업 → 이상적 익절보다 **좋다** (부호 실수 방지)
+            better += 1
+            assert t["r"] > t["r_ideal"], t
+    assert nogap and worse and better and deep, (nogap, worse, better, deep)
+
+    # ⑭ 유동성 컷 — 0 이면 컷 없음과 같고, 무한대면 0건.
+    mk = lambda liq: _job(("T", df, None, {"shapes": BOTH, "liq": liq}))[1]["real"]
+    assert mk(0.0) == mk(None) and len(mk(0.0)) == len(gap)
+    assert mk(float("inf")) == []
+    lm = _liq_mask(df, 0.0, min_px=0.0)
+    assert not lm[:20].any() and lm[20:].all()   # 20봉 예열 전은 전부 False
+
+    print("selftest OK — 비용·짝짓기·LOYO·타임아웃·겹침·③b·창·캐시키 8종"
+          f" + 7단계 5종 (갭 없음 {nogap} · 손절갭 {worse}/{deep}건 −1R 초과 · "
+          f"익절갭 {better})")
 
 
 if __name__ == "__main__":
