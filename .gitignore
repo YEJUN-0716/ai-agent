@@ -14,6 +14,12 @@ token.json
 !/data/heartbeat.json
 /*.parquet
 
+# 축구 앱 캐시 (openfootball JSON). 위 /data/* 는 루트만 막는다.
+football/data/
+
+# Playwright MCP 스크린샷 작업 폴더
+.playwright-mcp/
+
 # Python
 __pycache__/
 *.py[cod]
