@@ -35,6 +35,10 @@ def cached_json(url: str, cache: Path, ttl: int):
     네트워크가 죽었다고 화면까지 죽을 이유는 없다.
     """
     CACHE_DIR.mkdir(exist_ok=True)
+    # 캐시 파일명에 외부 값이 섞인다 — FotMob 이 준 경기 id 가 그렇다.
+    # 그게 '../..' 이면 여기서 data/ 밖에 파일을 쓰게 된다. 먼저 막는다.
+    if cache.resolve().parent != CACHE_DIR.resolve():
+        raise ValueError(f"캐시 경로가 {CACHE_DIR.name}/ 을 벗어난다: {cache}")
     stale = not cache.exists() or time.time() - cache.stat().st_mtime > ttl
     if stale:
         try:
