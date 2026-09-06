@@ -357,3 +357,49 @@ def injury_card(rows: list[dict]) -> str:
         "<table class='t'><tr><th style='text-align:left'>선수</th>"
         f"<th style='text-align:right'>복귀 예상</th></tr>{items}</table></div>"
     )
+
+
+def live_card(m: dict, me: str) -> str:
+    """진행중인 경기 — 잠정 스코어와 경과."""
+    left, right = (me, m["opp"]) if m["home"] else (m["opp"], me)
+    return (
+        "<div class='card' style='border-left:3px solid var(--red)'>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;"
+        "flex-wrap:wrap;gap:14px'><div>"
+        "<div style='font-size:23px;font-weight:600'>"
+        f"{team(left)} <span class='num' style='color:var(--red)'>{esc(m['score'])}</span> "
+        f"{team(right)}</div>"
+        "<div class='num' style='font-size:13px;color:var(--text-2);margin-top:6px'>"
+        f"{'홈' if m['home'] else '원정'}</div></div>"
+        "<div class='num' style='font-size:20px;font-weight:700;color:var(--red)'>"
+        f"{esc(m['clock'])}</div></div></div>"
+    )
+
+
+def lineup_table(lu: dict) -> str:
+    """선발·교체와 각자의 현재 평점. 시즌 평점을 옆에 둬서 오늘이 어떤지 보이게."""
+    if not lu or not lu.get("starters"):
+        return pending_card("라인업이 아직 안 나왔습니다.")
+
+    def rows(players, tag):
+        tag = f" <span class='dim'>{esc(tag)}</span>" if tag else ""
+        return "".join(
+            f"<tr><td class='num dim'>{esc(p['shirt'])}</td>"
+            f"<td style='text-align:left'>{team(p['name'])}{tag}</td>"
+            f"<td class='num dim'>{'—' if p['season'] is None else format(p['season'], '.2f')}</td>"
+            f"<td class='num' style='color:{rating_color(p['rating'])};font-weight:600'>"
+            f"{p['rating']:.2f}</td></tr>"
+            for p in players
+        )
+
+    head = f"{esc(lu['formation'])}"
+    if lu.get("rating") is not None:
+        head += f" · 팀 평점 <span style='color:{rating_color(lu['rating'])}'>{lu['rating']:.2f}</span>"
+    return (
+        "<div class='card'>"
+        f"<div class='num' style='font-size:15px;margin-bottom:12px'>{head}</div>"
+        "<table class='t'><tr><th>번호</th><th style='text-align:left'>선수</th>"
+        "<th>시즌</th><th>지금</th></tr>"
+        + rows(lu["starters"], "") + rows(lu.get("subs") or [], "교체")
+        + "</table></div>"
+    )
