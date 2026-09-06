@@ -104,6 +104,22 @@ def names(team_id: int = TEAM_ID) -> dict[int, str]:
     return {r["id"]: r["name"] for r in rows}
 
 
+LOGO_URL = "https://images.fotmob.com/image_resources/logo/teamlogo/{team_id:d}_small.png"
+
+
+def logos(team_id: int = TEAM_ID) -> dict[str, str]:
+    """팀 이름 → 엠블럼 주소. 순위표(리그 20팀)와 일정의 상대(컵 팀)를 함께 훑는다.
+
+    주소는 팀 id(정수)로만 만든다 — 외부 문자열이 주소에 섞이지 않는다.
+    """
+    out = {name: LOGO_URL.format(team_id=tid) for tid, name in names(team_id).items()}
+    for f in (team(team_id).get("fixtures", {}).get("allFixtures", {}) or {}).get("fixtures", []):
+        opp = f.get("opponent") or {}
+        if opp.get("id") and opp.get("name") not in out:
+            out.setdefault(opp["name"], LOGO_URL.format(team_id=int(opp["id"])))
+    return out
+
+
 def competitions(team_id: int = TEAM_ID) -> list[dict]:
     """이번 시즌 이 팀이 뛰는 대회들 — 화면의 선택지가 된다."""
     seen: dict[int, dict] = {}
@@ -339,6 +355,8 @@ def _selfcheck():
     print(f"OK  {len(games)}경기 / 평점 {len(rows)}행 / 선수 {len(players)}명")
     print(f"    FotMob 시즌 평점과 대조: {len(pairs)}명, 최대 차이 {worst[0]:.2f} ({worst[1]})"
           + (" — 진행중 경기가 저쪽 평균에만 들어가 있다" if live_match() else ""))
+    crests = logos()
+    assert crests.get("Chelsea"), "엠블럼 주소를 못 만들었다"
     comps = competitions()
     assert comps, "대회 목록이 비었다"
     later = schedule()

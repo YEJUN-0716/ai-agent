@@ -88,6 +88,15 @@ def lineup_of(match_id):
         return {}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def crests():
+    """팀 엠블럼 주소. 하루 종일 안 바뀌므로 캐시를 길게 잡는다."""
+    try:
+        return fotmob.logos()
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def comps():
     """이번 시즌 뛰는 대회들 — 화면 위 선택지."""
@@ -122,6 +131,7 @@ def html(fragment):
 def main():
     st.set_page_config(page_title="Chelsea · EPL", page_icon="🔵", layout="wide")
     html(view.CSS)
+    view.LOGOS.update(crests())
 
     season = epl.load_season(epl.CURRENT)          # 과거·백업용 리그 일정
     me = epl.CHELSEA
