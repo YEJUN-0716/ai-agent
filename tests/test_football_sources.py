@@ -33,12 +33,19 @@ PAYLOAD = {
              goalConDiff=-1, pts=0),
     ]}}}],
     "fixtures": {"allFixtures": {"fixtures": [{
+        # 예정된 컵 경기(런던 시각으로 20:00). 리그만 볼 땐 빠져야 한다.
+        "id": 2,
+        "opponent": {"id": 8463, "name": "Leeds"},
+        "home": {"id": CHELSEA}, "away": {"id": 8463},
+        "tournament": {"leagueId": 133, "name": "EFL Cup"},
+        "status": {"finished": False, "utcTime": "2026-09-09T19:00:00.000Z"},
+    }, {
         # 첼시가 **원정**. 스코어는 홈-원정 순서라 풀럼 2 - 첼시 3 이다.
         "id": 1,
         "opponent": {"id": FULHAM, "name": "Fulham"},
         "home": {"id": FULHAM, "score": 2},
         "away": {"id": CHELSEA, "score": 3},
-        "tournament": {"leagueId": fotmob.EPL_ID},
+        "tournament": {"leagueId": fotmob.EPL_ID, "name": "Premier League"},
         "status": {"finished": True, "utcTime": "2026-08-24T19:00:00.000Z",
                    "scoreStr": "2 - 3"},
     }]}},
@@ -80,3 +87,18 @@ def test_진행중인_경기는_다음_경기로_남는다():
     live = dict(date=now.strftime("%Y-%m-%d"), time=now.strftime("%H:%M"),
                 team1="Chelsea", team2="Arsenal", score=None, round="Matchday 3")
     assert epl.upcoming([live], "Chelsea") == [live]
+
+
+def test_예정_경기가_런던_시각으로_온다(monkeypatch):
+    monkeypatch.setattr(fotmob, "team", lambda team_id=CHELSEA, ttl=None: PAYLOAD)
+    (m,) = fotmob.schedule(CHELSEA)
+    assert (m["date"], m["time"]) == ("2026-09-09", "20:00")  # 19:00 UTC = 20:00 런던(BST)
+    assert (m["team1"], m["team2"], m["round"]) == ("Chelsea", "Leeds", "EFL Cup")
+    assert m["score"] is None
+
+
+def test_대회로_거를_수_있다(monkeypatch):
+    monkeypatch.setattr(fotmob, "team", lambda team_id=CHELSEA, ttl=None: PAYLOAD)
+    assert fotmob.schedule(CHELSEA, league_id=fotmob.EPL_ID) == []
+    assert len(fotmob.schedule(CHELSEA, league_id=133)) == 1
+    assert sorted(c["name"] for c in fotmob.competitions(CHELSEA)) == ["EFL Cup", "Premier League"]
