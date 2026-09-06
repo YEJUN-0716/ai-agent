@@ -55,6 +55,10 @@ def _fragments():
         ),
         "next_match_card": view.next_match_card(upcoming, POISON),
         "h2h_card": view.h2h_card(records, epl.h2h_summary(records), POISON, 5),
+        # form 행은 '상대' 이름을 쓴다 — 오염된 팀을 상대 자리에 놓아야 검사가 된다
+        "results_table": view.results_table(
+            epl.form(done, "Rival FC"), epl.h2h_summary(epl.form(done, "Rival FC"))
+        ),
         "h2h_empty": view.h2h_card([], epl.h2h_summary([]), POISON, 5),
         "last_match_card": view.last_match_card(done[0], POISON),
         "standings_table": view.standings_table(epl.table(done), POISON),
@@ -73,7 +77,7 @@ def test_이스케이프된_형태로는_실제로_들어_있다():
     """빈 문자열을 돌려줘서 위 검사를 통과하는 걸 막는다."""
     frags = _fragments()
     for name in ("team", "badges", "team_card", "next_match_card", "fixtures_table",
-                 "last_match_card", "standings_table", "pending_card"):
+                 "last_match_card", "standings_table", "pending_card", "results_table"):
         assert ESCAPED in frags[name], f"{name} 이 팀명을 아예 안 그리고 있다"
 
 

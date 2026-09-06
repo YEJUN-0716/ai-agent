@@ -19,6 +19,8 @@ ALL_SEASONS = [epl.CURRENT] + PAST
 FORM_N = 10
 # 홈/원정 성적의 범위. 6시즌을 다 쓰면 표본은 크지만 지금 팀과 무관한 과거가 섞인다.
 VENUE_SEASONS = 2
+# 리뷰에 펼칠 최근 결과 수. 폼 배지와 같은 이유로 시즌 경계를 넘는다.
+RECENT_N = 5
 
 
 def html(fragment):
@@ -80,7 +82,11 @@ def main():
     html(view.label("지난 경기"))
     prev = epl.last_match(season, me)
     html(view.last_match_card(prev, me) if prev
-         else view.plain_card("아직 치른 경기가 없습니다."))
+         else view.plain_card("이번 시즌 치른 경기가 없습니다."))
+
+    html(view.label(f"최근 {RECENT_N}경기 · 시즌 경계를 넘습니다"))
+    results = epl.form(history, me, RECENT_N)
+    html(view.results_table(results, epl.h2h_summary(results)))
 
     # ── 순위표 ──
     html(view.label("순위표"))
