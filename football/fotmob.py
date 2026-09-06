@@ -220,7 +220,10 @@ def lineup(match_id: int, team_id: int = TEAM_ID, ttl: int = LIVE_TTL) -> dict:
                             season=perf.get("seasonRating")))
         return out
 
+    # 경기 전에도 라인업이 오는데 그건 예상이 아니라 '지난 경기 선발'이다
+    # (lineupType='lastStarting11'). 이름표를 그대로 실어 보내 화면이 거짓말을 안 하게 한다.
     return dict(formation=side.get("formation", ""), rating=side.get("rating"),
+                kind=lu.get("lineupType", ""),
                 starters=rows(side.get("starters")), subs=rows(side.get("subs")))
 
 

@@ -46,7 +46,7 @@ def live_block(me):
     html(view.label("진행중"))
     html(view.live_card(m, me))
     html(view.label("라인업 · 실시간 평점"))
-    html(view.lineup_table(lu))
+    html(view.lineup_table(lu, now=True))
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -77,6 +77,15 @@ def standings():
         return fotmob.table()
     except Exception:
         return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def lineup_of(match_id):
+    """끝난 경기의 라인업 — 진행중이 아니므로 영구 캐시 쪽 ttl 을 쓴다."""
+    try:
+        return fotmob.lineup(match_id, ttl=fotmob.MATCH_TTL)
+    except Exception:
+        return {}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -184,7 +193,8 @@ def main():
         html(view.label("결장 · 부상"))
         html(view.injury_card(injured()))
         html(view.pending_card(
-            "선발 라인업은 아직 없습니다 — 부상은 FotMob 이 주지만 예상 라인업은 안 줍니다."
+            "경기 전 예상 라인업은 없습니다 — FotMob 이 경기 전에 주는 건 '지난 경기 선발'"
+            "이지 예상이 아닙니다. 킥오프가 가까워지면 확정 라인업이 맨 위에 뜹니다."
         ))
 
     # ── 지난 경기 ──
@@ -204,10 +214,9 @@ def main():
     rows = ratings(lid)
     if prev and rows:
         last_id = max((r["match"] for r in rows), default=None)
-        last_rows = [r for r in rows if r["match"] == last_id]
-        opp_name = last_rows[0]["opp"] if last_rows else ""
-        html(view.label(f"지난 경기 선수 평점 · vs {opp_name}"))
-        html(view.match_ratings_table(sorted(last_rows, key=lambda r: -r["rating"])))
+        opp_name = next((r["opp"] for r in rows if r["match"] == last_id), "")
+        html(view.label(f"지난 경기 라인업 · vs {opp_name}"))
+        html(view.lineup_table(lineup_of(last_id)))
 
     html(view.label(f"시즌 평균 평점 · {choice} · 경기 평점의 단순 평균"))
     html(view.player_ratings_table(fotmob.average(rows)))
