@@ -607,15 +607,24 @@ def download_stock(ticker, start, end, interval='1d'):
 def _bitgak_state(ticker, end):
     """빗각 차트용 (시세, 상태). 분석 탭의 df(520일)로는 작도가 안 된다.
 
-    러너가 보는 첫 봉이 400번째라 최소 ~660봉이 필요하다 — 화면 때문에 그
-    숫자를 낮추면 잰 적 없는 규칙이 된다. 그래서 여기만 따로 길게 받는다.
+    러너가 보는 첫 봉이 400번째라 401봉이 필요하다 — 화면 때문에 그 숫자를
+    낮추면 잰 적 없는 규칙이 된다. 그래서 여기만 따로 길게 받는다.
+
+    **창과 피드를 러너에 맞춘다.** `_carried_channel` 은 방문 순서를 되짚는
+    경로 의존 함수라 시작 봉이 다르면 다른 채널이 나온다 → 창을 러너와 같은
+    `CALENDAR_DAYS` 로 고정. 시세도 sip 을 먼저 쓰고(`sip_bars`), 키가 없을
+    때만 yfinance 로 물러선다 — 돌파변곡 판정이 거래량 가중이라 피드가 다르면
+    변곡점이 갈릴 수 있다. 어느 쪽으로 그렸는지는 화면에 적는다.
     """
-    from modules.bitgak_chart import bitgak_state
-    _d = download_stock(ticker, start=end - timedelta(days=1600), end=end)
-    if _d.empty:
-        return _d, {"error": "시세 없음"}
-    _d = _d.dropna(subset=['Close'])
-    return _d, bitgak_state(_d)
+    from modules.bitgak_chart import CALENDAR_DAYS, bitgak_state, sip_bars
+    _d, _feed = sip_bars(ticker), "sip"
+    if _d is None or _d.empty:
+        _feed = "yfinance"
+        _d = download_stock(ticker, start=end - timedelta(days=CALENDAR_DAYS), end=end)
+        if _d is None or _d.empty:
+            return _d, {"error": "시세 없음"}
+        _d = _d.dropna(subset=['Close'])
+    return _d, bitgak_state(_d, feed=_feed)
 
 
 # 섹터 상대강도 비교용 ETF. yfinance 가 돌려주는 영문 섹터명이 키다.
@@ -6103,12 +6112,14 @@ def main():
                         from modules.bitgak_chart import plot_bitgak_chart
                         _n_ch = st.slider("표시 캔들 수", 60, 250, 120, 10, key="ch_candles")
                         _bg_df, _bg = _bitgak_state(ticker, end_dt)
+                        if not _bg or _bg.get("error"):
+                            # 그림보다 먼저 사유를 띄운다 — 빈 프레임을 그리면
+                            # KeyError 가 나서 진짜 사유("시세 없음")가 묻힌다.
+                            st.info(f"빗각 작도 실패 — {(_bg or {}).get('error', '데이터 없음')}")
                         st.plotly_chart(
                             plot_bitgak_chart(_bg_df, _bg, n_candles=_n_ch, ticker=ticker),
                             width='stretch')
-                        if not _bg or _bg.get("error"):
-                            st.info(f"빗각 작도 실패 — {(_bg or {}).get('error', '데이터 없음')}")
-                        else:
+                        if _bg and not _bg.get("error"):
                             _dir_map = {"bullish": "📈 상승", "bearish": "📉 하락", "sideways": "↔️ 횡보"}
                             _kb = _bg["k_below"][0] if _bg["k_below"] else None
                             _ka = _bg["k_above"][0] if _bg["k_above"] else None
@@ -6122,14 +6133,21 @@ def main():
                             _hit = _bg["hit"]
                             _cc4.metric("오늘 발동",
                                         {"breakout": "돌파 안착", "support": "지지 확인"}[_hit["shape"]]
-                                        if _hit else "없음")
+                                        if _hit else ("없음" if _bg["eligible"] else "컷 미달"))
                             if _hit:
                                 st.success(
                                     f"진입 {fmt_p(_hit['px'])} · 손절 {fmt_p(_hit['stop_lvl'])} "
                                     f"· 목표 {fmt_p(_hit['target_lvl'])} — "
                                     f"위험 {_hit['risk_pct']*100:.2f}%, 여유 {_hit['margin']*100:.2f}%")
+                            if not _bg["eligible"]:
+                                st.warning(
+                                    "유동성 컷 미달 (직전 20일 중위 거래대금 $5M 또는 주가 $5 미만) "
+                                    "— 러너는 이 종목에 주문을 내지 않습니다. 발동 판정은 생략했습니다.")
+                            _feed_note = ("시세 sip (러너와 동일)" if _bg["feed"] == "sip" else
+                                          "시세 yfinance — 러너는 sip 이라 변곡점이 갈릴 수 있습니다")
                             st.caption(
-                                f"변곡점 3점 → 피보 12선(0~5.5). 전 구간 발동 {_bg['n_trades']}회. "
+                                f"변곡점 3점 → 피보 12선(0~5.5). {_bg['bars']}봉, "
+                                f"전 구간 발동 {_bg['n_trades']}회. {_feed_note}. "
                                 "규칙은 8단계 페이퍼 러너와 동일 — 성과 판정은 아직 진행 중입니다.")
                     except Exception as _e:
                         st.warning(f"빗각 분석 오류: {_e}")
