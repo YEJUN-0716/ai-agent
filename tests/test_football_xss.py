@@ -62,6 +62,13 @@ def _fragments():
         "h2h_empty": view.h2h_card([], epl.h2h_summary([]), POISON, 5),
         "last_match_card": view.last_match_card(done[0], POISON),
         "standings_table": view.standings_table(epl.table(done), POISON),
+        # 선수 이름도 외부 문자열이다(FotMob)
+        "player_ratings_table": view.player_ratings_table(
+            [dict(id=1, name=POISON, n=2, minutes=173, avg=7.42)]
+        ),
+        "match_ratings_table": view.match_ratings_table(
+            [dict(id=1, name=POISON, minutes=90, rating=8.16)]
+        ),
         "pending_card": view.pending_card(POISON),
         "plain_card": view.plain_card(POISON),
     }
@@ -77,7 +84,8 @@ def test_이스케이프된_형태로는_실제로_들어_있다():
     """빈 문자열을 돌려줘서 위 검사를 통과하는 걸 막는다."""
     frags = _fragments()
     for name in ("team", "badges", "team_card", "next_match_card", "fixtures_table",
-                 "last_match_card", "standings_table", "pending_card", "results_table"):
+                 "last_match_card", "standings_table", "pending_card", "results_table",
+                 "player_ratings_table", "match_ratings_table"):
         assert ESCAPED in frags[name], f"{name} 이 팀명을 아예 안 그리고 있다"
 
 
