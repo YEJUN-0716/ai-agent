@@ -341,3 +341,19 @@ def match_ratings_table(rows: list[dict]) -> str:
         "<tr><th style='text-align:left'>선수</th><th>출전</th><th>평점</th></tr>"
         f"{body}</table></div>"
     )
+
+
+def injury_card(rows: list[dict]) -> str:
+    """결장·의심 선수. 부상 종류는 안 나온다 — FotMob 이 숫자 코드만 준다."""
+    if not rows:
+        return plain_card("결장 중인 선수가 없습니다.")
+    items = "".join(
+        f"<tr><td style='text-align:left'>{team(r['name'])}</td>"
+        f"<td class='num dim'>{esc(r['expected'])}</td></tr>"
+        for r in rows
+    )
+    return (
+        "<div class='card' style='border-left:3px solid var(--amber)'>"
+        "<table class='t'><tr><th style='text-align:left'>선수</th>"
+        f"<th style='text-align:right'>복귀 예상</th></tr>{items}</table></div>"
+    )
