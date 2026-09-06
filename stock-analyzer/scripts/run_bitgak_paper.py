@@ -339,9 +339,15 @@ def universe_ids() -> list[str]:
 
 
 def daily_bars(symbols: list[str], calendar_days: int = 1100,
-               chunk: int = 100) -> dict[str, pd.DataFrame]:
-    """조정 일봉. **sip 고정** — 판정 행 패널과 같은 피드여야 컷이 같은 컷이다."""
-    end = datetime.now(timezone.utc)
+               chunk: int = 100, end: datetime | None = None) -> dict[str, pd.DataFrame]:
+    """조정 일봉. **sip 고정** — 판정 행 패널과 같은 피드여야 컷이 같은 컷이다.
+
+    `end` 는 화면용 손잡이다. 무료 플랜의 sip 은 **최근 15분을 안 준다**
+    (`modules/alpaca_data` 머리말) — 그래서 `end=now` 는 403 이 난다. 러너는
+    그 시각 자체가 판정이라 기본값을 안 바꾸고(§2.2 봉인), 차트처럼 시점이
+    안 중요한 쪽만 지연 밖으로 물러선 `end` 를 넘긴다.
+    """
+    end = end or datetime.now(timezone.utc)
     start = end - timedelta(days=calendar_days)
     out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), chunk):

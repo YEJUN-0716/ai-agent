@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -45,10 +46,17 @@ CALENDAR_DAYS = 1100
 _UP, _DOWN, _FLAT = "#26a69a", "#ef5350", "#ff9800"
 
 
+# 무료 플랜의 sip 은 최근 15분을 안 준다 — `end=now` 면 403. 차트는 일봉을
+# 그리는 것뿐이라 그 15분이 무해하므로 지연 밖으로 물러서서 받는다. 러너는
+# 그 시각 자체가 판정이라 이 손잡이를 안 쓴다.
+SIP_DELAY_MIN = 20
+
+
 def sip_bars(ticker: str):
     """러너와 같은 sip 일봉. 키가 없거나 피드가 막히면 None (호출부가 물러선다)."""
     try:
-        df = daily_bars([ticker], calendar_days=CALENDAR_DAYS).get(ticker)
+        end = datetime.now(timezone.utc) - timedelta(minutes=SIP_DELAY_MIN)
+        df = daily_bars([ticker], calendar_days=CALENDAR_DAYS, end=end).get(ticker)
     except Exception:
         return None
     return df.dropna() if df is not None and not df.empty else None
