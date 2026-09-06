@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -51,7 +52,10 @@ N_SAMPLE = 1000                 # 종목-일
 LIQ, MIN_PX = 5e6, 5.0          # 판정 행 유니버스 (§6)
 GATE_TK = ["AAPL", "MSFT", "JPM"]
 GATE_OPEN_BP, GATE_LOW_BP = 100.0, 300.0     # §5.3
-DELTA_CACHE = Path("data/bitgak_delta_1550.json")   # API 재호출을 막는다(gitignore)
+# API 재호출을 막는다(gitignore). **파일 이름에 v2 가 붙은 건 2026-09-06 창
+# 경계 정정 때문이다** — v1 에 든 값은 마감 시각 라벨 봉을 같이 집은 옛 산식이라
+# 그대로 두면 고친 코드가 옛 숫자를 그대로 다시 뱉는다. 산식을 고치면 이름을 바꾼다.
+DELTA_CACHE = Path("data/bitgak_delta_1550_v2.json")
 # 무료 IEX 분봉의 벽 — 실측(2020-07-15 0봉 / 2020-08-14 18봉). 사전 등록이 못 본
 # 자리다: 표본은 봉인된 대로 9년에서 뽑되, **δ 가 실제로 나온 건 이 날 이후뿐**이라
 # 그 시대의 발동만 따로 세서 같이 보고한다(판정선은 안 고친다).
@@ -105,8 +109,14 @@ def eligible(panel: pd.DataFrame) -> list[tuple[str, pd.Timestamp]]:
 
 
 # ── §5.4 δ — 막판 이동 ──────────────────────────────────────────
-def _last_at_or_before(df: pd.DataFrame, when) -> float | None:
-    sub = df.loc[:when]
+def _last_before(df: pd.DataFrame, when) -> float | None:
+    """`when` **직전**까지의 마지막 종가 — 마감 시각 라벨 봉은 뺀다.
+
+    Alpaca 봉 타임스탬프는 **봉 시작**이다(`modules/alpaca_data._to_frame`).
+    15:50 라벨 봉은 [15:50, 15:51) 의 체결이라 MOC 마감을 1분 넘긴 값이고,
+    16:00 라벨 봉은 아예 장 마감 뒤다. 둘 다 그 시각에 알 수 없는 정보다.
+    """
+    sub = df.loc[df.index < when]
     return float(sub["Close"].iloc[-1]) if len(sub) else None
 
 
@@ -137,17 +147,21 @@ def deltas(pairs: list[tuple[str, pd.Timestamp]]) -> dict:
         syms = {tk.split(":")[-1]: tk for tk in tks}
         try:
             bars = get_bars(list(syms), timeframe="1Min", start=start, end=end)
-        except Exception as e:                       # 하루가 빠져도 표본만 준다
-            print(f"    [{ts.date()}] {type(e).__name__}: {e}", flush=True)
-            bars = {}
+        except Exception as e:
+            # **캐시에 아무것도 안 쓰고 넘어간다.** 여기서 None 을 박으면
+            # 일시적 통신 실패가 "그날은 프린트가 없다"로 굳어 재실행이 다시
+            # 안 받는다 — 그 날짜는 영구히 오염된다. 다시 부르는 값이 싸다.
+            print(f"    [{ts.date()}] {type(e).__name__}: {e} — 캐시 안 남김(재실행 시 재시도)",
+                  flush=True)
+            continue
         for sym, tk in syms.items():
             d = bars.get(sym)
             key = f"{tk}|{ts.date()}"
             if d is None or d.empty:
                 got[key] = None                      # IEX 에 그날 프린트가 없다
                 continue
-            p50 = _last_at_or_before(d, cut)         # 15:50 까지의 마지막 프린트
-            pcl = _last_at_or_before(d, close_t)     # 16:00 까지의 마지막 프린트
+            p50 = _last_before(d, cut)               # 15:50 직전 마지막 프린트
+            pcl = _last_before(d, close_t)           # 16:00 직전(=15:59) 프린트
             got[key] = (abs(p50 - pcl) / pcl if p50 and pcl and pcl > 0 else None)
         if n % 25 == 0 or n == len(by_date):
             DELTA_CACHE.write_text(json.dumps(got), encoding="utf-8")
@@ -178,7 +192,7 @@ def margins() -> dict:
 # 왜: 무료 플랜의 sip 은 최근 15분을 안 준다(`modules/alpaca_data` 머리말). 러너가
 # 15:50 에 보는 값이 실제로는 ~15:34 값이 된다. **자는 그대로 두고 자리만 옮겨서**
 # δ 와 거짓 진입이 얼마가 되는지 잰다 — 사전 등록 §7.2 갈래가 그 비율로 정해진다.
-DELAY_CACHE = Path("data/bitgak_delta_cuts.json")     # gitignore
+DELAY_CACHE = Path("data/bitgak_delta_cuts_v2.json")  # gitignore · v2 = 창 경계 정정
 DEFAULT_CUTS = ("15:50", "15:40", "15:34", "15:30")
 
 
@@ -187,14 +201,55 @@ def _td(hhmm: str) -> timedelta:
     return timedelta(hours=int(h), minutes=int(m))
 
 
+def _parse_cuts(arg: str) -> tuple[str, ...]:
+    """"15:50, 9:40" → ("15:50", "09:40"). 검증하고 **정규화**한다.
+
+    cut 문자열이 그대로 캐시 키가 된다. 공백 하나나 앞자리 0 하나가 다르면
+    같은 시각인데 키가 갈려 1,000 종목-일을 통째로 다시 받는다(수백 콜).
+    정규장 밖 cut 은 예외 없이 δ=0 을 주는데, 그건 "막판 이동이 없었다"가
+    아니라 두 다리가 같은 봉을 집었다는 뜻이라 조용히 틀린다.
+    """
+    lo, hi = timedelta(hours=9, minutes=40), timedelta(hours=15, minutes=59)
+    out = []
+    for raw in arg.split(","):
+        c = raw.strip()
+        if not re.fullmatch(r"\d{1,2}:\d{2}", c):
+            sys.exit(f"cut 은 HH:MM 이어야 합니다 — 받은 값 {raw!r}")
+        t = _td(c)
+        if not lo <= t <= hi:
+            sys.exit(f"cut {c} 이 정규장(09:40~15:59) 밖입니다 — "
+                     f"cut 다리와 종가 다리가 같은 봉을 집어 δ 가 조용히 0 이 됩니다.")
+        out.append(f"{t.seconds // 3600:02d}:{t.seconds % 3600 // 60:02d}")
+    return tuple(dict.fromkeys(out))
+
+
+def _common_sample(got: dict, pick: list[tuple[str, pd.Timestamp]],
+                   cuts: tuple[str, ...]) -> list[dict]:
+    """**모든 cut 이 값을 가진** 종목-일만 남긴다.
+
+    cut 마다 따로 탈락시키면 표의 행마다 다른 종목-일의 중위값이 된다.
+    빠지는 건 무작위가 아니라 거래가 얇은 날 — 그런 날은 10분 창이 비기 쉬워
+    이른 cut 에서 먼저 빠지고, 그 결과 지연 δ 가 실제보다 작게(=「유지」 쪽으로)
+    나온다. 재는 게 "cut 을 옮기면 δ 가 커지나"이므로 표본이 같아야 한다.
+    """
+    return [r for tk, ts in pick
+            if (r := got.get(f"{tk}|{ts.date()}"))
+            and all(r.get(c) is not None for c in cuts)]
+
+
 def deltas_multi(pairs: list[tuple[str, pd.Timestamp]],
                  cuts: tuple[str, ...]) -> dict:
     """{"종목|날짜": {cut: δ}} — 분봉 한 번으로 여러 cut 을 잰다.
 
-    **산식은 `deltas()` 그대로다.** cut 다리는 `[cut−10분, cut]` 의 마지막
-    프린트, 종가 다리는 언제나 `[15:40, 16:00]` 의 마지막 프린트 — 종가 다리를
+    **산식은 `deltas()` 그대로다.** cut 다리는 `[cut−10분, cut)` 의 마지막
+    프린트, 종가 다리는 언제나 `[15:40, 16:00)` 의 마지막 프린트 — 종가 다리를
     cut 에 따라 움직이면 재는 게 "막판 이동"이 아니라 두 창의 차이가 된다.
-    cut=15:50 행이 기존 측정(δ 중위 14.9bp)을 재현하는지가 **자 검사**다.
+    cut=15:50 행이 `deltas()` 와 같은 값을 주는지가 **자 검사**다.
+
+    ⚠️ 두 창이 **반열림**인 건 2026-09-06 정정이다(`_last_before`). 그 전엔
+    양 끝을 닫아서 15:50 봉(=마감 뒤 1분)과 16:00 봉(=장 마감 뒤)을 같이
+    집었다 — 그 시각에 알 수 없는 정보가 δ 에 섞였다. `deltas()` 도 같이
+    고쳤으므로 **7단계 발행값 δ 중위 14.9bp 는 다시 재야 한다.**
     """
     from modules.alpaca_data import get_bars
 
@@ -218,9 +273,13 @@ def deltas_multi(pairs: list[tuple[str, pd.Timestamp]],
         syms = {tk.split(":")[-1]: tk for tk in tks}
         try:
             bars = get_bars(list(syms), timeframe="1Min", start=start, end=end)
-        except Exception as e:                       # 하루가 빠져도 표본만 준다
-            print(f"    [{ts.date()}] {type(e).__name__}: {e}", flush=True)
-            bars = {}
+        except Exception as e:
+            # **캐시에 아무것도 안 쓰고 넘어간다.** 여기서 None 을 박으면
+            # 일시적 통신 실패가 "그날은 프린트가 없다"로 굳어 재실행이 다시
+            # 안 받는다 — 그 날짜는 영구히 오염된다. 다시 부르는 값이 싸다.
+            print(f"    [{ts.date()}] {type(e).__name__}: {e} — 캐시 안 남김(재실행 시 재시도)",
+                  flush=True)
+            continue
         for sym, tk in syms.items():
             d = bars.get(sym)
             key = f"{tk}|{ts.date()}"
@@ -229,11 +288,11 @@ def deltas_multi(pairs: list[tuple[str, pd.Timestamp]],
                 row.update({c: None for c in cuts})
                 continue
             # 종가 다리 — 모든 cut 이 같은 것을 쓴다(기존 측정과 같은 창)
-            pcl = _last_at_or_before(d.loc[to_utc(timedelta(hours=15, minutes=40)):],
-                                     to_utc(timedelta(hours=16)))
+            pcl = _last_before(d.loc[to_utc(timedelta(hours=15, minutes=40)):],
+                               to_utc(timedelta(hours=16)))
             for c in cuts:
                 cut = to_utc(_td(c))
-                p = _last_at_or_before(d.loc[cut - timedelta(minutes=10):], cut)
+                p = _last_before(d.loc[cut - timedelta(minutes=10):], cut)
                 row[c] = (abs(p - pcl) / pcl if p and pcl and pcl > 0 else None)
         if n % 25 == 0 or n == len(by_date):
             DELAY_CACHE.write_text(json.dumps(got), encoding="utf-8")
@@ -248,6 +307,12 @@ def run_delay(cuts: tuple[str, ...] = DEFAULT_CUTS) -> None:
     if not gate(panel):
         sys.exit(1)
 
+    # 여유 분포부터 읽는다 — 판정 행 스캔 캐시가 없으면 여기서 죽는다.
+    # 뒤에 두면 분봉 1,000 콜을 다 쓰고 나서 "캐시 없음"으로 끝난다.
+    m = margins()
+    allm = np.asarray(m["breakout"] + m["support"])
+    recent = np.asarray(m["recent"])
+
     pairs = eligible(panel)
     rng = np.random.default_rng(SEED)               # 봉인 — 같은 1,000건
     pick = [pairs[j] for j in rng.choice(len(pairs), size=N_SAMPLE, replace=False)]
@@ -255,24 +320,25 @@ def run_delay(cuts: tuple[str, ...] = DEFAULT_CUTS) -> None:
           f"(시드 {SEED}, 7단계와 같은 표본)")
     got = deltas_multi(pick, cuts)
 
-    m = margins()
-    allm = np.asarray(m["breakout"] + m["support"])
-    recent = np.asarray(m["recent"])
     print(f"\n### 결과 — 여유 중위 {np.median(allm) * 1e4:.1f}bp, 발동 {allm.size:,}건")
-    print(f"{'cut':>6} {'표본':>9} {'δ중위':>9} {'δ90':>9} "
+    rows = _common_sample(got, pick, cuts)          # 모든 cut 이 같은 종목-일
+    if len(rows) < N_SAMPLE // 2:
+        sys.exit(f"공통 표본이 {len(rows)}/{N_SAMPLE} 뿐이다 — 절반도 못 받았으면 "
+                 f"이건 분포가 아니라 사고다. 로그를 보고 다시 온다.")
+    print(f"     공통 표본 {len(rows)}/{N_SAMPLE} — cut 전부에 값이 있는 종목-일만")
+    print(f"{'cut':>6} {'δ중위':>9} {'δ90':>9} "
           f"{'거짓진입':>9} {'(2020-08~)':>11}  갈래")
     for c in cuts:
-        vals = [v for tk, ts in pick
-                if (v := (got.get(f"{tk}|{ts.date()}") or {}).get(c)) is not None]
-        if len(vals) < N_SAMPLE // 2:
-            print(f"{c:>6} {len(vals):>4}/{N_SAMPLE}  표본 절반 미달 — 분포가 아니라 사고다")
-            continue
+        vals = [r[c] for r in rows]
         d50, d90 = float(np.median(vals)), float(np.percentile(vals, 90))
-        rate, rate_r = float((allm < d50).mean()), float((recent < d50).mean())
+        rate = float((allm < d50).mean())
+        # 2020-08 이전 발동만 있으면 recent 가 빈다 — nan% 대신 안 잰 걸 안 잰다고 쓴다
+        rr = (f"{float((recent < d50).mean()) * 100:10.1f}%" if recent.size
+              else f"{'-':>11}")
         branch = ("유지" if rate <= 0.10 else
                   "유지 + 참고 F 대조" if rate <= 0.25 else "참고 F 로 이동 (죽음)")
-        print(f"{c:>6} {len(vals):>4}/{N_SAMPLE} {d50 * 1e4:8.1f}bp {d90 * 1e4:8.1f}bp "
-              f"{rate * 100:8.1f}% {rate_r * 100:10.1f}%  {branch}")
+        print(f"{c:>6} {d50 * 1e4:8.1f}bp {d90 * 1e4:8.1f}bp "
+              f"{rate * 100:8.1f}% {rr}  {branch}")
     print("\n갈래는 사전 등록 §7.2. **25% 초과는 참고 F 로 옮기라는 뜻인데 참고 F 가"
           "\n7단계에서 죽었다(② 하한 −0.000) — 그 칸에 떨어지면 노선이 닫힌다.**")
 
@@ -323,6 +389,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "gate":
         sys.exit(0 if gate(pd.read_parquet(LARGECAP_PANEL)) else 1)
     if len(sys.argv) > 1 and sys.argv[1] == "delay":
-        cuts = tuple(sys.argv[2].split(",")) if len(sys.argv) > 2 else DEFAULT_CUTS
+        cuts = _parse_cuts(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_CUTS
         sys.exit(run_delay(cuts))
     run()
