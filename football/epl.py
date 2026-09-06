@@ -13,7 +13,9 @@ from __future__ import annotations
 import json
 import time
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 SRC = "https://raw.githubusercontent.com/openfootball/football.json/master/{season}/en.1.json"
 CACHE_DIR = Path(__file__).parent / "data"
@@ -23,7 +25,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 CURRENT = "2026-27"
-CHELSEA = "Chelsea FC"
+# 팀 이름은 짧은 쪽 하나로 통일한다 — openfootball 은 'Chelsea FC', FotMob 은
+# 'Chelsea' 로 부른다. 20팀 전부 short() 만 지나면 두 소스가 같은 이름이 된다.
+CHELSEA = "Chelsea"
+
+LONDON = ZoneInfo("Europe/London")
+# 킥오프로부터 이만큼 지나면 끝난 경기로 본다(진행중인 경기는 '다음 경기'에 남는다).
+MATCH_LENGTH = timedelta(hours=2)
 
 
 # ─── 로딩 ──────────────────────────────────────────────────────────────
@@ -58,6 +66,7 @@ def load_season(season: str = CURRENT) -> list[dict]:
     matches = cached_json(
         SRC.format(season=season), CACHE_DIR / f"en1-{season}.json", TTL_SEC
     )["matches"]
+    matches = [{**m, "team1": short(m["team1"]), "team2": short(m["team2"])} for m in matches]
     return sorted(matches, key=lambda m: (m["date"], m.get("time", "")))
 
 
@@ -108,8 +117,15 @@ def team_matches(matches: list[dict], team: str) -> list[dict]:
 
 
 def upcoming(matches: list[dict], team: str, n: int | None = None) -> list[dict]:
-    """아직 결과가 없는 경기들(날짜순). n 을 주면 앞에서 n 개."""
-    out = [m for m in team_matches(matches, team) if ft(m) is None]
+    """아직 안 끝난 경기들(날짜순). n 을 주면 앞에서 n 개.
+
+    **결과 유무로 가르지 않는다.** openfootball 은 결과를 주 1회(수요일)만
+    올려서, 사흘 전에 끝난 경기가 계속 '예정'으로 남는다 — 2026-09-06 에
+    3라운드 10경기가 통째로 그랬다. 그래서 시계로 가른다.
+    """
+    cut = datetime.now(LONDON) - MATCH_LENGTH
+    key = (cut.strftime("%Y-%m-%d"), cut.strftime("%H:%M"))
+    out = [m for m in team_matches(matches, team) if (m["date"], m.get("time", "")) > key]
     return out[:n] if n else out
 
 

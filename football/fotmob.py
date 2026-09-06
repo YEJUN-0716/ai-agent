@@ -56,10 +56,59 @@ def fixtures(team_id: int = TEAM_ID, league_id: int | None = EPL_ID) -> list[dic
             id=f["id"],
             date=(status.get("utcTime") or "")[:10],
             opp=(f.get("opponent") or {}).get("name", ""),
+            opp_id=(f.get("opponent") or {}).get("id"),
             home=home,
+            # 스코어는 홈-원정 순서로 온다. 'scoreStr' 을 우리 팀 기준으로 읽으면
+            # 원정 경기가 통째로 뒤집힌다 — home/away 의 score 를 그대로 쓴다.
+            home_goals=(f.get("home") or {}).get("score"),
+            away_goals=(f.get("away") or {}).get("score"),
             score=status.get("scoreStr", ""),
         ))
     return sorted(out, key=lambda m: m["date"])
+
+
+def table(team_id: int = TEAM_ID) -> list[dict]:
+    """리그 순위표 — `epl.table()` 과 **같은 행 모양**으로 돌려준다.
+
+    소스를 갈아탄 이유: openfootball 은 주 1회(수요일)만 결과를 올린다.
+    9/2 다음 커밋이 없어서 3라운드가 통째로 비어 있었다 — 캐시가 아니라 소스다.
+    모양을 맞춰 두면 화면(view)과 나머지 계산은 하나도 안 건드린다.
+    """
+    blocks = team(team_id).get("table") or []
+    rows = ((blocks[0].get("data") if blocks else {}) or {}).get("table", {}).get("all", [])
+    out = []
+    for r in rows:
+        gf, ga = (int(x) for x in r["scoresStr"].split("-"))
+        out.append(dict(team=r["name"], rank=r["idx"], p=r["played"], w=r["wins"],
+                        d=r["draws"], l=r["losses"], gf=gf, ga=ga,
+                        gd=r["goalConDiff"], pts=r["pts"]))
+    return out
+
+
+def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID) -> list[dict]:
+    """끝난 경기 → **openfootball 경기 모양**. epl.py 의 계산을 그대로 쓰려고.
+
+    팀 이름은 순위표 쪽 이름을 쓴다 — 일정에 있는 'Brighton' 이 아니라
+    'Brighton and Hove Albion'. openfootball 이름을 epl.short() 로 줄인 것과
+    20팀 전부 일치한다(그래서 매핑 표가 필요 없다).
+    """
+    names = {r["team"]: r["team"] for r in table(team_id)}
+    ids = {}
+    blocks = team(team_id).get("table") or []
+    for r in ((blocks[0].get("data") if blocks else {}) or {}).get("table", {}).get("all", []):
+        ids[r["id"]] = r["name"]
+    me = ids.get(team_id, "")
+    out = []
+    for f in fixtures(team_id, league_id):
+        opp = ids.get(f["opp_id"], f["opp"])
+        out.append(dict(
+            date=f["date"], time="", round="",
+            team1=me if f["home"] else opp,
+            team2=opp if f["home"] else me,
+            score={"ft": [int(f["home_goals"]), int(f["away_goals"])]},
+        ))
+    assert not names or me, "순위표에서 우리 팀을 못 찾았다 — id 체계가 바뀌었다"
+    return out
 
 
 def match_ratings(match_id: int, team_id: int = TEAM_ID) -> list[dict]:
@@ -155,19 +204,29 @@ def _selfcheck():
     assert rows, "평점 행이 비었다"
     assert all(0 < r["rating"] <= 10 for r in rows), "평점 범위 밖의 값이 있다"
 
-    table = average(rows)
+    players = average(rows)
     # 합계를 다른 경로로 다시 센다 — 선수별 경기 수의 합 = 전체 행 수
-    assert sum(p["n"] for p in table) == len(rows)
+    assert sum(p["n"] for p in players) == len(rows)
+
+    standings = table()
+    assert len(standings) == 20, f"순위표가 20팀이 아니다: {len(standings)}"
+    us = next(r for r in standings if r["team"].startswith("Chelsea"))
+    # 변환한 경기로 순위표를 **다시 세서** FotMob 것과 맞춰 본다.
+    # 경기 수만 맞춰 보면 원정 스코어가 뒤집혀 있어도 통과한다(실제로 그랬다).
+    import epl
+    mine = next(r for r in epl.table(as_matches()) if r["team"] == us["team"])
+    for k in ("p", "w", "d", "l", "gf", "ga", "pts"):
+        assert mine[k] == us[k], f"{k}: 우리가 센 값 {mine[k]} vs FotMob {us[k]}"
 
     theirs = squad_ratings()
-    pairs = [(p, theirs[p["id"]]) for p in table if p["id"] in theirs and p["n"] >= 2]
+    pairs = [(p, theirs[p["id"]]) for p in players if p["id"] in theirs and p["n"] >= 2]
     worst = max((abs(p["avg"] - t), p["name"]) for p, t in pairs) if pairs else (0, "")
-    print(f"OK  {len(games)}경기 / 평점 {len(rows)}행 / 선수 {len(table)}명")
+    print(f"OK  {len(games)}경기 / 평점 {len(rows)}행 / 선수 {len(players)}명")
     print(f"    FotMob 시즌 평점과 대조: {len(pairs)}명, 최대 차이 {worst[0]:.2f} ({worst[1]})")
     hurt = injuries()
     print(f"    결장/의심 {len(hurt)}명: "
           + ", ".join(f"{h['name']}({h['expected']})" for h in hurt))
-    print("    상위: " + ", ".join(f"{p['name']} {p['avg']:.2f}({p['n']}경기)" for p in table[:3]))
+    print("    상위: " + ", ".join(f"{p['name']} {p['avg']:.2f}({p['n']}경기)" for p in players[:3]))
 
 
 if __name__ == "__main__":
