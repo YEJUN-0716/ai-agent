@@ -113,6 +113,28 @@ def average(rows: list[dict], min_matches: int = 1) -> list[dict]:
     return sorted(out, key=lambda p: -p["avg"])
 
 
+def injuries(team_id: int = TEAM_ID) -> list[dict]:
+    """지금 못 뛰는 선수 — 이름과 복귀 예상.
+
+    같은 응답 안에 명단이 두 군데 있고 **서로 다르다**(2026-09-07 실측):
+      squad[].members[].injury                    ← 여기를 쓴다. 지금 상태다.
+      overview.lastLineupStats.unavailable        지난 경기 시점의 결장자다
+    이름이 붙은 그릇('lastLineupStats')이 답을 갖고 있다 — 지난 경기에 못 뛴
+    선수(Enzo)와 지금 의심스러운 선수(Caicedo)는 다른 명단이다. 프리뷰는 다음
+    경기를 묻는 화면이므로 앞쪽이다.
+
+    부상 '종류'는 못 준다 — `injuryId` 는 숫자 코드고 라벨이 응답에 없다.
+    """
+    out = []
+    for group in (team(team_id).get("squad", {}) or {}).get("squad", []):
+        for m in group.get("members", []):
+            hurt = m.get("injury")
+            if hurt:
+                out.append(dict(id=m.get("id"), name=m.get("name", ""),
+                                expected=hurt.get("expectedReturn", "")))
+    return out
+
+
 def squad_ratings(team_id: int = TEAM_ID) -> dict[int, float]:
     """FotMob 이 스스로 매긴 시즌 평점 — 우리 평균을 대조할 다른 경로."""
     out = {}
@@ -142,6 +164,9 @@ def _selfcheck():
     worst = max((abs(p["avg"] - t), p["name"]) for p, t in pairs) if pairs else (0, "")
     print(f"OK  {len(games)}경기 / 평점 {len(rows)}행 / 선수 {len(table)}명")
     print(f"    FotMob 시즌 평점과 대조: {len(pairs)}명, 최대 차이 {worst[0]:.2f} ({worst[1]})")
+    hurt = injuries()
+    print(f"    결장/의심 {len(hurt)}명: "
+          + ", ".join(f"{h['name']}({h['expected']})" for h in hurt))
     print("    상위: " + ", ".join(f"{p['name']} {p['avg']:.2f}({p['n']}경기)" for p in table[:3]))
 
 

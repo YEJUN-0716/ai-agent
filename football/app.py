@@ -25,6 +25,14 @@ RECENT_N = 5
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def injured():
+    try:
+        return fotmob.injuries()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def ratings():
     """선수 평점 — 이번 시즌 EPL 경기 전부. FotMob 은 비공식이라 죽을 수 있고,
     죽으면 이 구역만 비어야 한다(순위·일정은 openfootball 이라 멀쩡하다)."""
@@ -83,10 +91,10 @@ def main():
         html(view.label("다음 5경기"))
         html(view.fixtures_table(epl.upcoming(season, me, 5), standings, me))
 
-        html(view.label("라인업 · 부상"))
+        html(view.label("결장 · 부상"))
+        html(view.injury_card(injured()))
         html(view.pending_card(
-            "API-Football 무료 플랜은 2022~2024 시즌만 줍니다. "
-            "이번 시즌 라인업·부상을 보려면 Pro($19/월)가 필요합니다."
+            "선발 라인업은 아직 없습니다 — 부상은 FotMob 이 주지만 예상 라인업은 안 줍니다."
         ))
 
     # ── 지난 경기 ──
