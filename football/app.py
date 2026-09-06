@@ -24,6 +24,31 @@ VENUE_SEASONS = 2
 RECENT_N = 5
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def now_playing():
+    """지금 뛰고 있는 경기와 그 라인업·평점. 없으면 (None, {}).
+
+    캐시가 30초인 건 이것만이다 — 나머지는 경기 중에도 안 바뀐다.
+    """
+    try:
+        m = fotmob.live_match()
+        return (m, fotmob.lineup(m["id"])) if m else (None, {})
+    except Exception:
+        return None, {}
+
+
+@st.fragment(run_every=30)
+def live_block(me):
+    """진행중일 때만 그리는 조각. 30초마다 이 부분만 다시 그린다."""
+    m, lu = now_playing()
+    if not m:
+        return
+    html(view.label("진행중"))
+    html(view.live_card(m, me))
+    html(view.label("라인업 · 실시간 평점"))
+    html(view.lineup_table(lu))
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def live():
     """이번 시즌 결과와 순위표 — FotMob.
@@ -88,6 +113,8 @@ def main():
     html("<div class='blk'>")
     html(view.header(epl.CURRENT))
 
+    live_block(me)
+
     # ── 다음 경기 ──
     nxt = epl.next_match(season, me)
     html(view.label("다음 경기"))
@@ -140,7 +167,8 @@ def main():
     html(view.player_ratings_table(fotmob.average(rows)))
 
     # ── 순위표 ──
-    html(view.label("순위표"))
+    playing, _ = now_playing()
+    html(view.label("순위표" + (" · 진행중 경기 잠정 반영" if playing else "")))
     html(view.standings_table(standings_rows, me))
     html(view.footer() + "</div>")
 

@@ -19,9 +19,12 @@ EPL_ID = 47      # FotMob 의 프리미어리그 id (openfootball 과 다른 체
 TEAM_URL = "https://www.fotmob.com/api/data/teams?id={team_id}"
 MATCH_URL = "https://www.fotmob.com/api/data/matchDetails?matchId={match_id}"
 
-TEAM_TTL = 6 * 3600
+# 순위표·부상·진행중 판단이 전부 이 응답에서 나온다. 6시간이면 라이브가 안 보인다.
+TEAM_TTL = 300
 # 끝난 경기의 평점은 더 안 변한다. 한 경기가 260KB 라 다시 받을 이유가 없다.
 MATCH_TTL = 10 ** 9
+# 진행중인 경기는 반대다 — 평점도 스코어도 계속 바뀐다.
+LIVE_TTL = 60
 
 RATING = "FotMob rating"
 MINUTES = "Minutes played"
@@ -36,18 +39,24 @@ def _stat(player: dict, key: str):
     return None
 
 
-def team(team_id: int = TEAM_ID) -> dict:
+def team(team_id: int = TEAM_ID, ttl: int = TEAM_TTL) -> dict:
+    """팀 응답 — 순위표·일정·스쿼드·부상이 다 여기 있다(캐시 파일 하나)."""
     return cached_json(
-        TEAM_URL.format(team_id=team_id), CACHE_DIR / f"fotmob-team-{team_id}.json", TEAM_TTL
+        TEAM_URL.format(team_id=team_id), CACHE_DIR / f"fotmob-team-{team_id}.json", ttl
     )
 
 
-def fixtures(team_id: int = TEAM_ID, league_id: int | None = EPL_ID) -> list[dict]:
-    """끝난 경기(오래된 것부터). league_id 를 주면 그 대회만 — 컵 경기가 섞이지 않게."""
+def fixtures(team_id: int = TEAM_ID, league_id: int | None = EPL_ID,
+             ongoing: bool = False) -> list[dict]:
+    """끝난 경기(오래된 것부터). league_id 를 주면 그 대회만 — 컵 경기가 섞이지 않게.
+
+    ongoing=True 면 **뛰고 있는 경기의 잠정 스코어도** 넣는다. 기본은 뺀다 —
+    폼 배지나 최근 결과에 아직 안 끝난 경기가 승패로 찍히면 안 된다.
+    """
     out = []
-    for f in (team().get("fixtures", {}).get("allFixtures", {}) or {}).get("fixtures", []):
+    for f in (team(team_id).get("fixtures", {}).get("allFixtures", {}) or {}).get("fixtures", []):
         status = f.get("status") or {}
-        if not status.get("finished"):
+        if not (status.get("finished") or (ongoing and status.get("ongoing"))):
             continue
         if league_id and (f.get("tournament") or {}).get("leagueId") != league_id:
             continue
@@ -85,7 +94,8 @@ def table(team_id: int = TEAM_ID) -> list[dict]:
     return out
 
 
-def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID) -> list[dict]:
+def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID,
+               ongoing: bool = False) -> list[dict]:
     """끝난 경기 → **openfootball 경기 모양**. epl.py 의 계산을 그대로 쓰려고.
 
     팀 이름은 순위표 쪽 이름을 쓴다 — 일정에 있는 'Brighton' 이 아니라
@@ -99,7 +109,7 @@ def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID) -> list[d
         ids[r["id"]] = r["name"]
     me = ids.get(team_id, "")
     out = []
-    for f in fixtures(team_id, league_id):
+    for f in fixtures(team_id, league_id, ongoing):
         opp = ids.get(f["opp_id"], f["opp"])
         out.append(dict(
             date=f["date"], time="", round="",
@@ -111,11 +121,70 @@ def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID) -> list[d
     return out
 
 
+def details(match_id: int, ttl: int = MATCH_TTL) -> dict:
+    """경기 상세(평점·라인업). 진행중이면 ttl 을 짧게 줘서 다시 받는다."""
+    return cached_json(
+        MATCH_URL.format(match_id=match_id), CACHE_DIR / f"fotmob-match-{match_id}.json", ttl
+    )
+
+
+def live_match(team_id: int = TEAM_ID) -> dict | None:
+    """지금 뛰고 있는 경기. 없으면 None.
+
+    끝난 경기 목록(fixtures)에는 안 잡힌다 — 저긴 finished 만 본다.
+    """
+    fx = (team(team_id, LIVE_TTL).get("fixtures", {}).get("allFixtures", {}) or {})
+    for f in fx.get("fixtures", []):
+        st = f.get("status") or {}
+        if not st.get("ongoing"):
+            continue
+        # 시계와 스코어는 **경기 상세**에서 읽는다. 팀 응답의 liveTime 은 낡는다 —
+        # 후반 8분에도 '1분'이라고 했고, 상세는 같은 순간에 48분이었다.
+        detail = {}
+        try:
+            detail = (details(f["id"], LIVE_TTL).get("header") or {}).get("status") or {}
+        except Exception:
+            pass
+        live = detail.get("liveTime") or {}
+        clock = live.get("short") or (detail.get("reason") or {}).get("long", "")
+        return dict(id=f["id"], opp=(f.get("opponent") or {}).get("name", ""),
+                    home=(f.get("home") or {}).get("id") == team_id,
+                    score=detail.get("scoreStr") or st.get("scoreStr", ""),
+                    # 방향 표시 문자(U+200E)가 섞여 온다 — 화면엔 안 보이지만 지운다
+                    clock=clock.replace("‎", "").strip())
+    return None
+
+
+def lineup(match_id: int, team_id: int = TEAM_ID, ttl: int = LIVE_TTL) -> dict:
+    """선발·교체와 각자의 현재 평점. 포메이션과 팀 평균 평점도 같이 온다.
+
+    교체는 **뛴 선수만** 넣는다 — 벤치에 앉아만 있으면 평점이 없다.
+    """
+    lu = (details(match_id, ttl).get("content", {}) or {}).get("lineup") or {}
+    side = next((lu.get(k) for k in ("homeTeam", "awayTeam")
+                 if (lu.get(k) or {}).get("id") == team_id), None)
+    if not side:
+        return {}
+
+    def rows(players):
+        out = []
+        for pl in players or []:
+            perf = pl.get("performance") or {}
+            if perf.get("rating") is None:
+                continue
+            out.append(dict(id=pl.get("id"), name=pl.get("name", ""),
+                            shirt=str(pl.get("shirtNumber") or ""),
+                            rating=float(perf["rating"]),
+                            season=perf.get("seasonRating")))
+        return out
+
+    return dict(formation=side.get("formation", ""), rating=side.get("rating"),
+                starters=rows(side.get("starters")), subs=rows(side.get("subs")))
+
+
 def match_ratings(match_id: int, team_id: int = TEAM_ID) -> list[dict]:
     """한 경기에서 그 팀 선수들의 평점(높은 순). 평점이 없는 선수(미출전)는 뺀다."""
-    data = cached_json(
-        MATCH_URL.format(match_id=match_id), CACHE_DIR / f"fotmob-match-{match_id}.json", MATCH_TTL
-    )
+    data = details(match_id)
     out = []
     for p in (data.get("content", {}).get("playerStats") or {}).values():
         if p.get("teamId") != team_id:
@@ -213,8 +282,9 @@ def _selfcheck():
     us = next(r for r in standings if r["team"].startswith("Chelsea"))
     # 변환한 경기로 순위표를 **다시 세서** FotMob 것과 맞춰 본다.
     # 경기 수만 맞춰 보면 원정 스코어가 뒤집혀 있어도 통과한다(실제로 그랬다).
+    # 저쪽 순위표는 **진행중 경기를 잠정 반영**하므로 우리도 넣고 센다.
     import epl
-    mine = next(r for r in epl.table(as_matches()) if r["team"] == us["team"])
+    mine = next(r for r in epl.table(as_matches(ongoing=True)) if r["team"] == us["team"])
     for k in ("p", "w", "d", "l", "gf", "ga", "pts"):
         assert mine[k] == us[k], f"{k}: 우리가 센 값 {mine[k]} vs FotMob {us[k]}"
 
@@ -222,7 +292,14 @@ def _selfcheck():
     pairs = [(p, theirs[p["id"]]) for p in players if p["id"] in theirs and p["n"] >= 2]
     worst = max((abs(p["avg"] - t), p["name"]) for p, t in pairs) if pairs else (0, "")
     print(f"OK  {len(games)}경기 / 평점 {len(rows)}행 / 선수 {len(players)}명")
-    print(f"    FotMob 시즌 평점과 대조: {len(pairs)}명, 최대 차이 {worst[0]:.2f} ({worst[1]})")
+    print(f"    FotMob 시즌 평점과 대조: {len(pairs)}명, 최대 차이 {worst[0]:.2f} ({worst[1]})"
+          + (" — 진행중 경기가 저쪽 평균에만 들어가 있다" if live_match() else ""))
+    now = live_match()
+    if now:
+        lu = lineup(now["id"])
+        print(f"    진행중: vs {now['opp']} {now['score']} ({now['clock']}) · "
+              f"{lu.get('formation')} 선발 {len(lu.get('starters', []))}명 "
+              f"교체투입 {len(lu.get('subs', []))}명")
     hurt = injuries()
     print(f"    결장/의심 {len(hurt)}명: "
           + ", ".join(f"{h['name']}({h['expected']})" for h in hurt))
