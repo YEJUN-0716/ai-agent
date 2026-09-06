@@ -325,24 +325,6 @@ def player_ratings_table(rows: list[dict]) -> str:
     )
 
 
-def match_ratings_table(rows: list[dict]) -> str:
-    """한 경기의 선수별 평점(높은 순)."""
-    if not rows:
-        return pending_card("이 경기의 평점을 못 받아왔습니다.")
-    body = "".join(
-        f"<tr><td style='text-align:left'>{team(r['name'])}</td>"
-        f"<td class='num dim'>{r['minutes']:d}분</td>"
-        f"<td class='num' style='color:{rating_color(r['rating'])};font-weight:600'>"
-        f"{r['rating']:.2f}</td></tr>"
-        for r in rows
-    )
-    return (
-        "<div class='card'><table class='t'>"
-        "<tr><th style='text-align:left'>선수</th><th>출전</th><th>평점</th></tr>"
-        f"{body}</table></div>"
-    )
-
-
 def injury_card(rows: list[dict]) -> str:
     """결장·의심 선수. 부상 종류는 안 나온다 — FotMob 이 숫자 코드만 준다."""
     if not rows:
@@ -376,7 +358,7 @@ def live_card(m: dict, me: str) -> str:
     )
 
 
-def lineup_table(lu: dict) -> str:
+def lineup_table(lu: dict, now: bool = False) -> str:
     """선발·교체와 각자의 현재 평점. 시즌 평점을 옆에 둬서 오늘이 어떤지 보이게."""
     if not lu or not lu.get("starters"):
         return pending_card("라인업이 아직 안 나왔습니다.")
@@ -399,7 +381,7 @@ def lineup_table(lu: dict) -> str:
         "<div class='card'>"
         f"<div class='num' style='font-size:15px;margin-bottom:12px'>{head}</div>"
         "<table class='t'><tr><th>번호</th><th style='text-align:left'>선수</th>"
-        "<th>시즌</th><th>지금</th></tr>"
+        f"<th>시즌</th><th>{'지금' if now else '평점'}</th></tr>"
         + rows(lu["starters"], "") + rows(lu.get("subs") or [], "교체")
         + "</table></div>"
     )
