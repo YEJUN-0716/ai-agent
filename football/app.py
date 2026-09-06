@@ -9,6 +9,7 @@
 import streamlit as st
 
 import epl
+import fotmob
 import view
 
 PAST = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"]
@@ -21,6 +22,16 @@ FORM_N = 10
 VENUE_SEASONS = 2
 # 리뷰에 펼칠 최근 결과 수. 폼 배지와 같은 이유로 시즌 경계를 넘는다.
 RECENT_N = 5
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def ratings():
+    """선수 평점 — 이번 시즌 EPL 경기 전부. FotMob 은 비공식이라 죽을 수 있고,
+    죽으면 이 구역만 비어야 한다(순위·일정은 openfootball 이라 멀쩡하다)."""
+    try:
+        return fotmob.season_rows()
+    except Exception:
+        return []
 
 
 def html(fragment):
@@ -87,6 +98,18 @@ def main():
     html(view.label(f"최근 {RECENT_N}경기 · 시즌 경계를 넘습니다"))
     results = epl.form(history, me, RECENT_N)
     html(view.results_table(results, epl.h2h_summary(results)))
+
+    # ── 선수 평점 (FotMob) ──
+    rows = ratings()
+    if prev and rows:
+        last_id = max((r["match"] for r in rows), default=None)
+        last_rows = [r for r in rows if r["match"] == last_id]
+        opp_name = last_rows[0]["opp"] if last_rows else ""
+        html(view.label(f"지난 경기 선수 평점 · vs {opp_name}"))
+        html(view.match_ratings_table(sorted(last_rows, key=lambda r: -r["rating"])))
+
+    html(view.label("시즌 평균 평점 · 경기 평점의 단순 평균"))
+    html(view.player_ratings_table(fotmob.average(rows)))
 
     # ── 순위표 ──
     html(view.label("순위표"))

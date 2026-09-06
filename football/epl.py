@@ -18,6 +18,9 @@ from pathlib import Path
 SRC = "https://raw.githubusercontent.com/openfootball/football.json/master/{season}/en.1.json"
 CACHE_DIR = Path(__file__).parent / "data"
 TTL_SEC = 6 * 3600
+# FotMob 은 기본 UA 에 404 를 준다. 한 군데서만 정해 둔다.
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 CURRENT = "2026-27"
 CHELSEA = "Chelsea FC"
@@ -25,28 +28,32 @@ CHELSEA = "Chelsea FC"
 
 # ─── 로딩 ──────────────────────────────────────────────────────────────
 
-def load_season(season: str = CURRENT) -> list[dict]:
-    """한 시즌 전 경기(날짜순).
+def cached_json(url: str, cache: Path, ttl: int):
+    """받아서 캐시하고 파싱까지. 평점 모듈(fotmob.py)도 같이 쓴다.
 
     캐시가 신선하면 그걸 쓰고, 받아오기가 실패하면 낡은 캐시라도 쓴다 —
     네트워크가 죽었다고 화면까지 죽을 이유는 없다.
     """
     CACHE_DIR.mkdir(exist_ok=True)
-    cache = CACHE_DIR / f"en1-{season}.json"
-    stale = not cache.exists() or time.time() - cache.stat().st_mtime > TTL_SEC
+    stale = not cache.exists() or time.time() - cache.stat().st_mtime > ttl
     if stale:
         try:
-            req = urllib.request.Request(
-                SRC.format(season=season), headers={"User-Agent": "Mozilla/5.0"}
-            )
-            with urllib.request.urlopen(req, timeout=20) as r:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=25) as r:
                 body = r.read()
             json.loads(body)  # 깨진 응답으로 멀쩡한 캐시를 덮지 않는다
             cache.write_bytes(body)
         except Exception:
             if not cache.exists():
                 raise
-    matches = json.loads(cache.read_text(encoding="utf-8"))["matches"]
+    return json.loads(cache.read_text(encoding="utf-8"))
+
+
+def load_season(season: str = CURRENT) -> list[dict]:
+    """한 시즌 전 경기(날짜순)."""
+    matches = cached_json(
+        SRC.format(season=season), CACHE_DIR / f"en1-{season}.json", TTL_SEC
+    )["matches"]
     return sorted(matches, key=lambda m: (m["date"], m.get("time", "")))
 
 

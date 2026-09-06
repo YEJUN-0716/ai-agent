@@ -298,3 +298,46 @@ def plain_card(text: str) -> str:
 def footer() -> str:
     return ("<div class='dim' style='font-size:11px;font-family:var(--mono);margin:26px 0 40px'>"
             "SOURCE openfootball/football.json · 캐시 6시간</div>")
+
+
+def rating_color(value: float) -> str:
+    """FotMob 평점 색. 7.0 이 평범한 경기다 — 기준선을 화면에서도 그렇게 잡는다."""
+    return GREEN if value >= 7.5 else (RED if value < 6.5 else "var(--text-1)")
+
+
+def player_ratings_table(rows: list[dict]) -> str:
+    """시즌 평균 평점 — 경기 평점의 단순 평균(fotmob.average 가 계산)."""
+    if not rows:
+        return pending_card("평점을 못 받아왔습니다. FotMob 이 막혔거나 아직 경기가 없습니다.")
+    body = "".join(
+        f"<tr><td class='num dim'>{i:d}</td>"
+        f"<td style='text-align:left'>{team(r['name'])}</td>"
+        f"<td class='num'>{r['n']:d}</td>"
+        f"<td class='num dim'>{r['minutes']:d}</td>"
+        f"<td class='num' style='color:{rating_color(r['avg'])};font-weight:600'>"
+        f"{r['avg']:.2f}</td></tr>"
+        for i, r in enumerate(rows, 1)
+    )
+    return (
+        "<div class='card'><table class='t'>"
+        "<tr><th>#</th><th style='text-align:left'>선수</th><th>경기</th>"
+        f"<th>분</th><th>평균</th></tr>{body}</table></div>"
+    )
+
+
+def match_ratings_table(rows: list[dict]) -> str:
+    """한 경기의 선수별 평점(높은 순)."""
+    if not rows:
+        return pending_card("이 경기의 평점을 못 받아왔습니다.")
+    body = "".join(
+        f"<tr><td style='text-align:left'>{team(r['name'])}</td>"
+        f"<td class='num dim'>{r['minutes']:d}분</td>"
+        f"<td class='num' style='color:{rating_color(r['rating'])};font-weight:600'>"
+        f"{r['rating']:.2f}</td></tr>"
+        for r in rows
+    )
+    return (
+        "<div class='card'><table class='t'>"
+        "<tr><th style='text-align:left'>선수</th><th>출전</th><th>평점</th></tr>"
+        f"{body}</table></div>"
+    )
