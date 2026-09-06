@@ -50,18 +50,42 @@ def live_block(me):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def live():
-    """이번 시즌 결과와 순위표 — FotMob.
+def results(league_id):
+    """이번 시즌 결과 — FotMob. league_id=None 이면 컵·친선까지 전부.
 
-    openfootball 은 결과를 주 1회(수요일)만 올린다. 2026-09-06 에 3라운드
-    10경기가 통째로 비어 있었다 — 캐시가 아니라 소스가 안 채운 것이다.
-    그래서 **결과·순위표만** FotMob 으로 받는다. 일정과 과거 시즌은
-    openfootball 이 계속 준다(FotMob 은 이번 시즌·이 팀만 준다).
+    openfootball 은 결과를 주 1회(수요일)만 올리고, 리그만 준다.
+    2026-09-06 에 3라운드 10경기가 통째로 비어 있었다 — 소스가 안 채운 것이다.
     """
     try:
-        return fotmob.as_matches(), fotmob.table()
+        return fotmob.as_matches(league_id=league_id)
     except Exception:
-        return None, None
+        return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fixtures(league_id):
+    """예정 경기 — FotMob(컵 포함). 실패하면 None."""
+    try:
+        return fotmob.schedule(league_id=league_id)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def standings():
+    try:
+        return fotmob.table()
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def comps():
+    """이번 시즌 뛰는 대회들 — 화면 위 선택지."""
+    try:
+        return fotmob.competitions()
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -73,11 +97,11 @@ def injured():
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def ratings():
-    """선수 평점 — 이번 시즌 EPL 경기 전부. FotMob 은 비공식이라 죽을 수 있고,
-    죽으면 이 구역만 비어야 한다(순위·일정은 openfootball 이라 멀쩡하다)."""
+def ratings(league_id):
+    """선수 평점 — 고른 대회의 이번 시즌 경기 전부. FotMob 은 비공식이라
+    죽을 수 있고, 죽으면 이 구역만 비어야 한다."""
     try:
-        return fotmob.season_rows()
+        return fotmob.season_rows(league_id=league_id)
     except Exception:
         return []
 
@@ -90,21 +114,37 @@ def main():
     st.set_page_config(page_title="Chelsea · EPL", page_icon="🔵", layout="wide")
     html(view.CSS)
 
-    season = epl.load_season(epl.CURRENT)          # 일정(전체 380경기)
-    results, standings_rows = live()
-    if results is None:                            # FotMob 이 막히면 낡아도 openfootball
-        results, standings_rows = epl.played(season), epl.table(season)
-    current = [{**m, "season": epl.CURRENT} for m in results]
-    history = sorted(epl.load_seasons(PAST) + current,
+    season = epl.load_season(epl.CURRENT)          # 과거·백업용 리그 일정
+    me = epl.CHELSEA
+
+    # 대회 선택. FotMob 이 죽으면 선택지가 없고 리그만 남는다.
+    available = comps()
+    labels = ["전체"] + [c["name"] for c in available]
+    ids = {c["name"]: c["id"] for c in available}
+    default = next((c["name"] for c in available if c["id"] == fotmob.EPL_ID), "전체")
+    choice = st.segmented_control("대회", labels, default=default) or default
+    lid = ids.get(choice)                          # '전체' 는 None
+
+    picked = results(lid)
+    league = results(fotmob.EPL_ID) if lid != fotmob.EPL_ID else picked
+    standings_rows = standings()
+    if picked is None or league is None or standings_rows is None:
+        # FotMob 이 막히면 낡아도 openfootball(리그만)
+        picked = league = epl.played(season)
+        standings_rows = epl.table(season)
+
+    # 폼·홈원정·상대전적은 **리그 기준**이다 — 컵을 섞으면 상대와 비교가 안 된다.
+    history = sorted(epl.load_seasons(PAST)
+                     + [{**m, "season": epl.CURRENT} for m in league],
                      key=lambda m: (m["date"], m.get("time", "")))
     recent = [m for m in history if m["season"] in ALL_SEASONS[:VENUE_SEASONS]]
-    standings = {r["team"]: r for r in standings_rows}
-    me = epl.CHELSEA
+    current = [{**m, "season": epl.CURRENT} for m in picked]
+    rank_of = {r["team"]: r for r in standings_rows}
 
     def card_for(name):
         return view.team_card(
             name,
-            standings.get(name),
+            rank_of.get(name),
             epl.form(history, name, FORM_N),
             epl.venue_record(recent, name, home=True),
             epl.venue_record(recent, name, home=False),
@@ -116,8 +156,11 @@ def main():
     live_block(me)
 
     # ── 다음 경기 ──
-    nxt = epl.next_match(season, me)
-    html(view.label("다음 경기"))
+    later = fixtures(lid)
+    if later is None:
+        later = epl.upcoming(season, me)
+    nxt = later[0] if later else None
+    html(view.label(f"다음 경기 · {choice}"))
     if not nxt:
         html(view.plain_card("남은 경기가 없습니다."))
     else:
@@ -125,18 +168,18 @@ def main():
         opp = nxt["team2"] if nxt["team1"] == me else nxt["team1"]
 
         html(view.label(
-            f"맞대결 상대 · 폼은 최근 {FORM_N}경기, 홈원정은 {VENUE_SEASONS}시즌"
+            f"맞대결 상대 · 리그 기준(폼 최근 {FORM_N}경기, 홈원정 {VENUE_SEASONS}시즌)"
         ))
         left, right = st.columns(2)
         left.markdown(card_for(me), unsafe_allow_html=True)
         right.markdown(card_for(opp), unsafe_allow_html=True)
 
-        html(view.label(f"상대 전적 · 최근 {len(ALL_SEASONS)}시즌"))
+        html(view.label(f"상대 전적 · 리그 최근 {len(ALL_SEASONS)}시즌"))
         records = epl.h2h(history, me, opp)
         html(view.h2h_card(records, epl.h2h_summary(records), opp, len(ALL_SEASONS)))
 
-        html(view.label("다음 5경기"))
-        html(view.fixtures_table(epl.upcoming(season, me, 5), standings, me))
+        html(view.label(f"다음 5경기 · {choice}"))
+        html(view.fixtures_table(later[:5], rank_of, me))
 
         html(view.label("결장 · 부상"))
         html(view.injury_card(injured()))
@@ -145,17 +188,20 @@ def main():
         ))
 
     # ── 지난 경기 ──
-    html(view.label("지난 경기"))
+    html(view.label(f"지난 경기 · {choice}"))
     prev = epl.last_match(current, me)
     html(view.last_match_card(prev, me) if prev
          else view.plain_card("이번 시즌 치른 경기가 없습니다."))
 
-    html(view.label(f"최근 {RECENT_N}경기 · 시즌 경계를 넘습니다"))
-    results = epl.form(history, me, RECENT_N)
-    html(view.results_table(results, epl.h2h_summary(results)))
+    # 리그일 때만 시즌 경계를 넘는다. 컵은 이번 시즌 것만 있으면 된다.
+    pool = history if lid == fotmob.EPL_ID else current
+    note = "시즌 경계를 넘습니다" if lid == fotmob.EPL_ID else choice
+    html(view.label(f"최근 {RECENT_N}경기 · {note}"))
+    rows = epl.form(pool, me, RECENT_N)
+    html(view.results_table(rows, epl.h2h_summary(rows)))
 
     # ── 선수 평점 (FotMob) ──
-    rows = ratings()
+    rows = ratings(lid)
     if prev and rows:
         last_id = max((r["match"] for r in rows), default=None)
         last_rows = [r for r in rows if r["match"] == last_id]
@@ -163,12 +209,12 @@ def main():
         html(view.label(f"지난 경기 선수 평점 · vs {opp_name}"))
         html(view.match_ratings_table(sorted(last_rows, key=lambda r: -r["rating"])))
 
-    html(view.label("시즌 평균 평점 · 경기 평점의 단순 평균"))
+    html(view.label(f"시즌 평균 평점 · {choice} · 경기 평점의 단순 평균"))
     html(view.player_ratings_table(fotmob.average(rows)))
 
     # ── 순위표 ──
     playing, _ = now_playing()
-    html(view.label("순위표" + (" · 진행중 경기 잠정 반영" if playing else "")))
+    html(view.label("순위표 · 리그" + (" · 진행중 경기 잠정 반영" if playing else "")))
     html(view.standings_table(standings_rows, me))
     html(view.footer() + "</div>")
 

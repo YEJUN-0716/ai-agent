@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
-from epl import CACHE_DIR, cached_json
+from datetime import datetime
+
+from epl import CACHE_DIR, LONDON, cached_json
 
 TEAM_ID = 8455   # Chelsea
 EPL_ID = 47      # FotMob 의 프리미어리그 id (openfootball 과 다른 체계다)
@@ -63,6 +65,7 @@ def fixtures(team_id: int = TEAM_ID, league_id: int | None = EPL_ID,
         home = (f.get("home") or {}).get("id") == team_id
         out.append(dict(
             id=f["id"],
+            comp=(f.get("tournament") or {}).get("name", ""),
             date=(status.get("utcTime") or "")[:10],
             opp=(f.get("opponent") or {}).get("name", ""),
             opp_id=(f.get("opponent") or {}).get("id"),
@@ -94,6 +97,49 @@ def table(team_id: int = TEAM_ID) -> list[dict]:
     return out
 
 
+def names(team_id: int = TEAM_ID) -> dict[int, str]:
+    """FotMob 팀 id → 순위표 이름. 컵 상대(2부 팀 등)는 순위표에 없어서 빠진다."""
+    blocks = team(team_id).get("table") or []
+    rows = ((blocks[0].get("data") if blocks else {}) or {}).get("table", {}).get("all", [])
+    return {r["id"]: r["name"] for r in rows}
+
+
+def competitions(team_id: int = TEAM_ID) -> list[dict]:
+    """이번 시즌 이 팀이 뛰는 대회들 — 화면의 선택지가 된다."""
+    seen: dict[int, dict] = {}
+    for f in (team(team_id).get("fixtures", {}).get("allFixtures", {}) or {}).get("fixtures", []):
+        t = f.get("tournament") or {}
+        if t.get("leagueId"):
+            c = seen.setdefault(t["leagueId"], dict(id=t["leagueId"], name=t.get("name", ""), n=0))
+            c["n"] += 1
+    return sorted(seen.values(), key=lambda c: -c["n"])
+
+
+def schedule(team_id: int = TEAM_ID, league_id: int | None = None) -> list[dict]:
+    """아직 안 치른 경기 — **openfootball 경기 모양**(런던 시각).
+
+    일정도 FotMob 에서 받는 이유는 컵 때문이다. openfootball 은 리그만 준다.
+    """
+    ids = names(team_id)
+    me = ids.get(team_id, "")
+    out = []
+    for f in (team(team_id).get("fixtures", {}).get("allFixtures", {}) or {}).get("fixtures", []):
+        st = f.get("status") or {}
+        if st.get("finished") or st.get("ongoing") or not st.get("utcTime"):
+            continue
+        if league_id and (f.get("tournament") or {}).get("leagueId") != league_id:
+            continue
+        when = datetime.fromisoformat(st["utcTime"].replace("Z", "+00:00")).astimezone(LONDON)
+        home = (f.get("home") or {}).get("id") == team_id
+        opp = ids.get((f.get("opponent") or {}).get("id")) or (f.get("opponent") or {}).get("name", "")
+        out.append(dict(
+            date=when.strftime("%Y-%m-%d"), time=when.strftime("%H:%M"),
+            round=(f.get("tournament") or {}).get("name", ""),
+            team1=me if home else opp, team2=opp if home else me, score=None,
+        ))
+    return sorted(out, key=lambda m: (m["date"], m["time"]))
+
+
 def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID,
                ongoing: bool = False) -> list[dict]:
     """끝난 경기 → **openfootball 경기 모양**. epl.py 의 계산을 그대로 쓰려고.
@@ -102,22 +148,18 @@ def as_matches(team_id: int = TEAM_ID, league_id: int | None = EPL_ID,
     'Brighton and Hove Albion'. openfootball 이름을 epl.short() 로 줄인 것과
     20팀 전부 일치한다(그래서 매핑 표가 필요 없다).
     """
-    names = {r["team"]: r["team"] for r in table(team_id)}
-    ids = {}
-    blocks = team(team_id).get("table") or []
-    for r in ((blocks[0].get("data") if blocks else {}) or {}).get("table", {}).get("all", []):
-        ids[r["id"]] = r["name"]
+    ids = names(team_id)
     me = ids.get(team_id, "")
     out = []
     for f in fixtures(team_id, league_id, ongoing):
         opp = ids.get(f["opp_id"], f["opp"])
         out.append(dict(
-            date=f["date"], time="", round="",
+            date=f["date"], time="", round=f["comp"],
             team1=me if f["home"] else opp,
             team2=opp if f["home"] else me,
             score={"ft": [int(f["home_goals"]), int(f["away_goals"])]},
         ))
-    assert not names or me, "순위표에서 우리 팀을 못 찾았다 — id 체계가 바뀌었다"
+    assert not ids or me, "순위표에서 우리 팀을 못 찾았다 — id 체계가 바뀌었다"
     return out
 
 
@@ -294,6 +336,13 @@ def _selfcheck():
     print(f"OK  {len(games)}경기 / 평점 {len(rows)}행 / 선수 {len(players)}명")
     print(f"    FotMob 시즌 평점과 대조: {len(pairs)}명, 최대 차이 {worst[0]:.2f} ({worst[1]})"
           + (" — 진행중 경기가 저쪽 평균에만 들어가 있다" if live_match() else ""))
+    comps = competitions()
+    assert comps, "대회 목록이 비었다"
+    later = schedule()
+    assert later, "예정 경기가 없다"
+    print("    대회: " + ", ".join(f"{c['name']}({c['n']})" for c in comps)
+          + f" / 예정 {len(later)}경기, 다음은 {later[0]['round']} {later[0]['date']}")
+
     now = live_match()
     if now:
         lu = lineup(now["id"])
