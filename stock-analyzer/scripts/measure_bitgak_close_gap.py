@@ -174,6 +174,109 @@ def margins() -> dict:
     return out
 
 
+# ── 지연 결정 (2026-09-06) — cut 을 앞으로 옮기면 δ 가 얼마나 커지나 ──────
+# 왜: 무료 플랜의 sip 은 최근 15분을 안 준다(`modules/alpaca_data` 머리말). 러너가
+# 15:50 에 보는 값이 실제로는 ~15:34 값이 된다. **자는 그대로 두고 자리만 옮겨서**
+# δ 와 거짓 진입이 얼마가 되는지 잰다 — 사전 등록 §7.2 갈래가 그 비율로 정해진다.
+DELAY_CACHE = Path("data/bitgak_delta_cuts.json")     # gitignore
+DEFAULT_CUTS = ("15:50", "15:40", "15:34", "15:30")
+
+
+def _td(hhmm: str) -> timedelta:
+    h, m = hhmm.split(":")
+    return timedelta(hours=int(h), minutes=int(m))
+
+
+def deltas_multi(pairs: list[tuple[str, pd.Timestamp]],
+                 cuts: tuple[str, ...]) -> dict:
+    """{"종목|날짜": {cut: δ}} — 분봉 한 번으로 여러 cut 을 잰다.
+
+    **산식은 `deltas()` 그대로다.** cut 다리는 `[cut−10분, cut]` 의 마지막
+    프린트, 종가 다리는 언제나 `[15:40, 16:00]` 의 마지막 프린트 — 종가 다리를
+    cut 에 따라 움직이면 재는 게 "막판 이동"이 아니라 두 창의 차이가 된다.
+    cut=15:50 행이 기존 측정(δ 중위 14.9bp)을 재현하는지가 **자 검사**다.
+    """
+    from modules.alpaca_data import get_bars
+
+    if not os.environ.get("ALPACA_API_KEY"):
+        sys.exit("ALPACA_API_KEY 가 없습니다. `set -a && . ./.env && set +a` 먼저.")
+
+    got = (json.loads(DELAY_CACHE.read_text(encoding="utf-8"))
+           if DELAY_CACHE.exists() else {})
+    by_date: dict[pd.Timestamp, list[str]] = {}
+    for tk, ts in pairs:
+        k = f"{tk}|{ts.date()}"
+        if k not in got or any(c not in got[k] for c in cuts):
+            by_date.setdefault(ts, []).append(tk)
+    print(f"  δ 캐시 {len(got)}건 · 새로 받을 날짜 {len(by_date)}개", flush=True)
+
+    first = min(_td(c) for c in cuts) - timedelta(minutes=10)
+    for n, (ts, tks) in enumerate(sorted(by_date.items()), 1):
+        et = ts.tz_localize("America/New_York")
+        to_utc = lambda d: (et + d).tz_convert("UTC").tz_localize(None)
+        start, end = to_utc(first), to_utc(timedelta(hours=16, minutes=5))
+        syms = {tk.split(":")[-1]: tk for tk in tks}
+        try:
+            bars = get_bars(list(syms), timeframe="1Min", start=start, end=end)
+        except Exception as e:                       # 하루가 빠져도 표본만 준다
+            print(f"    [{ts.date()}] {type(e).__name__}: {e}", flush=True)
+            bars = {}
+        for sym, tk in syms.items():
+            d = bars.get(sym)
+            key = f"{tk}|{ts.date()}"
+            row = got.setdefault(key, {})
+            if d is None or d.empty:
+                row.update({c: None for c in cuts})
+                continue
+            # 종가 다리 — 모든 cut 이 같은 것을 쓴다(기존 측정과 같은 창)
+            pcl = _last_at_or_before(d.loc[to_utc(timedelta(hours=15, minutes=40)):],
+                                     to_utc(timedelta(hours=16)))
+            for c in cuts:
+                cut = to_utc(_td(c))
+                p = _last_at_or_before(d.loc[cut - timedelta(minutes=10):], cut)
+                row[c] = (abs(p - pcl) / pcl if p and pcl and pcl > 0 else None)
+        if n % 25 == 0 or n == len(by_date):
+            DELAY_CACHE.write_text(json.dumps(got), encoding="utf-8")
+            print(f"    ..{n}/{len(by_date)}일", flush=True)
+    DELAY_CACHE.write_text(json.dumps(got), encoding="utf-8")
+    return got
+
+
+def run_delay(cuts: tuple[str, ...] = DEFAULT_CUTS) -> None:
+    """cut 별 δ 와 거짓 진입 비율. **표본·시드·여유 분포는 7단계 그대로.**"""
+    panel = pd.read_parquet(LARGECAP_PANEL)
+    if not gate(panel):
+        sys.exit(1)
+
+    pairs = eligible(panel)
+    rng = np.random.default_rng(SEED)               # 봉인 — 같은 1,000건
+    pick = [pairs[j] for j in rng.choice(len(pairs), size=N_SAMPLE, replace=False)]
+    print(f"\n### δ vs 결정 시각 — {len(pairs):,} 종목-일에서 {N_SAMPLE}건 "
+          f"(시드 {SEED}, 7단계와 같은 표본)")
+    got = deltas_multi(pick, cuts)
+
+    m = margins()
+    allm = np.asarray(m["breakout"] + m["support"])
+    recent = np.asarray(m["recent"])
+    print(f"\n### 결과 — 여유 중위 {np.median(allm) * 1e4:.1f}bp, 발동 {allm.size:,}건")
+    print(f"{'cut':>6} {'표본':>9} {'δ중위':>9} {'δ90':>9} "
+          f"{'거짓진입':>9} {'(2020-08~)':>11}  갈래")
+    for c in cuts:
+        vals = [v for tk, ts in pick
+                if (v := (got.get(f"{tk}|{ts.date()}") or {}).get(c)) is not None]
+        if len(vals) < N_SAMPLE // 2:
+            print(f"{c:>6} {len(vals):>4}/{N_SAMPLE}  표본 절반 미달 — 분포가 아니라 사고다")
+            continue
+        d50, d90 = float(np.median(vals)), float(np.percentile(vals, 90))
+        rate, rate_r = float((allm < d50).mean()), float((recent < d50).mean())
+        branch = ("유지" if rate <= 0.10 else
+                  "유지 + 참고 F 대조" if rate <= 0.25 else "참고 F 로 이동 (죽음)")
+        print(f"{c:>6} {len(vals):>4}/{N_SAMPLE} {d50 * 1e4:8.1f}bp {d90 * 1e4:8.1f}bp "
+              f"{rate * 100:8.1f}% {rate_r * 100:10.1f}%  {branch}")
+    print("\n갈래는 사전 등록 §7.2. **25% 초과는 참고 F 로 옮기라는 뜻인데 참고 F 가"
+          "\n7단계에서 죽었다(② 하한 −0.000) — 그 칸에 떨어지면 노선이 닫힌다.**")
+
+
 def run() -> None:
     panel = pd.read_parquet(LARGECAP_PANEL)
     if not gate(panel):
@@ -219,4 +322,7 @@ if __name__ == "__main__":
         pass
     if len(sys.argv) > 1 and sys.argv[1] == "gate":
         sys.exit(0 if gate(pd.read_parquet(LARGECAP_PANEL)) else 1)
+    if len(sys.argv) > 1 and sys.argv[1] == "delay":
+        cuts = tuple(sys.argv[2].split(",")) if len(sys.argv) > 2 else DEFAULT_CUTS
+        sys.exit(run_delay(cuts))
     run()
