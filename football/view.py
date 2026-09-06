@@ -209,15 +209,41 @@ def h2h_card(records: list[dict], summary: dict, opp: str, seasons: int) -> str:
         for r in records
     )
     return (
-        "<div class='card'>"
+        f"<div class='card'>{wdl_line(summary)}"
+        "<table class='t'><tr><th>시즌</th><th style='text-align:left'>장소</th>"
+        f"<th>스코어</th><th>결과</th><th>날짜</th></tr>{rows}</table></div>"
+    )
+
+
+def wdl_line(summary: dict) -> str:
+    """'12경기 5승 3무 4패 · 득실 18-15' 한 줄. h2h 와 최근 결과가 같이 쓴다."""
+    return (
         "<div class='num' style='font-size:17px;margin-bottom:12px'>"
         f"{summary['n']:d}경기 <span style='color:{GREEN}'>{summary['w']:d}승</span> "
         f"<span class='dim'>{summary['d']:d}무</span> "
         f"<span style='color:{RED}'>{summary['l']:d}패</span>"
         "<span class='dim' style='font-size:13px'> · 득실 "
         f"{summary['gf']:d}-{summary['ga']:d}</span></div>"
-        "<table class='t'><tr><th>시즌</th><th style='text-align:left'>장소</th>"
-        f"<th>스코어</th><th>결과</th><th>날짜</th></tr>{rows}</table></div>"
+    )
+
+
+def results_table(records: list[dict], summary: dict) -> str:
+    """최근 결과 — epl.form() 의 행을 그대로 받는다(h2h 와 같은 모양)."""
+    if not records:
+        return plain_card("아직 치른 경기가 없습니다.")
+    rows = "".join(
+        f"<tr><td class='num dim'>{esc(r['date'])}</td>"
+        f"<td style='text-align:left'>{'홈' if r['home'] else '원정'}</td>"
+        f"<td style='text-align:left'>{team(r['opp'])}</td>"
+        f"<td class='num'>{r['gf']:d}-{r['ga']:d}</td>"
+        f"<td style='color:{RES_COLOR[r['res']]}'>{esc(r['res'])}</td></tr>"
+        for r in records
+    )
+    return (
+        f"<div class='card'>{wdl_line(summary)}"
+        "<table class='t'><tr><th>날짜</th><th style='text-align:left'>장소</th>"
+        "<th style='text-align:left'>상대</th><th>스코어</th><th>결과</th></tr>"
+        f"{rows}</table></div>"
     )
 
 
