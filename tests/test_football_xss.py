@@ -44,7 +44,15 @@ def _fragments():
         # 상대 시점으로 부른다 — badges 는 '상대' 이름을 title 속성에 넣기 때문에,
         # 이래야 속성 탈출(따옴표)까지 검사된다.
         "badges": view.badges(epl.form(done, "Rival FC")),
-        "team_card": view.team_card(done, POISON, standing),
+        "team_card": view.team_card(
+            POISON, standing, epl.form(done, POISON),
+            epl.venue_record(done, POISON, home=True),
+            epl.venue_record(done, POISON, home=False),
+        ),
+        # me 를 상대로 놓아야 오염된 팀명이 '상대' 칸과 round 에 함께 들어간다
+        "fixtures_table": view.fixtures_table(
+            [_match(score=None)], {POISON: standing}, "Rival FC"
+        ),
         "next_match_card": view.next_match_card(upcoming, POISON),
         "h2h_card": view.h2h_card(records, epl.h2h_summary(records), POISON, 5),
         "h2h_empty": view.h2h_card([], epl.h2h_summary([]), POISON, 5),
@@ -64,7 +72,7 @@ def test_오염된_문자열이_raw_로_안_나간다(name, html):
 def test_이스케이프된_형태로는_실제로_들어_있다():
     """빈 문자열을 돌려줘서 위 검사를 통과하는 걸 막는다."""
     frags = _fragments()
-    for name in ("team", "badges", "team_card", "next_match_card",
+    for name in ("team", "badges", "team_card", "next_match_card", "fixtures_table",
                  "last_match_card", "standings_table", "pending_card"):
         assert ESCAPED in frags[name], f"{name} 이 팀명을 아예 안 그리고 있다"
 

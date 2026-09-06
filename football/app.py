@@ -2,8 +2,9 @@
 
 실행:  streamlit run football/app.py
 
-여기는 배치만 한다 — HTML 은 view.py 가 만든다(이스케이프 포함).
-라인업·부상·xG 자리는 비어 있다. API-Football 키가 오면 채운다.
+여기는 배치와 "어느 범위의 데이터를 쓸지"만 정한다 —
+계산은 epl.py, HTML 은 view.py(이스케이프 포함).
+라인업·부상은 API-Football 유료 플랜이라야 이번 시즌을 준다. 지금은 자리만.
 """
 import streamlit as st
 
@@ -11,6 +12,13 @@ import epl
 import view
 
 PAST = ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"]
+ALL_SEASONS = [epl.CURRENT] + PAST
+
+# 폼 배지에 쓸 경기 수. 시즌 초에는 이번 시즌만으로 폼이 2~3경기밖에 안 되므로
+# 시즌 경계를 넘어서 센다.
+FORM_N = 10
+# 홈/원정 성적의 범위. 6시즌을 다 쓰면 표본은 크지만 지금 팀과 무관한 과거가 섞인다.
+VENUE_SEASONS = 2
 
 
 def html(fragment):
@@ -22,8 +30,19 @@ def main():
     html(view.CSS)
 
     season = epl.load_season(epl.CURRENT)
-    table = {r["team"]: r for r in epl.table(season)}
+    history = epl.load_seasons(ALL_SEASONS)
+    recent = [m for m in history if m["season"] in ALL_SEASONS[:VENUE_SEASONS]]
+    standings = {r["team"]: r for r in epl.table(season)}
     me = epl.CHELSEA
+
+    def card_for(name):
+        return view.team_card(
+            name,
+            standings.get(name),
+            epl.form(history, name, FORM_N),
+            epl.venue_record(recent, name, home=True),
+            epl.venue_record(recent, name, home=False),
+        )
 
     html("<div class='blk'>")
     html(view.header(epl.CURRENT))
@@ -37,18 +56,24 @@ def main():
         html(view.next_match_card(nxt, me))
         opp = nxt["team2"] if nxt["team1"] == me else nxt["team1"]
 
-        html(view.label("맞대결 상대"))
+        html(view.label(
+            f"맞대결 상대 · 폼은 최근 {FORM_N}경기, 홈원정은 {VENUE_SEASONS}시즌"
+        ))
         left, right = st.columns(2)
-        left.markdown(view.team_card(season, me, table.get(me)), unsafe_allow_html=True)
-        right.markdown(view.team_card(season, opp, table.get(opp)), unsafe_allow_html=True)
+        left.markdown(card_for(me), unsafe_allow_html=True)
+        right.markdown(card_for(opp), unsafe_allow_html=True)
 
-        html(view.label(f"상대 전적 · 최근 {len(PAST)}시즌"))
-        records = epl.h2h(epl.load_seasons(PAST), me, opp)
-        html(view.h2h_card(records, epl.h2h_summary(records), opp, len(PAST)))
+        html(view.label(f"상대 전적 · 최근 {len(ALL_SEASONS)}시즌"))
+        records = epl.h2h(history, me, opp)
+        html(view.h2h_card(records, epl.h2h_summary(records), opp, len(ALL_SEASONS)))
+
+        html(view.label("다음 5경기"))
+        html(view.fixtures_table(epl.upcoming(season, me, 5), standings, me))
 
         html(view.label("라인업 · 부상"))
         html(view.pending_card(
-            "API-Football 키를 넣으면 채워집니다. 라인업은 킥오프 40분 전에 확정됩니다."
+            "API-Football 무료 플랜은 2022~2024 시즌만 줍니다. "
+            "이번 시즌 라인업·부상을 보려면 Pro($19/월)가 필요합니다."
         ))
 
     # ── 지난 경기 ──

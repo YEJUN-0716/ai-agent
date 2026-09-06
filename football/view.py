@@ -106,20 +106,73 @@ def badges(rows: list[dict]) -> str:
     return out or "<span class='dim'>경기 없음</span>"
 
 
-def team_card(matches: list[dict], name: str, row: dict | None) -> str:
-    """한 팀의 순위·승점·폼."""
+def wdl(row: dict | None) -> str:
+    """승무패를 짧게. 0 인 항목은 뺀다 — '3승 0무 0패' 보다 '3승' 이 읽기 쉽다."""
+    if not row or not row["p"]:
+        return "기록 없음"
+    parts = [f"{row[k]:d}{n}" for k, n in (("w", "승"), ("d", "무"), ("l", "패")) if row[k]]
+    return " ".join(parts)
+
+
+def _venue(label: str, row: dict | None) -> str:
+    """'홈 3승 1무 (10점)' 한 토막. 경기가 없으면 '홈 —'."""
+    if not row or not row["p"]:
+        return f"{label} —"
+    return f"{label} {wdl(row)}<span class='dim'> ({row['pts']:d}점)</span>"
+
+
+def team_card(name: str, row: dict | None, form_rows: list[dict],
+              home: dict | None = None, away: dict | None = None) -> str:
+    """한 팀의 순위·승점·홈원정·폼.
+
+    계산은 받기만 한다(matches 를 안 받는다) — 그려야 할 숫자가
+    어디서 왔는지는 부르는 쪽 책임이다.
+    """
     if row:
         stat = (f"{row['rank']:d}위 · {row['pts']:d}점 · "
                 f"{row['w']:d}승 {row['d']:d}무 {row['l']:d}패 · 득실 {row['gd']:+d}")
     else:
         stat = "기록 없음"
+
+    venue = ""
+    if home or away:
+        venue = ("<div class='num' style='font-size:12px;color:var(--text-3);margin-bottom:12px'>"
+                 f"{_venue('홈', home)} · {_venue('원정', away)}</div>")
+
     return (
         "<div class='card'>"
         f"<div style='font-size:19px;font-weight:600;margin-bottom:10px'>{team(name)}</div>"
-        "<div class='num' style='font-size:13px;color:var(--text-2);margin-bottom:12px'>"
+        "<div class='num' style='font-size:13px;color:var(--text-2);margin-bottom:6px'>"
         f"{stat}</div>"
-        f"<div>{badges(epl.form(matches, name, 5))}</div>"
+        f"{venue}"
+        f"<div>{badges(form_rows)}</div>"
         "</div>"
+    )
+
+
+def fixtures_table(fixtures: list[dict], standings: dict, me: str) -> str:
+    """다음 몇 경기 — 상대와 그 상대의 현재 순위."""
+    if not fixtures:
+        return plain_card("남은 경기가 없습니다.")
+    rows = ""
+    for m in fixtures:
+        home = m["team1"] == me
+        opp = m["team2"] if home else m["team1"]
+        row = standings.get(opp)
+        rank = f"{row['rank']:d}위" if row else "—"
+        _, seoul = kickoff(m)
+        rows += (
+            f"<tr><td class='num dim'>{seoul:%m/%d(%a)}</td>"
+            f"<td style='text-align:left'>{'홈' if home else '원정'}</td>"
+            f"<td style='text-align:left'>{team(opp)}</td>"
+            f"<td class='num'>{rank}</td>"
+            f"<td class='num dim'>{esc(m['round'])}</td></tr>"
+        )
+    return (
+        "<div class='card'><table class='t'>"
+        "<tr><th>날짜</th><th style='text-align:left'>장소</th>"
+        "<th style='text-align:left'>상대</th><th>상대 순위</th><th>라운드</th></tr>"
+        f"{rows}</table></div>"
     )
 
 

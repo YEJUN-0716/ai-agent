@@ -96,10 +96,16 @@ def team_matches(matches: list[dict], team: str) -> list[dict]:
     return [m for m in matches if team in (m["team1"], m["team2"])]
 
 
+def upcoming(matches: list[dict], team: str, n: int | None = None) -> list[dict]:
+    """아직 결과가 없는 경기들(날짜순). n 을 주면 앞에서 n 개."""
+    out = [m for m in team_matches(matches, team) if ft(m) is None]
+    return out[:n] if n else out
+
+
 def next_match(matches: list[dict], team: str) -> dict | None:
-    """아직 결과가 없는 첫 경기. 시즌이 끝났으면 None."""
-    upcoming = [m for m in team_matches(matches, team) if ft(m) is None]
-    return upcoming[0] if upcoming else None
+    """다음 경기 하나 — 예정 목록의 첫 칸. 시즌이 끝났으면 None."""
+    out = upcoming(matches, team, 1)
+    return out[0] if out else None
 
 
 def last_match(matches: list[dict], team: str) -> dict | None:
@@ -148,6 +154,16 @@ def table(matches: list[dict]) -> list[dict]:
 def standing(matches: list[dict], team: str) -> dict | None:
     """순위표에서 한 팀 줄만."""
     return next((r for r in table(matches) if r["team"] == team), None)
+
+
+def venue_record(matches: list[dict], team: str, home: bool) -> dict | None:
+    """홈(또는 원정) 경기만의 성적.
+
+    승점 계산을 새로 쓰지 않는다 — 부분집합에 standing() 을 다시 돌린다.
+    그래서 홈+원정의 합은 정의상 전체와 같다(자체 점검이 그걸 확인한다).
+    """
+    side = "team1" if home else "team2"
+    return standing([m for m in matches if m[side] == team], team)
 
 
 def form(matches: list[dict], team: str, n: int = 5) -> list[dict]:
@@ -214,6 +230,20 @@ def _selfcheck():
 
     nm = next_match(ms, CHELSEA)
     assert nm is None or ft(nm) is None, "다음 경기인데 결과가 있다"
+
+    up = upcoming(ms, CHELSEA, 5)
+    assert len(up) <= 5, "예정 경기를 n 개로 안 자른다"
+    assert all(ft(m) is None for m in up), "예정 경기에 결과가 들어 있다"
+    assert [m["date"] for m in up] == sorted(m["date"] for m in up), "예정 경기가 날짜순이 아니다"
+    assert nm == (up[0] if up else None), "next_match 가 예정 목록의 첫 칸이 아니다"
+
+    # 홈/원정을 쪼개도 합은 전체와 같아야 한다 — 쪼개는 축이 틀리면 여기서 걸린다
+    full = standing(ms, CHELSEA)
+    h = venue_record(ms, CHELSEA, True)
+    a = venue_record(ms, CHELSEA, False)
+    for field in ("p", "w", "d", "l", "gf", "ga", "pts"):
+        got = (h[field] if h else 0) + (a[field] if a else 0)
+        assert got == full[field], f"홈+원정 {field} 합이 전체와 다르다: {got} != {full[field]}"
 
     # 끝난 시즌은 380경기가 전부 소화돼 있어야 한다.
     # 이 검사가 [0,0] 형식을 놓치던 결함을 잡았다 — 2025-26 에서 27경기가 새고 있었다.
