@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "football"))
+import epl  # noqa: E402
 import fotmob  # noqa: E402
+import pytest  # noqa: E402
 
 
 def _row(pid, rating, minutes=90, match=1):
@@ -41,3 +43,11 @@ def test_평점이_없는_선수는_행이_되지_않는다():
     assert fotmob._stat(
         {"stats": [{"stats": {fotmob.RATING: {"stat": {"value": 7.51}}}}]}, fotmob.RATING
     ) == 7.51
+
+
+def test_캐시_경로가_data_밖으로_못_나간다(tmp_path):
+    """경기 id 는 FotMob 이 준 외부 값이다 — 파일명에 그대로 들어간다."""
+    escaped = epl.CACHE_DIR / ".." / "evil.json"
+    with pytest.raises(ValueError):
+        epl.cached_json("https://example.invalid/x", escaped, 10)
+    assert not escaped.exists(), "막기 전에 파일이 이미 쓰였다"
