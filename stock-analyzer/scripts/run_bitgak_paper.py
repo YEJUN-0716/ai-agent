@@ -242,7 +242,7 @@ def _carried_channel(df: pd.DataFrame, sw, qual, trades: list, i: int):
 
 
 def lines_at(df: pd.DataFrame, shapes: tuple = SHAPES,
-             trades: list | None = None) -> dict | None:
+             trades: list | None = None, sw=None, qual=None, ch=None) -> dict | None:
     """마지막 봉에서 발동했는가, 그리고 **그날의 채널선 셋**.
 
     산수는 전부 `pilot_bitgak_power` 함수를 부른다. 채널은 `_carried_channel` 이
@@ -251,17 +251,22 @@ def lines_at(df: pd.DataFrame, shapes: tuple = SHAPES,
     쓰므로 러너도 진입 때 고정해서 들고 간다.
 
     `trades` 를 주면 그 스캔을 재사용한다(게이트가 종목당 한 번만 스캔하려고 쓴다).
+    `sw`/`qual`/`ch` 도 같은 이유의 손잡이다 — 이미 센 것을 다시 안 세게만 하고,
+    안 주면 여기서 똑같이 짓는다. 규칙은 어느 쪽이든 같다.
     """
     i = len(df) - 1
     if i < max(MIN_LEN, POC_WIN + SWING_L):
         return None
-    sw = find_swing_points(df, lookback=SWING_L)
+    if sw is None:
+        sw = find_swing_points(df, lookback=SWING_L)
     if len(sw) < 3:
         return None
-    qual = _qualify(df, sw)
+    if qual is None:
+        qual = _qualify(df, sw)
     if trades is None:
         trades = scan(df, shapes=shapes, fill="gap", entry="close")
-    ch, _ = _carried_channel(df, sw, qual, trades, i)
+    if ch is None:
+        ch, _ = _carried_channel(df, sw, qual, trades, i)
     if ch is None:
         return None
 
