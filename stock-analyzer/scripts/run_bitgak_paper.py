@@ -93,6 +93,7 @@ MIN_PX       = 5.0
 NOTIONAL     = 1000.0                    # 트레이드당 명목 목표(달러)
 MAX_NEW      = 5                         # 하루 신규 진입 상한
 WINDOW       = (15, 30), (15, 50)        # 제출 창 (ET) — 15:50 이 브로커 컷오프
+DATA_CUT     = (15, 15)                  # 결정에 쓰는 **자료의 시각** (ET) — 아래 참조
 SETTLE_FROM  = (16, 15)                  # 체결 확정은 이 시각 이후
 MIN_SUBMITS  = 15                        # §1 표본 문턱 — 못 넘으면 「미측정」
 GATE_TOL     = 1e-6                      # §2.5 절대오차
@@ -371,9 +372,24 @@ def _coid(kind: str, day: str, symbol: str) -> str:
 
 
 def plan(now: datetime, holding: list[str]) -> dict:
-    """그날 15:50 의 **결정 집합**. ③ 대조가 이것과 실제 주문을 맞춘다."""
+    """그날의 **결정 집합** — 자료는 `DATA_CUT`(15:15 ET) 것. ③ 대조의 한쪽이다.
+
+    **왜 15:50 이 아니라 15:15 인가.** 무료 플랜의 sip 은 최근 15분을 안 준다
+    (`modules/alpaca_data` 머리말) — 15:50 값은 15:50 에 존재하지 않는다. 그리고
+    이 함수가 1,000종목에 **약 200초**(시세 143s + 스캔 58s) 걸린다. 15:30 자료는
+    15:45 이후에나 받을 수 있으니 제출이 15:49~15:51 이 되어 §3.2 「지각 0일」을
+    걸고 도박하는 꼴이고, 크론 넷 중 셋은 기다리다 죽는다. 15:15 자료는 15:30 에
+    받을 수 있어 **크론 넷이 전부 즉시 일하고** 컷오프까지 16분이 남는다.
+
+    대가는 쟀다 — 거짓 진입 11.1% → **18.6%**, 사전 등록 §7.2 의 「10~25% = 판정
+    그대로」 안이다(`docs/measurements/2026-09-06-bitgak-delay-cut.md`).
+
+    **시각만 옮긴다. 규칙(작도·사다리·형태·컷)은 한 줄도 안 바뀐다.**
+    """
     syms = universe()
-    frames = daily_bars(syms)
+    # 그날의 15:15 ET. `now` 가 ET tz-aware 라 replace 가 서머타임을 알아서 문다.
+    cut = now.replace(hour=DATA_CUT[0], minute=DATA_CUT[1], second=0, microsecond=0)
+    frames = daily_bars(syms, end=cut.astimezone(timezone.utc))
     triggers, eligible = [], 0
     for sym, df in sorted(frames.items()):
         df = df.dropna()
