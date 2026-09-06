@@ -96,9 +96,21 @@ def test_이스케이프된_형태로는_실제로_들어_있다():
         assert ESCAPED in frags[name], f"{name} 이 팀명을 아예 안 그리고 있다"
 
 
+def test_엠블럼이_붙어도_팀명은_이스케이프된다():
+    """로고는 team() 한 곳에서 붙는다 — 그 자리가 이스케이프 통로이기도 하다."""
+    view.LOGOS[POISON] = "https://x/1.png\" onerror=\"alert(1)"
+    try:
+        html = view.team(POISON)
+    finally:
+        view.LOGOS.pop(POISON, None)
+    assert "<img" in html and ESCAPED in html
+    for marker in RAW_MARKERS + ['onerror="alert']:
+        assert marker not in html
+
+
 def test_앰퍼샌드_팀명이_엔티티로_나간다():
     """실제 EPL 데이터에 있는 경우 — 이건 가상의 위협이 아니다."""
-    assert view.team("Brighton & Hove Albion FC") == "Brighton &amp; Hove Albion"
+    assert view.team("Brighton & Hove Albion FC") == "Brighton &amp; Hove Albion"  # 로고 없을 때
 
 
 def test_숫자_자리에_문자열이_오면_조용히_새지_않고_터진다():

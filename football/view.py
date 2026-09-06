@@ -20,30 +20,33 @@ import epl
 
 LONDON, SEOUL = ZoneInfo("Europe/London"), ZoneInfo("Asia/Seoul")
 
-GREEN, RED, GREY = "var(--green)", "var(--red)", "var(--text-4)"
+GREEN, RED, GREY = "var(--green)", "var(--red)", "var(--text-3)"
 RES_COLOR = {"W": GREEN, "D": GREY, "L": RED}
 
 CSS = """<style>
  :root{
-   --bg:#0B0F17; --surface:#131A28; --border:#1E2A3E;
-   --text-1:#E8EEF9; --text-2:#94A3B8; --text-3:#64748B; --text-4:#475569;
-   --blue:#2E6FE8; --green:#22C55E; --red:#EF4444; --amber:#F59E0B;
+   --bg:#F6F7F9; --surface:#FFFFFF; --border:#E4E8EE;
+   --text-1:#101828; --text-2:#475467; --text-3:#667085; --text-4:#98A2B3;
+   --blue:#2563EB; --green:#15803D; --red:#DC2626; --amber:#B45309;
+   --line:#EEF1F5;
    --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
  }
  .stApp{background:var(--bg);color:var(--text-1)}
  #MainMenu,footer,header{visibility:hidden}
  .blk{max-width:1180px;margin:0 auto}
  .lbl{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:1.6px;
-      text-transform:uppercase;color:var(--text-2);margin:30px 0 10px}
- .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
+      text-transform:uppercase;color:var(--text-3);margin:30px 0 10px}
+ .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+       padding:16px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
  .b{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;
     border-radius:4px;font-family:var(--mono);font-size:11px;font-weight:700;
     margin-right:4px;color:#fff}
+ .crest{width:18px;height:18px;object-fit:contain;vertical-align:-4px;margin-right:6px}
  table.t{width:100%;border-collapse:collapse;font-size:13px}
  table.t th{font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;
             color:var(--text-3);text-align:right;padding:6px 8px;border-bottom:1px solid var(--border)}
  table.t th:first-child,table.t td:first-child{text-align:left}
- table.t td{padding:6px 8px;border-bottom:1px solid rgba(30,42,62,.5);text-align:right;
+ table.t td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;
             color:var(--text-1)}
  .num{font-family:var(--mono)}
  .dim{color:var(--text-3)}
@@ -57,9 +60,18 @@ def esc(value) -> str:
     return escape(str(value), quote=True)
 
 
+# 팀 이름 → 엠블럼 주소. app 이 시작할 때 한 번 채운다(FotMob).
+# team() 한 곳만 이걸 보므로 표·카드 전부가 같이 로고를 얻는다.
+# 선수 이름도 team() 을 지나지만 이름이 안 맞으니 로고가 안 붙는다.
+LOGOS: dict[str, str] = {}
+
+
 def team(name: str) -> str:
-    """팀명 짧게 + 이스케이프. 팀명이 화면으로 나가는 유일한 통로."""
-    return esc(epl.short(name))
+    """팀명 짧게 + 이스케이프(+ 있으면 엠블럼). 팀명이 화면으로 나가는 유일한 통로."""
+    short = epl.short(name)
+    url = LOGOS.get(short)
+    crest = f"<img class='crest' src='{esc(url)}' alt=''>" if url else ""
+    return crest + esc(short)
 
 
 # ─── 시각 ──────────────────────────────────────────────────────────────

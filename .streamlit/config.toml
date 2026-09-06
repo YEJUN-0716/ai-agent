@@ -1,0 +1,11 @@
+# 화면은 밝은 톤이다. 위젯(대회 선택 버튼 등)은 Streamlit 이 그리므로
+# 여기서 같은 톤으로 맞춰 준다 — 카드·표 색은 football/view.py 의 CSS 가 정한다.
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#101828"
+
+[server]
+headless = true
