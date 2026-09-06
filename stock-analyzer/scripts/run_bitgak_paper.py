@@ -339,6 +339,33 @@ def universe_ids() -> list[str]:
     return sorted(_last_snapshot()["asset_id"].dropna().unique().tolist())
 
 
+# sip 금수는 **정확히 15분**이다. 실측(2026-09-06, `end` 를 초 단위로 밀어가며):
+#   900초 전 → 403 · 905초 전 → OK · 이후 전부 OK
+# 러너는 15:15 자료를 15:30 크론이 부르니 간격이 딱 900.x 초다 — 기동이 몇 초
+# 빨랐거나 시계가 몇 초 어긋나면 그날 회차가 통째로 죽는다(첫 회차 09/08 에서
+# 드러날 자리였다). 30초를 얹어 경계에서 물러선다.
+SIP_LAG      = timedelta(seconds=930)
+SIP_MAX_WAIT = 300.0                     # 이 이상 기다려야 하면 크론이 아니라 사람이다
+
+
+def _await_sip(end: datetime) -> None:
+    """`end` 가 sip 금수 안이면 풀릴 때까지 기다린다. 너무 멀면 안 기다리고 알린다.
+
+    장 밖에서 `scan` 을 돌리면 `end` 가 미래라 몇 시간을 기다리게 된다 — 그건
+    기다릴 일이 아니라 잘못 부른 것이므로 **바로 세운다**.
+    """
+    wait = (end + SIP_LAG - datetime.now(timezone.utc)).total_seconds()
+    if wait <= 0:
+        return
+    if wait > SIP_MAX_WAIT:
+        raise RuntimeError(
+            f"sip 은 최근 15분을 안 줍니다 — end={end:%Y-%m-%d %H:%M}Z 가 풀리려면 "
+            f"{wait / 60:.0f}분 더 필요합니다. 장중 크론이 아니면 end 를 뒤로 물리세요 "
+            f"(차트는 {end:%H:%M}Z 대신 now-20분을 씁니다).")
+    print(f"  [sip] 금수 해제까지 {wait:.0f}초 대기 (end={end:%H:%M}Z)", flush=True)
+    time.sleep(wait)
+
+
 def daily_bars(symbols: list[str], calendar_days: int = 1100,
                chunk: int = 100, end: datetime | None = None) -> dict[str, pd.DataFrame]:
     """조정 일봉. **sip 고정** — 판정 행 패널과 같은 피드여야 컷이 같은 컷이다.
@@ -347,8 +374,12 @@ def daily_bars(symbols: list[str], calendar_days: int = 1100,
     (`modules/alpaca_data` 머리말) — 그래서 `end=now` 는 403 이 난다. 러너는
     그 시각 자체가 판정이라 기본값을 안 바꾸고(§2.2 봉인), 차트처럼 시점이
     안 중요한 쪽만 지연 밖으로 물러선 `end` 를 넘긴다.
+
+    금수가 풀릴 때까지는 **여기서 기다린다**(`_await_sip`) — 러너의 15:15 자료를
+    15:30 크론이 부르면 간격이 딱 900초라, 그냥 부르면 동전 던지기가 된다.
     """
     end = end or datetime.now(timezone.utc)
+    _await_sip(end)
     start = end - timedelta(days=calendar_days)
     out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), chunk):
