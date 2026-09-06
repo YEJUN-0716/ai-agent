@@ -25,6 +25,21 @@ RECENT_N = 5
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def live():
+    """이번 시즌 결과와 순위표 — FotMob.
+
+    openfootball 은 결과를 주 1회(수요일)만 올린다. 2026-09-06 에 3라운드
+    10경기가 통째로 비어 있었다 — 캐시가 아니라 소스가 안 채운 것이다.
+    그래서 **결과·순위표만** FotMob 으로 받는다. 일정과 과거 시즌은
+    openfootball 이 계속 준다(FotMob 은 이번 시즌·이 팀만 준다).
+    """
+    try:
+        return fotmob.as_matches(), fotmob.table()
+    except Exception:
+        return None, None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def injured():
     try:
         return fotmob.injuries()
@@ -50,10 +65,15 @@ def main():
     st.set_page_config(page_title="Chelsea · EPL", page_icon="🔵", layout="wide")
     html(view.CSS)
 
-    season = epl.load_season(epl.CURRENT)
-    history = epl.load_seasons(ALL_SEASONS)
+    season = epl.load_season(epl.CURRENT)          # 일정(전체 380경기)
+    results, standings_rows = live()
+    if results is None:                            # FotMob 이 막히면 낡아도 openfootball
+        results, standings_rows = epl.played(season), epl.table(season)
+    current = [{**m, "season": epl.CURRENT} for m in results]
+    history = sorted(epl.load_seasons(PAST) + current,
+                     key=lambda m: (m["date"], m.get("time", "")))
     recent = [m for m in history if m["season"] in ALL_SEASONS[:VENUE_SEASONS]]
-    standings = {r["team"]: r for r in epl.table(season)}
+    standings = {r["team"]: r for r in standings_rows}
     me = epl.CHELSEA
 
     def card_for(name):
@@ -99,7 +119,7 @@ def main():
 
     # ── 지난 경기 ──
     html(view.label("지난 경기"))
-    prev = epl.last_match(season, me)
+    prev = epl.last_match(current, me)
     html(view.last_match_card(prev, me) if prev
          else view.plain_card("이번 시즌 치른 경기가 없습니다."))
 
@@ -121,7 +141,7 @@ def main():
 
     # ── 순위표 ──
     html(view.label("순위표"))
-    html(view.standings_table(epl.table(season), me))
+    html(view.standings_table(standings_rows, me))
     html(view.footer() + "</div>")
 
 
